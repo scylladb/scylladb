@@ -33,7 +33,7 @@
 /// Seastar continuations are normally short, but often chained to one
 /// another, so that one continuation does a bit of work and then schedules
 /// another continuation for later. Such chains can be long, and often even
-/// involve loopings - see for example \ref do_with. We call such chains
+/// involve loopings - see for example \ref repeat. We call such chains
 /// "fibers" of execution.
 ///
 /// These fibers are not threads - each is just a string of continuations -
@@ -44,7 +44,18 @@
 /// produces data that a second fiber consumes, and we wish to ensure that
 /// both fibers get a chance to run, and that if one stops prematurely,
 /// the other doesn't hang forever.
-
+///
+/// Consult the following table to see which APIs are useful for fiber tasks:
+///
+/// Task                                           | APIs
+/// -----------------------------------------------|-------------------
+/// Repeat a blocking task indefinitely            | \ref keep_doing()
+/// Repeat a blocking task, then exit              | \ref repeat(), \ref do_until()
+/// Provide mutual exclusion between two tasks     | \ref semaphore, \ref shared_mutex
+/// Pass a stream of data between two fibers       | \ref seastar::pipe
+/// Safely shut down a resource                    | \ref seastar::gate, \ref seastar::with_gate()
+/// Hold on to an object while a fiber is running  | \ref do_with()
+///
 
 /// Seastar API namespace
 namespace seastar {

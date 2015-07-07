@@ -91,6 +91,7 @@ def try_compile(compiler, source = '', flags = []):
         sfile.file.write(bytes(source, 'utf-8'))
         sfile.file.flush()
         return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + flags,
+                               shell = True,
                                stdout = subprocess.DEVNULL,
                                stderr = subprocess.DEVNULL) == 0
 

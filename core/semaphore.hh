@@ -28,20 +28,44 @@
 #include <exception>
 #include "timer.hh"
 
+/// \addtogroup fiber-module
+/// @{
+
+/// Exception thrown when a semaphore is broken by
+/// \ref semaphore::broken().
 class broken_semaphore : public std::exception {
 public:
+    /// Reports the exception reason.
     virtual const char* what() const noexcept {
         return "Semaphore broken";
     }
 };
 
+/// Exception thrown when a semaphore wait operation
+/// times out.
+///
+/// \see semaphore::wait(typename timer<>::duration timeout, size_t nr)
 class semaphore_timed_out : public std::exception {
 public:
+    /// Reports the exception reason.
     virtual const char* what() const noexcept {
         return "Semaphore timedout";
     }
 };
 
+/// \brief Counted resource guard.
+///
+/// This is a standard computer science semaphore, adapted
+/// for futures.  You can deposit units into a counter,
+/// or take them away.  Taking units from the counter may wait
+/// if not enough units are available.
+///
+/// To support exceptional conditions, a \ref broken() method
+/// is provided, which causes all current waiters to stop waiting,
+/// with an exceptional future returned.  This allows causing all
+/// fibers that are blocked on a semaphore to continue.  This is
+/// similar to POSIX's `pthread_cancel()`, with \ref wait() acting
+/// as a cancellation point.
 class semaphore {
 private:
     size_t _count;
@@ -53,7 +77,22 @@ private:
     };
     std::list<entry> _wait_list;
 public:
+    /// Constructs a semaphore object with a specific number of units
+    /// in its internal counter.  The default is 1, suitable for use as
+    /// an unlocked mutex.
+    ///
+    /// \param count number of initial units present in the counter (default 1).
     semaphore(size_t count = 1) : _count(count) {}
+    /// Waits until at least a specific number of units are available in the
+    /// counter, and reduces the counter by that amount of units.
+    ///
+    /// \note Waits are serviced in FIFO order, though if several are awakened
+    ///       at once, they may be reordered by the scheduler.
+    ///
+    /// \param nr Amount of units to wait for (default 1).
+    /// \return a future that becomes ready when sufficient units are availble
+    ///         to satisfy the request.  If the semaphore was \ref broken(), may
+    ///         contain an exception.
     future<> wait(size_t nr = 1) {
         if (_count >= nr && _wait_list.empty()) {
             _count -= nr;
@@ -64,6 +103,19 @@ public:
         _wait_list.push_back(entry(std::move(pr), nr));
         return fut;
     }
+    /// Waits until at least a specific number of units are available in the
+    /// counter, and reduces the counter by that amount of units.  If the request
+    /// cannot be satisfied in time, the request is aborted.
+    ///
+    /// \note Waits are serviced in FIFO order, though if several are awakened
+    ///       at once, they may be reordered by the scheduler.
+    ///
+    /// \param timeout how long to wait.
+    /// \param nr Amount of units to wait for (default 1).
+    /// \return a future that becomes ready when sufficient units are availble
+    ///         to satisfy the request.  On timeout, the future contains a
+    ///         \ref semaphore_timed_out exception.  If the semaphore was
+    ///         \ref broken(), may contain an exception.
     future<> wait(typename timer<>::duration timeout, size_t nr = 1) {
         auto fut = wait(nr);
         if (!fut.available()) {
@@ -77,6 +129,15 @@ public:
         }
         return std::move(fut);
     }
+    /// Deposits a specified number of units into the counter.
+    ///
+    /// The counter is incremented by the specified number of units.
+    /// If the new counter value is sufficient to satisfy the request
+    /// of one or more waiters, their futures (in FIFO order) become
+    /// ready, and the value of the counter is reduced according to
+    /// the amount requested.
+    ///
+    /// \param nr Number of units to deposit (default 1).
     void signal(size_t nr = 1) {
         _count += nr;
         while (!_wait_list.empty() && _wait_list.front().nr <= _count) {
@@ -89,6 +150,16 @@ public:
             _wait_list.pop_front();
         }
     }
+    /// Attempts to reduce the counter value by a specified number of units.
+    ///
+    /// If sufficient units are available in the counter, and if no
+    /// other fiber is waiting, then the counter is reduced.  Otherwise,
+    /// nothing happens.  This is useful for "opportunistic" waits where
+    /// useful work can happen if the counter happens to be ready, but
+    /// when it is not worthwhile to wait.
+    ///
+    /// \param nr number of units to reduce the counter by (default 1).
+    /// \return `true` if the counter had sufficient units, and was decremented.
     bool try_wait(size_t nr = 1) {
         if (_count >= nr && _wait_list.empty()) {
             _count -= nr;
@@ -97,30 +168,36 @@ public:
             return false;
         }
     }
+    /// Returns the number of units available in the counter.
+    ///
+    /// Does not take into account any waiters.
     size_t current() const { return _count; }
 
-    // Signal to waiters that an error occured.  wait() will see
-    // an exceptional future<> containing a broken_semaphore exception.
-    //
-    // This may only be used once per semaphore; after using it the
-    // semaphore is in an indeterminite state and should not be waited on.
+    /// Signal to waiters that an error occurred.  \ref wait() will see
+    /// an exceptional future<> containing a \ref broken_semaphore exception.
+    /// The future is made available immediately.
+    ///
+    /// This may only be used once per semaphore; after using it the
+    /// semaphore is in an indeterminate state and should not be waited on.
     void broken() { broken(std::make_exception_ptr(broken_semaphore())); }
 
-    // Signal to waiters that an error occured.  wait() will see
-    // an exceptional future<> containing the provided exception parameter.
-    //
-    // This may only be used once per semaphore; after using it the
-    // semaphore is in an indeterminite state and should not be waited on.
+    /// Signal to waiters that an error occurred.  \ref wait() will see
+    /// an exceptional future<> containing the provided exception parameter.
+    /// The future is made available immediately.
+    ///
+    /// This may only be used once per semaphore; after using it the
+    /// semaphore is in an indeterminate state and should not be waited on.
     template <typename Exception>
     void broken(const Exception& ex) {
         broken(std::make_exception_ptr(ex));
     }
 
-    // Signal to waiters that an error occured.  wait() will see
-    // an exceptional future<> containing the provided exception parameter.
-    //
-    // This may only be used once per semaphore; after using it the
-    // semaphore is in an indeterminite state and should not be waited on.
+    /// Signal to waiters that an error occurred.  \ref wait() will see
+    /// an exceptional future<> containing the provided exception parameter.
+    /// The future is made available immediately.
+    ///
+    /// This may only be used once per semaphore; after using it the
+    /// semaphore is in an indeterminate state and should not be waited on.
     void broken(std::exception_ptr ex);
 };
 
@@ -134,5 +211,7 @@ semaphore::broken(std::exception_ptr xp) {
         _wait_list.pop_front();
     }
 }
+
+/// @}
 
 #endif /* CORE_SEMAPHORE_HH_ */
