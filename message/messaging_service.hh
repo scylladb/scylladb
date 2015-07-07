@@ -102,6 +102,18 @@ future<> des_frozen_mutation(input_stream<char>& in, frozen_mutation& v);
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
 struct serializer {
+    template<typename T>
+    inline future<T> read_integral(input_stream<char>& in) {
+        static_assert(std::is_integral<T>::value, "T should be integral");
+
+        return in.read_exactly(sizeof(T)).then([] (temporary_buffer<char> buf) {
+            if (buf.size() != sizeof(T)) {
+                throw rpc::closed_error();
+            }
+            return make_ready_future<T>(net::ntoh(*unaligned_cast<T*>(buf.get())));
+        });
+    }
+
     // For integer type
     template<typename T>
     inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<std::is_integral<std::remove_reference_t<T>>::value, void*> = nullptr) {
@@ -130,11 +142,7 @@ struct serializer {
     template<typename T>
     inline auto operator()(input_stream<char>& in, std::vector<T>& v) {
         using size_type = typename  std::vector<T>::size_type;
-        return in.read_exactly(sizeof(size_type)).then([&v, &in, this] (temporary_buffer<char> buf) {
-            if (buf.size() != sizeof(size_type)) {
-                throw rpc::closed_error();
-            }
-            size_type c = net::ntoh(*reinterpret_cast<const net::packed<size_type>*>(buf.get()));
+        return read_integral<size_type>(in).then([&v, &in, this] (size_type c) {
             new (&v) std::vector<T>;
             v.reserve(c);
             union U {
