@@ -179,6 +179,12 @@ void reactor::signals::action(int signo, siginfo_t* siginfo, void* ignore) {
     engine()._signals._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
+inline int alarm_signal() {
+    // We don't want to use SIGALRM, because the boost unit test library
+    // also plays with it.
+    return SIGRTMIN;
+}
+
 reactor::reactor()
     : _backend()
 #ifdef HAVE_OSV
@@ -201,12 +207,12 @@ reactor::reactor()
     struct sigevent sev;
     sev.sigev_notify = SIGEV_THREAD_ID;
     sev._sigev_un._tid = syscall(SYS_gettid);
-    sev.sigev_signo = SIGALRM;
+    sev.sigev_signo = alarm_signal();
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
     sigset_t mask;
     sigemptyset(&mask);
-    sigaddset(&mask, SIGALRM);
+    sigaddset(&mask, alarm_signal());
     r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
     assert(r == 0);
 #endif
@@ -1044,7 +1050,7 @@ int reactor::run() {
     }
 
 #ifndef HAVE_OSV
-    _signals.handle_signal(SIGALRM, [this] {
+    _signals.handle_signal(alarm_signal(), [this] {
         complete_timers(_timers, _expired_timers, [this] {
             if (!_timers.empty()) {
                 enable_timer(_timers.get_next_timeout());
