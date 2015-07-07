@@ -3,6 +3,7 @@
  */
 
 #include "i_partitioner.hh"
+#include "core/reactor.hh"
 #include "murmur3_partitioner.hh"
 
 namespace dht {
@@ -269,6 +270,15 @@ ring_position ring_position::deserialize(bytes_view& in) {
     } else {
         return ring_position(std::move(token), partition_key::from_bytes(to_bytes(read_simple_bytes(in, size))));
     }
+}
+
+unsigned shard_of(const token& t) {
+    if (t._data.size() < 2) {
+        return 0;
+    }
+    uint16_t v = uint8_t(t._data[t._data.size() - 1])
+            | (uint8_t(t._data[t._data.size() - 2]) << 8);
+    return v % smp::count;
 }
 
 }
