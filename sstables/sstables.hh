@@ -224,6 +224,9 @@ public:
     bool is_shared() {
         return true; // FIXME: set to false for sstables created by compaction process
     }
+
+    // Returns the total bytes of all components.
+    future<uint64_t> bytes_on_disk();
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
@@ -244,6 +247,7 @@ private:
     lw_shared_ptr<file> _index_file;
     lw_shared_ptr<file> _data_file;
     uint64_t _data_file_size;
+    uint64_t _bytes_on_disk = 0;
 
     sstring _dir;
     unsigned long _generation = 0;
