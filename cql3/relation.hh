@@ -43,7 +43,7 @@ public:
     }
     virtual ~relation() {}
 
-    virtual const operator_type& get_operator() {
+    virtual const operator_type& get_operator() const {
         return _relation_type;
     }
 
