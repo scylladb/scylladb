@@ -33,6 +33,35 @@ private:
     std::unique_ptr<chunk> _begin;
     chunk* _current;
     size_type _size;
+public:
+    class fragment_iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
+        chunk* _current;
+    public:
+        fragment_iterator(chunk* current) : _current(current) {}
+        fragment_iterator(const fragment_iterator&) = default;
+        fragment_iterator& operator=(const fragment_iterator&) = default;
+        bytes_view operator*() const {
+            return { _current->data, _current->offset };
+        }
+        bytes_view operator->() const {
+            return *(*this);
+        }
+        fragment_iterator& operator++() {
+            _current = _current->next.get();
+            return *this;
+        }
+        fragment_iterator operator++(int) {
+            fragment_iterator tmp(*this);
+            ++(*this);
+            return tmp;
+        }
+        bool operator==(const fragment_iterator& other) const {
+            return _current == other._current;
+        }
+        bool operator!=(const fragment_iterator& other) const {
+            return _current != other._current;
+        }
+    };
 private:
     inline size_type current_space_left() const {
         if (!_current) {
@@ -232,5 +261,14 @@ public:
                 r = r->next.get();
             }
         }
+    }
+
+    // begin() and end() form an input range to bytes_view representing fragments.
+    // Any modification of this instance invalidates iterators.
+    fragment_iterator begin() const { return { _begin.get() }; }
+    fragment_iterator end() const { return { nullptr }; }
+
+    boost::iterator_range<fragment_iterator> fragments() const {
+        return { begin(), end() };
     }
 };

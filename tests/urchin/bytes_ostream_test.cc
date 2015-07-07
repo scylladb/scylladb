@@ -141,6 +141,24 @@ BOOST_AUTO_TEST_CASE(test_writing_large_blobs) {
     BOOST_REQUIRE(std::all_of(buf_view.begin(), buf_view.end(), [] (auto&& c) { return c == 7; }));
 }
 
+BOOST_AUTO_TEST_CASE(test_fragment_iteration) {
+    int count = 64*1024;
+
+    bytes_ostream buf;
+    append_sequence(buf, count);
+
+    bytes_ostream buf2;
+    for (bytes_view frag : buf.fragments()) {
+        buf2.write(frag);
+    }
+
+    // If this fails, we will only have one fragment, and the test will be weak.
+    // Bump up the 'count' if this is triggered.
+    assert(!buf2.is_linearized());
+
+    assert_sequence(buf2, count);
+}
+
 BOOST_AUTO_TEST_CASE(test_writing_empty_blobs) {
     bytes_ostream buf;
 
