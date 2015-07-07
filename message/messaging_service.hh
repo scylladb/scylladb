@@ -68,6 +68,7 @@ enum class messaging_verb : int32_t {
     // Used by streaming
     STREAM_INIT_MESSAGE,
     PREPARE_MESSAGE,
+    STREAM_MUTATION,
     INCOMING_FILE_MESSAGE,
     OUTGOING_FILE_MESSAGE,
     RECEIVED_MESSAGE,
