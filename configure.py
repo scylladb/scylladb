@@ -514,6 +514,8 @@ urchin_core = (['database.cc',
                  'streaming/messages/received_message.cc',
                  'streaming/messages/prepare_message.cc',
                  'streaming/messages/file_message_header.cc',
+                 'streaming/messages/outgoing_file_message.cc',
+                 'streaming/messages/incoming_file_message.cc',
                  'gc_clock.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]

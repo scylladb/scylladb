@@ -38,29 +38,6 @@ class outgoing_file_message : public stream_message {
     using UUID = utils::UUID;
     using compression_info = compress::compression_info;
     using format_types = sstables::sstable::format_types;
-#if 0
-    public static Serializer<OutgoingFileMessage> serializer = new Serializer<OutgoingFileMessage>()
-    {
-        public OutgoingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
-            throw new UnsupportedOperationException("Not allowed to call deserialize on an outgoing file");
-        }
-
-        public void serialize(OutgoingFileMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-        {
-            FileMessageHeader.serializer.serialize(message.header, out, version);
-
-            final SSTableReader reader = message.sstable;
-            StreamWriter writer = message.header.compressionInfo == null ?
-                    new StreamWriter(reader, message.header.sections, session) :
-                    new CompressedStreamWriter(reader,
-                            message.header.sections,
-                            message.header.compressionInfo, session);
-            writer.write(out.getChannel());
-            session.fileSent(message.header);
-        }
-    };
-#endif
 public:
 
     file_message_header header;
@@ -94,15 +71,6 @@ public:
         return "File (" + header + ", file: " + sstable.getFilename() + ")";
     }
 #endif
-public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static outgoing_file_message deserialize(bytes_view& v) {
-        return outgoing_file_message();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
 };
 
 } // namespace messages

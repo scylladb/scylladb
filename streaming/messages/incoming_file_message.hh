@@ -24,6 +24,7 @@
 #include "streaming/messages/stream_message.hh"
 #include "streaming/messages/file_message_header.hh"
 #include "sstables/sstables.hh"
+#include "mutation_reader.hh"
 
 namespace streaming {
 namespace messages {
@@ -32,43 +33,13 @@ namespace messages {
  * IncomingFileMessage is used to receive the part(or whole) of a SSTable data file.
  */
 class incoming_file_message : public stream_message {
-#if 0
-    public static Serializer<IncomingFileMessage> serializer = new Serializer<IncomingFileMessage>()
-    {
-        public IncomingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
-            DataInputStream input = new DataInputStream(Channels.newInputStream(in));
-            FileMessageHeader header = FileMessageHeader.serializer.deserialize(input, version);
-            StreamReader reader = header.compressionInfo == null ? new StreamReader(header, session)
-                    : new CompressedStreamReader(header, session);
-
-            try
-            {
-                return new IncomingFileMessage(reader.read(in), header);
-            }
-            catch (Throwable t)
-            {
-                JVMStabilityInspector.inspectThrowable(t);
-                session.doRetry(header, t);
-                return null;
-            }
-        }
-
-        public void serialize(IncomingFileMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-        {
-            throw new UnsupportedOperationException("Not allowed to call serialize on an incoming file");
-        }
-    };
-#endif
 public:
     file_message_header header;
-    sstables::sstable* sstable;
 
     incoming_file_message() = default;
-    incoming_file_message(sstables::sstable& sstable_, file_message_header header_)
+    incoming_file_message(file_message_header header_, mutation_reader mr_)
         : stream_message(stream_message::Type::FILE)
-        , header(std::move(header_))
-        , sstable(&sstable_) {
+        , header(std::move(header_)) {
     }
 
 #if 0

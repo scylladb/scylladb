@@ -23,7 +23,7 @@
 
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
-#include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/messages/incoming_file_message.hh"
 
 namespace streaming {
 
@@ -56,7 +56,8 @@ public:
      *
      * @param sstable SSTable file received.
      */
-    void received(sstables::sstable* sstable) {
+    void received(messages::incoming_file_message message) {
+        // TODO: Iterate message.mr and write each mutation
 #if 0
         if (done)
             return;

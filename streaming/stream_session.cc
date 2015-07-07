@@ -51,21 +51,9 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
-    ms().register_handler(messaging_verb::OUTGOING_FILE_MESSAGE, [] (messages::outgoing_file_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::received_message msg_ret;
-            return make_ready_future<messages::received_message>(std::move(msg_ret));
-        });
     });
     ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::outgoing_file_message msg_ret;
-            return make_ready_future<messages::outgoing_file_message>(std::move(msg_ret));
-        });
+        return make_ready_future<>();
     });
     ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg) {
         auto cpu_id = 0;
@@ -181,7 +169,7 @@ void stream_session::receive(messages::incoming_file_message message) {
     auto cf_id = message.header.cf_id;
     auto it = _receivers.find(cf_id);
     assert(it != _receivers.end());
-    it->second.received(message.sstable);
+    it->second.received(std::move(message));
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
