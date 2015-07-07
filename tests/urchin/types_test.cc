@@ -240,3 +240,57 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
     BOOST_REQUIRE(t->compare(b1, b2) > 0);
     BOOST_REQUIRE(t->compare(b2, b2) == 0);
 }
+
+void test_validation_fails(const shared_ptr<const abstract_type>& type, bytes_view v)
+{
+    try {
+        type->validate(v);
+        BOOST_FAIL("Validation should have failed");
+    } catch (const marshal_exception& e) {
+        // expected
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_ascii_type_validation) {
+    ascii_type->validate(bytes());
+    ascii_type->validate(bytes("foo"));
+    test_validation_fails(ascii_type, bytes("fóo"));
+}
+
+BOOST_AUTO_TEST_CASE(test_utf8_type_validation) {
+    utf8_type->validate(bytes());
+    utf8_type->validate(bytes("foo"));
+    utf8_type->validate(bytes("fóo"));
+    test_validation_fails(utf8_type, bytes("test") + from_hex("fe"));
+}
+
+BOOST_AUTO_TEST_CASE(test_int32_type_validation) {
+    int32_type->validate(bytes());
+    int32_type->validate(from_hex("deadbeef"));
+    test_validation_fails(int32_type, from_hex("00"));
+    test_validation_fails(int32_type, from_hex("0000000000"));
+}
+
+BOOST_AUTO_TEST_CASE(test_long_type_validation) {
+    long_type->validate(bytes());
+    long_type->validate(from_hex("deadbeefdeadbeef"));
+    test_validation_fails(long_type, from_hex("00"));
+    test_validation_fails(long_type, from_hex("00000000"));
+    test_validation_fails(long_type, from_hex("000000000000000000"));
+}
+
+BOOST_AUTO_TEST_CASE(test_timeuuid_type_validation) {
+    auto now = utils::UUID_gen::get_time_UUID();
+    timeuuid_type->validate(now.to_bytes());
+    auto random = utils::make_random_uuid();
+    test_validation_fails(timeuuid_type, random.to_bytes());
+    test_validation_fails(timeuuid_type, from_hex("00"));
+}
+
+BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
+    auto now = utils::UUID_gen::get_time_UUID();
+    uuid_type->validate(now.to_bytes());
+    auto random = utils::make_random_uuid();
+    uuid_type->validate(random.to_bytes());
+    test_validation_fails(uuid_type, from_hex("00"));
+}
