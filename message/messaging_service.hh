@@ -200,6 +200,9 @@ struct serializer {
         db::frozen_mutation_serializer::write(o, v);
         return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
     }
+    inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
+        return operator()(out, const_cast<const frozen_mutation&>(v));
+    }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
         static auto sz = data_output::serialized_size<uint32_t>();
         return in.read_exactly(sz).then([&v, &in] (temporary_buffer<char> buf) mutable {
