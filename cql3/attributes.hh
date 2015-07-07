@@ -75,7 +75,7 @@ public:
 
         try {
             data_type_for<int64_t>()->validate(*tval);
-        } catch (exceptions::marshal_exception e) {
+        } catch (marshal_exception e) {
             throw exceptions::invalid_request_exception("Invalid timestamp value");
         }
         return boost::any_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
@@ -93,7 +93,7 @@ public:
         try {
             data_type_for<int32_t>()->validate(*tval);
         }
-        catch (exceptions::marshal_exception e) {
+        catch (marshal_exception e) {
             throw exceptions::invalid_request_exception("Invalid TTL value");
         }
 

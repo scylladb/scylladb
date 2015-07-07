@@ -13,9 +13,12 @@
 #include "combine.hh"
 #include <cmath>
 #include <sstream>
+#include <regex>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/numeric.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/date_time/c_local_time_adjustor.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -337,10 +340,25 @@ struct timeuuid_type_impl : public abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+        if (!std::regex_match(s.data(), re)) {
+            throw marshal_exception();
+        }
+        utils::UUID v(s);
+        if (v.version() != 1) {
+            throw marshal_exception();
+        }
+        return v.to_bytes();
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return boost::any_cast<const utils::UUID&>(v).to_sstring();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
@@ -381,8 +399,90 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         return boost::any(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
+    boost::posix_time::ptime get_time(const std::string& s) const {
+        // Apparently, the code below doesn't leak the input facet.
+        // std::locale::facet has some internal, custom reference counting
+        // and deletes the object when it's no longer used.
+        auto tif = new boost::posix_time::time_input_facet("%Y-%m-%d %H:%M:%S%F");
+        std::istringstream ss(s);
+        ss.imbue(std::locale(ss.getloc(), tif));
+        boost::posix_time::ptime t;
+        ss >> t;
+        if (ss.fail() || ss.peek() != std::istringstream::traits_type::eof()) {
+            throw marshal_exception();
+        }
+        return t;
+    }
+    boost::posix_time::time_duration get_utc_offset(const std::string& s) const {
+        static constexpr const char* formats[] = {
+            "%H:%M",
+            "%H%M",
+        };
+        for (auto&& f : formats) {
+            auto tif = new boost::posix_time::time_input_facet(f);
+            std::istringstream ss(s);
+            ss.imbue(std::locale(ss.getloc(), tif));
+            auto sign = ss.get();
+            boost::posix_time::ptime p;
+            ss >> p;
+            if (ss.good() && ss.peek() == std::istringstream::traits_type::eof()) {
+                return p.time_of_day() * (sign == '-' ? -1 : 1);
+            }
+        }
+        throw marshal_exception();
+    }
+    int64_t timestamp_from_string(sstring_view s) const {
+        std::string str;
+        str.resize(s.size());
+        std::transform(s.begin(), s.end(), str.begin(), ::tolower);
+        if (str == "now") {
+            return db_clock::now().time_since_epoch().count();
+        }
+
+        char* end;
+        auto v = std::strtoll(s.begin(), &end, 10);
+        if (end == s.begin() + s.size()) {
+            return v;
+        }
+
+        std::regex date_re("^\\d{4}-\\d{2}-\\d{2}([ t]\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?)?");
+        std::smatch dsm;
+        if (!std::regex_search(str, dsm, date_re)) {
+            throw marshal_exception();
+        }
+        auto t = get_time(dsm.str());
+
+        auto tz = dsm.suffix().str();
+        std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
+        std::smatch tsm;
+        if (std::regex_match(tz, tsm, tz_re)) {
+            t -= get_utc_offset(tsm.str());
+        } else if (tz.empty()) {
+            typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
+            // local_tz::local_to_utc(), where are you?
+            auto t1 = local_tz::utc_to_local(t);
+            auto tz_offset = t1 - t;
+            auto t2 = local_tz::utc_to_local(t - tz_offset);
+            auto dst_offset = t2 - t;
+            t -= tz_offset + dst_offset;
+        } else {
+            throw marshal_exception();
+        }
+        return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
+    }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        int64_t ts;
+        try {
+            ts = timestamp_from_string(s);
+        } catch (...) {
+            throw marshal_exception(sprint("unable to parse date '%s'", s));
+        }
+        bytes b(bytes::initialized_later(), sizeof(int64_t));
+        *unaligned_cast<int64_t*>(b.begin()) = net::hton(ts);
+        return b;
     }
     virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
@@ -447,10 +547,22 @@ struct uuid_type_impl : abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+        if (!std::regex_match(s.data(), re)) {
+            throw marshal_exception();
+        }
+        utils::UUID v(s);
+        return v.to_bytes();
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return boost::any_cast<const utils::UUID&>(v).to_sstring();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::uuid;
@@ -497,10 +609,28 @@ struct inet_addr_type_impl : abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        // FIXME: support host names
+        if (s.empty()) {
+            return bytes();
+        }
+        net::ipv4_address ipv4;
+        try {
+            ipv4 = net::ipv4_address(s.data());
+        } catch (...) {
+            throw marshal_exception();
+        }
+        bytes b(bytes::initialized_later(), sizeof(uint32_t));
+        auto out = b.begin();
+        serialize(boost::any(ipv4), out);
+        return b;
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return  "";
+        }
+        boost::asio::ip::address_v4 ipv4(boost::any_cast<const net::ipv4_address&>(v).ip);
+        return ipv4.to_string();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
@@ -573,10 +703,26 @@ struct floating_type_impl : public simple_type_impl<T> {
         return boost::any(x.d);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            auto d = boost::lexical_cast<T>(s.begin(), s.size());
+            bytes b(bytes::initialized_later(), sizeof(T));
+            auto out = b.begin();
+            serialize(boost::any(d), out);
+            return b;
+        }
+        catch(const boost::bad_lexical_cast& e) {
+            throw marshal_exception(sprint("Invalid number format '%s'", s));
+        }
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return to_sstring(boost::any_cast<T>(v));
     }
 };
 

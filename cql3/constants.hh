@@ -153,7 +153,7 @@ public:
                     _receiver->type->validate(value.value());
                 }
                 return value;
-            } catch (const exceptions::marshal_exception& e) {
+            } catch (const marshal_exception& e) {
                 throw exceptions::invalid_request_exception(e.what());
             }
         }

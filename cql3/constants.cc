@@ -57,7 +57,7 @@ constants::literal::parsed_value(data_type validator)
             return long_type->from_string(_text);
         }
         return validator->from_string(_text);
-    } catch (const exceptions::marshal_exception& e) {
+    } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
 }

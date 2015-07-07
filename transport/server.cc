@@ -358,6 +358,8 @@ future<> cql_server::connection::process_request() {
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             try {
                 f.get();
+            } catch (const exceptions::cassandra_exception& ex) {
+                write_error(stream, ex.code(), ex.what());
             } catch (std::exception& ex) {
                 write_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what());
             } catch (...) {
