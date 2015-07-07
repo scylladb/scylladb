@@ -630,7 +630,7 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
                 return make_ready_future<>();
             }
 
-            return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
+            return read_schema_partition_for_keyspace(proxy.local(), *cf_name, name).then([func, cf_name] (auto&& v) mutable {
                 return do_with(std::move(v), [func = std::forward<Func>(func), cf_name] (auto& v) {
                     return func(v).then_wrapped([cf_name, &v] (future<> f) {
                         try {
@@ -652,7 +652,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         return create_keyspace(ksm);
     }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::legacy_schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
-            return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
+            return create_tables_from_tables_partition(proxy.local(), v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 for (auto& t: tables) {
                     auto s = t.second;
                     auto& ks = this->find_keyspace(s->ks_name());

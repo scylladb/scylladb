@@ -24,6 +24,9 @@
 
 #include "service/migration_manager.hh"
 
+#include "message/messaging_service.hh"
+#include "gms/gossiper.hh"
+
 namespace service {
 
 #if 0
@@ -399,37 +402,44 @@ future<> migration_manager::announce(distributed<service::storage_proxy>& proxy,
 future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
-        return db::legacy_schema_tables::merge_schema(proxy, std::move(mutations), false);
+        return db::legacy_schema_tables::merge_schema(proxy.local(), std::move(mutations), false);
     } else {
         return announce(proxy, std::move(mutations));
     }
 }
 
-#if 0
-private static void pushSchemaMutation(InetAddress endpoint, Collection<Mutation> schema)
+future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
-    MessageOut<Collection<Mutation>> msg = new MessageOut<>(MessagingService.Verb.DEFINITIONS_UPDATE,
-                                                            schema,
-                                                            MigrationsSerializer.instance);
-    MessagingService.instance().sendOneWay(msg, endpoint);
+    net::messaging_service::shard_id id{endpoint, 0};
+    auto fm = make_lw_shared<std::vector<frozen_mutation>>(schema.begin(), schema.end());
+    return net::get_local_messaging_service().send_message_oneway(net::messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
-#endif
 
-    // Returns a future on the local application of the schema
+// Returns a future on the local application of the schema
 future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema)
 {
-    auto f = db::legacy_schema_tables::merge_schema(proxy, std::move(schema));
-#if 0
-    for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
-    {
-        // only push schema to nodes with known and equal versions
-        if (!endpoint.equals(FBUtilities.getBroadcastAddress()) &&
-                MessagingService.instance().knowsVersion(endpoint) &&
-                MessagingService.instance().getRawVersion(endpoint) == MessagingService.current_version)
-            pushSchemaMutation(endpoint, schema);
-    }
-#endif
-    return f;
+    return gms::get_live_members().then([&proxy, schema = std::move(schema)](std::set<gms::inet_address> live_members) {
+        return do_with(std::move(schema), [&proxy, live_members] (auto&& schema) {
+            return parallel_for_each(live_members.begin(), live_members.end(), [&schema] (auto& endpoint) {
+                // only push schema to nodes with known and equal versions
+                if (endpoint != utils::fb_utilities::get_broadcast_address() &&
+                        net::get_local_messaging_service().knows_version(endpoint) &&
+                        net::get_local_messaging_service().get_raw_version(endpoint) == net::messaging_service::current_version) {
+                    return push_schema_mutation(endpoint, schema);
+                } else {
+                    return make_ready_future<>();
+                }
+            }).then_wrapped([] (future<> f) {
+                try {
+                    f.get();
+                } catch (std::exception& ex) {
+                    std::cout << "announce error " << ex.what() << "\n";
+                }
+            }).then([&proxy, &schema] {
+                return db::legacy_schema_tables::merge_schema(proxy.local(), std::move(schema));
+            });
+        });
+    });
 }
 
 #if 0
