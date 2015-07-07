@@ -380,6 +380,8 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
         return update_schema_version(utils::make_random_uuid()); // FIXME: should not be random
     }).then([] {
         return check_health();
+    }).then([] {
+        return db::legacy_schema_tables::save_system_keyspace_schema();
     });
 }
 

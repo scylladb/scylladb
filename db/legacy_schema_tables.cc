@@ -26,6 +26,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
+#include "query_context.hh"
 
 #include "query-result-set.hh"
 #include "schema_builder.hh"
@@ -266,17 +267,24 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                          .comment(description)
                          .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
     }
+#endif
 
-    /** add entries to system.schema_* for the hardcoded system definitions */
-    public static void saveSystemKeyspaceSchema()
-    {
-        KSMetaData keyspace = Schema.instance.getKSMetaData(SystemKeyspace.NAME);
-        // delete old, possibly obsolete entries in schema tables
-        for (String table : ALL)
-            executeOnceInternal(String.format("DELETE FROM system.%s WHERE keyspace_name = ?", table), keyspace.name);
+/** add entries to system.schema_* for the hardcoded system definitions */
+future<> save_system_keyspace_schema() {
+    auto& ks = db::qctx->db().find_keyspace(db::system_keyspace::NAME);
+    auto ksm = ks.metadata();
+
+    // delete old, possibly obsolete entries in schema tables
+    return parallel_for_each(ALL, [ksm] (sstring cf) {
+        return db::execute_cql("DELETE FROM system.%s WHERE keyspace_name = ?", cf, ksm->name()).discard_result();
+    }).then([ksm] {
         // (+1 to timestamp to make sure we don't get shadowed by the tombstones we just added)
-        makeCreateKeyspaceMutation(keyspace, FBUtilities.timestampMicros() + 1).apply();
-    }
+        auto mvec  = make_create_keyspace_mutations(ksm, qctx->next_timestamp(), true);
+        return qctx->proxy().mutate_locally(mvec);
+    });
+}
+
+#if 0
 
     public static Collection<KSMetaData> readSchemaFromSystemTables()
     {

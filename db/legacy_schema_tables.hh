@@ -52,6 +52,8 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
+future<> save_system_keyspace_schema();
+
 future<schema_result::value_type>
 read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 
