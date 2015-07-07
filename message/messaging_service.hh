@@ -251,6 +251,9 @@ struct serializer {
 
 class messaging_service {
 public:
+    // FIXME: messaging service versioning
+    static constexpr int32_t current_version = 0;
+
     struct shard_id {
         gms::inet_address addr;
         uint32_t cpu_id;
@@ -301,6 +304,15 @@ public:
         return _dropped_messages;
     }
 
+    int32_t get_raw_version(const gms::inet_address& endpoint) const {
+        // FIXME: messaging service versioning
+        return current_version;
+    }
+
+    bool knows_version(const gms::inet_address& endpoint) const {
+        // FIXME: messaging service versioning
+        return true;
+    }
 
 private:
     static constexpr uint16_t _default_port = 7000;
