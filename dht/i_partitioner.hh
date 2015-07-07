@@ -268,6 +268,8 @@ std::ostream& operator<<(std::ostream& out, const decorated_key& t);
 
 i_partitioner& global_partitioner();
 
+unsigned shard_of(const token&);
+
 } // dht
 
 namespace std {
