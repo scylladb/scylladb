@@ -98,6 +98,79 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
     });
 }
 
+static mutation make_mutation_with_key(schema_ptr s, sstring key) {
+    mutation m(partition_key::from_single_value(*s, to_bytes(key)), s);
+    m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+    return m;
+}
+
+SEASTAR_TEST_CASE(test_filtering) {
+    return seastar::async([] {
+        auto s = make_schema();
+
+        auto m1 = make_mutation_with_key(s, "key1");
+        auto m2 = make_mutation_with_key(s, "key2");
+        auto m3 = make_mutation_with_key(s, "key3");
+        auto m4 = make_mutation_with_key(s, "key4");
+
+        // All pass
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [] (const mutation& m) { return true; }))
+            .produces(m1)
+            .produces(m2)
+            .produces(m3)
+            .produces(m4)
+            .produces_end_of_stream();
+
+        // None pass
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [] (const mutation& m) { return false; }))
+            .produces_end_of_stream();
+
+        // Trim front
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                [&] (const mutation& m) { return !m.key().equal(*s, m1.key()); }))
+            .produces(m2)
+            .produces(m3)
+            .produces(m4)
+            .produces_end_of_stream();
+
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+            [&] (const mutation& m) { return !m.key().equal(*s, m1.key()) && !m.key().equal(*s, m2.key()); }))
+            .produces(m3)
+            .produces(m4)
+            .produces_end_of_stream();
+
+        // Trim back
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [&] (const mutation& m) { return !m.key().equal(*s, m4.key()); }))
+            .produces(m1)
+            .produces(m2)
+            .produces(m3)
+            .produces_end_of_stream();
+
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [&] (const mutation& m) { return !m.key().equal(*s, m4.key()) && !m.key().equal(*s, m3.key()); }))
+            .produces(m1)
+            .produces(m2)
+            .produces_end_of_stream();
+
+        // Trim middle
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [&] (const mutation& m) { return !m.key().equal(*s, m3.key()); }))
+            .produces(m1)
+            .produces(m2)
+            .produces(m4)
+            .produces_end_of_stream();
+
+        assert_that(make_filtering_reader(make_reader_returning_many({m1, m2, m3, m4}),
+                 [&] (const mutation& m) { return !m.key().equal(*s, m2.key()) && !m.key().equal(*s, m3.key()); }))
+            .produces(m1)
+            .produces(m4)
+            .produces_end_of_stream();
+    });
+}
+
 SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
     return seastar::async([] {
         auto s = make_schema();
