@@ -103,14 +103,9 @@ public:
         return total_size;
     }
 
-#if 0
-    public synchronized Collection<OutgoingFileMessage> getFileMessages()
-    {
-        // We may race between queuing all those messages and the completion of the completion of
-        // the first ones. So copy tthe values to avoid a ConcurrentModificationException
-        return new ArrayList<>(files.values());
+    std::map<int32_t, messages::outgoing_file_message>& get_file_messages() {
+        return files;
     }
-#endif
 
     messages::outgoing_file_message create_message_for_retry(int sequence_number) {
 #if 0
@@ -156,6 +151,7 @@ public:
         return future;
     }
 #endif
+    void start();
 };
 
 } // namespace streaming

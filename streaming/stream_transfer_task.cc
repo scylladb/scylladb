@@ -23,6 +23,10 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/messages/outgoing_file_message.hh"
+#include "mutation_reader.hh"
+#include "frozen_mutation.hh"
+#include "mutation.hh"
+#include "message/messaging_service.hh"
 
 namespace streaming {
 
@@ -33,6 +37,26 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
     auto seq = message.header.sequence_number;
     files.emplace(seq, std::move(message));
     total_size += size;
+}
+
+void stream_transfer_task::start() {
+    using shard_id = net::messaging_service::shard_id;
+    using net::messaging_verb;
+    for (auto& x : files) {
+        auto& seq = x.first;
+        auto& msg = x.second;
+        auto id = shard_id{session.peer, 0};
+        do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
+            return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
+                auto fm = make_lw_shared<const frozen_mutation>(m);
+                return session.ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm).then([this, fm] {
+                    return stop_iteration::no;
+                });
+            });
+        }).then([this, seq] {
+           this->complete(seq);
+        });
+    }
 }
 
 } // namespace streaming

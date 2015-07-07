@@ -51,6 +51,12 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
+    ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm) {
+        auto cf_id = fm.column_family_id();
+        auto& db = stream_session::get_local_db();
+        auto& cf = db.find_column_family(cf_id);
+        cf.apply(fm, db::replay_position(), &db);
+        return make_ready_future<>();
     });
     ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg) {
         return make_ready_future<>();
@@ -270,6 +276,11 @@ void stream_session::start_streaming_files() {
             taskCompleted(task); // there is no file to send
     }
 #endif
+    set_state(stream_session_state::STREAMING);
+    for (auto& x : _transfers) {
+        stream_transfer_task& task = x.second;
+        task.start();
+    }
 }
 
 std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
