@@ -85,7 +85,7 @@ public:
     public:
         marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
                 : abstract_marker{bind_index, std::move(receiver)} {
-            assert(dynamic_cast<const set_type_impl*>(receiver->type.get()));
+            assert(dynamic_cast<const set_type_impl*>(_receiver->type.get()));
         }
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
     };
