@@ -399,7 +399,7 @@ future<> migration_manager::announce(distributed<service::storage_proxy>& proxy,
 future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
-        return db::legacy_schema_tables::merge_schema(proxy, std::move(mutations), false);
+        return db::legacy_schema_tables::merge_schema(proxy.local(), std::move(mutations), false);
     } else {
         return announce(proxy, std::move(mutations));
     }
@@ -418,7 +418,7 @@ private static void pushSchemaMutation(InetAddress endpoint, Collection<Mutation
     // Returns a future on the local application of the schema
 future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema)
 {
-    auto f = db::legacy_schema_tables::merge_schema(proxy, std::move(schema));
+    auto f = db::legacy_schema_tables::merge_schema(proxy.local(), std::move(schema));
 #if 0
     for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
     {
