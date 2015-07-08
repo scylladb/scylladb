@@ -32,6 +32,7 @@ options {
 @parser::includes {
 #include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
+#include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
@@ -262,8 +263,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st8= createKeyspaceStatement     { $stmt = st8; }
     | st9= createTableStatement        { $stmt = st9; }
     | st10=createIndexStatement        { $stmt = st10; }
-#if 0
     | st11=dropKeyspaceStatement       { $stmt = st11; }
+#if 0
     | st12=dropTableStatement          { $stmt = st12; }
     | st13=dropIndexStatement          { $stmt = st13; }
     | st14=alterTableStatement         { $stmt = st14; }
@@ -810,16 +811,18 @@ alterTypeStatement returns [AlterTypeStatement expr]
                { $expr = AlterTypeStatement.renames(name, renames); }
           )
     ;
+#endif
 
 
 /**
  * DROP KEYSPACE [IF EXISTS] <KSP>;
  */
-dropKeyspaceStatement returns [DropKeyspaceStatement ksp]
-    @init { boolean ifExists = false; }
-    : K_DROP K_KEYSPACE (K_IF K_EXISTS { ifExists = true; } )? ks=keyspaceName { $ksp = new DropKeyspaceStatement(ks, ifExists); }
+dropKeyspaceStatement returns [::shared_ptr<drop_keyspace_statement> ksp]
+    @init { bool if_exists = false; }
+    : K_DROP K_KEYSPACE (K_IF K_EXISTS { if_exists = true; } )? ks=keyspaceName { $ksp = ::make_shared<drop_keyspace_statement>(ks, if_exists); }
     ;
 
+#if 0
 /**
  * DROP COLUMNFAMILY [IF EXISTS] <CF>;
  */
