@@ -10,6 +10,11 @@
 
 class database;
 
+namespace service {
+class storage_proxy;
+}
+
+
 namespace db {
 struct query_context {
     distributed<database>& _db;
@@ -24,6 +29,10 @@ struct query_context {
     }
     database& db() {
         return _db.local();
+    }
+
+    service::storage_proxy& proxy() {
+        return _qp.local().proxy().local();
     }
 };
 
