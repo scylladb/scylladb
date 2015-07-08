@@ -907,6 +907,11 @@ SEASTAR_TEST_CASE(test_table_compression) {
             assert(!f.failed());
             e.require_table_exists("ks", "tb1");
             BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_compressor() == compressor::none);
+            return e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : '' };");
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            e.require_table_exists("ks", "tb5");
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb5")->get_compressor_params().get_compressor() == compressor::none);
             return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LossyCompressor' };");
         }).then_wrapped([&e] (auto f) {
             assert_that_failed(f);
