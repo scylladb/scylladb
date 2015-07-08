@@ -84,6 +84,22 @@ public:
         return _raw._max_compaction_threshold;
     }
 
+    void set_min_index_interval(int32_t t) {
+        _raw._min_index_interval = t;
+    }
+
+    int32_t get_min_index_interval() {
+        return _raw._min_index_interval;
+    }
+
+    void set_max_index_interval(int32_t t) {
+        _raw._max_index_interval = t;
+    }
+
+    int32_t get_max_index_interval() {
+        return _raw._max_index_interval;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }

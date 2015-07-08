@@ -177,6 +177,8 @@ private:
         double _dc_local_read_repair_chance = 0.1;
         int32_t _min_compaction_threshold = 4;
         int32_t _max_compaction_threshold = 32;
+        int32_t _min_index_interval = 128;
+        int32_t _max_index_interval = 2048;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -286,6 +288,14 @@ public:
 
     int32_t max_compaction_threshold() const {
         return _raw._max_compaction_threshold;
+    }
+
+    int32_t min_index_interval() const {
+        return _raw._min_index_interval;
+    }
+
+    int32_t max_index_interval() const {
+        return _raw._max_index_interval;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;

@@ -1034,10 +1034,10 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "local_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
         m.set_clustered_cell(ckey, "min_compaction_threshold", table->min_compaction_threshold(), timestamp);
         m.set_clustered_cell(ckey, "max_compaction_threshold", table->max_compaction_threshold(), timestamp);
+        m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
+        m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
 #if 0
-        adder.add("max_index_interval", table.getMaxIndexInterval());
         adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-        adder.add("min_index_interval", table.getMinIndexInterval());
         adder.add("read_repair_chance", table.getReadRepairChance());
         adder.add("speculative_retry", table.getSpeculativeRetry().toString());
 
@@ -1298,13 +1298,15 @@ future<> save_system_keyspace_schema() {
         builder.set_compressor_params(cp);
 #if 0
         cfm.compactionStrategyOptions(fromJsonMap(result.getString("compaction_strategy_options")));
-
-        if (result.has("min_index_interval"))
-            cfm.minIndexInterval(result.getInt("min_index_interval"));
-
-        if (result.has("max_index_interval"))
-            cfm.maxIndexInterval(result.getInt("max_index_interval"));
 #endif
+
+        if (table_row.has("min_index_interval")) {
+            builder.set_min_index_interval(table_row.get_nonnull<int>("min_index_interval"));
+        }
+
+        if (table_row.has("max_index_interval")) {
+            builder.set_max_index_interval(table_row.get_nonnull<int>("max_index_interval"));
+        }
 
         if (table_row.has("bloom_filter_fp_chance")) {
             builder.set_bloom_filter_fp_chance(table_row.get_nonnull<double>("bloom_filter_fp_chance"));
