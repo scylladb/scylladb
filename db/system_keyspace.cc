@@ -646,16 +646,27 @@ future<> update_schema_version(utils::UUID version) {
         executeInternal(String.format(req, PEERS), ep);
     }
 
+#endif
     /**
      * This method is used to update the System Keyspace with the new tokens for this node
     */
-    public static synchronized void updateTokens(Collection<Token> tokens)
-    {
-        assert !tokens.isEmpty() : "removeEndpoint should be used instead";
-        String req = "INSERT INTO system.%s (key, tokens) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), tokensAsSet(tokens));
-        forceBlockingFlush(LOCAL);
+future<> update_tokens(std::unordered_set<dht::token> tokens) {
+    if (tokens.empty()) {
+        throw std::invalid_argument("remove_endpoint should be used instead");
     }
+
+    set_type_impl::native_type tset;
+    for (auto& t: tokens) {
+        tset.push_back(boost::any(dht::global_partitioner().to_sstring(t)));
+    }
+
+    sstring req = "INSERT INTO system.%s (key, tokens) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), std::move(tset)).discard_result().then([] {
+        return force_blocking_flush(LOCAL);
+    });
+}
+
+#if 0
 
     /**
      * Convenience method to update the list of tokens in the local system keyspace.

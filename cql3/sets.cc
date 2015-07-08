@@ -109,7 +109,7 @@ sets::value::from_serialized(bytes_view v, set_type type, serialization_format s
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol?!
         auto s = boost::any_cast<set_type_impl::native_type>(type->deserialize(v, sf));
-        std::set<bytes, serialized_compare> elements(type->as_less_comparator());
+        std::set<bytes, serialized_compare> elements(type->get_elements_type()->as_less_comparator());
         for (auto&& element : s) {
             elements.insert(elements.end(), type->get_elements_type()->decompose(element));
         }

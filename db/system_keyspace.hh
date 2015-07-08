@@ -67,6 +67,7 @@ extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 future<> update_schema_version(utils::UUID version);
+future<> update_tokens(std::unordered_set<dht::token> tokens);
 
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
