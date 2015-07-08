@@ -1031,8 +1031,8 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
         m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds(), timestamp);
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
+        m.set_clustered_cell(ckey, "local_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
 #if 0
-        adder.add("local_read_repair_chance", table.getDcLocalReadRepairChance());
         adder.add("max_compaction_threshold", table.getMaxCompactionThreshold());
         adder.add("max_index_interval", table.getMaxIndexInterval());
         adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
@@ -1260,8 +1260,11 @@ future<> save_system_keyspace_schema() {
 
 #if 0
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
-        cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
 #endif
+        if (table_row.has("local_read_repair_chance")) {
+            builder.set_dc_local_read_repair_chance(table_row.get_nonnull<double>("local_read_repair_chance"));
+        }
+
         if (table_row.has("gc_grace_seconds")) {
             builder.set_gc_grace_seconds(table_row.get_nonnull<int32_t>("gc_grace_seconds"));
         }

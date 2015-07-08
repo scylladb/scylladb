@@ -174,6 +174,7 @@ private:
         bool _is_dense = false;
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = 864000;
+        double _dc_local_read_repair_chance = 0.1;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -271,6 +272,10 @@ public:
 
     int32_t gc_grace_seconds() const {
         return _raw._gc_grace_seconds;
+    }
+
+    double dc_local_read_repair_chance() const {
+        return _raw._dc_local_read_repair_chance;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;

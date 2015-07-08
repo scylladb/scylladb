@@ -167,8 +167,11 @@ public:
         }
 #if 0
         cfm.readRepairChance(getDouble(KW_READREPAIRCHANCE, cfm.getReadRepairChance()));
-        cfm.dcLocalReadRepairChance(getDouble(KW_DCLOCALREADREPAIRCHANCE, cfm.getDcLocalReadRepairChance()));
 #endif
+        if (has_property(KW_DCLOCALREADREPAIRCHANCE)) {
+            builder.set_dc_local_read_repair_chance(get_double(KW_DCLOCALREADREPAIRCHANCE, builder.get_dc_local_read_repair_chance()));
+        }
+
         if (has_property(KW_GCGRACESECONDS)) {
             builder.set_gc_grace_seconds(get_int(KW_GCGRACESECONDS, builder.get_gc_grace_seconds()));
         }

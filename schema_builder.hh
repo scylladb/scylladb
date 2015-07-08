@@ -60,6 +60,14 @@ public:
         return _raw._gc_grace_seconds;
     }
 
+    void set_dc_local_read_repair_chance(double chance) {
+        _raw._dc_local_read_repair_chance = chance;
+    }
+
+    double get_dc_local_read_repair_chance() {
+        return _raw._dc_local_read_repair_chance;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }
