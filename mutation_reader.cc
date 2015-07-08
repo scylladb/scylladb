@@ -101,15 +101,14 @@ mutation_reader make_reader_returning(mutation m) {
     return make_reader_returning_many({std::move(m)});
 }
 
-mutation_reader make_reader_returning_many(std::initializer_list<mutation> mutations) {
-    auto vec = std::vector<mutation>(mutations);
-    std::reverse(vec.begin(), vec.end());
-    return [vec = std::move(vec)] () mutable -> future<mutation_opt> {
-        if (vec.empty()) {
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
+    std::reverse(mutations.begin(), mutations.end());
+    return [mutations = std::move(mutations)] () mutable -> future<mutation_opt> {
+        if (mutations.empty()) {
             return make_ready_future<mutation_opt>();
         }
-        auto m = std::move(vec.back());
-        vec.pop_back();
+        auto m = std::move(mutations.back());
+        mutations.pop_back();
         return make_ready_future<mutation_opt>(std::move(m));
     };
 }
