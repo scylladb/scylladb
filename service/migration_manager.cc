@@ -237,10 +237,12 @@ future<> migration_manager::announce_new_column_family(distributed<service::stor
     cfm.validate();
 #endif
     try {
-        auto&& keyspace = proxy.local().get_db().local().find_keyspace(cfm->ks_name());
+        auto& db = proxy.local().get_db().local();
+        auto&& keyspace = db.find_keyspace(cfm->ks_name());
+        if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
+            throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
+        }
 #if 0
-        else if (ksm.cfMetaData().containsKey(cfm.cfName))
-            throw new AlreadyExistsException(cfm.ksName, cfm.cfName);
         logger.info(String.format("Create new table: %s", cfm));
 #endif
         auto mutations = db::legacy_schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
