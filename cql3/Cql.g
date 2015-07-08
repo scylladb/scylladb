@@ -1574,7 +1574,18 @@ STRING_LITERAL
     @init{
         std::string txt; // temporary to build pg-style-string
     }
-    @after{ setText(txt); }
+    @after{ 
+        // This is an ugly hack that allows returning empty string literals.
+        // If setText() was called with an empty string antlr3 would decide
+        // that setText() was never called and just return the unmodified
+        // token value. To prevent that we call setText() with non-empty string
+        // that is not valid utf8 which will be later changed to an empty
+        // string once it leaves antlr3 code.
+        if (txt.empty()) {
+            txt.push_back(-1);
+        }
+        setText(txt);
+    }
     :
 // FIXME:
 #if 0
