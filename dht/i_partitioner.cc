@@ -145,12 +145,18 @@ bool operator<(const token& t1, const token& t2)
 }
 
 std::ostream& operator<<(std::ostream& out, const token& t) {
-    auto flags = out.flags();
-    for (auto c : t._data) {
-        unsigned char x = c;
-        out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
+    if (t._kind == token::kind::after_all_keys) {
+        out << "maximum token";
+    } else if (t._kind == token::kind::before_all_keys) {
+        out << "minimum token";
+    } else {
+        auto flags = out.flags();
+        for (auto c : t._data) {
+            unsigned char x = c;
+            out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
+        }
+        out.flags(flags);
     }
-    out.flags(flags);
     return out;
 }
 
