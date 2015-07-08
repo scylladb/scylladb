@@ -372,12 +372,51 @@ static future<> setup_version() {
 future<> check_health();
 future<> force_blocking_flush(sstring cfname);
 
+// Changing the real load_dc_rack_info into a future would trigger a tidal wave of futurization that would spread
+// even into simple string operations like get_rack() / get_dc(). We will cache those at startup, and then change
+// our view of it every time we do updates on those values.
+//
+// The cache must be distributed, because the values themselves may not update atomically, so a shard reading that
+// is different than the one that wrote, may see a corrupted value. invoke_on_all will be used to guarantee that all
+// updates are propagated correctly.
+struct local_cache {
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
+    future<> stop() {
+        return make_ready_future<>();
+    }
+};
+static distributed<local_cache> _local_cache;
+
+static future<> build_dc_rack_info() {
+    return _local_cache.start().then([] {
+        return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+            return do_for_each(*msg, [] (auto& row) {
+                // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
+                net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
+                if (!row.has("data_center") || !row.has("rack")) {
+                    return make_ready_future<>();
+                }
+                gms::inet_address gms_addr(std::move(peer));
+                sstring dc = row.template get_as<sstring>("data_center");
+                sstring rack = row.template get_as<sstring>("rack");
+
+                locator::endpoint_dc_rack  element = { dc, rack };
+                return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
+                    lc._cached_dc_rack_info.emplace(gms_addr, element);
+                });
+            });
+        });
+    });
+}
+
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     auto new_ctx = std::make_unique<query_context>(db, qp);
     qctx.swap(new_ctx);
     assert(!new_ctx);
     return setup_version().then([] {
         return update_schema_version(utils::make_random_uuid()); // FIXME: should not be random
+    }).then([] {
+        return build_dc_rack_info();
     }).then([] {
         return check_health();
     }).then([] {
@@ -1086,23 +1125,8 @@ future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
 }
 
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
-load_dc_rack_info()
-{
-    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> result;
-#if 0 //TODO
-    for (UntypedResultSet.Row row : executeInternal("SELECT peer, data_center, rack from system." + PEERS))
-    {
-        InetAddress peer = row.getInetAddress("peer");
-        if (row.has("data_center") && row.has("rack"))
-        {
-            Map<String, String> dcRack = new HashMap<>();
-            dcRack.put("data_center", row.getString("data_center"));
-            dcRack.put("rack", row.getString("rack"));
-            result.put(peer, dcRack);
-        }
-    }
-#endif
-    return result;
+load_dc_rack_info() {
+    return _local_cache.local()._cached_dc_rack_info;
 }
 
 future<lw_shared_ptr<query::result_set>>
