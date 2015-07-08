@@ -395,6 +395,9 @@ public:
     struct mutation {
         tombstone tomb;
         std::vector<std::pair<bytes, atomic_cell>> cells;
+        // Expires cells based on query_time. Removes cells covered by tomb or this->tomb.
+        // FIXME: also perform tombstone GC.
+        bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time);
     };
     struct mutation_view {
         tombstone tomb;
