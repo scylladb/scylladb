@@ -85,15 +85,15 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
 
 std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                const sstring& keyspace,
-                                                               const sstring& table/*,
-                                                               AbstractType<?> rawComparator,
-                                                               boolean isSuper*/);
+                                                               const sstring& table,/*,
+                                                               AbstractType<?> rawComparator, */
+                                                               bool is_super);
 
 column_definition create_column_from_column_row(const query::result_set_row& row,
                                                 sstring keyspace,
-                                                sstring table/*,
-                                                AbstractType<?> rawComparator,
-                                                boolean isSuper*/);
+                                                sstring table, /*,
+                                                AbstractType<?> rawComparator, */
+                                                bool is_super);
 
 
 void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, const partition_key& pkey, std::vector<mutation>& mutations);

@@ -35,6 +35,7 @@ enum class cause {
     NONATOMIC,
     CONSISTENCY,
     HINT,
+    SUPER,
 };
 
 void fail(cause what) __attribute__((noreturn));
