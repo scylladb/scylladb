@@ -308,7 +308,7 @@ public:
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */
-    void on_initialization_complete();
+    future<> on_initialization_complete();
 
     /**l
      * Call back for handling exception during streaming.
