@@ -8,7 +8,7 @@ inline const int native_protocol() {
 }
 
 inline const sstring& release() {
-    static sstring v = "SeastarDB v0.1";
+    static sstring v = "2.2.0";
     return v;
 }
 }
