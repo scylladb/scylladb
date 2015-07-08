@@ -1025,8 +1025,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         const auto& compression_options = table->get_compressor_params();
         m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
+        m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
 #if 0
-        adder.add("default_validator", table.getDefaultValidator().toString());
         adder.add("gc_grace_seconds", table.getGcGraceSeconds());
 #endif
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
@@ -1253,7 +1253,12 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
         cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
-        cfm.defaultValidator(TypeParser.parse(result.getString("default_validator")));
+#endif
+        if (table_row.has("default_validator")) {
+            builder.set_default_validator(parse_type(table_row.get_nonnull<sstring>("default_validator")));
+        }
+
+#if 0
         cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
         cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
