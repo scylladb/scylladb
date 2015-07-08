@@ -37,8 +37,9 @@ template <typename ValueType>
 class reversed_primary_key_restrictions : public forwarding_primary_key_restrictions<ValueType> {
 private:
     ::shared_ptr<primary_key_restrictions<ValueType>> _restrictions;
+    using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
 protected:
-    virtual ::shared_ptr<primary_key_restrictions<ValueType>> get_delegate() override {
+    virtual ::shared_ptr<primary_key_restrictions<ValueType>> get_delegate() const override {
         return _restrictions;
     }
 public:
@@ -46,16 +47,20 @@ public:
         : _restrictions(std::move(restrictions))
     { }
 
-    virtual std::vector<query::range<ValueType>> bounds(const query_options& options) override {
-        auto ranges = _restrictions->bounds(options);
+    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
+        auto ranges = _restrictions->bounds_ranges(options);
         for (auto&& range : ranges) {
             range.reverse();
         }
         return ranges;
     }
 
-    virtual bool is_inclusive(statements::bound bound) override {
+    virtual bool is_inclusive(statements::bound bound) const override {
         return _restrictions->is_inclusive(reverse(bound));
+    }
+
+    sstring to_string() const override {
+        return sprint("Reversed(%s)", forwarding_primary_key_restrictions<ValueType>::to_string());
     }
 };
 

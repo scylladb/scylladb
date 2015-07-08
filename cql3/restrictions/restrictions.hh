@@ -46,7 +46,7 @@ public:
      * Returns the column definitions in position order.
      * @return the column definitions in position order.
      */
-    virtual std::vector<const column_definition*> get_column_defs() = 0;
+    virtual std::vector<const column_definition*> get_column_defs() const = 0;
 
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
@@ -55,7 +55,7 @@ public:
      * @param function_name the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
 #if 0
     /**
@@ -64,7 +64,7 @@ public:
      * @param index_manager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) = 0;
+    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) const = 0;
 
     /**
      * Adds to the specified list the <code>index_expression</code>s corresponding to this <code>Restriction</code>.
@@ -83,14 +83,14 @@ public:
      *
      * @return <code>true</code> if this <code>SingleColumnprimary_key_restrictions</code> is empty, <code>false</code> otherwise.
      */
-    virtual bool empty() = 0;
+    virtual bool empty() const = 0;
 
     /**
      * Returns the number of columns that have a restriction.
      *
      * @return the number of columns that have a restriction.
      */
-    virtual uint32_t size() = 0;
+    virtual uint32_t size() const = 0;
 };
 
 }

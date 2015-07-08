@@ -4,6 +4,7 @@
 
 #include "functions.hh"
 #include "function_call.hh"
+#include "token_fct.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
@@ -98,14 +99,16 @@ functions::get(database& db,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
         const sstring& receiver_cf) {
-    // FIXME:
-#if 0
-    // later
+
+    static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
+
     if (name.has_keyspace()
-        ? name.equals(TOKEN_FUNCTION_NAME)
-        : name.name.equals(TOKEN_FUNCTION_NAME.name))
-        return new TokenFct(Schema.instance.getCFMetaData(receiverKs, receiverCf));
-#endif
+        ? name == TOKEN_FUNCTION_NAME
+        : name.name == TOKEN_FUNCTION_NAME.name)
+    {
+        return ::make_shared<token_fct>(db.find_schema(receiver_ks, receiver_cf));
+    }
+
     std::vector<shared_ptr<function>> candidates;
     auto&& add_declared = [&] (function_name fn) {
         auto&& fns = _declared.equal_range(fn);

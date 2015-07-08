@@ -1,13 +1,91 @@
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
-#include "cql3/restrictions/statement_restrictions.hh"
+
+#include "statement_restrictions.hh"
+#include "reverse_primary_key_restrictions.hh"
+#include "single_column_primary_key_restrictions.hh"
+#include "token_restriction.hh"
 
 namespace cql3 {
 namespace restrictions {
 
 using boost::adaptors::filtered;
 using boost::adaptors::transformed;
+
+template<typename T>
+class statement_restrictions::initial_key_restrictions : public primary_key_restrictions<T> {
+public:
+    using bounds_range_type = typename primary_key_restrictions<T>::bounds_range_type;
+
+    ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
+        if (restriction->is_multi_column()) {
+            throw std::runtime_error("not implemented");
+        }
+        return ::make_shared<single_column_primary_key_restrictions<T>>(schema)->merge_to(schema, restriction);
+    }
+    ::shared_ptr<primary_key_restrictions<T>> merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) override {
+        if (restriction->is_multi_column()) {
+            throw std::runtime_error("not implemented");
+        }
+        if (restriction->is_on_token()) {
+            return static_pointer_cast<token_restriction>(restriction);
+        }
+        return ::make_shared<single_column_primary_key_restrictions<T>>(schema)->merge_to(restriction);
+    }
+    void merge_with(::shared_ptr<restriction> restriction) override {
+        throw exceptions::unsupported_operation_exception();
+    }
+    std::vector<bytes_opt> values(const query_options& options) const override {
+        // throw? should not reach?
+        return {};
+    }
+    std::vector<T> values_as_keys(const query_options& options) const override {
+        // throw? should not reach?
+        return {};
+    }
+    std::vector<bounds_range_type> bounds_ranges(const query_options&) const override {
+        // throw? should not reach?
+        return {};
+    }
+    std::vector<const column_definition*> get_column_defs() const override {
+        // throw? should not reach?
+        return {};
+    }
+    bool uses_function(const sstring&, const sstring&) const override {
+        return false;
+    }
+    bool empty() const override {
+        return true;
+    }
+    uint32_t size() const override {
+        return 0;
+    }
+    sstring to_string() const override {
+        return "Initial restrictions";
+    }
+};
+
+template<>
+::shared_ptr<primary_key_restrictions<partition_key>>
+statement_restrictions::initial_key_restrictions<partition_key>::merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) {
+    if (restriction->is_on_token()) {
+        return static_pointer_cast<token_restriction>(restriction);
+    }
+    return do_merge_to(std::move(schema), std::move(restriction));
+}
+
+template<>
+::shared_ptr<primary_key_restrictions<clustering_key_prefix>>
+statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) {
+    return do_merge_to(std::move(schema), std::move(restriction));
+}
+
+template<typename T>
+::shared_ptr<primary_key_restrictions<T>> statement_restrictions::get_initial_key_restrictions() {
+    static thread_local ::shared_ptr<primary_key_restrictions<T>> initial_kr = ::make_shared<initial_key_restrictions<T>>();
+    return initial_kr;
+}
 
 std::vector<::shared_ptr<column_identifier>>
 statement_restrictions::get_partition_key_unrestricted_components() const {
@@ -25,6 +103,8 @@ statement_restrictions::get_partition_key_unrestricted_components() const {
 
 statement_restrictions::statement_restrictions(schema_ptr schema)
     : _schema(schema)
+    , _partition_key_restrictions(get_initial_key_restrictions<partition_key>())
+    , _clustering_columns_restrictions(get_initial_key_restrictions<clustering_key_prefix>())
     , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
 { }
 
@@ -81,7 +161,7 @@ statement_restrictions::statement_restrictions(database& db,
 
     if (_uses_secondary_indexing) {
         _index_restrictions.push_back(_clustering_columns_restrictions);
-    } else if (_clustering_columns_restrictions && _clustering_columns_restrictions->is_contains()) {
+    } else if (_clustering_columns_restrictions->is_contains()) {
         fail(unimplemented::cause::INDEXES);
 #if 0
         _index_restrictions.push_back(new Forwardingprimary_key_restrictions() {
@@ -125,23 +205,9 @@ statement_restrictions::statement_restrictions(database& db,
 
 void statement_restrictions::add_restriction(::shared_ptr<restriction> restriction) {
     if (restriction->is_multi_column()) {
-        throw std::runtime_error("not implemented");
-#if 0
-            if (!_clustering_columns_restrictions) {
-                _clustering_columns_restrictions = static_pointer_cast<multi_column_restriction>(restriction);
-            } else {
-                _clustering_columns_restrictions->merge_with(restriction);
-            }
-#endif
+        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
     } else if (restriction->is_on_token()) {
-        throw std::runtime_error("not implemented");
-#if 0
-            if (!_partition_key_restrictions) {
-                _partition_key_restrictions = static_pointer_cast<token_restriction>(restriction);
-            } else {
-                _partition_key_restrictions->merge_with(restriction);
-            }
-#endif
+        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
     } else {
         add_single_column_restriction(::static_pointer_cast<single_column_restriction>(restriction));
     }
@@ -150,23 +216,17 @@ void statement_restrictions::add_restriction(::shared_ptr<restriction> restricti
 void statement_restrictions::add_single_column_restriction(::shared_ptr<single_column_restriction> restriction) {
     auto& def = restriction->get_column_def();
     if (def.is_partition_key()) {
-        if (!_partition_key_restrictions) {
-            _partition_key_restrictions = ::make_shared<single_column_primary_key_restrictions<partition_key>>(_schema);
-        }
-        _partition_key_restrictions->merge_with(restriction);
+        _partition_key_restrictions = _partition_key_restrictions->merge_to(_schema, restriction);
     } else if (def.is_clustering_key()) {
-        if (!_clustering_columns_restrictions) {
-            _clustering_columns_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key_prefix>>(_schema);
-        }
-        _clustering_columns_restrictions->merge_with(restriction);
+        _clustering_columns_restrictions = _clustering_columns_restrictions->merge_to(_schema, restriction);
     } else {
         _nonprimary_key_restrictions->add_restriction(restriction);
     }
 }
 
 bool statement_restrictions::uses_function(const sstring& ks_name, const sstring& function_name) const {
-    return  (_partition_key_restrictions && _partition_key_restrictions->uses_function(ks_name, function_name))
-            || (_clustering_columns_restrictions && _clustering_columns_restrictions->uses_function(ks_name, function_name))
+    return  _partition_key_restrictions->uses_function(ks_name, function_name)
+            || _clustering_columns_restrictions->uses_function(ks_name, function_name)
             || _nonprimary_key_restrictions->uses_function(ks_name, function_name);
 }
 
@@ -177,10 +237,10 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
     // - Is it queriable without 2ndary index, which is always more efficient
     // If a component of the partition key is restricted by a relation, all preceding
     // components must have a EQ. Only the last partition key component can be in IN relation.
-    if (_partition_key_restrictions && _partition_key_restrictions->is_on_token()) {
+    if (_partition_key_restrictions->is_on_token()) {
         _is_key_range = true;
     } else if (has_partition_key_unrestricted_components()) {
-        if (_partition_key_restrictions) {
+        if (!_partition_key_restrictions->empty()) {
             if (!has_queriable_index) {
                 throw exceptions::invalid_request_exception(sprint("Partition key parts: %s must be restricted as other parts are",
                     join(", ", get_partition_key_unrestricted_components())));
@@ -193,9 +253,6 @@ void statement_restrictions::process_partition_key_restrictions(bool has_queriab
 }
 
 bool statement_restrictions::has_partition_key_unrestricted_components() const {
-    if (!_partition_key_restrictions) {
-        return _schema->partition_key_size();
-    }
     return _partition_key_restrictions->size() < _schema->partition_key_size();
 }
 
@@ -237,29 +294,17 @@ void statement_restrictions::process_clustering_columns_restrictions(bool has_qu
 }
 
 std::vector<query::partition_range> statement_restrictions::get_partition_key_ranges(const query_options& options) const {
-    if (!_partition_key_restrictions) {
+    if (_partition_key_restrictions->empty()) {
         return {query::partition_range::make_open_ended_both_sides()};
     }
-    std::vector<query::partition_range> ranges;
-    ranges.reserve(_partition_key_restrictions->size());
-    for (query::range<partition_key>& r : _partition_key_restrictions->bounds(options)) {
-        if (!r.is_singular()) {
-            throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
-        }
-        ranges.emplace_back(std::move(r).transform<query::ring_position>(
-            [this] (partition_key&& k) -> query::ring_position {
-                auto token = dht::global_partitioner().get_token(*_schema, k);
-                return { std::move(token), std::move(k) };
-            }));
-    }
-    return ranges;
+    return _partition_key_restrictions->bounds_ranges(options);
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
-    if (!_clustering_columns_restrictions) {
+    if (_clustering_columns_restrictions->empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }
-    return _clustering_columns_restrictions->bounds(options);
+    return _clustering_columns_restrictions->bounds_ranges(options);
 }
 
 bool statement_restrictions::need_filtering() {
@@ -289,7 +334,7 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
 }
 
 void statement_restrictions::reverse() {
-    if (_clustering_columns_restrictions) {
+    if (!_clustering_columns_restrictions->empty()) {
         _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions<clustering_key_prefix>>(
             _clustering_columns_restrictions);
     }

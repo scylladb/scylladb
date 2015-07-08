@@ -93,6 +93,9 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
         return os << cd.name_as_text();
     }
+    friend std::ostream& operator<<(std::ostream& os, const column_definition* cd) {
+        return cd != nullptr ? os << *cd : os << "(null)";
+    }
     bool has_component_index() const {
         return is_primary_key();
     }

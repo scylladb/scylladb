@@ -50,6 +50,7 @@ options {
 #include "cql3/operation_impl.hh"
 #include "cql3/error_listener.hh"
 #include "cql3/single_column_relation.hh"
+#include "cql3/token_relation.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "cql3/maps.hh"
@@ -1215,10 +1216,10 @@ relationType returns [const cql3::operator_type* op = nullptr]
 
 relation[std::vector<cql3::relation_ptr>& clauses]
     : name=cident type=relationType t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), *type, std::move(t))); }
-#if 0
+
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
-        { $clauses.add(new TokenRelation(l, type, t)); }
-#endif
+        { $clauses.emplace_back(::make_shared<cql3::token_relation>(std::move(l), *type, std::move(t))); }
+
     | name=cident K_IN marker=inMarker
         { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::operator_type::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues
@@ -1256,12 +1257,9 @@ inMarker returns [shared_ptr<cql3::abstract_marker::in_raw> marker]
     | ':' name=ident { $marker = new_in_bind_variables(name); }
     ;
 
-#if 0
-tupleOfIdentifiers returns [List<ColumnIdentifier.Raw> ids]
-    @init { $ids = new ArrayList<ColumnIdentifier.Raw>(); }
-    : '(' n1=cident { $ids.add(n1); } (',' ni=cident { $ids.add(ni); })* ')'
+tupleOfIdentifiers returns [std::vector<::shared_ptr<cql3::column_identifier::raw>> ids]
+    : '(' n1=cident { $ids.push_back(n1); } (',' ni=cident { $ids.push_back(ni); })* ')'
     ;
-#endif
 
 singleColumnInValues returns [std::vector<::shared_ptr<cql3::term::raw>> terms]
     : '(' ( t1 = term { $terms.push_back(t1); } (',' ti=term { $terms.push_back(ti); })* )? ')'

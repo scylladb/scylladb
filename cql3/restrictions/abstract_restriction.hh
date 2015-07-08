@@ -41,39 +41,39 @@ namespace restrictions {
  */
 class abstract_restriction : public restriction {
 public:
-    virtual bool is_on_token() override {
+    virtual bool is_on_token() const override {
         return false;
     }
 
-    virtual bool is_multi_column() override {
+    virtual bool is_multi_column() const override {
         return false;
     }
 
-    virtual bool is_slice() override {
+    virtual bool is_slice() const override {
         return false;
     }
 
-    virtual bool is_EQ() override {
+    virtual bool is_EQ() const override {
         return false;
     }
 
-    virtual bool is_IN() override {
+    virtual bool is_IN() const override {
         return false;
     }
 
-    virtual bool is_contains() override {
+    virtual bool is_contains() const override {
         return false;
     }
 
-    virtual bool has_bound(statements::bound b) override {
+    virtual bool has_bound(statements::bound b) const override {
         return true;
     }
 
-    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
         return values(options);
     }
 
-    virtual bool is_inclusive(statements::bound b) override {
+    virtual bool is_inclusive(statements::bound b) const override {
         return true;
     }
 
