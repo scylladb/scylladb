@@ -292,4 +292,14 @@ unsigned shard_of(const token& t) {
     return v % smp::count;
 }
 
+int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
+    if (lh.less_compare(s, rh)) {
+        return -1;
+    } else if (lh.equal(s, rh)) {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
 }
