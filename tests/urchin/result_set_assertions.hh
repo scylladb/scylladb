@@ -42,6 +42,7 @@ public:
     const result_set_assertions& has(const row_assertion& ra) const;
     const result_set_assertions& has_only(const row_assertion& ra) const;
     const result_set_assertions& is_empty() const;
+    const result_set_assertions& has_size(int row_count) const;
 };
 
 // Make rs live as long as the returned assertion object is used

@@ -71,3 +71,9 @@ result_set_assertions::is_empty() const {
     BOOST_REQUIRE_EQUAL(_rs.rows().size(), 0);
     return *this;
 }
+
+const result_set_assertions&
+result_set_assertions::has_size(int row_count) const {
+    BOOST_REQUIRE_EQUAL(_rs.rows().size(), row_count);
+    return *this;
+}
