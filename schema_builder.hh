@@ -68,6 +68,22 @@ public:
         return _raw._dc_local_read_repair_chance;
     }
 
+    void set_min_compaction_threshold(int32_t t) {
+        _raw._min_compaction_threshold = t;
+    }
+
+    int32_t get_min_compaction_threshold() {
+        return _raw._min_compaction_threshold;
+    }
+
+    void set_max_compaction_threshold(int32_t t) {
+        _raw._max_compaction_threshold = t;
+    }
+
+    int32_t get_max_compaction_threshold() {
+        return _raw._max_compaction_threshold;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }

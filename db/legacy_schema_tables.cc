@@ -1032,11 +1032,11 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds(), timestamp);
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
         m.set_clustered_cell(ckey, "local_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
+        m.set_clustered_cell(ckey, "min_compaction_threshold", table->min_compaction_threshold(), timestamp);
+        m.set_clustered_cell(ckey, "max_compaction_threshold", table->max_compaction_threshold(), timestamp);
 #if 0
-        adder.add("max_compaction_threshold", table.getMaxCompactionThreshold());
         adder.add("max_index_interval", table.getMaxIndexInterval());
         adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-        adder.add("min_compaction_threshold", table.getMinCompactionThreshold());
         adder.add("min_index_interval", table.getMinIndexInterval());
         adder.add("read_repair_chance", table.getReadRepairChance());
         adder.add("speculative_retry", table.getSpeculativeRetry().toString());
@@ -1273,9 +1273,15 @@ future<> save_system_keyspace_schema() {
             builder.set_default_validator(parse_type(table_row.get_nonnull<sstring>("default_validator")));
         }
 
+        if (table_row.has("min_compaction_threshold")) {
+            builder.set_min_compaction_threshold(table_row.get_nonnull<int>("min_compaction_threshold"));
+        }
+
+        if (table_row.has("max_compaction_threshold")) {
+            builder.set_max_compaction_threshold(table_row.get_nonnull<int>("max_compaction_threshold"));
+        }
+
 #if 0
-        cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
-        cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
             cfm.comment(result.getString("comment"));
         if (result.has("memtable_flush_period_in_ms"))

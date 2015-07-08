@@ -175,13 +175,29 @@ public:
         if (has_property(KW_GCGRACESECONDS)) {
             builder.set_gc_grace_seconds(get_int(KW_GCGRACESECONDS, builder.get_gc_grace_seconds()));
         }
+
+        std::experimental::optional<sstring> tmp_value = {};
+        if (has_property(KW_MINCOMPACTIONTHRESHOLD)) {
+            if (get_compaction_options().count(KW_MINCOMPACTIONTHRESHOLD)) {
+                tmp_value = get_compaction_options().at(KW_MINCOMPACTIONTHRESHOLD);
+            }
+        }
+        int min_compaction_threshold = to_int(KW_MINCOMPACTIONTHRESHOLD, tmp_value, builder.get_min_compaction_threshold());
+
+        tmp_value = {};
+        if (has_property(KW_MAXCOMPACTIONTHRESHOLD)) {
+            if (get_compaction_options().count(KW_MAXCOMPACTIONTHRESHOLD)) {
+                tmp_value = get_compaction_options().at(KW_MAXCOMPACTIONTHRESHOLD);
+            }
+        }
+        int max_compaction_threshold = to_int(KW_MAXCOMPACTIONTHRESHOLD, tmp_value, builder.get_max_compaction_threshold());
+
+        if (min_compaction_threshold <= 0 || max_compaction_threshold <= 0)
+            throw exceptions::configuration_exception("Disabling compaction by setting compaction thresholds to 0 has been deprecated, set the compaction option 'enabled' to false instead.");
+        builder.set_min_compaction_threshold(min_compaction_threshold);
+        builder.set_max_compaction_threshold(max_compaction_threshold);
+
 #if 0
-        int minCompactionThreshold = toInt(KW_MINCOMPACTIONTHRESHOLD, getCompactionOptions().get(KW_MINCOMPACTIONTHRESHOLD), cfm.getMinCompactionThreshold());
-        int maxCompactionThreshold = toInt(KW_MAXCOMPACTIONTHRESHOLD, getCompactionOptions().get(KW_MAXCOMPACTIONTHRESHOLD), cfm.getMaxCompactionThreshold());
-        if (minCompactionThreshold <= 0 || maxCompactionThreshold <= 0)
-            throw new ConfigurationException("Disabling compaction by setting compaction thresholds to 0 has been deprecated, set the compaction option 'enabled' to false instead.");
-        cfm.minCompactionThreshold(minCompactionThreshold);
-        cfm.maxCompactionThreshold(maxCompactionThreshold);
         cfm.defaultTimeToLive(getInt(KW_DEFAULT_TIME_TO_LIVE, cfm.getDefaultTimeToLive()));
         cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(getString(KW_SPECULATIVE_RETRY, cfm.getSpeculativeRetry().toString())));
         cfm.memtableFlushPeriod(getInt(KW_MEMTABLE_FLUSH_PERIOD, cfm.getMemtableFlushPeriod()));

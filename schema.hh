@@ -175,6 +175,8 @@ private:
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = 864000;
         double _dc_local_read_repair_chance = 0.1;
+        int32_t _min_compaction_threshold = 4;
+        int32_t _max_compaction_threshold = 32;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -276,6 +278,14 @@ public:
 
     double dc_local_read_repair_chance() const {
         return _raw._dc_local_read_repair_chance;
+    }
+
+    int32_t min_compaction_threshold() const {
+        return _raw._min_compaction_threshold;
+    }
+
+    int32_t max_compaction_threshold() const {
+        return _raw._max_compaction_threshold;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;
