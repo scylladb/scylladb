@@ -25,6 +25,7 @@
 #include <boost/range/algorithm/for_each.hpp>
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
+#include "net/ip.hh"
 
 class tuple_type_impl;
 
@@ -672,6 +673,12 @@ template <>
 inline
 shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
     return date_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<net::ipv4_address>() {
+    return inet_addr_type;
 }
 
 namespace std {
