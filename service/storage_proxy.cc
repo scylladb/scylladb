@@ -1580,7 +1580,7 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::
         return make_empty();
     }
 
-    if (partition_ranges[0].is_singular()) { // do not support mixed partitions (yet?)
+    if (partition_ranges[0].is_singular() && partition_ranges[0].start_value().has_key()) { // do not support mixed partitions (yet?)
         try {
             return query_singular(cmd, std::move(partition_ranges), cl);
         } catch (const no_such_column_family&) {
