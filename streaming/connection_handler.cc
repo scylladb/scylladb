@@ -47,7 +47,11 @@ future<> connection_handler::initiate() {
             _session.plan_id(), _session.description(),
             is_for_outgoing, _session.keep_ss_table_level());
     auto id = shard_id{from, 0};
-    return _session.ms().send_message<void>(net::messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg));
+    _session.src_cpu_id = engine().cpu_id();
+    return _session.ms().send_message<unsigned>(net::messaging_verb::STREAM_INIT_MESSAGE,
+            std::move(id), std::move(msg), _session.src_cpu_id).then([this] (unsigned dst_cpu_id) {
+        _session.dst_cpu_id = dst_cpu_id;
+    });
 }
 
 } // namespace streaming

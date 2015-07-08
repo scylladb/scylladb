@@ -36,44 +36,46 @@
 namespace streaming {
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg, unsigned src_cpu_id) {
+        auto dst_cpu_id = engine().cpu_id();
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), src_cpu_id, dst_cpu_id] () mutable {
             stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
                 msg.description, msg.from, msg.keep_ss_table_level);
-            return make_ready_future<>();
+            return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
-    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO: find session
             stream_session s;
             auto msg_ret = s.prepare(std::move(msg.requests), std::move(msg.summaries));
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
-    ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm) {
-        auto cf_id = fm.column_family_id();
-        auto& db = stream_session::get_local_db();
-        auto& cf = db.find_column_family(cf_id);
-        cf.apply(fm, db::replay_position(), &db);
-        return make_ready_future<>();
+    ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
+            auto cf_id = fm.column_family_id();
+            auto& db = stream_session::get_local_db();
+            auto& cf = db.find_column_family(cf_id);
+            cf.apply(fm, db::replay_position(), &db);
+            return make_ready_future<>();
+        });
     });
-    ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg) {
-        return make_ready_future<>();
+    ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
+            // TODO
+            return make_ready_future<>();
+        });
     });
-    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
             messages::complete_message msg_ret;
             return make_ready_future<messages::complete_message>(std::move(msg_ret));
         });
     });
-    ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg) {
-        auto cpu_id = 0;
-        smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
+        smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
         }).then_wrapped([] (auto&& f) {
             try {
@@ -107,7 +109,8 @@ void stream_session::on_initialization_complete() {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
     auto id = shard_id{this->peer, 0};
-    ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id), std::move(prepare)).then([this] (messages::prepare_message msg) {
+    ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
+            std::move(prepare), this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         for (auto& request : msg.requests) {
             // always flush on stream request
             add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);

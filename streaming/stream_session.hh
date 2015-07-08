@@ -144,6 +144,8 @@ public:
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
     inet_address connecting;
     connection_handler conn_handler;
+    unsigned src_cpu_id;
+    unsigned dst_cpu_id;
 private:
     int _index;
     // should not be null when session is started

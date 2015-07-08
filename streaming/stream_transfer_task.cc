@@ -49,7 +49,7 @@ void stream_transfer_task::start() {
         do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
-                return session.ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm).then([this, fm] {
+                return session.ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session.dst_cpu_id).then([this, fm] {
                     return stop_iteration::no;
                 });
             });
