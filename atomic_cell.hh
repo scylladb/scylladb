@@ -194,8 +194,8 @@ public:
     operator atomic_cell_view() const {
         return atomic_cell_view(_data);
     }
-    static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point expiry) {
-        return atomic_cell_type::make_dead(timestamp, expiry);
+    static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
+        return atomic_cell_type::make_dead(timestamp, deletion_time);
     }
     static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value) {
         return atomic_cell_type::make_live(timestamp, value);
