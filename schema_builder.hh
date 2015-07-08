@@ -52,6 +52,14 @@ public:
         _raw._default_validator = validator;
     }
 
+    void set_gc_grace_seconds(int32_t gc_grace_seconds) {
+        _raw._gc_grace_seconds = gc_grace_seconds;
+    }
+
+    int32_t get_gc_grace_seconds() {
+        return _raw._gc_grace_seconds;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }

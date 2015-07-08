@@ -1029,9 +1029,7 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
         m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
-#if 0
-        adder.add("gc_grace_seconds", table.getGcGraceSeconds());
-#endif
+        m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds(), timestamp);
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
 #if 0
         adder.add("local_read_repair_chance", table.getDcLocalReadRepairChance());
@@ -1263,8 +1261,11 @@ future<> save_system_keyspace_schema() {
 #if 0
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
-        cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
 #endif
+        if (table_row.has("gc_grace_seconds")) {
+            builder.set_gc_grace_seconds(table_row.get_nonnull<int32_t>("gc_grace_seconds"));
+        }
+
         if (table_row.has("default_validator")) {
             builder.set_default_validator(parse_type(table_row.get_nonnull<sstring>("default_validator")));
         }

@@ -173,6 +173,7 @@ private:
         compression_parameters _compressor_params;
         bool _is_dense = false;
         cf_type _type = cf_type::standard;
+        int32_t _gc_grace_seconds = 864000;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -266,6 +267,10 @@ public:
 
     bool is_super() const {
         return _raw._type == cf_type::super;
+    }
+
+    int32_t gc_grace_seconds() const {
+        return _raw._gc_grace_seconds;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;
