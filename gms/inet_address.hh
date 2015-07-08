@@ -20,6 +20,8 @@ public:
     inet_address(int32_t ip)
         : _addr(uint32_t(ip)) {
     }
+    inet_address(net::ipv4_address&& addr) : _addr(std::move(addr)) {}
+
     inet_address(const sstring& addr) {
         // FIXME: We need a real DNS resolver
         if (addr == "localhost") {
