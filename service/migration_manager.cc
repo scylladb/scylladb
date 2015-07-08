@@ -332,22 +332,25 @@ public static void announceTypeUpdate(UserType updatedType, boolean announceLoca
 {
     announceNewType(updatedType, announceLocally);
 }
+#endif
 
-public static void announceKeyspaceDrop(String ksName) throws ConfigurationException
+future<> migration_manager::announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally)
 {
-    announceKeyspaceDrop(ksName, false);
+    try {
+        auto& db = proxy.local().get_db().local();
+        /*auto&& keyspace = */db.find_keyspace(ks_name);
+#if 0
+        logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
+        announce(LegacySchemaTables.makeDropKeyspaceMutation(oldKsm, FBUtilities.timestampMicros()), announceLocally);
+#endif
+        // FIXME
+        throw std::runtime_error("not implemented");
+    } catch (const no_such_keyspace& e) {
+        throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
+    }
 }
 
-public static void announceKeyspaceDrop(String ksName, boolean announceLocally) throws ConfigurationException
-{
-    KSMetaData oldKsm = Schema.instance.getKSMetaData(ksName);
-    if (oldKsm == null)
-        throw new ConfigurationException(String.format("Cannot drop non existing keyspace '%s'.", ksName));
-
-    logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
-    announce(LegacySchemaTables.makeDropKeyspaceMutation(oldKsm, FBUtilities.timestampMicros()), announceLocally);
-}
-
+#if 0
 public static void announceColumnFamilyDrop(String ksName, String cfName) throws ConfigurationException
 {
     announceColumnFamilyDrop(ksName, cfName, false);
