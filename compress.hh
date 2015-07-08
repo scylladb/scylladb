@@ -32,7 +32,7 @@ public:
         validate_options(options);
 
         auto it = options.find(SSTABLE_COMPRESSION);
-        if (it == options.end()) {
+        if (it == options.end() || it->second.empty()) {
             return;
         }
         const auto& compressor_class = it->second;
