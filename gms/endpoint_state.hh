@@ -71,7 +71,7 @@ public:
         _heart_beat_state = hbs;
     }
 
-    std::experimental::optional<versioned_value> get_application_state(application_state key) {
+    std::experimental::optional<versioned_value> get_application_state(application_state key) const {
         auto it = _application_state.find(key);
         if (it == _application_state.end()) {
             return {};
