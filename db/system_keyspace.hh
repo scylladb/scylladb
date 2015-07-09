@@ -72,6 +72,8 @@ future<> update_tokens(std::unordered_set<dht::token> tokens);
 template <typename Value>
 future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
+future<> remove_endpoint(gms::inet_address ep);
+
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
 

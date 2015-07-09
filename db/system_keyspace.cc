@@ -683,16 +683,19 @@ future<> update_schema_version(utils::UUID version) {
         return tokens;
     }
 
-    /**
-     * Remove stored tokens being used by another node
-     */
-    public static synchronized void removeEndpoint(InetAddress ep)
-    {
-        String req = "DELETE FROM system.%s WHERE peer = ?";
-        executeInternal(String.format(req, PEERS), ep);
-    }
-
 #endif
+/**
+ * Remove stored tokens being used by another node
+ */
+future<> remove_endpoint(gms::inet_address ep) {
+    return _local_cache.invoke_on_all([ep] (local_cache& lc) {
+        lc._cached_dc_rack_info.erase(ep);
+    }).then([ep] {
+        sstring req = "DELETE FROM system.%s WHERE peer = ?";
+        return execute_cql(req, PEERS, ep).discard_result();
+    });
+}
+
     /**
      * This method is used to update the System Keyspace with the new tokens for this node
     */
