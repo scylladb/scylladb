@@ -397,35 +397,31 @@ future<> save_system_keyspace_schema() {
                                                            Integer.MAX_VALUE,
                                                            System.currentTimeMillis());
     }
-
-    public static Collection<Mutation> convertSchemaToMutations()
-    {
-        Map<DecoratedKey, Mutation> mutationMap = new HashMap<>();
-
-        for (String table : ALL)
-            convertSchemaToMutations(mutationMap, table);
-
-        return mutationMap.values();
-    }
-
-    private static void convertSchemaToMutations(Map<DecoratedKey, Mutation> mutationMap, String schemaTableName)
-    {
-        for (Row partition : getSchemaPartitionsForTable(schemaTableName))
-        {
-            if (isSystemKeyspaceSchemaPartition(partition))
-                continue;
-
-            Mutation mutation = mutationMap.get(partition.key);
-            if (mutation == null)
-            {
-                mutation = new Mutation(SystemKeyspace.NAME, partition.key.getKey());
-                mutationMap.put(partition.key, mutation);
-            }
-
-            mutation.add(partition.cf);
-        }
-    }
 #endif
+
+    future<std::vector<frozen_mutation>> convert_schema_to_mutations(service::storage_proxy& proxy)
+    {
+        auto map = [&proxy] (sstring table) {
+            return db::system_keyspace::query_mutations(proxy, table).then([&proxy, table] (auto rs) {
+                auto s = proxy.get_db().local().find_schema(system_keyspace::NAME, table);
+                std::vector<frozen_mutation> results;
+                for (auto&& p : rs->partitions()) {
+                    auto mut = p.mut().unfreeze(s);
+                    auto partition_key = boost::any_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+                    if (partition_key == system_keyspace::NAME) {
+                        continue;
+                    }
+                    results.emplace_back(p.mut());
+                }
+                return results;
+            });
+        };
+        auto reduce = [] (auto&& result, auto&& mutations) {
+            std::copy(mutations.begin(), mutations.end(), std::back_inserter(result));
+            return std::move(result);
+        };
+        return map_reduce(ALL.begin(), ALL.end(), map, std::move(std::vector<frozen_mutation>{}), reduce);
+    }
 
     future<schema_result>
     read_schema_for_keyspaces(service::storage_proxy& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
