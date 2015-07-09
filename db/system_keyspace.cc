@@ -612,14 +612,12 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
     });
 }
 
-#if 0
-    public static synchronized void updatePreferredIP(InetAddress ep, InetAddress preferred_ip)
-    {
-        String req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-        executeInternal(String.format(req, PEERS), ep, preferred_ip);
-        forceBlockingFlush(PEERS);
-    }
-#endif
+future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
+    sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
+    return execute_cql(req, PEERS, ep, preferred_ip).discard_result().then([] {
+        return force_blocking_flush(PEERS);
+    });
+}
 
 template <typename Value>
 static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value) {

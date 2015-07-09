@@ -70,6 +70,8 @@ future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);
 future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
 
+future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
+
 template <typename Value>
 future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
 
