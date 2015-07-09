@@ -455,15 +455,10 @@ column_family::stop() {
     });
 }
 
-// FIXME: this is just an example, should be changed to something more general
-// Note: We assume that the column_family does not get destroyed during compaction.
 future<>
-column_family::compact_all_sstables() {
-    auto sstables_to_compact =
-            make_lw_shared<std::vector<sstables::shared_sstable>>();
-    for (auto&& entry : *_sstables) {
-        sstables_to_compact->push_back(entry.second);
-    }
+column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) {
+    auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(sstables));
+
     auto new_tables = make_lw_shared<std::vector<
             std::pair<unsigned, sstables::shared_sstable>>>();
     auto create_sstable = [this, new_tables] {
@@ -503,6 +498,18 @@ column_family::compact_all_sstables() {
             oldtab->mark_for_deletion();
         }
     });
+}
+
+// FIXME: this is just an example, should be changed to something more general
+// Note: We assume that the column_family does not get destroyed during compaction.
+future<>
+column_family::compact_all_sstables() {
+    std::vector<sstables::shared_sstable> sstables;
+    sstables.reserve(_sstables->size());
+    for (auto&& entry : *_sstables) {
+        sstables.push_back(entry.second);
+    }
+    return compact_sstables(std::move(sstables));
 }
 
 void column_family::start_compaction() {
