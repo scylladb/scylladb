@@ -923,7 +923,6 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
                     if (mo) {
                         auto p_builder = qs.builder.add_partition(mo->key());
                         mo->partition().query(p_builder, *_schema, qs.cmd.timestamp, qs.limit);
-                        p_builder.finish();
                         qs.limit -= p_builder.row_count();
                     } else {
                         qs.range_empty = true;

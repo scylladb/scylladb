@@ -104,6 +104,5 @@ mutation::query(const query::partition_slice& slice, gc_clock::time_point now, u
     query::result::builder builder(slice);
     auto pb = builder.add_partition(key());
     _p.query(pb, *_schema, now, row_limit);
-    pb.finish();
     return builder.build();
 }

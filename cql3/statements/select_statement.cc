@@ -290,11 +290,7 @@ public:
     }
 
     void accept_partition_end(const query::result_row_view& static_row) {
-        if (_row_count == 0
-            && !static_row.empty()
-            && !stmt._restrictions->uses_secondary_indexing()
-            && stmt._restrictions->has_no_clustering_columns_restriction())
-        {
+        if (_row_count == 0) {
             builder.new_row();
             auto static_row_iterator = static_row.iterator();
             for (auto&& def : stmt._selection->get_columns()) {

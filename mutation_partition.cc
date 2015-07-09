@@ -281,14 +281,16 @@ mutation_partition::query(query::result::partition_writer& pw,
         return s.regular_column_at(id);
     };
 
-    // So that we can always add static row before we know how many clustered rows there will be,
-    // without exceeding the limit.
+    // To avoid retraction of the partition entry in case of limit == 0.
     assert(limit > 0);
 
+    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
+        return s.static_column_at(id);
+    };
+
+    bool any_live = has_any_live_data(static_row(), _tombstone, static_column_resolver, now);
+
     if (!slice.static_columns.empty()) {
-        auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
-            return s.static_column_at(id);
-        };
         auto row_builder = pw.add_static_row();
         get_row_slice(static_row(), slice.static_columns, partition_tombstone(),
             static_column_resolver, now, row_builder);
@@ -318,6 +320,7 @@ mutation_partition::query(query::result::partition_writer& pw,
             // any of the row's cell is live and we should return the row in
             // such case.
             if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver, now)) {
+                any_live = true;
                 auto row_builder = pw.add_row(e.key());
                 get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
                 row_builder.finish();
@@ -326,6 +329,12 @@ mutation_partition::query(query::result::partition_writer& pw,
                 }
             }
         }
+    }
+
+    if (!any_live) {
+        pw.retract();
+    } else {
+        pw.finish();
     }
 }
 
