@@ -48,7 +48,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
     return *this;
 }
 
-stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details) {
+stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
     _coordinator.transfer_files(to, std::move(sstable_details));
     return *this;
 }

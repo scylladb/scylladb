@@ -13,6 +13,7 @@
 #include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "dns.hh"
 #include <cstdio>
@@ -71,6 +72,8 @@ int main(int ac, char** av) {
                 });
             }).then([listen_address, seed_provider] {
                 return net::init_messaging_service(listen_address, seed_provider);
+            }).then([&db] {
+                return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
                 return proxy.start(std::ref(db)).then([&proxy] {
                     engine().at_exit([&proxy] { return proxy.stop(); });

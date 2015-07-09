@@ -21,35 +21,29 @@
 
 #pragma once
 
-#include "streaming/messages/stream_message.hh"
-#include "streaming/messages/file_message_header.hh"
-#include "sstables/sstables.hh"
+#include "query-request.hh"
 #include "mutation_reader.hh"
+#include "utils/UUID.hh"
+#include <vector>
 
 namespace streaming {
-namespace messages {
 
-/**
- * IncomingFileMessage is used to receive the part(or whole) of a SSTable data file.
- */
-class incoming_file_message : public stream_message {
-public:
-    file_message_header header;
-
-    incoming_file_message() = default;
-    incoming_file_message(file_message_header header_, mutation_reader mr_)
-        : stream_message(stream_message::Type::FILE)
-        , header(std::move(header_)) {
+struct stream_detail {
+    using UUID = utils::UUID;
+    UUID cf_id;
+    std::vector<shared_ptr<query::range<dht::ring_position>>> prs;
+    mutation_reader mr;
+    int64_t estimated_keys;
+    int64_t repaired_at;
+    stream_detail() = default;
+    stream_detail(UUID cf_id_, std::vector<shared_ptr<query::range<dht::ring_position>>> prs_,
+                  mutation_reader mr_, long estimated_keys_, long repaired_at_)
+        : cf_id(std::move(cf_id_))
+        , prs(std::move(prs_))
+        , mr(std::move(mr_))
+        , estimated_keys(estimated_keys_)
+        , repaired_at(repaired_at_) {
     }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        return "File (" + header + ", file: " + sstable.getFilename() + ")";
-    }
-#endif
 };
 
-} // namespace messages
 } // namespace streaming

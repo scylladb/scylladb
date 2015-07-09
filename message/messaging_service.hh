@@ -68,6 +68,7 @@ enum class messaging_verb : int32_t {
     // Used by streaming
     STREAM_INIT_MESSAGE,
     PREPARE_MESSAGE,
+    STREAM_MUTATION,
     INCOMING_FILE_MESSAGE,
     OUTGOING_FILE_MESSAGE,
     RECEIVED_MESSAGE,
@@ -90,6 +91,13 @@ public:
 } // namespace std
 
 namespace net {
+
+future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
+future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
+future<> ser_sstring(output_stream<char>& out, sstring& v);
+future<> des_sstring(input_stream<char>& in, sstring& v);
+future<> ser_frozen_mutation(output_stream<char>& out, const frozen_mutation& v);
+future<> des_frozen_mutation(input_stream<char>& in, frozen_mutation& v);
 
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
@@ -147,78 +155,29 @@ struct serializer {
 
     // For messaging_verb
     inline auto operator()(output_stream<char>& out, messaging_verb& v) {
-        bytes b(bytes::initialized_later(), sizeof(v));
-        auto _out = b.begin();
-        serialize_int32(_out, int32_t(v));
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sizeof(v));
+        return ser_messaging_verb(out, v);
     }
     inline auto operator()(input_stream<char>& in, messaging_verb& v) {
-        return in.read_exactly(sizeof(v)).then([&v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != sizeof(v)) {
-                throw rpc::closed_error();
-            }
-            bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sizeof(v));
-            v = messaging_verb(read_simple<int32_t>(bv));
-        });
+        return des_messaging_verb(in, v);
     }
 
     // For sstring
     inline auto operator()(output_stream<char>& out, sstring& v) {
-        auto serialize_string_size = serialize_int16_size + v.size();
-        auto sz = serialize_int16_size + serialize_string_size;
-        bytes b(bytes::initialized_later(), sz);
-        auto _out = b.begin();
-        serialize_int16(_out, serialize_string_size);
-        serialize_string(_out, v);
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+        return ser_sstring(out, v);
     }
     inline auto operator()(input_stream<char>& in, sstring& v) {
-        return in.read_exactly(serialize_int16_size).then([&in, &v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != serialize_int16_size) {
-                throw rpc::closed_error();
-            }
-            size_t serialize_string_size = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
-            return in.read_exactly(serialize_string_size).then([serialize_string_size, &v]
-                (temporary_buffer<char> buf) mutable {
-                if (buf.size() != serialize_string_size) {
-                    throw rpc::closed_error();
-                }
-                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
-                new (&v) sstring(read_simple_short_string(bv));
-                return make_ready_future<>();
-            });
-        });
+        return des_sstring(in, v);
     }
 
     // For frozen_mutation
     inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
-        db::frozen_mutation_serializer s(v);
-        uint32_t sz = s.size() + data_output::serialized_size(sz);
-        bytes b(bytes::initialized_later(), sz);
-        data_output o(b);
-        o.write<uint32_t>(sz - data_output::serialized_size(sz));
-        db::frozen_mutation_serializer::write(o, v);
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+        return ser_frozen_mutation(out, v);
     }
     inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
         return operator()(out, const_cast<const frozen_mutation&>(v));
     }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
-        static auto sz = data_output::serialized_size<uint32_t>();
-        return in.read_exactly(sz).then([&v, &in] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != sz) {
-                throw rpc::closed_error();
-            }
-            data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), sz));
-            size_t msz = i.read<int32_t>();
-            return in.read_exactly(msz).then([&v, msz] (temporary_buffer<char> buf) {
-                if (buf.size() != msz) {
-                    throw rpc::closed_error();
-                }
-                data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), msz));
-                new (&v) frozen_mutation(db::frozen_mutation_serializer::read(i));
-            });
-        });
+        return des_frozen_mutation(in, v);
     }
 
     // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2

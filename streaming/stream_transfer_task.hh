@@ -24,6 +24,7 @@
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include <map>
 
@@ -49,7 +50,7 @@ public:
         : stream_task(session, cf_id) {
     }
 
-    void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at);
+    void add_transfer_file(stream_detail detail);
 
     /**
      * Received ACK for file at {@code sequenceNumber}.
@@ -102,14 +103,9 @@ public:
         return total_size;
     }
 
-#if 0
-    public synchronized Collection<OutgoingFileMessage> getFileMessages()
-    {
-        // We may race between queuing all those messages and the completion of the completion of
-        // the first ones. So copy tthe values to avoid a ConcurrentModificationException
-        return new ArrayList<>(files.values());
+    std::map<int32_t, messages::outgoing_file_message>& get_file_messages() {
+        return files;
     }
-#endif
 
     messages::outgoing_file_message create_message_for_retry(int sequence_number) {
 #if 0
@@ -155,6 +151,7 @@ public:
         return future;
     }
 #endif
+    void start();
 };
 
 } // namespace streaming

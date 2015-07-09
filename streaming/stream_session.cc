@@ -29,52 +29,53 @@
 #include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_result_future.hh"
+#include "mutation_reader.hh"
+#include "dht/i_partitioner.hh"
+#include "database.hh"
 
 namespace streaming {
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg, unsigned src_cpu_id) {
+        auto dst_cpu_id = engine().cpu_id();
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), src_cpu_id, dst_cpu_id] () mutable {
+            stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
+                msg.description, msg.from, msg.keep_ss_table_level);
+            return make_ready_future<unsigned>(dst_cpu_id);
+        });
+    });
+    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
+            // TODO: find session
+            stream_session s;
+            auto msg_ret = s.prepare(std::move(msg.requests), std::move(msg.summaries));
+            return make_ready_future<messages::prepare_message>(std::move(msg_ret));
+        });
+    });
+    ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
+            auto cf_id = fm.column_family_id();
+            auto& db = stream_session::get_local_db();
+            auto& cf = db.find_column_family(cf_id);
+            cf.apply(fm, db::replay_position(), &db);
+            return make_ready_future<>();
+        });
+    });
+    ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
             return make_ready_future<>();
         });
     });
-    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::prepare_message msg_ret;
-            return make_ready_future<messages::prepare_message>(std::move(msg_ret));
-        });
-    });
-    ms().register_handler(messaging_verb::OUTGOING_FILE_MESSAGE, [] (messages::outgoing_file_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::received_message msg_ret;
-            return make_ready_future<messages::received_message>(std::move(msg_ret));
-        });
-    });
-    ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::outgoing_file_message msg_ret;
-            return make_ready_future<messages::outgoing_file_message>(std::move(msg_ret));
-        });
-    });
-    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg) {
-        auto cpu_id = 0;
-        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
             messages::complete_message msg_ret;
             return make_ready_future<messages::complete_message>(std::move(msg_ret));
         });
     });
-    ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg) {
-        auto cpu_id = 0;
-        smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+    ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
+        smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
         }).then_wrapped([] (auto&& f) {
             try {
@@ -88,11 +89,13 @@ void stream_session::init_messaging_service_handler() {
 }
 
 distributed<stream_session::handler> stream_session::_handlers;
+distributed<database>* stream_session::_db;
 
-future<> stream_session::init_streaming_service() {
-    return _handlers.start().then([this] {
-        return _handlers.invoke_on_all([this] (handler& h) {
-            this->init_messaging_service_handler();
+future<> stream_session::init_streaming_service(distributed<database>& db) {
+    _db = &db;
+    return _handlers.start().then([] {
+        return _handlers.invoke_on_all([] (handler& h) {
+            init_messaging_service_handler();
         });
     });
 }
@@ -105,12 +108,21 @@ void stream_session::on_initialization_complete() {
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
-    // handler.sendMessage(prepare);
-
-    // if we don't need to prepare for receiving stream, start sending files immediately
-    if (_requests.empty()) {
-        start_streaming_files();
-    }
+    auto id = shard_id{this->peer, 0};
+    ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
+            std::move(prepare), this->dst_cpu_id).then([this] (messages::prepare_message msg) {
+        for (auto& request : msg.requests) {
+            // always flush on stream request
+            add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
+        }
+        for (auto& summary : msg.summaries) {
+            prepare_receiving(summary);
+        }
+        // if we don't need to prepare for receiving stream, start sending files immediately
+        if (_requests.empty()) {
+            start_streaming_files();
+        }
+    });
 }
 
 void stream_session::on_error() {
@@ -125,7 +137,7 @@ void stream_session::on_error() {
     close_session(stream_session_state::FAILED);
 }
 
-void stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     for (auto& request : requests) {
@@ -137,8 +149,8 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     }
 
     // send back prepare message if prepare message contains stream request
+    messages::prepare_message prepare;
     if (!requests.empty()) {
-        messages::prepare_message prepare;
         for (auto& x: _transfers) {
             auto& task = x.second;
             prepare.summaries.emplace_back(task.get_summary());
@@ -150,6 +162,8 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     if (!maybe_completed()) {
         start_streaming_files();
     }
+
+    return prepare;
 }
 
 void stream_session::file_sent(const messages::file_message_header& header) {
@@ -176,7 +190,7 @@ void stream_session::receive(messages::incoming_file_message message) {
     auto cf_id = message.header.cf_id;
     auto it = _receivers.find(cf_id);
     assert(it != _receivers.end());
-    it->second.received(message.sstable);
+    it->second.received(std::move(message));
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
@@ -277,23 +291,74 @@ void stream_session::start_streaming_files() {
             taskCompleted(task); // there is no file to send
     }
 #endif
+    set_state(stream_session_state::STREAMING);
+    for (auto& x : _transfers) {
+        stream_transfer_task& task = x.second;
+        task.start();
+    }
 }
 
-void stream_session::add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details) {
-    for (auto& details : sstable_details) {
+std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
+    // if columnfamilies are not specified, we add all cf under the keyspace
+    std::vector<column_family*> stores;
+    auto& db = get_local_db();
+    if (column_families.empty()) {
+        abort();
+        // FIXME: stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
+    } else {
+        // TODO: We can move this to database class and use lw_shared_ptr<column_family> instead
+        for (auto& cf_name : column_families) {
+            auto& x = db.find_column_family(keyspace, cf_name);
+            stores.push_back(&x);
+        }
+    }
+    return stores;
+}
+
+void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+    std::vector<stream_detail> sstable_details;
+    auto cfs = get_column_family_stores(keyspace, column_families);
+    if (flush_tables) {
+        // FIXME: flushSSTables(stores);
+    }
+    for (auto& cf : cfs) {
+        std::vector<mutation_reader> readers;
+        std::vector<shared_ptr<query::range<ring_position>>> prs;
+        auto cf_id = cf->schema()->id();
+        for (auto& range : ranges) {
+            auto pr = make_shared<query::range<ring_position>>(std::move(range).transform<ring_position>(
+                [this] (token&& t) -> ring_position {
+                    return { std::move(t) };
+                }));
+            prs.push_back(pr);
+            auto mr = cf->make_reader(*pr);
+            readers.push_back(std::move(mr));
+        }
+        // Store this mutation_reader so we can send mutaions later
+        mutation_reader mr = make_combined_reader(std::move(readers));
+        // FIXME: sstable.estimatedKeysForRanges(ranges)
+        long estimated_keys = 0;
+        sstable_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+    }
+    add_transfer_files(std::move(sstable_details));
+}
+
+void stream_session::add_transfer_files(std::vector<stream_detail> sstable_details) {
+    for (auto& detail : sstable_details) {
+#if 0
         if (details.sections.empty()) {
             // A reference was acquired on the sstable and we won't stream it
             // FIXME
             // details.sstable.releaseReference();
             continue;
         }
-        // FIXME
-        UUID cf_id; // details.sstable.metadata.cfId;
+#endif
+        UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {
             it = _transfers.emplace(cf_id, stream_transfer_task(*this, cf_id)).first;
         }
-        it->second.add_transfer_file(details.sstable, details.estimated_keys, std::move(details.sections), details.repaired_at);
+        it->second.add_transfer_file(std::move(detail));
     }
 }
 
@@ -329,8 +394,9 @@ void stream_session::start() {
     try {
         // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
         //                                                        peer, peer == connecting ? "" : " through " + connecting);
-        conn_handler.initiate();
-        on_initialization_complete();
+        conn_handler.initiate().then([this] {
+            on_initialization_complete();
+        });
     } catch (...) {
         on_error();
     }

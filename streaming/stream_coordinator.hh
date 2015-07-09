@@ -93,7 +93,7 @@ public:
     std::vector<session_info> get_all_session_info();
 
 public:
-    void transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
+    void transfer_files(inet_address to, std::vector<stream_detail> sstable_details);
 
 private:
 #if 0
