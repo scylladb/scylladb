@@ -330,6 +330,8 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     }
 
     auto generation = boost::lexical_cast<unsigned long>(comps[1]);
+    // Make sure new sstables don't overwrite this one.
+    _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
 
     try {
         format = sstable::format_from_sstring(comps[2]);
