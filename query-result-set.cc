@@ -12,10 +12,12 @@ namespace query {
 // contains cells from the visited results.
 class result_set_builder {
     schema_ptr _schema;
+    const partition_slice& _slice;
     std::vector<result_set_row> _rows;
     std::unordered_map<sstring, data_value> _pkey_cells;
 public:
-    result_set_builder(schema_ptr schema);
+    // Keep slice live as long as the builder is used.
+    result_set_builder(schema_ptr schema, const partition_slice& slice);
     result_set build() const;
     void accept_new_partition(const partition_key& key, uint32_t row_count);
     void accept_new_partition(uint32_t row_count);
@@ -44,8 +46,8 @@ std::ostream& operator<<(std::ostream& out, const result_set& rs) {
     return out;
 }
 
-result_set_builder::result_set_builder(schema_ptr schema)
-    : _schema{schema}
+result_set_builder::result_set_builder(schema_ptr schema, const partition_slice& slice)
+    : _schema{schema}, _slice(slice)
 { }
 
 result_set result_set_builder::build() const {
@@ -121,7 +123,14 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
 {
     std::unordered_map<sstring, data_value> cells;
     auto i = row.iterator();
-    auto columns = is_static ? _schema->static_columns() : _schema->regular_columns();
+    auto column_ids = is_static ? _slice.static_columns : _slice.regular_columns;
+    auto columns = column_ids | boost::adaptors::transformed([this, is_static] (column_id id) -> const column_definition& {
+        if (is_static) {
+            return _schema->static_column_at(id);
+        } else {
+            return _schema->regular_column_at(id);
+        }
+    });
     for (auto &&col : columns) {
         if (col.is_atomic()) {
             auto cell = i.next_atomic_cell();
@@ -144,7 +153,7 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
 result_set
 result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const result& r) {
     auto make = [&slice, s = std::move(s)] (bytes_view v) mutable {
-        result_set_builder builder{std::move(s)};
+        result_set_builder builder{std::move(s), slice};
         result_view view(v);
         view.consume(slice, builder);
         return builder.build();
