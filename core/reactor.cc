@@ -708,9 +708,11 @@ blockdev_file_impl::allocate(uint64_t position, uint64_t length) {
 
 future<size_t>
 posix_file_impl::size(void) {
-    return posix_file_impl::stat().then([] (struct stat&& st) {
-        return make_ready_future<size_t>(st.st_size);
-    });
+    auto r = ::lseek(_fd, 0, SEEK_END);
+    if (r == -1) {
+        return make_exception_future<size_t>(std::system_error(errno, std::system_category()));
+    }
+    return make_ready_future<size_t>(r);
 }
 
 future<>
