@@ -610,15 +610,45 @@ future<db_clock::time_point> get_truncated_at(cql3::query_processor& qp, utils::
         executeInternal(String.format(req, PEERS), ep, preferred_ip);
         forceBlockingFlush(PEERS);
     }
+#endif
 
-    public static synchronized void updatePeerInfo(InetAddress ep, String columnName, Object value)
-    {
-        if (ep.equals(FBUtilities.getBroadcastAddress()))
-            return;
+template <typename Value>
+static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value) {
+    return make_ready_future<>();
+}
 
-        String req = "INSERT INTO system.%s (peer, %s) VALUES (?, ?)";
-        executeInternal(String.format(req, PEERS, columnName), ep, value);
+template <>
+future<> update_cached_values(gms::inet_address ep, sstring column_name, sstring value) {
+    return _local_cache.invoke_on_all([ep = std::move(ep),
+                                       column_name = std::move(column_name),
+                                       value = std::move(value)] (local_cache& lc) {
+        if (column_name == "data_center") {
+            lc._cached_dc_rack_info[ep].dc = value;
+        } else if (column_name == "rack") {
+            lc._cached_dc_rack_info[ep].rack = value;
+        }
+        return make_ready_future<>();
+    });
+}
+
+template <typename Value>
+future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value) {
+    if (ep == utils::fb_utilities::get_broadcast_address()) {
+        return make_ready_future<>();
     }
+
+    return update_cached_values(ep, column_name, value).then([ep, column_name, value] {
+        sstring clause = sprint("(peer, %s) VALUES (?, ?)", column_name);
+        sstring req = "INSERT INTO system.%s " + clause;
+        return execute_cql(req, PEERS, ep.addr(), value).discard_result();
+    });
+}
+// sets are not needed, since tokens are updated by another method
+template future<> update_peer_info<sstring>(gms::inet_address ep, sstring column_name, sstring);
+template future<> update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
+template future<> update_peer_info<net::ipv4_address>(gms::inet_address ep, sstring column_name, net::ipv4_address);
+
+#if 0
 
     public static synchronized void updateHintsDropped(InetAddress ep, UUID timePeriod, int value)
     {
