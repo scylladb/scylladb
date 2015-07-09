@@ -57,6 +57,8 @@ public:
 
     static future<> announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally = false);
 
+    static future<> announce_column_family_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
+
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied

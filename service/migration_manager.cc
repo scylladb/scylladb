@@ -350,23 +350,27 @@ future<> migration_manager::announce_keyspace_drop(distributed<service::storage_
     }
 }
 
+future<> migration_manager::announce_column_family_drop(distributed<service::storage_proxy>& proxy,
+                                                        const sstring& ks_name,
+                                                        const sstring& cf_name,
+                                                        bool announce_locally)
+{
+    try {
+        auto& db = proxy.local().get_db().local();
+        /*auto&& cfm = */db.find_schema(ks_name, cf_name);
+        /*auto&& ksm = */db.find_keyspace(ks_name);
 #if 0
-public static void announceColumnFamilyDrop(String ksName, String cfName) throws ConfigurationException
-{
-    announceColumnFamilyDrop(ksName, cfName, false);
+        logger.info(String.format("Drop table '%s/%s'", oldCfm.ksName, oldCfm.cfName));
+        announce(LegacySchemaTables.makeDropTableMutation(ksm, oldCfm, FBUtilities.timestampMicros()), announceLocally);
+#endif
+        // FIXME
+        throw std::runtime_error("not implemented");
+    } catch (const no_such_column_family& e) {
+        throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
+    }
 }
 
-public static void announceColumnFamilyDrop(String ksName, String cfName, boolean announceLocally) throws ConfigurationException
-{
-    CFMetaData oldCfm = Schema.instance.getCFMetaData(ksName, cfName);
-    if (oldCfm == null)
-        throw new ConfigurationException(String.format("Cannot drop non existing table '%s' in keyspace '%s'.", cfName, ksName));
-    KSMetaData ksm = Schema.instance.getKSMetaData(ksName);
-
-    logger.info(String.format("Drop table '%s/%s'", oldCfm.ksName, oldCfm.cfName));
-    announce(LegacySchemaTables.makeDropTableMutation(ksm, oldCfm, FBUtilities.timestampMicros()), announceLocally);
-}
-
+#if 0
 public static void announceTypeDrop(UserType droppedType)
 {
     announceTypeDrop(droppedType, false);
