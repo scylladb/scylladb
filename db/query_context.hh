@@ -34,6 +34,10 @@ struct query_context {
     service::storage_proxy& proxy() {
         return _qp.local().proxy().local();
     }
+
+    api::timestamp_type next_timestamp() {
+        return _qp.local().next_timestamp();
+    }
 };
 
 // This does not have to be thread local, because all cores will share the same context.
