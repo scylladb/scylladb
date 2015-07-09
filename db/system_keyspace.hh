@@ -77,6 +77,8 @@ future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value
 
 future<> remove_endpoint(gms::inet_address ep);
 
+future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value);
+
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
 

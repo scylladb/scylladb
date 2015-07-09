@@ -655,15 +655,11 @@ template future<> update_peer_info<sstring>(gms::inet_address ep, sstring column
 template future<> update_peer_info<utils::UUID>(gms::inet_address ep, sstring column_name, utils::UUID);
 template future<> update_peer_info<net::ipv4_address>(gms::inet_address ep, sstring column_name, net::ipv4_address);
 
-#if 0
-
-    public static synchronized void updateHintsDropped(InetAddress ep, UUID timePeriod, int value)
-    {
-        // with 30 day TTL
-        String req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
-        executeInternal(String.format(req, PEER_EVENTS), timePeriod, value, ep);
-    }
-#endif
+future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value) {
+    // with 30 day TTL
+    sstring req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
+    return execute_cql(req, PEER_EVENTS, time_period, value, ep).discard_result();
+}
 
 future<> update_schema_version(utils::UUID version) {
     sstring req = "INSERT INTO system.%s (key, schema_version) VALUES (?, ?)";
