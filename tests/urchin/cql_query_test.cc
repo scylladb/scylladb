@@ -369,6 +369,58 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
     });
 }
 
+SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (k blob, c blob, v blob, s1 blob static, primary key (k, c));").discard_result().then([&e] {
+            return e.execute_cql("update cf set s1 = 0x01 where k = 0x01;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set s1 = 0x02 where k = 0x02;").discard_result();
+        }).then([&e] {
+            // Determine partition order
+            return e.execute_cql("select k from cf;");
+        }).then([&e](auto msg) {
+            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            std::vector<bytes> keys;
+            for (auto&& row : rows->rs().rows()) {
+                BOOST_REQUIRE(row[0]);
+                keys.push_back(*row[0]);
+            }
+            BOOST_REQUIRE(keys.size() == 2);
+            bytes k1 = keys[0];
+            bytes k2 = keys[1];
+
+            return now().then([k1, k2, &e] {
+                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {k1},
+                    });
+                });
+            }).then([&e, k1, k2] {
+                return e.execute_cql("select s1 from cf limit 2;").then([k1, k2](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {k1}, {k2}
+                    });
+                });
+            }).then([&e, k1, k2] {
+                return e.execute_cql(sprint("update cf set s1 = null where k = 0x%s;", to_hex(k1))).discard_result();
+            }).then([&e, k1, k2] {
+                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {k2}
+                    });
+                });
+            }).then([&e, k1, k2] {
+                return e.execute_cql(sprint("update cf set s1 = null where k = 0x%s;", to_hex(k2))).discard_result();
+            }).then([&e, k1, k2] {
+                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](auto msg) {
+                    assert_that(msg).is_rows().is_empty();
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {
