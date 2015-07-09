@@ -305,6 +305,16 @@ public:
             const std::experimental::string_view& query_string,
             const std::initializer_list<boost::any>& = { });
 
+    /*
+     * This function provides a timestamp that is guaranteed to be higher than any timestamp
+     * previously used in internal queries.
+     *
+     * This is useful because the client_state have a built-in mechanism to guarantee monotonicity.
+     * Bypassing that mechanism by the use of some other clock may yield times in the past, even if the operation
+     * was done in the future.
+     */
+    api::timestamp_type next_timestamp();
+
 #if 0
     public static UntypedResultSet executeInternalWithPaging(String query, int pageSize, Object... values)
     {

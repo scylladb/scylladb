@@ -59,7 +59,15 @@ public:
     operator const service::client_state&() const {
         return _cs;
     }
+
+    api::timestamp_type next_timestamp() {
+        return _cs.get_timestamp();
+    }
 };
+
+api::timestamp_type query_processor::next_timestamp() {
+    return _internal_state->next_timestamp();
+}
 
 query_processor::query_processor(distributed<service::storage_proxy>& proxy,
         distributed<database>& db)
