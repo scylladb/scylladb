@@ -46,9 +46,8 @@ private:
     long total_size;
 public:
     using UUID = utils::UUID;
-    stream_transfer_task(stream_session& session, UUID cf_id)
-        : stream_task(session, cf_id) {
-    }
+    stream_transfer_task(std::shared_ptr<stream_session> session, UUID cf_id);
+    ~stream_transfer_task();
 
     void add_transfer_file(stream_detail detail);
 

@@ -89,7 +89,7 @@ public:
 
         // Initialize and start all sessions
         for (auto& session : coordinator_.get_all_stream_sessions()) {
-            session.init(future);
+            session->init(future);
         }
         coordinator_.connect_all_stream_sessions();
     }

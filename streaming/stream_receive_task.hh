@@ -24,6 +24,7 @@
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/incoming_file_message.hh"
+#include <memory>
 
 namespace streaming {
 
@@ -45,11 +46,8 @@ private:
     // holds references to SSTables received
     // protected Collection<SSTableWriter> sstables;
 public:
-    stream_receive_task(stream_session& _session, UUID _cf_id, int _total_files, long _total_size)
-        : stream_task(_session, _cf_id)
-        , total_files(_total_files)
-        , total_size(_total_size) {
-    }
+    stream_receive_task(std::shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
+    ~stream_receive_task();
 
     /**
      * Process received file.

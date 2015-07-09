@@ -40,7 +40,7 @@ protected:
     UUID cf_id;
     int64_t estimated_keys;
     std::map<int64_t, int64_t> sections;
-    stream_session& session;
+    std::shared_ptr<stream_session> session;
     // FIXME: Version
     version_types input_version;
     int64_t repaired_at;
@@ -49,7 +49,7 @@ protected:
     // FIXME: Descriptor
     //Descriptor desc;
 public:
-    stream_reader(file_message_header header, stream_session& session_)
+    stream_reader(file_message_header header, std::shared_ptr<stream_session> session_)
         : cf_id(header.cf_id)
         , estimated_keys(header.estimated_keys)
         , sections(header.sections)

@@ -91,6 +91,21 @@ void stream_session::init_messaging_service_handler() {
 distributed<stream_session::handler> stream_session::_handlers;
 distributed<database>* stream_session::_db;
 
+stream_session::stream_session()
+    : conn_handler(shared_from_this()) {
+}
+
+stream_session::stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
+    : peer(peer_)
+    , connecting(connecting_)
+    , conn_handler(shared_from_this())
+    , _index(index_)
+    , _keep_ss_table_level(keep_ss_table_level_) {
+    //this.metrics = StreamingMetrics.get(connecting);
+}
+
+stream_session::~stream_session() = default;
+
 future<> stream_session::init_streaming_service(distributed<database>& db) {
     _db = &db;
     return _handlers.start().then([] {
@@ -109,7 +124,7 @@ future<> stream_session::on_initialization_complete() {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
     auto id = shard_id{this->peer, 0};
-    ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
+    return ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
             std::move(prepare), this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         for (auto& request : msg.requests) {
             // always flush on stream request
@@ -273,7 +288,7 @@ bool stream_session::maybe_completed() {
 void stream_session::prepare_receiving(stream_summary& summary) {
     if (summary.files > 0) {
         // FIXME: handle when cf_id already exists
-        _receivers.emplace(summary.cf_id, stream_receive_task(*this, summary.cf_id, summary.files, summary.total_size));
+        _receivers.emplace(summary.cf_id, stream_receive_task(shared_from_this(), summary.cf_id, summary.files, summary.total_size));
     }
 }
 
@@ -306,7 +321,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
         abort();
         // FIXME: stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
     } else {
-        // TODO: We can move this to database class and use lw_shared_ptr<column_family> instead
+        // TODO: We can move this to database class and use std::shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {
             auto& x = db.find_column_family(keyspace, cf_name);
             stores.push_back(&x);
@@ -356,7 +371,7 @@ void stream_session::add_transfer_files(std::vector<stream_detail> sstable_detai
         UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {
-            it = _transfers.emplace(cf_id, stream_transfer_task(*this, cf_id)).first;
+            it = _transfers.emplace(cf_id, stream_transfer_task(shared_from_this(), cf_id)).first;
         }
         it->second.add_transfer_file(std::move(detail));
     }

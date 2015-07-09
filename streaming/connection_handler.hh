@@ -25,6 +25,7 @@
 #include "gms/inet_address.hh"
 #include "streaming/session_info.hh"
 #include "streaming/progress_info.hh"
+#include <memory>
 
 namespace streaming {
 
@@ -40,12 +41,8 @@ class stream_session;
  */
 class connection_handler {
 public:
-    connection_handler(stream_session& session)
-        : _session(session)
-        , _incoming(session)
-        , _outgoing(session) {
-    }
-
+    connection_handler(std::shared_ptr<stream_session> session);
+    ~connection_handler();
     /**
      * Set up incoming message handler and initiate streaming.
      *
@@ -107,16 +104,14 @@ public:
     {
         return outgoing != null && !outgoing.isClosed();
     }
-#endif
 
 public:
     class message_handler {
-    protected:
-        stream_session& session;
+    public:
+        std::shared_ptr<stream_session> session;
         int protocol_version;
-        message_handler(stream_session& session_) : session(session_) {
-        }
-#if 0
+        message_handler(std::shared_ptr<stream_session> session_);
+        ~message_handler();
         protected Socket socket;
 
         private final AtomicReference<SettableFuture<?>> closeFuture = new AtomicReference<>();
@@ -188,7 +183,6 @@ public:
             }
             catch (IOException ignore) {}
         }
-#endif
     };
 
     /**
@@ -196,12 +190,12 @@ public:
      */
     class incoming_message_handler : public message_handler {
     public:
-        incoming_message_handler(stream_session& session) : message_handler(session) {
-        }
+        incoming_message_handler(std::shared_ptr<stream_session> session);
+        ~incoming_message_handler();
+
         sstring name() {
             return "STREAM-IN";
         }
-#if 0
         public void run()
         {
             try
@@ -235,7 +229,6 @@ public:
                 signalCloseDone();
             }
         }
-#endif
     };
 
     /**
@@ -243,13 +236,12 @@ public:
      */
     class outgoing_message_handler : public message_handler {
     public:
-        outgoing_message_handler(stream_session& session) : message_handler(session) {
-        }
+        outgoing_message_handler(std::shared_ptr<stream_session> session);
+        ~outgoing_message_handler();
 
         sstring name() {
             return "STREAM-OUT";
         }
-#if 0
 
         /*
          * All out going messages are queued up into messageQueue.
@@ -322,13 +314,11 @@ public:
                 session.onError(e);
             }
         }
-#endif
     };
+#endif
 
 private:
-    stream_session& _session;
-    incoming_message_handler _incoming;
-    outgoing_message_handler _outgoing;
+    std::shared_ptr<stream_session> _session;
 };
 
 } // namespace streaming

@@ -27,6 +27,13 @@
 
 namespace streaming {
 
+
+connection_handler::connection_handler(std::shared_ptr<stream_session> session)
+    : _session(session) {
+}
+
+connection_handler::~connection_handler() = default;
+
 future<> connection_handler::initiate() {
     using shard_id = net::messaging_service::shard_id;
     using net::messaging_verb;
@@ -43,14 +50,14 @@ future<> connection_handler::initiate() {
 #endif
     auto from = utils::fb_utilities::get_broadcast_address();
     bool is_for_outgoing = true;
-    messages::stream_init_message msg(from, _session.session_index(),
-            _session.plan_id(), _session.description(),
-            is_for_outgoing, _session.keep_ss_table_level());
+    messages::stream_init_message msg(from, _session->session_index(),
+            _session->plan_id(), _session->description(),
+            is_for_outgoing, _session->keep_ss_table_level());
     auto id = shard_id{from, 0};
-    _session.src_cpu_id = engine().cpu_id();
-    return _session.ms().send_message<unsigned>(net::messaging_verb::STREAM_INIT_MESSAGE,
-            std::move(id), std::move(msg), _session.src_cpu_id).then([this] (unsigned dst_cpu_id) {
-        _session.dst_cpu_id = dst_cpu_id;
+    _session->src_cpu_id = engine().cpu_id();
+    return _session->ms().send_message<unsigned>(net::messaging_verb::STREAM_INIT_MESSAGE,
+            std::move(id), std::move(msg), _session->src_cpu_id).then([this] (unsigned dst_cpu_id) {
+        _session->dst_cpu_id = dst_cpu_id;
     });
 }
 

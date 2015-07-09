@@ -38,6 +38,7 @@
 #include "dht/i_partitioner.hh"
 #include <map>
 #include <vector>
+#include <memory>
 
 namespace streaming {
 
@@ -107,7 +108,7 @@ class stream_result_future;
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-class stream_session : public gms::i_endpoint_state_change_subscriber {
+class stream_session : public gms::i_endpoint_state_change_subscriber, public std::enable_shared_from_this<stream_session> {
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
@@ -168,7 +169,7 @@ private:
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
 public:
-    stream_session() : conn_handler(*this) { }
+    stream_session();
     /**
      * Create new streaming session with the peer.
      *
@@ -176,14 +177,8 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
-        : peer(peer_)
-        , connecting(connecting_)
-        , conn_handler(*this)
-        , _index(index_)
-        , _keep_ss_table_level(keep_ss_table_level_) {
-        //this.metrics = StreamingMetrics.get(connecting);
-    }
+    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_);
+    ~stream_session();
 
     UUID plan_id();
 

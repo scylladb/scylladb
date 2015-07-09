@@ -63,7 +63,7 @@ public:
      */
     bool has_active_sessions();
 
-    std::vector<stream_session> get_all_stream_sessions();
+    std::vector<std::shared_ptr<stream_session>> get_all_stream_sessions();
 
     bool is_receiving();
 
@@ -76,11 +76,11 @@ public:
     std::set<inet_address> get_peers();
 
 public:
-    stream_session& get_or_create_next_session(inet_address peer, inet_address connecting) {
+    std::shared_ptr<stream_session> get_or_create_next_session(inet_address peer, inet_address connecting) {
         return get_or_create_host_data(peer).get_or_create_next_session(peer, connecting);
     }
 
-    stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
+    std::shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
         return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id, connecting);
     }
 
@@ -132,7 +132,7 @@ private:
     class host_streaming_data {
         using inet_address = gms::inet_address;
     private:
-        std::map<int, stream_session> _stream_sessions;
+        std::map<int, std::shared_ptr<stream_session>> _stream_sessions;
         std::map<int, session_info> _session_infos;
         int _last_returned = -1;
         int _connections_per_host;
@@ -148,19 +148,19 @@ private:
 
         bool has_active_sessions();
 
-        stream_session& get_or_create_next_session(inet_address peer, inet_address connecting);
+        std::shared_ptr<stream_session> get_or_create_next_session(inet_address peer, inet_address connecting);
 
         void connect_all_stream_sessions() {
             for (auto& x : _stream_sessions) {
                 auto& session = x.second;
-                session.start();
+                session->start();
                 // logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.plan_id(), session.session_index(), session.peer);
             }
         }
 
-        std::vector<stream_session> get_all_stream_sessions();
+        std::vector<std::shared_ptr<stream_session>> get_all_stream_sessions();
 
-        stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting);
+        std::shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id, inet_address connecting);
 
         void update_progress(progress_info info);
 

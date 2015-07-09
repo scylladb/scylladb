@@ -30,9 +30,15 @@
 
 namespace streaming {
 
+stream_transfer_task::stream_transfer_task(std::shared_ptr<stream_session> session, UUID cf_id)
+    : stream_task(session, cf_id) {
+}
+
+stream_transfer_task::~stream_transfer_task() = default;
+
 void stream_transfer_task::add_transfer_file(stream_detail detail) {
     assert(cf_id == detail.cf_id);
-    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail), session.keep_ss_table_level());
+    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail), session->keep_ss_table_level());
     auto size = message.header.size();
     auto seq = message.header.sequence_number;
     files.emplace(seq, std::move(message));
@@ -45,11 +51,11 @@ void stream_transfer_task::start() {
     for (auto& x : files) {
         auto& seq = x.first;
         auto& msg = x.second;
-        auto id = shard_id{session.peer, 0};
+        auto id = shard_id{session->peer, 0};
         do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
-                return session.ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session.dst_cpu_id).then([this, fm] {
+                return session->ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session->dst_cpu_id).then([this, fm] {
                     return stop_iteration::no;
                 });
             });
