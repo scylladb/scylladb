@@ -399,10 +399,12 @@ struct file::read_state {
      *       "_front".
      */
     void trim_buf_before_ret() {
-        assert(have_good_bytes());
-
-        buf.trim(pos);
-        buf.trim_front(_front);
+        if (have_good_bytes()) {
+            buf.trim(pos);
+            buf.trim_front(_front);
+        } else {
+            buf.trim(0);
+        }
     }
 
     uint64_t cur_offset() const {
@@ -480,10 +482,8 @@ file::dma_read_bulk(uint64_t offset, size_t range_size) {
                     [rstate] (auto buf1) mutable {
                 if (buf1.size()) {
                     rstate->append_new_data(buf1);
-                } else if (rstate->have_good_bytes()){
-                    rstate->eof = true;
                 } else {
-                    throw eof_error();
+                    rstate->eof = true;
                 }
 
                 return make_ready_future<>();
