@@ -35,7 +35,7 @@ thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, st
 
 query_options::query_options(std::vector<bytes_opt> values)
         : query_options(db::consistency_level::ONE, { }, std::move(values),
-        false, query_options::specific_options::DEFAULT, 3,
+        false, query_options::specific_options::DEFAULT, version::native_protocol(),
                 serialization_format::use_32_bit()) {
 }
 

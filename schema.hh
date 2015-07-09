@@ -144,6 +144,7 @@ private:
         std::vector<column_definition> _columns;
         sstring _comment;
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
+        data_type _default_validator = bytes_type;
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
@@ -326,6 +327,11 @@ public:
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
+
+    const data_type& default_validator() const {
+        return _raw._default_validator;
+    }
+
     const sstring& ks_name() const {
         return _raw._ks_name;
     }

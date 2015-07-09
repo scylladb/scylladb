@@ -26,6 +26,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
+#include "query_context.hh"
 
 #include "query-result-set.hh"
 #include "schema_builder.hh"
@@ -266,17 +267,24 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                          .comment(description)
                          .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
     }
+#endif
 
-    /** add entries to system.schema_* for the hardcoded system definitions */
-    public static void saveSystemKeyspaceSchema()
-    {
-        KSMetaData keyspace = Schema.instance.getKSMetaData(SystemKeyspace.NAME);
-        // delete old, possibly obsolete entries in schema tables
-        for (String table : ALL)
-            executeOnceInternal(String.format("DELETE FROM system.%s WHERE keyspace_name = ?", table), keyspace.name);
+/** add entries to system.schema_* for the hardcoded system definitions */
+future<> save_system_keyspace_schema() {
+    auto& ks = db::qctx->db().find_keyspace(db::system_keyspace::NAME);
+    auto ksm = ks.metadata();
+
+    // delete old, possibly obsolete entries in schema tables
+    return parallel_for_each(ALL, [ksm] (sstring cf) {
+        return db::execute_cql("DELETE FROM system.%s WHERE keyspace_name = ?", cf, ksm->name()).discard_result();
+    }).then([ksm] {
         // (+1 to timestamp to make sure we don't get shadowed by the tombstones we just added)
-        makeCreateKeyspaceMutation(keyspace, FBUtilities.timestampMicros() + 1).apply();
-    }
+        auto mvec  = make_create_keyspace_mutations(ksm, qctx->next_timestamp(), true);
+        return qctx->proxy().mutate_locally(mvec);
+    });
+}
+
+#if 0
 
     public static Collection<KSMetaData> readSchemaFromSystemTables()
     {
@@ -1025,8 +1033,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         const auto& compression_options = table->get_compressor_params();
         m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
+        m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
 #if 0
-        adder.add("default_validator", table.getDefaultValidator().toString());
         adder.add("gc_grace_seconds", table.getGcGraceSeconds());
 #endif
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
@@ -1253,7 +1261,12 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
         cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
-        cfm.defaultValidator(TypeParser.parse(result.getString("default_validator")));
+#endif
+        if (table_row.has("default_validator")) {
+            builder.set_default_validator(parse_type(table_row.get_nonnull<sstring>("default_validator")));
+        }
+
+#if 0
         cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
         cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
