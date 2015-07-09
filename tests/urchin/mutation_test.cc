@@ -19,6 +19,7 @@
 #include "schema_builder.hh"
 #include "query-result-set.hh"
 #include "query-result-reader.hh"
+#include "partition_slice_builder.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/urchin/mutation_assertions.hh"
@@ -399,28 +400,7 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 }
 
 static query::partition_slice make_full_slice(const schema& s) {
-    query::partition_slice::option_set options;
-    options.set<query::partition_slice::option::send_partition_key>();
-    options.set<query::partition_slice::option::send_clustering_key>();
-    options.set<query::partition_slice::option::send_timestamp_and_expiry>();
-
-    std::vector<query::clustering_range> ranges;
-    ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
-
-    std::vector<column_id> static_columns;
-    boost::range::push_back(static_columns,
-        s.static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-
-    std::vector<column_id> regular_columns;
-    boost::range::push_back(regular_columns,
-        s.regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-
-    return {
-        std::move(ranges),
-        std::move(static_columns),
-        std::move(regular_columns),
-        std::move(options)
-    };
+    return partition_slice_builder(s).build();
 }
 
 SEASTAR_TEST_CASE(test_querying_of_mutation) {
