@@ -71,15 +71,24 @@ template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
     integer_type_impl(sstring name) : simple_type_impl<T>(name) {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto v = boost::any_cast<const T&>(value);
         auto u = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         auto v = boost::any_cast<const T&>(value);
         return sizeof(v);
     }
     virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
         return read_simple_opt<T>(v);
     }
     T compose_value(const bytes& b) const {
@@ -141,14 +150,23 @@ struct string_type_impl : public abstract_type {
     string_type_impl(sstring name, std::function<shared_ptr<cql3::cql3_type>()> cql3_type)
         : abstract_type(name), _cql3_type(cql3_type) {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto& v = boost::any_cast<const sstring&>(value);
         out = std::copy(v.begin(), v.end(), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         auto& v = boost::any_cast<const sstring&>(value);
         return v.size();
     }
     virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
         // FIXME: validation?
         return boost::any(sstring(reinterpret_cast<const char*>(v.begin()), v.size()));
     }
@@ -192,14 +210,23 @@ struct string_type_impl : public abstract_type {
 struct bytes_type_impl final : public abstract_type {
     bytes_type_impl() : abstract_type("org.apache.cassandra.db.marshal.BytesType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto& v = boost::any_cast<const bytes&>(value);
         out = std::copy(v.begin(), v.end(), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         auto& v = boost::any_cast<const bytes&>(value);
         return v.size();
     }
     virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
         return boost::any(bytes(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
@@ -234,16 +261,19 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         *out++ = char(value);
     }
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         serialize_value(boost::any_cast<bool>(value), out);
     }
-    virtual size_t serialized_size() const {
+    virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return 1;
     }
-    virtual size_t serialized_size(const boost::any& value) const override {
-        return serialized_size();
-    }
     size_t serialized_size(bool value) const {
-        return serialized_size();
+        return 1;
     }
     virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
@@ -271,6 +301,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
     }
     virtual sstring to_string(const bytes& b) const override {
+        if (b.empty()) {
+            return "";
+        }
         if (b.size() != 1) {
             throw marshal_exception();
         }
@@ -284,13 +317,19 @@ struct boolean_type_impl : public simple_type_impl<bool> {
 struct date_type_impl : public abstract_type {
     date_type_impl() : abstract_type("date") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto v = boost::any_cast<db_clock::time_point>(value);
         int64_t i = v.time_since_epoch().count();
         i = net::hton(uint64_t(i));
         out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
-         return 8;
+        if (value.empty()) {
+            return 0;
+        }
+        return 8;
     }
     virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
@@ -325,13 +364,22 @@ struct date_type_impl : public abstract_type {
 struct timeuuid_type_impl : public abstract_type {
     timeuuid_type_impl() : abstract_type("org.apache.cassandra.db.marshal.TimeUUIDType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return 16;
     }
     virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
         uint64_t msb, lsb;
         if (v.empty()) {
             return {};
@@ -419,11 +467,17 @@ private:
 struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     timestamp_type_impl() : simple_type_impl("org.apache.cassandra.db.marshal.TimestampType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         uint64_t v = boost::any_cast<db_clock::time_point>(value).time_since_epoch().count();
         v = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return 8;
     }
     virtual boost::any deserialize(bytes_view in) const override {
@@ -538,10 +592,16 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
 struct uuid_type_impl : abstract_type {
     uuid_type_impl() : abstract_type("org.apache.cassandra.db.marshal.UUIDType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return 16;
     }
     virtual boost::any deserialize(bytes_view v) const override {
@@ -620,12 +680,18 @@ struct uuid_type_impl : abstract_type {
 struct inet_addr_type_impl : abstract_type {
     inet_addr_type_impl() : abstract_type("org.apache.cassandra.db.marshal.InetAddressType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         // FIXME: support ipv6
         auto& ipv4 = boost::any_cast<const net::ipv4_address&>(value);
         uint32_t u = htonl(ipv4.ip);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return 4;
     }
     virtual boost::any deserialize(bytes_view v) const override {
@@ -720,6 +786,9 @@ template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
     floating_type_impl(sstring name) : simple_type_impl<T>(std::move(name)) {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
         T d = boost::any_cast<const T&>(value);
         if (std::isnan(d)) {
             // Java's Double.doubleToLongBits() documentation specifies that
@@ -735,6 +804,9 @@ struct floating_type_impl : public simple_type_impl<T> {
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
     virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
         return sizeof(T);
     }
 
