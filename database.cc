@@ -566,6 +566,10 @@ size_t column_family::sstables_count() {
     return _sstables->size();
 }
 
+lw_shared_ptr<sstable_list> column_family::get_sstables() {
+    return _sstables;
+}
+
 future<> column_family::populate(sstring sstdir) {
 
     return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
