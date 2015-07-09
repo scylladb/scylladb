@@ -22,6 +22,10 @@ public:
     }
     inet_address(net::ipv4_address&& addr) : _addr(std::move(addr)) {}
 
+    const net::ipv4_address& addr() const {
+        return _addr;
+    }
+
     inet_address(const sstring& addr) {
         // FIXME: We need a real DNS resolver
         if (addr == "localhost") {
