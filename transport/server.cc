@@ -8,6 +8,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/bimap.hpp>
 #include <boost/assign.hpp>
+#include <boost/locale/encoding_utf.hpp>
 
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
@@ -172,6 +173,14 @@ private:
     void check_room(temporary_buffer<char>& buf, size_t n) {
         if (buf.size() < n) {
             throw transport::protocol_exception("truncated frame");
+        }
+    }
+
+    void validate_utf8(sstring_view s) {
+        try {
+            boost::locale::conv::utf_to_utf<char>(s.data(), boost::locale::conv::stop);
+        } catch (const boost::locale::conv::conversion_error& ex) {
+            throw transport::protocol_exception("Cannot decode string as UTF8");
         }
     }
 
@@ -677,6 +686,7 @@ sstring cql_server::connection::read_string(temporary_buffer<char>& buf)
     sstring s{buf.begin(), static_cast<size_t>(n)};
     assert(n >= 0);
     buf.trim_front(n);
+    validate_utf8(s);
     return s;
 }
 
@@ -686,6 +696,7 @@ sstring_view cql_server::connection::read_long_string_view(temporary_buffer<char
     check_room(buf, n);
     sstring_view s{buf.begin(), static_cast<size_t>(n)};
     buf.trim_front(n);
+    validate_utf8(s);
     return s;
 }
 

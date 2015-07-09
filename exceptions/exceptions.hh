@@ -55,13 +55,7 @@ enum class exception_code : int32_t {
     UNPREPARED      = 0x2500
 };
 
-class transport_exception {
-public:
-    virtual exception_code code() const = 0;
-    virtual sstring get_message() const = 0;
-};
-
-class cassandra_exception : public std::exception, public transport_exception {
+class cassandra_exception : public std::exception {
 private:
     exception_code _code;
     sstring _msg;
@@ -71,8 +65,8 @@ public:
         , _msg(std::move(msg))
     { }
     virtual const char* what() const noexcept override { return _msg.begin(); }
-    virtual exception_code code() const override { return _code; }
-    virtual sstring get_message() const override { return what(); }
+    exception_code code() const { return _code; }
+    sstring get_message() const { return what(); }
 };
 
 class request_validation_exception : public cassandra_exception {
