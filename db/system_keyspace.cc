@@ -539,7 +539,7 @@ future<> save_truncation_record(cql3::query_processor& qp, const column_family& 
     sstring req = sprint("UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'", LOCAL, LOCAL);
     return qp.execute_internal(req, {tmp}).then([&qp](auto rs) {
         truncation_records = {};
-        return force_blocking_flush(qp.db(), LOCAL);
+        return force_blocking_flush(LOCAL);
     });
 }
 
@@ -550,7 +550,7 @@ future<> remove_truncation_record(cql3::query_processor& qp, utils::UUID id) {
     sstring req = sprint("DELETE truncated_at[?] from system.%s WHERE key = '%s'", LOCAL, LOCAL);
     return qp.execute_internal(req, {id}).then([&qp](auto rs) {
         truncation_records = {};
-        return force_blocking_flush(qp.db(), LOCAL);
+        return force_blocking_flush(LOCAL);
     });
 }
 
@@ -738,21 +738,12 @@ future<> force_blocking_flush(sstring cfname) {
     if (!qctx) {
         return make_ready_future<>();
     }
-    // if (!Boolean.getBoolean("cassandra.unsafesystem"))
-    column_family& cf = qctx->db().find_column_family(NAME, cfname);
-    return cf.flush(&qctx->db());
-}
 
-future<> force_blocking_flush(distributed<database>& db, sstring cf_name) {
-#if 0
-    if (!Boolean.getBoolean("cassandra.unsafesystem"))
-#endif
-    {
-        return db.invoke_on_all([cf_name](database& db) {
-            auto& cf = db.find_column_family(NAME, cf_name);
-            return cf.seal_active_memtable(&db);
-        });
-    }
+    return qctx->_db.invoke_on_all([cfname = std::move(cfname)](database& db) {
+        // if (!Boolean.getBoolean("cassandra.unsafesystem"))
+        column_family& cf = db.find_column_family(NAME, cfname);
+        return cf.flush(&db);
+    });
 }
 
 #if 0

@@ -325,8 +325,6 @@ load_dc_rack_info();
     }
 #endif
 
-    future<> force_blocking_flush(distributed<database>&, sstring cf_name);
-
 #if o
     /**
      * Return a map of stored tokens to IP addresses
