@@ -9,6 +9,7 @@
 #include "core/distributed.hh"
 #include "core/print.hh"
 #include "core/sstring.hh"
+#include "core/do_with.hh"
 #include "net/api.hh"
 #include "utils/serialization.hh"
 #include "gms/inet_address.hh"
