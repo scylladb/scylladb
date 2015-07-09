@@ -68,6 +68,7 @@ extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);
+future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
 
 template <typename Value>
 future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);
