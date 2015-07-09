@@ -752,6 +752,32 @@ struct floating_type_impl : public simple_type_impl<T> {
         }
         return boost::any(x.d);
     }
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        T a = simple_type_traits<T>::read_nonempty(v1);
+        T b = simple_type_traits<T>::read_nonempty(v2);
+
+        // in java world NaN == NaN and NaN is greater than anything else
+        if (std::isnan(a) && std::isnan(b)) {
+            return 0;
+        } else if (std::isnan(a)) {
+            return 1;
+        } else if (std::isnan(b)) {
+            return -1;
+        }
+        // also -0 < 0
+        if (std::signbit(a) && !std::signbit(b)) {
+            return -1;
+        } else if (!std::signbit(a) && std::signbit(b))  {
+            return 1;
+        }
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
     virtual void validate(bytes_view v) const override {
         if (v.size() != 0 && v.size() != sizeof(T)) {
             throw marshal_exception();

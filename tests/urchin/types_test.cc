@@ -159,6 +159,32 @@ BOOST_AUTO_TEST_CASE(test_boolean_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(boolean_type->to_string(boolean_type->decompose(true)), "true");
 }
 
+template<typename T>
+void test_floating_type_compare(data_type t)
+{
+    auto nan = t->decompose(std::numeric_limits<T>::quiet_NaN());
+    auto pinf = t->decompose(std::numeric_limits<T>::infinity());
+    auto ninf = t->decompose(-std::numeric_limits<T>::infinity());
+    auto pzero = t->decompose(T(0.));
+    auto nzero = t->decompose(T(-0.));
+
+    BOOST_REQUIRE(t->less(ninf, pinf));
+    BOOST_REQUIRE(t->less(ninf, nan));
+    BOOST_REQUIRE(t->less(pinf, nan));
+    BOOST_REQUIRE(t->less(nzero, nan));
+    BOOST_REQUIRE(t->less(pzero, nan));
+    BOOST_REQUIRE(t->less(nzero, pinf));
+    BOOST_REQUIRE(t->less(pzero, pinf));
+    BOOST_REQUIRE(t->less(ninf, nzero));
+    BOOST_REQUIRE(t->less(ninf, pzero));
+    BOOST_REQUIRE(t->less(nzero, pzero));
+}
+
+BOOST_AUTO_TEST_CASE(test_floating_types_compare) {
+    test_floating_type_compare<float>(float_type);
+    test_floating_type_compare<double>(double_type);
+}
+
 BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
     compound_type<> type({utf8_type, utf8_type, utf8_type});
 
