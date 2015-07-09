@@ -12,7 +12,7 @@ namespace json {
 
 template<typename Map>
 inline sstring to_json(const Map& map) {
-    Json::Value root;
+    Json::Value root(Json::objectValue);
     for (auto&& kv : map) {
         root[kv.first] = Json::Value(kv.second);
     }
