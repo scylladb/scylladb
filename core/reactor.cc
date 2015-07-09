@@ -706,13 +706,13 @@ blockdev_file_impl::allocate(uint64_t position, uint64_t length) {
     return make_ready_future<>();
 }
 
-future<size_t>
+future<uint64_t>
 posix_file_impl::size(void) {
     auto r = ::lseek(_fd, 0, SEEK_END);
     if (r == -1) {
-        return make_exception_future<size_t>(std::system_error(errno, std::system_category()));
+        return make_exception_future<uint64_t>(std::system_error(errno, std::system_category()));
     }
-    return make_ready_future<size_t>(r);
+    return make_ready_future<uint64_t>(r);
 }
 
 future<>
@@ -725,15 +725,15 @@ posix_file_impl::close() {
     });
 }
 
-future<size_t>
+future<uint64_t>
 blockdev_file_impl::size(void) {
     return engine()._thread_pool.submit<syscall_result_extra<size_t>>([this] {
-        size_t size;
+        uint64_t size;
         int ret = ::ioctl(_fd, BLKGETSIZE64, &size);
         return wrap_syscall(ret, size);
-    }).then([] (syscall_result_extra<size_t> ret) {
+    }).then([] (syscall_result_extra<uint64_t> ret) {
         ret.throw_if_error();
-        return make_ready_future<size_t>(ret.extra);
+        return make_ready_future<uint64_t>(ret.extra);
     });
 }
 

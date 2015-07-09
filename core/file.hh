@@ -73,7 +73,7 @@ public:
     virtual future<> truncate(uint64_t length) = 0;
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
     virtual future<> allocate(uint64_t position, uint64_t length) = 0;
-    virtual future<size_t> size(void) = 0;
+    virtual future<uint64_t> size(void) = 0;
     virtual future<> close() = 0;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
 
@@ -307,7 +307,7 @@ public:
     }
 
     /// Gets the file size.
-    future<size_t> size() {
+    future<uint64_t> size() {
         return _file_impl->size();
     }
 
