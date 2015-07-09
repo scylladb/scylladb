@@ -68,6 +68,14 @@ public:
         return _raw._dc_local_read_repair_chance;
     }
 
+    void set_read_repair_chance(double chance) {
+        _raw._read_repair_chance = chance;
+    }
+
+    double get_read_repair_chance() {
+        return _raw._read_repair_chance;
+    }
+
     void set_min_compaction_threshold(int32_t t) {
         _raw._min_compaction_threshold = t;
     }

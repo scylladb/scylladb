@@ -175,6 +175,7 @@ private:
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = 864000;
         double _dc_local_read_repair_chance = 0.1;
+        double _read_repair_chance = 0.0;
         int32_t _min_compaction_threshold = 4;
         int32_t _max_compaction_threshold = 32;
         int32_t _min_index_interval = 128;
@@ -280,6 +281,10 @@ public:
 
     double dc_local_read_repair_chance() const {
         return _raw._dc_local_read_repair_chance;
+    }
+
+    double read_repair_chance() const {
+        return _raw._read_repair_chance;
     }
 
     int32_t min_compaction_threshold() const {

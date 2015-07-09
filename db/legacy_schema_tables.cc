@@ -1038,7 +1038,9 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
 #if 0
         adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-        adder.add("read_repair_chance", table.getReadRepairChance());
+#endif
+        m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
+#if 0
         adder.add("speculative_retry", table.getSpeculativeRetry().toString());
 
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
@@ -1258,9 +1260,10 @@ future<> save_system_keyspace_schema() {
 #endif
         builder.set_is_dense(is_dense);
 
-#if 0
-        cfm.readRepairChance(result.getDouble("read_repair_chance"));
-#endif
+        if (table_row.has("read_repair_chance")) {
+            builder.set_read_repair_chance(table_row.get_nonnull<double>("read_repair_chance"));
+        }
+
         if (table_row.has("local_read_repair_chance")) {
             builder.set_dc_local_read_repair_chance(table_row.get_nonnull<double>("local_read_repair_chance"));
         }

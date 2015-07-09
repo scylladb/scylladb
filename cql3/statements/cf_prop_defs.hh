@@ -165,9 +165,11 @@ public:
         if (has_property(KW_COMMENT)) {
             builder.set_comment(get_string(KW_COMMENT, ""));
         }
-#if 0
-        cfm.readRepairChance(getDouble(KW_READREPAIRCHANCE, cfm.getReadRepairChance()));
-#endif
+
+        if (has_property(KW_READREPAIRCHANCE)) {
+            builder.set_read_repair_chance(get_double(KW_READREPAIRCHANCE, builder.get_read_repair_chance()));
+        }
+
         if (has_property(KW_DCLOCALREADREPAIRCHANCE)) {
             builder.set_dc_local_read_repair_chance(get_double(KW_DCLOCALREADREPAIRCHANCE, builder.get_dc_local_read_repair_chance()));
         }
