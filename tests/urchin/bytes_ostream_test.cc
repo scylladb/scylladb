@@ -169,6 +169,69 @@ BOOST_AUTO_TEST_CASE(test_writing_empty_blobs) {
     BOOST_REQUIRE(buf.linearize().empty());
 }
 
+BOOST_AUTO_TEST_CASE(test_retraction_to_initial_state) {
+    bytes_ostream buf;
+
+    auto pos = buf.pos();
+    buf.write(1);
+
+    buf.retract(pos);
+
+    BOOST_REQUIRE(buf.size() == 0);
+    BOOST_REQUIRE(buf.linearize().empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_retraction_to_the_same_chunk) {
+    bytes_ostream buf;
+
+    buf.write(1);
+    buf.write(2);
+    auto pos = buf.pos();
+    buf.write(3);
+    buf.write(4);
+
+    buf.retract(pos);
+
+    BOOST_REQUIRE(buf.size() == sizeof(int) * 2);
+
+    bytes_view v(buf.linearize());
+    BOOST_REQUIRE_EQUAL(read_simple<int>(v), 1);
+    BOOST_REQUIRE_EQUAL(read_simple<int>(v), 2);
+    BOOST_REQUIRE(v.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_no_op_retraction) {
+    bytes_ostream buf;
+
+    buf.write(1);
+    buf.write(2);
+    auto pos = buf.pos();
+
+    buf.retract(pos);
+
+    BOOST_REQUIRE(buf.size() == sizeof(int) * 2);
+
+    bytes_view v(buf.linearize());
+    BOOST_REQUIRE_EQUAL(read_simple<int>(v), 1);
+    BOOST_REQUIRE_EQUAL(read_simple<int>(v), 2);
+    BOOST_REQUIRE(v.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_retraction_discarding_chunks) {
+    bytes_ostream buf;
+
+    buf.write(1);
+    auto pos = buf.pos();
+    append_sequence(buf, 64*1024);
+
+    buf.retract(pos);
+
+    BOOST_REQUIRE(buf.size() == sizeof(int));
+    bytes_view v(buf.linearize());
+    BOOST_REQUIRE_EQUAL(read_simple<int>(v), 1);
+    BOOST_REQUIRE(v.empty());
+}
+
 BOOST_AUTO_TEST_CASE(test_writing_placeholders) {
     bytes_ostream buf;
 

@@ -271,4 +271,42 @@ public:
     boost::iterator_range<fragment_iterator> fragments() const {
         return { begin(), end() };
     }
+
+    struct position {
+        chunk* _chunk;
+        size_type _offset;
+    };
+
+    position pos() const {
+        return { _current, _current ? _current->offset : 0 };
+    }
+
+    // Returns the amount of bytes written since given position.
+    // "pos" must be valid.
+    size_type written_since(position pos) {
+        chunk* c = pos._chunk;
+        if (!c) {
+            return _size;
+        }
+        size_type total = c->offset - pos._offset;
+        c = c->next.get();
+        while (c) {
+            total += c->offset;
+            c = c->next.get();
+        }
+        return total;
+    }
+
+    // Rollbacks all data written after "pos".
+    // Invalidates all placeholders and positions created after "pos".
+    void retract(position pos) {
+        if (!pos._chunk) {
+            *this = {};
+            return;
+        }
+        _size -= written_since(pos);
+        _current = pos._chunk;
+        _current->next = nullptr;
+        _current->offset = pos._offset;
+    }
 };
