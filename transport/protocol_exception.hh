@@ -28,18 +28,11 @@
 
 namespace transport {
 
-class protocol_exception : public std::exception, public exceptions::transport_exception {
-private:
-    exceptions::exception_code _code;
-    sstring _msg;
+class protocol_exception : public exceptions::cassandra_exception {
 public:
     protocol_exception(sstring msg)
-        : _code(exceptions::exception_code::PROTOCOL_ERROR)
-        , _msg(std::move(msg))
+        : exceptions::cassandra_exception{exceptions::exception_code::PROTOCOL_ERROR, std::move(msg)}
     { }
-    virtual const char* what() const noexcept override { return _msg.begin(); }
-    virtual exceptions::exception_code code() const override { return _code; }
-    virtual sstring get_message() const override { return _msg; }
 };
 
 }
