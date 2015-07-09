@@ -36,6 +36,7 @@ options {
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
+#include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
@@ -264,8 +265,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st9= createTableStatement        { $stmt = st9; }
     | st10=createIndexStatement        { $stmt = st10; }
     | st11=dropKeyspaceStatement       { $stmt = st11; }
-#if 0
     | st12=dropTableStatement          { $stmt = st12; }
+#if 0
     | st13=dropIndexStatement          { $stmt = st13; }
     | st14=alterTableStatement         { $stmt = st14; }
     | st15=alterKeyspaceStatement      { $stmt = st15; }
@@ -822,15 +823,15 @@ dropKeyspaceStatement returns [::shared_ptr<drop_keyspace_statement> ksp]
     : K_DROP K_KEYSPACE (K_IF K_EXISTS { if_exists = true; } )? ks=keyspaceName { $ksp = ::make_shared<drop_keyspace_statement>(ks, if_exists); }
     ;
 
-#if 0
 /**
  * DROP COLUMNFAMILY [IF EXISTS] <CF>;
  */
-dropTableStatement returns [DropTableStatement stmt]
-    @init { boolean ifExists = false; }
-    : K_DROP K_COLUMNFAMILY (K_IF K_EXISTS { ifExists = true; } )? cf=columnFamilyName { $stmt = new DropTableStatement(cf, ifExists); }
+dropTableStatement returns [::shared_ptr<drop_table_statement> stmt]
+    @init { bool if_exists = false; }
+    : K_DROP K_COLUMNFAMILY (K_IF K_EXISTS { if_exists = true; } )? cf=columnFamilyName { $stmt = ::make_shared<drop_table_statement>(cf, if_exists); }
     ;
 
+#if 0
 /**
  * DROP TYPE <name>;
  */
