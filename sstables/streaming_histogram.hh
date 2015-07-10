@@ -80,20 +80,18 @@ struct streaming_histogram {
             bin.map[p] = m;
             // if bin size exceeds maximum bin size then trim down to max size
             while (bin.map.size() > max_bin_size) {
-#if 1
-                // FIXME: convert Java code below.
-                assert(0);
-#else
                 // find points p1, p2 which have smallest difference
-                Iterator<Double> keys = bin.keySet().iterator();
-                double p1 = keys.next();
-                double p2 = keys.next();
+                auto it = bin.map.begin();
+                double p1 = it->first;
+                it++;
+                double p2 = it->first;
+                it++;
                 double smallestDiff = p2 - p1;
                 double q1 = p1, q2 = p2;
-                while (keys.hasNext())
-                {
+                while(it != bin.map.end()) {
                     p1 = p2;
-                    p2 = keys.next();
+                    p2 = it->first;
+                    it++;
                     double diff = p2 - p1;
                     if (diff < smallestDiff)
                     {
@@ -103,10 +101,9 @@ struct streaming_histogram {
                     }
                 }
                 // merge those two
-                long k1 = bin.remove(q1);
-                long k2 = bin.remove(q2);
-                bin.put((q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2);
-#endif
+                uint64_t k1 = bin.map.erase(q1);
+                uint64_t k2 = bin.map.erase(q2);
+                bin.map.insert({(q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2});
             }
         }
     }
