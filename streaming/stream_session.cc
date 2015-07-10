@@ -33,6 +33,8 @@
 #include "dht/i_partitioner.hh"
 #include "database.hh"
 #include "utils/fb_utilities.hh"
+#include "streaming/stream_plan.hh"
+#include "core/sleep.hh"
 
 namespace streaming {
 
@@ -117,6 +119,20 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
             init_messaging_service_handler();
         });
     });
+}
+
+future<> stream_session::test() {
+    if (utils::fb_utilities::get_broadcast_address() == inet_address("127.0.0.1")) {
+        return sleep(std::chrono::seconds(5)).then([] {
+            streaming_debug("================ STREAM_PLAN TEST ==============\n");
+            auto sp = stream_plan("MYPLAN");
+            auto to = inet_address("127.0.0.2");
+            std::vector<query::range<token>> ranges;
+            std::vector<sstring> cfs{"local"};
+            sp.transfer_ranges(to, to, "system", std::move(ranges), std::move(cfs)).execute();
+        });
+    }
+    return make_ready_future<>();
 }
 
 future<> stream_session::initiate() {

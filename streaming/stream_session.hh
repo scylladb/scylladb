@@ -142,6 +142,7 @@ public:
     }
     static database& get_local_db() { return _db->local(); }
     static future<> init_streaming_service(distributed<database>& db);
+    static future<> test();
 public:
     /**
      * Streaming endpoint.
