@@ -17,58 +17,31 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  *
  * Modified by Cloudius Systems
  */
 
 #pragma once
 
-#include <experimental/optional>
+#include "cql3/keyspace_element_name.hh"
 
 namespace cql3 {
 
-class cf_name {
-private:
-    std::experimental::optional<sstring> _ks_name;
-    sstring _cf_name;
-
+class cf_name : public keyspace_element_name {
+    sstring _cf_name = "";
 public:
-    void set_keyspace(sstring ks, bool keep_case) {
-        if (!keep_case) {
-            std::transform(ks.begin(), ks.end(), ks.begin(), ::tolower);
-        }
-        _ks_name = std::experimental::make_optional(std::move(ks));
-    }
+    void set_column_family(const sstring& cf, bool keep_case);
 
-    void set_column_family(sstring cf, bool keep_case) {
-        _cf_name = cf;
-        if (!keep_case) {
-            std::transform(_cf_name.begin(), _cf_name.end(), _cf_name.begin(), ::tolower);
-        }
-    }
-    bool has_keyspace() const {
-        return bool(_ks_name);
-    }
+    const sstring& get_column_family() const;
 
-    const sstring& get_keyspace() const {
-        return *_ks_name;
-    }
-
-    const sstring& get_column_family() const {
-        return _cf_name;
-    }
-
-    friend std::ostream& operator<<(std::ostream& os, const cf_name& n);
+    virtual sstring to_string() const override;
 };
 
 inline
 std::ostream&
 operator<<(std::ostream& os, const cf_name& n) {
-    if (n.has_keyspace()) {
-        os << n.get_keyspace() << ".";
-    }
-    os << n.get_column_family();
+    os << n.to_string();
     return os;
 }
 

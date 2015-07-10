@@ -15,25 +15,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-public class CFName extends KeyspaceElementName
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#include "cql3/cf_name.hh"
+
+namespace cql3 {
+
+void cf_name::set_column_family(const sstring& cf, bool keep_case)
 {
-    private String cfName;
+    _cf_name = to_internal_name(cf, keep_case);
+}
 
-    public void setColumnFamily(String cf, boolean keepCase)
-    {
-        cfName = toInternalName(cf, keepCase);
-    }
+const sstring& cf_name::get_column_family() const
+{
+    return _cf_name;
+}
 
-    public String getColumnFamily()
-    {
-        return cfName;
-    }
+sstring cf_name::to_string() const
+{
+    return keyspace_element_name::to_string() + _cf_name;
+}
 
-    @Override
-    public String toString()
-    {
-        return super.toString() + cfName;
-    }
 }
