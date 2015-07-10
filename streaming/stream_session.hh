@@ -26,13 +26,13 @@
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
-#include "streaming/connection_handler.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/messages/incoming_file_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/stream_detail.hh"
+#include "streaming/session_info.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
@@ -144,7 +144,6 @@ public:
     inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
     inet_address connecting;
-    connection_handler conn_handler;
     unsigned src_cpu_id;
     unsigned dst_cpu_id;
 private:
@@ -300,6 +299,8 @@ public:
         }
     }
 #endif
+    future<> initiate();
+
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */

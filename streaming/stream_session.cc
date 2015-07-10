@@ -32,6 +32,7 @@
 #include "mutation_reader.hh"
 #include "dht/i_partitioner.hh"
 #include "database.hh"
+#include "utils/fb_utilities.hh"
 
 namespace streaming {
 
@@ -91,14 +92,11 @@ void stream_session::init_messaging_service_handler() {
 distributed<stream_session::handler> stream_session::_handlers;
 distributed<database>* stream_session::_db;
 
-stream_session::stream_session()
-    : conn_handler(shared_from_this()) {
-}
+stream_session::stream_session() = default;
 
 stream_session::stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
     : peer(peer_)
     , connecting(connecting_)
-    , conn_handler(shared_from_this())
     , _index(index_)
     , _keep_ss_table_level(keep_ss_table_level_) {
     //this.metrics = StreamingMetrics.get(connecting);
@@ -114,6 +112,31 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
         });
     });
 }
+
+future<> stream_session::initiate() {
+#if 0
+    logger.debug("[Stream #{}] Sending stream init for incoming stream", session.planId());
+    Socket incomingSocket = session.createConnection();
+    incoming.start(incomingSocket, StreamMessage.CURRENT_VERSION);
+    incoming.sendInitMessage(incomingSocket, true);
+
+    logger.debug("[Stream #{}] Sending stream init for outgoing stream", session.planId());
+    Socket outgoingSocket = session.createConnection();
+    outgoing.start(outgoingSocket, StreamMessage.CURRENT_VERSION);
+    outgoing.sendInitMessage(outgoingSocket, false);
+#endif
+    auto from = utils::fb_utilities::get_broadcast_address();
+    bool is_for_outgoing = true;
+    messages::stream_init_message msg(from, session_index(), plan_id(), description(),
+            is_for_outgoing, keep_ss_table_level());
+    auto id = shard_id{this->peer, 0};
+    this->src_cpu_id = engine().cpu_id();
+    return ms().send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE,
+            std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
+        this->dst_cpu_id = dst_cpu_id;
+    });
+}
+
 
 future<> stream_session::on_initialization_complete() {
     // send prepare message
@@ -408,7 +431,7 @@ void stream_session::start() {
 
     // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
     //                                                        peer, peer == connecting ? "" : " through " + connecting);
-    conn_handler.initiate().then([this] {
+    initiate().then([this] {
         return on_initialization_complete();
     }).then_wrapped([this] (auto&& f) {
         try {

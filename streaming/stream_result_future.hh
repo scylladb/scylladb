@@ -24,7 +24,6 @@
 #include "core/shared_ptr.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
-#include "streaming/connection_handler.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
 #include <vector>
