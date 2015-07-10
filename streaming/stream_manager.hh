@@ -14,40 +14,29 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.net.InetAddress;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+#pragma once
+#include "core/shared_ptr.hh"
+#include "core/distributed.hh"
+#include "utils/UUID.hh"
+#include <map>
 
-import javax.management.ListenerNotFoundException;
-import javax.management.MBeanNotificationInfo;
-import javax.management.NotificationFilter;
-import javax.management.NotificationListener;
-import javax.management.openmbean.CompositeData;
+namespace streaming {
 
-import com.google.common.base.Function;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Sets;
-import com.google.common.util.concurrent.MoreExecutors;
-import com.google.common.util.concurrent.RateLimiter;
-
-import org.cliffc.high_scale_lib.NonBlockingHashMap;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.streaming.management.StreamEventJMXNotifier;
-import org.apache.cassandra.streaming.management.StreamStateCompositeData;
+class stream_result_future;
 
 /**
  * StreamManager manages currently running {@link StreamResultFuture}s and provides status of all operation invoked.
  *
  * All stream operation should be created through this class to track streaming status and progress.
  */
-public class StreamManager implements StreamManagerMBean
-{
-    public static final StreamManager instance = new StreamManager();
-
+class stream_manager {
+    using UUID = utils::UUID;
+#if 0
     /**
      * Gets streaming rate limiter.
      * When stream_throughput_outbound_megabits_per_sec is 0, this returns rate limiter
@@ -101,15 +90,18 @@ public class StreamManager implements StreamManagerMBean
     }
 
     private final StreamEventJMXNotifier notifier = new StreamEventJMXNotifier();
+#endif
 
     /*
      * Currently running streams. Removed after completion/failure.
      * We manage them in two different maps to distinguish plan from initiated ones to
      * receiving ones withing the same JVM.
      */
-    private final Map<UUID, StreamResultFuture> initiatedStreams = new NonBlockingHashMap<>();
-    private final Map<UUID, StreamResultFuture> receivingStreams = new NonBlockingHashMap<>();
-
+private:
+    std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
+    std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
+public:
+#if  0
     public Set<CompositeData> getCurrentStreams()
     {
         return Sets.newHashSet(Iterables.transform(Iterables.concat(initiatedStreams.values(), receivingStreams.values()), new Function<StreamResultFuture, CompositeData>()
@@ -135,26 +127,11 @@ public class StreamManager implements StreamManagerMBean
 
         initiatedStreams.put(result.planId, result);
     }
+#endif
+    void register_receiving(shared_ptr<stream_result_future> result);
 
-    public void registerReceiving(final StreamResultFuture result)
-    {
-        result.addEventListener(notifier);
-        // Make sure we remove the stream on completion (whether successful or not)
-        result.addListener(new Runnable()
-        {
-            public void run()
-            {
-                receivingStreams.remove(result.planId);
-            }
-        }, MoreExecutors.sameThreadExecutor());
-
-        receivingStreams.put(result.planId, result);
-    }
-
-    public StreamResultFuture getReceivingStream(UUID planId)
-    {
-        return receivingStreams.get(planId);
-    }
+    shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);
+#if 0
 
     public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback)
     {
@@ -175,4 +152,17 @@ public class StreamManager implements StreamManagerMBean
     {
         return notifier.getNotificationInfo();
     }
+#endif
+};
+
+extern distributed<stream_manager> _the_stream_manager;
+
+inline distributed<stream_manager>& get_stream_manager() {
+    return _the_stream_manager;
 }
+
+inline stream_manager& get_local_stream_manager() {
+    return _the_stream_manager.local();
+}
+
+} // namespace streaming

@@ -94,20 +94,7 @@ public:
     }
 
     static void init_receiving_side(int session_index, UUID plan_id,
-        sstring description, inet_address from, bool keep_ss_table_level) {
-#if 0
-        StreamResultFuture future = StreamManager.instance.getReceivingStream(planId);
-        if (future == null) {
-            logger.info("[Stream #{} ID#{}] Creating new streaming plan for {}", planId, sessionIndex, description);
-
-            // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
-            future = new StreamResultFuture(planId, description, keepSSTableLevel);
-            StreamManager.instance.registerReceiving(future);
-        }
-        // logger.info("[Stream #{}, ID#{}] Received streaming plan for {}", planId, sessionIndex, description);
-        return future;
-#endif
-    }
+        sstring description, inet_address from, bool keep_ss_table_level);
 
 private:
     static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, stream_coordinator& coordinator_) {
