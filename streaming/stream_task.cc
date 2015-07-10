@@ -24,7 +24,7 @@
 
 namespace streaming {
 
-stream_task::stream_task(std::shared_ptr<stream_session> _session, UUID _cf_id)
+stream_task::stream_task(shared_ptr<stream_session> _session, UUID _cf_id)
     : session(_session)
     , cf_id(std::move(_cf_id)) {
 }

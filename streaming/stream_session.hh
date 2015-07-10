@@ -115,7 +115,7 @@ void streaming_debug(const char* fmt, Args&&... args) {
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-class stream_session : public gms::i_endpoint_state_change_subscriber, public std::enable_shared_from_this<stream_session> {
+class stream_session : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_session> {
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;

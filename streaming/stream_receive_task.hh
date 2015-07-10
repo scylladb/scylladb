@@ -46,7 +46,7 @@ private:
     // holds references to SSTables received
     // protected Collection<SSTableWriter> sstables;
 public:
-    stream_receive_task(std::shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
+    stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();
 
     /**

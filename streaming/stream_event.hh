@@ -53,7 +53,7 @@ struct session_complete_event : public stream_event {
     bool success;
     int session_index;
 
-    session_complete_event(std::shared_ptr<stream_session> session)
+    session_complete_event(shared_ptr<stream_session> session)
         : stream_event(stream_event::type::STREAM_COMPLETE, session->plan_id())
         , peer(session->peer)
         , success(session->is_success())

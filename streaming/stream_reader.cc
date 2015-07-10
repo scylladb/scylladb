@@ -22,6 +22,19 @@
 
 namespace streaming {
 
+stream_reader::stream_reader(file_message_header header, shared_ptr<stream_session> session_)
+        : cf_id(header.cf_id)
+        , estimated_keys(header.estimated_keys)
+        , sections(header.sections)
+        , session(session_)
+        // input_version = header.format.info.getVersion(header.version)
+        , repaired_at(header.repaired_at)
+        , format(header.format)
+        , sstable_level(header.sstable_level) {
+}
+
+stream_reader::~stream_reader() = default;
+
 int64_t stream_reader::total_size() {
     int64_t size = 0;
     for (auto section : sections)

@@ -37,8 +37,8 @@ bool stream_coordinator::has_active_sessions() {
     return false;
 }
 
-std::vector<std::shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessions() {
-    std::vector<std::shared_ptr<stream_session>> results;
+std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessions() {
+    std::vector<shared_ptr<stream_session>> results;
     for (auto& x : _peer_sessions) {
         auto s = x.second.get_all_stream_sessions();
         std::move(s.begin(), s.end(), std::back_inserter(results));
@@ -114,11 +114,11 @@ bool stream_coordinator::host_streaming_data::has_active_sessions() {
     return false;
 }
 
-std::shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_next_session(inet_address peer, inet_address connecting) {
+shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_next_session(inet_address peer, inet_address connecting) {
     // create
     int size = _stream_sessions.size();
     if (size < _connections_per_host) {
-        auto session = std::make_shared<stream_session>(peer, connecting, size, _keep_ss_table_level);
+        auto session = make_shared<stream_session>(peer, connecting, size, _keep_ss_table_level);
         _stream_sessions.emplace(++_last_returned, session);
         return _stream_sessions[_last_returned];
     // get
@@ -130,19 +130,19 @@ std::shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_
     }
 }
 
-std::vector<std::shared_ptr<stream_session>> stream_coordinator::host_streaming_data::get_all_stream_sessions() {
-    std::vector<std::shared_ptr<stream_session>> sessions;
+std::vector<shared_ptr<stream_session>> stream_coordinator::host_streaming_data::get_all_stream_sessions() {
+    std::vector<shared_ptr<stream_session>> sessions;
     for (auto& x : _stream_sessions) {
         sessions.push_back(x.second);
     }
     return sessions;
 }
 
-std::shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_session_by_id(inet_address peer,
+shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_session_by_id(inet_address peer,
     int id, inet_address connecting) {
     auto it = _stream_sessions.find(id);
     if (it == _stream_sessions.end()) {
-        it = _stream_sessions.emplace(id, std::make_shared<stream_session>(peer, connecting, id, _keep_ss_table_level)).first;
+        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer, connecting, id, _keep_ss_table_level)).first;
     }
     return it->second;
 }

@@ -389,7 +389,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
         abort();
         // FIXME: stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
     } else {
-        // TODO: We can move this to database class and use std::shared_ptr<column_family> instead
+        // TODO: We can move this to database class and use shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {
             auto& x = db.find_column_family(keyspace, cf_name);
             stores.push_back(&x);

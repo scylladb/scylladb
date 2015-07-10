@@ -36,7 +36,7 @@ protected:
     sstables::sstable& sstable;
     std::map<int64_t, int64_t> sections;
     //StreamRateLimiter limiter;
-    std::shared_ptr<stream_session> session;
+    shared_ptr<stream_session> session;
 #if 0
     private OutputStream compressedOutput;
     // allocate buffer to use for transfers only once
@@ -44,7 +44,7 @@ protected:
 #endif
 
 public:
-    stream_writer(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_, std::shared_ptr<stream_session> session_)
+    stream_writer(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_, shared_ptr<stream_session> session_)
         : sstable(sstable_)
         , sections(std::move(sections_))
         , session(session_) {
