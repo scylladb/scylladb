@@ -1001,25 +1001,20 @@ future<> save_system_keyspace_schema() {
         mutation m{pkey, s};
         auto ckey = clustering_key::from_single_value(*s, to_bytes(table->cf_name()));
         m.set_clustered_cell(ckey, "cf_id", table->id(), timestamp);
+        m.set_clustered_cell(ckey, "type", cf_type_to_sstring(table->type()), timestamp);
+
+        if (table->is_super()) {
+             warn(unimplemented::cause::SUPER);
 #if 0
-        m.set_clustered_cell(ckey, "type", table.cfType.toString(), timestamp);
-#endif
-#if 0
-        if (table.isSuper())
-        {
             // We need to continue saving the comparator and subcomparator separatly, otherwise
             // we won't know at deserialization if the subcomparator should be taken into account
             // TODO: we should implement an on-start migration if we want to get rid of that.
             adder.add("comparator", table.comparator.subtype(0).toString());
             adder.add("subcomparator", table.comparator.subtype(1).toString());
-        }
-        else
-        {
 #endif
+        } else {
             m.set_clustered_cell(ckey, "comparator", table->regular_column_name_type()->name(), timestamp);
-#if 0
         }
-#endif
 
         m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
 #if 0
@@ -1034,18 +1029,18 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
         m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
-#if 0
-        adder.add("gc_grace_seconds", table.getGcGraceSeconds());
-#endif
+        m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds(), timestamp);
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
+        m.set_clustered_cell(ckey, "local_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
+        m.set_clustered_cell(ckey, "min_compaction_threshold", table->min_compaction_threshold(), timestamp);
+        m.set_clustered_cell(ckey, "max_compaction_threshold", table->max_compaction_threshold(), timestamp);
+        m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
+        m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
 #if 0
-        adder.add("local_read_repair_chance", table.getDcLocalReadRepairChance());
-        adder.add("max_compaction_threshold", table.getMaxCompactionThreshold());
-        adder.add("max_index_interval", table.getMaxIndexInterval());
         adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-        adder.add("min_compaction_threshold", table.getMinCompactionThreshold());
-        adder.add("min_index_interval", table.getMinIndexInterval());
-        adder.add("read_repair_chance", table.getReadRepairChance());
+#endif
+        m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
+#if 0
         adder.add("speculative_retry", table.getSpeculativeRetry().toString());
 
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
@@ -1225,16 +1220,24 @@ future<> save_system_keyspace_schema() {
 #if 0
         AbstractType<?> rawComparator = TypeParser.parse(result.getString("comparator"));
         AbstractType<?> subComparator = result.has("subcomparator") ? TypeParser.parse(result.getString("subcomparator")) : null;
-        ColumnFamilyType cfType = ColumnFamilyType.valueOf(result.getString("type"));
+#endif
 
+        cf_type cf = cf_type::standard;
+        if (table_row.has("type")) {
+            cf = sstring_to_cf_type(table_row.get_nonnull<sstring>("type"));
+            if (cf == cf_type::super) {
+                fail(unimplemented::cause::SUPER);
+            }
+        }
+#if 0
         AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
 #endif
 
         std::vector<column_definition> column_defs = create_columns_from_column_rows(serialized_column_definitions,
                                                                         ks_name,
-                                                                        cf_name/*,
-                                                                        fullRawComparator,
-                                                                        cfType == ColumnFamilyType.Super*/);
+                                                                        cf_name,/*,
+                                                                        fullRawComparator, */
+                                                                        cf == cf_type::super);
 
         bool is_dense;
         if (table_row.has("is_dense")) {
@@ -1257,18 +1260,31 @@ future<> save_system_keyspace_schema() {
 #endif
         builder.set_is_dense(is_dense);
 
-#if 0
-        cfm.readRepairChance(result.getDouble("read_repair_chance"));
-        cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
-        cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
-#endif
+        if (table_row.has("read_repair_chance")) {
+            builder.set_read_repair_chance(table_row.get_nonnull<double>("read_repair_chance"));
+        }
+
+        if (table_row.has("local_read_repair_chance")) {
+            builder.set_dc_local_read_repair_chance(table_row.get_nonnull<double>("local_read_repair_chance"));
+        }
+
+        if (table_row.has("gc_grace_seconds")) {
+            builder.set_gc_grace_seconds(table_row.get_nonnull<int32_t>("gc_grace_seconds"));
+        }
+
         if (table_row.has("default_validator")) {
             builder.set_default_validator(parse_type(table_row.get_nonnull<sstring>("default_validator")));
         }
 
+        if (table_row.has("min_compaction_threshold")) {
+            builder.set_min_compaction_threshold(table_row.get_nonnull<int>("min_compaction_threshold"));
+        }
+
+        if (table_row.has("max_compaction_threshold")) {
+            builder.set_max_compaction_threshold(table_row.get_nonnull<int>("max_compaction_threshold"));
+        }
+
 #if 0
-        cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
-        cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
             cfm.comment(result.getString("comment"));
         if (result.has("memtable_flush_period_in_ms"))
@@ -1285,13 +1301,15 @@ future<> save_system_keyspace_schema() {
         builder.set_compressor_params(cp);
 #if 0
         cfm.compactionStrategyOptions(fromJsonMap(result.getString("compaction_strategy_options")));
-
-        if (result.has("min_index_interval"))
-            cfm.minIndexInterval(result.getInt("min_index_interval"));
-
-        if (result.has("max_index_interval"))
-            cfm.maxIndexInterval(result.getInt("max_index_interval"));
 #endif
+
+        if (table_row.has("min_index_interval")) {
+            builder.set_min_index_interval(table_row.get_nonnull<int>("min_index_interval"));
+        }
+
+        if (table_row.has("max_index_interval")) {
+            builder.set_max_index_interval(table_row.get_nonnull<int>("max_index_interval"));
+        }
 
         if (table_row.has("bloom_filter_fp_chance")) {
             builder.set_bloom_filter_fp_chance(table_row.get_nonnull<double>("bloom_filter_fp_chance"));
@@ -1383,22 +1401,22 @@ future<> save_system_keyspace_schema() {
 
     std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                    const sstring& keyspace,
-                                                                   const sstring& table/*,
-                                                                   AbstractType<?> rawComparator,
-                                                                   boolean isSuper*/)
+                                                                   const sstring& table, /*,
+                                                                   AbstractType<?> rawComparator, */
+                                                                   bool is_super)
     {
         std::vector<column_definition> columns;
         for (auto&& row : rows->rows()) {
-            columns.emplace_back(std::move(create_column_from_column_row(row, keyspace, table/*, rawComparator, isSuper*/)));
+            columns.emplace_back(std::move(create_column_from_column_row(row, keyspace, table, /*, rawComparator, */ is_super)));
         }
         return columns;
     }
 
     column_definition create_column_from_column_row(const query::result_set_row& row,
                                                 sstring keyspace,
-                                                sstring table/*,
-                                                AbstractType<?> rawComparator,
-                                                boolean isSuper*/)
+                                                sstring table, /*,
+                                                AbstractType<?> rawComparator, */
+                                                bool is_super)
     {
         auto kind = deserialize_kind(row.get_nonnull<sstring>("type"));
 

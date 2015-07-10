@@ -31,6 +31,29 @@ enum class index_type {
     none, // cwi: added none to avoid "optional" bs.
 };
 
+enum class cf_type : uint8_t {
+    standard,
+    super,
+};
+
+inline sstring cf_type_to_sstring(cf_type t) {
+    if (t == cf_type::standard) {
+        return "Standard";
+    } else if (t == cf_type::super) {
+        return "Super";
+    }
+    throw std::invalid_argument(sprint("unknown type: %d\n", uint8_t(t)));
+}
+
+inline cf_type sstring_to_cf_type(sstring name) {
+    if (name == "Standard") {
+        return cf_type::standard;
+    } else if (name == "Super") {
+        return cf_type::super;
+    }
+    throw std::invalid_argument(sprint("unknown type: %s\n", name));
+}
+
 typedef std::unordered_map<sstring, sstring> index_options_map;
 
 class schema;
@@ -149,6 +172,14 @@ private:
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
         bool _is_dense = false;
+        cf_type _type = cf_type::standard;
+        int32_t _gc_grace_seconds = 864000;
+        double _dc_local_read_repair_chance = 0.1;
+        double _read_repair_chance = 0.0;
+        int32_t _min_compaction_threshold = 4;
+        int32_t _max_compaction_threshold = 32;
+        int32_t _min_index_interval = 128;
+        int32_t _max_index_interval = 2048;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -235,6 +266,43 @@ public:
     bool is_counter() const {
         return false;
     }
+
+    const cf_type type() const {
+        return _raw._type;
+    }
+
+    bool is_super() const {
+        return _raw._type == cf_type::super;
+    }
+
+    int32_t gc_grace_seconds() const {
+        return _raw._gc_grace_seconds;
+    }
+
+    double dc_local_read_repair_chance() const {
+        return _raw._dc_local_read_repair_chance;
+    }
+
+    double read_repair_chance() const {
+        return _raw._read_repair_chance;
+    }
+
+    int32_t min_compaction_threshold() const {
+        return _raw._min_compaction_threshold;
+    }
+
+    int32_t max_compaction_threshold() const {
+        return _raw._max_compaction_threshold;
+    }
+
+    int32_t min_index_interval() const {
+        return _raw._min_index_interval;
+    }
+
+    int32_t max_index_interval() const {
+        return _raw._max_index_interval;
+    }
+
     const column_definition* get_column_definition(const bytes& name) const;
     const_iterator regular_begin() const {
         return regular_columns().begin();

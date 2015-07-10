@@ -52,6 +52,62 @@ public:
         _raw._default_validator = validator;
     }
 
+    void set_gc_grace_seconds(int32_t gc_grace_seconds) {
+        _raw._gc_grace_seconds = gc_grace_seconds;
+    }
+
+    int32_t get_gc_grace_seconds() {
+        return _raw._gc_grace_seconds;
+    }
+
+    void set_dc_local_read_repair_chance(double chance) {
+        _raw._dc_local_read_repair_chance = chance;
+    }
+
+    double get_dc_local_read_repair_chance() {
+        return _raw._dc_local_read_repair_chance;
+    }
+
+    void set_read_repair_chance(double chance) {
+        _raw._read_repair_chance = chance;
+    }
+
+    double get_read_repair_chance() {
+        return _raw._read_repair_chance;
+    }
+
+    void set_min_compaction_threshold(int32_t t) {
+        _raw._min_compaction_threshold = t;
+    }
+
+    int32_t get_min_compaction_threshold() {
+        return _raw._min_compaction_threshold;
+    }
+
+    void set_max_compaction_threshold(int32_t t) {
+        _raw._max_compaction_threshold = t;
+    }
+
+    int32_t get_max_compaction_threshold() {
+        return _raw._max_compaction_threshold;
+    }
+
+    void set_min_index_interval(int32_t t) {
+        _raw._min_index_interval = t;
+    }
+
+    int32_t get_min_index_interval() {
+        return _raw._min_index_interval;
+    }
+
+    void set_max_index_interval(int32_t t) {
+        _raw._max_index_interval = t;
+    }
+
+    int32_t get_max_index_interval() {
+        return _raw._max_index_interval;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }
