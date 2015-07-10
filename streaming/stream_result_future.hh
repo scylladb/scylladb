@@ -53,6 +53,10 @@ private:
     shared_ptr<stream_coordinator> _coordinator;
     std::vector<stream_event_handler*> _event_listeners;
 public:
+    stream_result_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_)
+        : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(0, keep_ss_table_levels_)) {
+    }
+
     /**
      * Create new StreamResult of given {@code planId} and type.
      *
@@ -70,12 +74,6 @@ public:
             // set(getCurrentState());
         }
     }
-
-#if 0
-    stream_resslt_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_)
-        : stream_resslt_future(planId, description,  StreamCoordinator(0, keepSSTableLevels, new DefaultConnectionFactory()));
-    }
-#endif
 
 public:
     static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
