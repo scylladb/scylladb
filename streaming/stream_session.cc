@@ -52,8 +52,11 @@ void stream_session::init_messaging_service_handler() {
         streaming_debug("GOT PREPARE_MESSAGE\n");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO: find session
+#if 0
             stream_session s;
             auto msg_ret = s.prepare(std::move(msg.requests), std::move(msg.summaries));
+#endif
+            auto msg_ret = messages::prepare_message();
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
