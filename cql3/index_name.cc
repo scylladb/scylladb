@@ -15,33 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-public final class IndexName extends KeyspaceElementName
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#include "cql3/index_name.hh"
+
+namespace cql3 {
+
+void index_name::set_index(const sstring& idx, bool keep_case)
 {
-    private String idxName;
+    _idx_name = to_internal_name(idx, keep_case);
+}
 
-    public void setIndex(String idx, boolean keepCase)
-    {
-        idxName = toInternalName(idx, keepCase);
-    }
+const sstring& index_name::get_idx() const
+{
+    return _idx_name;
+}
 
-    public String getIdx()
-    {
-        return idxName;
+::shared_ptr<cf_name> index_name::get_cf_name() const
+{
+    auto cf = ::make_shared<cf_name>();
+    if (has_keyspace()) {
+        cf->set_keyspace(get_keyspace(), true);
     }
+    return cf;
+}
 
-    public CFName getCfName()
-    {
-        CFName cfName = new CFName();
-        if (hasKeyspace())
-            cfName.setKeyspace(getKeyspace(), true);
-    	return cfName;
-    }
+sstring index_name::to_string() const
+{
+    return keyspace_element_name::to_string() + _idx_name;
+}
 
-    @Override
-    public String toString()
-    {
-        return super.toString() + idxName;
-    }
 }

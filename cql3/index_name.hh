@@ -21,45 +21,26 @@
  *
  * Modified by Cloudius Systems
  */
-#include <experimental/optional>
-#include "core/sstring.hh"
-#include "cf_name.hh"
+
+#pragma once
+
+#include "cql3/keyspace_element_name.hh"
+
+#include "core/shared_ptr.hh"
+#include "cql3/cf_name.hh"
 
 namespace cql3 {
 
-class index_name {
-    std::experimental::optional<sstring> _ks_name;
-    sstring _idx_name;
-
+class index_name : public keyspace_element_name {
+    sstring _idx_name = "";
 public:
-    void set_keyspace(sstring ks, bool keep_case) {
-        if (!keep_case) {
-            std::transform(ks.begin(), ks.end(), ks.begin(), ::tolower);
-        }
-        _ks_name = std::experimental::make_optional(std::move(ks));
-    }
-    void set_index(sstring idx_name, bool keep_case) {
-        if (!keep_case) {
-            std::transform(idx_name.begin(), idx_name.end(), idx_name.begin(), ::tolower);
-        }
-        _idx_name = std::move(idx_name);
-    }
-    bool has_keyspace() const {
-        return bool(_ks_name);
-    }
-    const sstring& keyspace() const {
-        return _ks_name;
-    }
-    const sstring& idx() const {
-        return _idx_name;
-    }
-    cf_name get_cf_name() const {
-        cf_name cfname;
-        if (has_keyspace())  {
-            cf_name.set_keyspace(_ks_name, true);
-        }
-        return cfname;
-    }
+    void set_index(const sstring& idx, bool keep_case);
+
+    const sstring& get_idx() const;
+
+    ::shared_ptr<cf_name> get_cf_name() const;
+
+    virtual sstring to_string() const override;
 };
 
 }
