@@ -29,6 +29,7 @@
 #include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_result_future.hh"
+#include "streaming/stream_manager.hh"
 #include "mutation_reader.hh"
 #include "dht/i_partitioner.hh"
 #include "database.hh"
@@ -48,14 +49,21 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
-    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, unsigned dst_cpu_id) {
+    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, UUID plan_id, unsigned dst_cpu_id) {
         streaming_debug("GOT PREPARE_MESSAGE\n");
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO: find session
-#if 0
-            stream_session s;
-            auto msg_ret = s.prepare(std::move(msg.requests), std::move(msg.summaries));
-#endif
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id = std::move(plan_id)] () mutable {
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
+            if (f) {
+                auto c =  f->get_coordinator();
+                inet_address peer;
+                inet_address connecting;
+                auto session = c->get_or_create_next_session(peer, connecting);
+                auto msg_ret = session->prepare(std::move(msg.requests), std::move(msg.summaries));
+                return make_ready_future<messages::prepare_message>(std::move(msg_ret));
+            }
+            // TODO: Send error msg back
+            print("stream_session:: session does not exist within plan_id = %s\n", plan_id);
             auto msg_ret = messages::prepare_message();
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
@@ -174,7 +182,7 @@ future<> stream_session::on_initialization_complete() {
     auto id = shard_id{this->peer, 0};
     streaming_debug("SEND PREPARE_MESSAGE id=%s\n", id);
     return ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
-            std::move(prepare), this->dst_cpu_id).then([this] (messages::prepare_message msg) {
+            std::move(prepare), plan_id(), this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         streaming_debug("GOT PREPARE_MESSAGE Reply\n");
         for (auto& request : msg.requests) {
             // always flush on stream request

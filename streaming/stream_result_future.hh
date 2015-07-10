@@ -74,6 +74,8 @@ public:
             // set(getCurrentState());
         }
     }
+public:
+    shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
     static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
