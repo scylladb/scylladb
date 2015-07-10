@@ -15,45 +15,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.Locale;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "core/sstring.hh"
+
+#include <experimental/optional>
+
+namespace cql3 {
 
 /**
  * Base class for the names of the keyspace elements (e.g. table, index ...)
  */
-abstract class KeyspaceElementName
-{
+class keyspace_element_name {
     /**
      * The keyspace name as stored internally.
      */
-    private String ksName;
+    std::experimental::optional<sstring> _ks_name = std::experimental::nullopt;
 
+public:
     /**
      * Sets the keyspace.
      *
      * @param ks the keyspace name
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      */
-    public final void setKeyspace(String ks, boolean keepCase)
-    {
-        ksName = toInternalName(ks, keepCase);
-    }
+    void set_keyspace(const sstring& ks, bool keep_case);
 
     /**
      * Checks if the keyspace is specified.
      * @return <code>true</code> if the keyspace is specified, <code>false</code> otherwise.
      */
-    public final boolean hasKeyspace()
-    {
-        return ksName != null;
-    }
+    bool has_keyspace() const;
 
-    public final String getKeyspace()
-    {
-        return ksName;
-    }
+    const sstring& get_keyspace() const;
 
+    virtual sstring to_string() const;
+
+protected:
     /**
      * Converts the specified name into the name used internally.
      *
@@ -61,14 +66,7 @@ abstract class KeyspaceElementName
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      * @return the name used internally.
      */
-    protected static String toInternalName(String name, boolean keepCase)
-    {
-        return keepCase ? name : name.toLowerCase(Locale.US);
-    }
+    static sstring to_internal_name(sstring name, bool keep_case);
+};
 
-    @Override
-    public String toString()
-    {
-        return hasKeyspace() ? (getKeyspace() + ".") : "";
-    }
 }
