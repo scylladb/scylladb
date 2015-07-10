@@ -48,7 +48,7 @@ private:
     sstring _description;
     std::vector<stream_event_handler*> _handlers;
     long _repaired_at;
-    stream_coordinator _coordinator;
+    shared_ptr<stream_coordinator> _coordinator;
 
     bool _flush_before_transfer = true;
     // FIXME: ActiveRepairService.UNREPAIRED_SSTABLE
@@ -72,7 +72,7 @@ public:
         : _plan_id(utils::UUID_gen::get_time_UUID())
         , _description(description)
         , _repaired_at(repaired_at)
-        , _coordinator(connections_per_host, keep_ss_table_levels) {
+        , _coordinator(make_shared<stream_coordinator>(connections_per_host, keep_ss_table_levels)) {
     }
 
     /**
@@ -156,7 +156,7 @@ public:
      * @return true if this plan has no plan to execute
      */
     bool is_empty() {
-        return !_coordinator.has_active_sessions();
+        return !_coordinator->has_active_sessions();
     }
 
     /**

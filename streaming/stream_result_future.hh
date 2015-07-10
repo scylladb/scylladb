@@ -50,7 +50,7 @@ public:
     UUID plan_id;
     sstring description;
 private:
-    stream_coordinator& _coordinator;
+    shared_ptr<stream_coordinator> _coordinator;
     std::vector<stream_event_handler*> _event_listeners;
 public:
     /**
@@ -61,12 +61,12 @@ public:
      * @param planId Stream plan ID
      * @param description Stream description
      */
-    stream_result_future(UUID plan_id_, sstring description_, stream_coordinator& coordinator_)
+    stream_result_future(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_)
         : plan_id(std::move(plan_id_))
         , description(std::move(description_))
         , _coordinator(coordinator_) {
         // if there is no session to listen to, we immediately set result for returning
-        if (!_coordinator.is_receiving() && !_coordinator.has_active_sessions()) {
+        if (!_coordinator->is_receiving() && !_coordinator->has_active_sessions()) {
             // set(getCurrentState());
         }
     }
@@ -78,7 +78,7 @@ public:
 #endif
 
 public:
-    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, stream_coordinator& coordinator_) {
+    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
         auto future = create_and_register(plan_id_, description_, coordinator_);
         for (auto& listener : listeners_) {
             future->add_event_listener(listener);
@@ -87,17 +87,17 @@ public:
         //logger.info("[Stream #{}] Executing streaming plan for {}", plan_id,  description);
 
         // Initialize and start all sessions
-        for (auto& session : coordinator_.get_all_stream_sessions()) {
+        for (auto& session : coordinator_->get_all_stream_sessions()) {
             session->init(future);
         }
-        coordinator_.connect_all_stream_sessions();
+        coordinator_->connect_all_stream_sessions();
     }
 
     static void init_receiving_side(int session_index, UUID plan_id,
         sstring description, inet_address from, bool keep_ss_table_level);
 
 private:
-    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, stream_coordinator& coordinator_) {
+    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
         auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
         // FIXME: StreamManager.instance.register(future);
         return future;
