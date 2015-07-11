@@ -114,6 +114,32 @@ struct serializer {
         });
     }
 
+    // Adaptor for writing objects having db::serializer<>
+    template<typename Serializable>
+    inline future<> write_serializable(output_stream<char>& out, const Serializable& v) {
+        db::serializer<Serializable> ser(v);
+        bytes b(bytes::initialized_later(), ser.size() + data_output::serialized_size<uint32_t>());
+        data_output d_out(b);
+        d_out.write<uint32_t>(ser.size());
+        ser.write(d_out);
+        return out.write(reinterpret_cast<const char*>(b.c_str()), b.size());
+    }
+
+    // Adaptor for reading objects having db::serializer<>
+    template<typename Serializable>
+    inline future<> read_serializable(input_stream<char>& in, Serializable& v) {
+        return read_integral<uint32_t>(in).then([&in, &v] (auto sz) mutable {
+            return in.read_exactly(sz).then([sz, &v] (temporary_buffer<char> buf) mutable {
+                if (buf.size() != sz) {
+                    throw rpc::closed_error();
+                }
+                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
+                data_input in(bv);
+                db::serializer<Serializable>::read(v, in);
+            });
+        });
+    }
+
     // For integer type
     template<typename T>
     inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<std::is_integral<std::remove_reference_t<T>>::value, void*> = nullptr) {
