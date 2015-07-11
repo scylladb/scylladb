@@ -98,7 +98,7 @@ template<> void serializer<collection_mutation::view>::read(collection_mutation:
 
 template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
 template<> void serializer<frozen_mutation>::write(output&, const type&);
-template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&) = delete;
+template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&);
 template<> frozen_mutation serializer<frozen_mutation>::read(input&);
 
 template<> serializer<partition_key_view>::serializer(const partition_key_view &);

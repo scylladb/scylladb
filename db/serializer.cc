@@ -230,6 +230,11 @@ void db::serializer<frozen_mutation>::write(output& out, const frozen_mutation& 
 }
 
 template<>
+void db::serializer<frozen_mutation>::read(frozen_mutation& m, input& in) {
+    m = read(in);
+}
+
+template<>
 frozen_mutation db::serializer<frozen_mutation>::read(input& in) {
     return frozen_mutation(bytes_serializer::read(in));
 }
