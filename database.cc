@@ -31,6 +31,7 @@
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
 #include "service/storage_service.hh"
+#include "mutation_query.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -936,6 +937,13 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
     });
 }
 
+mutation_source
+column_family::as_mutation_source() const {
+    return [this] (const query::partition_range& range) {
+        return this->make_reader(range);
+    };
+}
+
 future<lw_shared_ptr<query::result>>
 database::query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
     static auto make_empty = [] {
@@ -948,6 +956,17 @@ database::query(const query::read_command& cmd, const std::vector<query::partiti
     } catch (const no_such_column_family&) {
         // FIXME: load from sstables
         return make_empty();
+    }
+}
+
+future<reconcilable_result>
+database::query_mutations(const query::read_command& cmd, const query::partition_range& range) {
+    try {
+        column_family& cf = find_column_family(cmd.cf_id);
+        return mutation_query(cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
+    } catch (const no_such_column_family&) {
+        // FIXME: load from sstables
+        return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 }
 
