@@ -45,6 +45,7 @@
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
+#include <boost/range/algorithm/heap_algorithm.hpp>
 
 namespace service {
 
@@ -2840,6 +2841,104 @@ void storage_proxy::init_messaging_service() {
             return query_singular_local_digest(cmd, pr);
         });
     });
+}
+
+// Merges reconcilable_result:s from different shards into one
+// Drops partitions which exceed the limit.
+class mutation_result_merger {
+    // Adapts reconcilable_result to a consumable sequence of partitions.
+    struct partition_run {
+        foreign_ptr<lw_shared_ptr<reconcilable_result>> result;
+        size_t index = 0;
+
+        partition_run(foreign_ptr<lw_shared_ptr<reconcilable_result>> result)
+            : result(std::move(result))
+        { }
+
+        const partition& current() const {
+            return result->partitions()[index];
+        }
+
+        bool has_more() const {
+            return index < result->partitions().size();
+        }
+
+        void advance() {
+            ++index;
+        }
+    };
+
+    uint32_t _limit;
+    schema_ptr _schema;
+    std::vector<partition_run> _runs;
+public:
+    mutation_result_merger(uint32_t limit, schema_ptr schema)
+        : _limit(limit)
+        , _schema(std::move(schema))
+    { }
+
+    void reserve(size_t shard_count) {
+        _runs.reserve(shard_count);
+    }
+
+    void operator()(foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
+        if (result->partitions().size() > 0) {
+            _runs.emplace_back(partition_run(std::move(result)));
+        }
+    }
+
+    reconcilable_result get() && {
+        std::vector<partition> partitions;
+        uint32_t row_count = 0;
+
+        auto cmp = [this] (const partition_run& r1, const partition_run& r2) {
+            const partition& p1 = r1.current();
+            const partition& p2 = r2.current();
+            return p1._m.key(*_schema).legacy_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
+        };
+
+        boost::range::make_heap(_runs, cmp);
+
+        while (!_runs.empty()) {
+            boost::range::pop_heap(_runs, cmp);
+            partition_run& next = _runs.back();
+            const partition& p = next.current();
+            partitions.push_back(p);
+            row_count += p._row_count;
+            if (row_count >= _limit) {
+                break;
+            }
+            next.advance();
+            if (next.has_more()) {
+                boost::range::push_heap(_runs, cmp);
+            } else {
+                _runs.pop_back();
+            }
+        }
+
+        return { row_count, std::move(partitions) };
+    }
+};
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
+    if (pr.is_singular()) {
+        unsigned shard = _db.local().shard_of(pr.start_value().token());
+        return _db.invoke_on(shard, [cmd, &pr] (database& db) {
+            return db.query_mutations(*cmd, pr).then([] (reconcilable_result&& result) {
+                return make_foreign(make_lw_shared(std::move(result)));
+            });
+        });
+    } else {
+        auto schema = _db.local().find_schema(cmd->cf_id);
+        return _db.map_reduce(mutation_result_merger{cmd->row_limit, schema}, [cmd, &pr] (database& db) {
+            return db.query_mutations(*cmd, pr).then([] (reconcilable_result&& result) {
+                return make_foreign(make_lw_shared(std::move(result)));
+            });
+        }).then([] (reconcilable_result&& result) {
+            return make_foreign(make_lw_shared(std::move(result)));
+        });
+    }
 }
 
 }
