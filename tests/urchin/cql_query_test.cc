@@ -421,6 +421,88 @@ SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
     });
 }
 
+SEASTAR_TEST_CASE(test_partitions_have_consistent_ordering_in_range_query) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (k blob, v int, primary key (k));").discard_result().then([&e] {
+            return e.execute_cql(
+                "begin unlogged batch \n"
+                    "  insert into cf (k, v) values (0x01, 0); \n"
+                    "  insert into cf (k, v) values (0x02, 0); \n"
+                    "  insert into cf (k, v) values (0x03, 0); \n"
+                    "  insert into cf (k, v) values (0x04, 0); \n"
+                    "  insert into cf (k, v) values (0x05, 0); \n"
+                    "  insert into cf (k, v) values (0x06, 0); \n"
+                    "apply batch;"
+            ).discard_result();
+        }).then([&e] {
+            // Determine partition order
+            return e.execute_cql("select k from cf;");
+        }).then([&e](auto msg) {
+            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            std::vector<bytes> keys;
+            for (auto&& row : rows->rs().rows()) {
+                BOOST_REQUIRE(row[0]);
+                keys.push_back(*row[0]);
+            }
+            BOOST_REQUIRE(keys.size() == 6);
+
+            return now().then([keys, &e] {
+                return e.execute_cql("select k from cf limit 1;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]}
+                    });
+                });
+            }).then([keys, &e] {
+                return e.execute_cql("select k from cf limit 2;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]}
+                    });
+                });
+            }).then([keys, &e] {
+                return e.execute_cql("select k from cf limit 3;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]}
+                    });
+                });
+            }).then([keys, &e] {
+                return e.execute_cql("select k from cf limit 4;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]},
+                        {keys[3]}
+                    });
+                });
+            }).then([keys, &e] {
+                return e.execute_cql("select k from cf limit 5;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]},
+                        {keys[3]},
+                        {keys[4]}
+                    });
+                });
+            }).then([keys, &e] {
+                return e.execute_cql("select k from cf limit 6;").then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]},
+                        {keys[3]},
+                        {keys[4]},
+                        {keys[5]}
+                    });
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {
