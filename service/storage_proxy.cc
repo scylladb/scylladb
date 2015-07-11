@@ -1589,12 +1589,13 @@ storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::
         }
     }
 
-    if (partition_ranges.size() != 1) {
-        // FIXME: implement
-        throw std::runtime_error("more than one non singular range not supported yet");
-    }
-
-    return query_local(std::move(cmd), std::move(partition_ranges));
+    return do_with(std::move(partition_ranges), [this, s, cmd](std::vector<query::partition_range>& prs) {
+        return map_reduce(prs.begin(), prs.end(), [this, s, cmd](const query::partition_range& pr) {
+            return query_mutations_locally(cmd, pr).then([s, cmd](auto&& result_ptr) {
+                return make_foreign(make_lw_shared(to_data_query_result(*result_ptr, s, cmd->slice)));
+            });
+        }, query::result_merger());
+    });
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>

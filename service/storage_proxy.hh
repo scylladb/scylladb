@@ -109,6 +109,12 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
 
+    /*
+     * Executes data query on the whole cluster.
+     *
+     * Partitions for each range will be ordered according to decorated_key ordering. Results for
+     * each range from "partition_ranges" may appear in any order.
+     */
     future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         std::vector<query::partition_range>&& partition_ranges,
