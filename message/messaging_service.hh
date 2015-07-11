@@ -96,8 +96,6 @@ future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
 future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
 future<> ser_sstring(output_stream<char>& out, sstring& v);
 future<> des_sstring(input_stream<char>& in, sstring& v);
-future<> ser_frozen_mutation(output_stream<char>& out, const frozen_mutation& v);
-future<> des_frozen_mutation(input_stream<char>& in, frozen_mutation& v);
 
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
@@ -205,13 +203,13 @@ struct serializer {
 
     // For frozen_mutation
     inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
-        return ser_frozen_mutation(out, v);
+        return write_serializable(out, v);
     }
     inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
-        return operator()(out, const_cast<const frozen_mutation&>(v));
+        return write_serializable(out, v);
     }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
-        return des_frozen_mutation(in, v);
+        return read_serializable(in, v);
     }
 
     // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2
