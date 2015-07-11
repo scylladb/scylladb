@@ -1164,7 +1164,7 @@ query(service::storage_proxy& proxy, const sstring& cf_name) {
         query::partition_slice::option::send_clustering_key>();
     query::partition_slice slice{{query::clustering_range::make_open_ended_both_sides()}, static_cols, regular_cols, opts};
     auto cmd = make_lw_shared<query::read_command>(schema->id(), slice, std::numeric_limits<uint32_t>::max());
-    return proxy.query(cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
+    return proxy.query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }

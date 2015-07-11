@@ -1572,7 +1572,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
+storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
     };
@@ -1629,7 +1629,7 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         query::partition_slice::option::send_clustering_key>();
     query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
     auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
-    return query(cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
+    return query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }

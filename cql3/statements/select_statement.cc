@@ -199,7 +199,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
 future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges,
         service::query_state& state, const query_options& options, db_clock::time_point now) {
-    return proxy.local().query(cmd, std::move(partition_ranges), options.get_consistency())
+    return proxy.local().query(_schema, cmd, std::move(partition_ranges), options.get_consistency())
         .then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });
