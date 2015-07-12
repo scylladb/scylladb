@@ -26,6 +26,7 @@
 #include "core/shared_ptr.hh"
 #include "core/app-template.hh"
 #include "core/do_with.hh"
+#include "core/seastar.hh"
 #include "test-utils.hh"
 
 struct writer {
@@ -133,3 +134,55 @@ SEASTAR_TEST_CASE(test_fstream_unaligned) {
 
     return sem->wait();
 }
+
+future<> test_consume_until_end(uint64_t size) {
+    return open_file_dma("testfile.tmp",
+            open_flags::rw | open_flags::create | open_flags::truncate).then([size] (file f) {
+        return do_with(make_lw_shared(std::move(f)), [size] (lw_shared_ptr<file> f) {
+            return do_with(make_file_output_stream(f), [size] (output_stream<char>& out) {
+                std::vector<char> buf(size);
+                std::iota(buf.begin(), buf.end(), 0);
+                return out.write(buf.data(), buf.size()).then([&out] {
+                   return out.flush();
+                });
+            }).then([f] {
+                return f->size();
+            }).then([size, f] (size_t real_size) {
+                BOOST_REQUIRE_EQUAL(size, real_size);
+            }).then([size, f] {
+                auto consumer = [offset = uint64_t(0), size] (temporary_buffer<char> buf) mutable -> future<input_stream<char>::unconsumed_remainder> {
+                    if (!buf) {
+                        return make_ready_future<input_stream<char>::unconsumed_remainder>(temporary_buffer<char>());
+                    }
+                    BOOST_REQUIRE(offset + buf.size() <= size);
+                    std::vector<char> expected(buf.size());
+                    std::iota(expected.begin(), expected.end(), offset);
+                    offset += buf.size();
+                    BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin()));
+                    return make_ready_future<input_stream<char>::unconsumed_remainder>(std::experimental::nullopt);
+                };
+                return do_with(make_file_input_stream(f), std::move(consumer), [size] (input_stream<char>& in, auto& consumer) {
+                    return in.consume(consumer);
+                });
+            });
+        });
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_consume_aligned_file) {
+    return test_consume_until_end(4096);
+}
+
+SEASTAR_TEST_CASE(test_consume_empty_file) {
+    return test_consume_until_end(0);
+}
+
+SEASTAR_TEST_CASE(test_consume_unaligned_file) {
+    return test_consume_until_end(1);
+}
+
+SEASTAR_TEST_CASE(test_consume_unaligned_file_large) {
+    return test_consume_until_end((1 << 20) + 1);
+}
+
