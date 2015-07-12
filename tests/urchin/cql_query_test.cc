@@ -1083,14 +1083,14 @@ SEASTAR_TEST_CASE(test_ttl) {
                 {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", my_list_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql(
-                "insert into cf (p1, r1, r3) values ('key1', 'value1_1', ['a', 'b', 'c']) using ttl 1000;").discard_result();
+                "update cf using ttl 1000 set r1 = 'value1_1', r3 = ['a', 'b', 'c'] where p1 = 'key1';").discard_result();
         }).then([&e] {
             return e.execute_cql(
-                "insert into cf (p1, r1, r3) values ('key3', 'value1_3', ['a', 'b', 'c']) using ttl 1;").discard_result();
+                "update cf using ttl 1 set r1 = 'value1_3', r3 = ['a', 'b', 'c'] where p1 = 'key3';").discard_result();
         }).then([&e] {
             return e.execute_cql("update cf using ttl 1 set r3[1] = 'b' where p1 = 'key1';").discard_result();
         }).then([&e] {
-            return e.execute_cql("insert into cf (p1, r1) values ('key2', 'value1_2') using ttl 1;").discard_result();
+            return e.execute_cql("update cf using ttl 1 set r1 = 'value1_2' where p1 = 'key2';").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, r2) values ('key2', 'value2_2');").discard_result();
         }).then([&e] {
