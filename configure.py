@@ -605,6 +605,7 @@ deps['tests/urchin/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'te
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
+    '-Wno-maybe-uninitialized', # false positives on gcc 5
     ]
 
 # The "--with-osv=<path>" parameter is a shortcut for a bunch of other
