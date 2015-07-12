@@ -369,6 +369,26 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
     });
 }
 
+SEASTAR_TEST_CASE(test_insert_without_clustering_key) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (k blob, v blob, primary key (k));").discard_result().then([&e] {
+            return e.execute_cql("insert into cf (k) values (0x01);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), {}}
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("select k from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")}
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table cf (k blob, c blob, v blob, s1 blob static, primary key (k, c));").discard_result().then([&e] {
