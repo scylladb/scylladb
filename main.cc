@@ -89,7 +89,7 @@ int main(int ac, char** av) {
                         try {
                             f.get();
                         } catch (std::system_error& e) {
-                            std::cerr << "Directory " << datadir << " not found. Tried to created it but failed" << std::endl;
+                            fprint(std::cerr, "Directory \"%s\" not found. Tried to created it but failed: %s\n", datadir, e.what());
                             throw;
                         }
                     });
