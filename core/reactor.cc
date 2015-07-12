@@ -2002,10 +2002,8 @@ future<> do_flush_directory(sstring name) {
     }
 
     return open_directory(name).then([] (file f) {
-        auto fptr = std::make_unique<file>(std::move(f));
-        auto fut = fptr->flush();
-        return fut.then([fptr = std::move(fptr)] {
-            return fptr->close();
+        return f.flush().then([f] () mutable {
+            return f.close();
         });
     });
 }
