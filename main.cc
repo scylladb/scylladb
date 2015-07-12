@@ -83,6 +83,17 @@ int main(int ac, char** av) {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });
                 });
+            }).then([&db] {
+                return parallel_for_each(db.local().get_config().data_file_directories(), [] (sstring datadir) {
+                    return recursive_touch_directory(datadir).then_wrapped([datadir] (future<> f) {
+                        try {
+                            f.get();
+                        } catch (std::system_error& e) {
+                            std::cerr << "Directory " << datadir << " not found. Tried to created it but failed" << std::endl;
+                            throw;
+                        }
+                    });
+                });
             }).then([&db, &proxy] {
                 return db.invoke_on_all([&proxy] (database& db) {
                     return db.init_from_data_directory(proxy);
