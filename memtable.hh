@@ -48,6 +48,8 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
 
+    mutation_source as_data_source();
+
     bool empty() const { return partitions.empty(); }
     const db::replay_position& replay_position() const {
         return _replay_position;

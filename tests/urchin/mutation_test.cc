@@ -19,6 +19,7 @@
 #include "schema_builder.hh"
 #include "query-result-set.hh"
 #include "query-result-reader.hh"
+#include "partition_slice_builder.hh"
 
 #include "tests/test-utils.hh"
 #include "tests/urchin/mutation_assertions.hh"
@@ -399,28 +400,7 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
 }
 
 static query::partition_slice make_full_slice(const schema& s) {
-    query::partition_slice::option_set options;
-    options.set<query::partition_slice::option::send_partition_key>();
-    options.set<query::partition_slice::option::send_clustering_key>();
-    options.set<query::partition_slice::option::send_timestamp_and_expiry>();
-
-    std::vector<query::clustering_range> ranges;
-    ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
-
-    std::vector<column_id> static_columns;
-    boost::range::push_back(static_columns,
-        s.static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-
-    std::vector<column_id> regular_columns;
-    boost::range::push_back(regular_columns,
-        s.regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-
-    return {
-        std::move(ranges),
-        std::move(static_columns),
-        std::move(regular_columns),
-        std::move(options)
-    };
+    return partition_slice_builder(s).build();
 }
 
 SEASTAR_TEST_CASE(test_querying_of_mutation) {
@@ -446,5 +426,78 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
         m.partition().apply(tombstone(2, gc_clock::now()));
 
         assert_that(resultify(m)).is_empty();
+    });
+}
+
+SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_results) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("sc1", bytes_type, column_kind::static_column)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+        mutation m(partition_key::from_single_value(*s, "key1"), s);
+        m.partition().apply(tombstone(1, gc_clock::now()));
+        m.partition().static_row().apply(*s->get_column_definition("sc1"),
+            atomic_cell::make_dead(2, gc_clock::now()));
+        m.set_clustered_cell(clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A"))),
+            *s->get_column_definition("v"), atomic_cell::make_dead(2, gc_clock::now()));
+
+        auto slice = make_full_slice(*s);
+
+        assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
+            .is_empty();
+    });
+}
+
+SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_results_even_if_static_row_was_not_queried) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("sc1", bytes_type, column_kind::static_column)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+        mutation m(partition_key::from_single_value(*s, "key1"), s);
+        m.partition().static_row().apply(*s->get_column_definition("sc1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("sc1:value"))));
+
+        auto slice = partition_slice_builder(*s)
+            .with_no_static_columns()
+            .with_regular_column("v")
+            .build();
+
+        assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
+            .has_only(a_row()
+                .with_column("pk", bytes("key1"))
+                .with_column("v", {}));
+    });
+}
+
+SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v1", bytes_type, column_kind::regular_column)
+            .with_column("v2", bytes_type, column_kind::regular_column)
+            .build();
+
+        mutation m(partition_key::from_single_value(*s, "key1"), s);
+        m.set_clustered_cell(clustering_key::from_single_value(*s, bytes("ck:A")),
+            *s->get_column_definition("v1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value"))));
+
+        auto slice = partition_slice_builder(*s).build();
+
+        assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
+            .has_only(a_row()
+                .with_column("pk", bytes("key1"))
+                .with_column("ck", bytes("ck:A"))
+                .with_column("v1", bytes("v1:value"))
+                .with_column("v2", {}));
     });
 }

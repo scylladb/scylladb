@@ -68,10 +68,12 @@ public:
     }
 };
 
+// Call finish() or retract() when done.
 class result::partition_writer {
     bytes_ostream& _w;
     const partition_slice& _slice;
     bytes_ostream::place_holder<uint32_t> _count_ph;
+    bytes_ostream::position _pos;
     uint32_t _row_count = 0;
     bool _static_row_added = false;
     bool _finished = false;
@@ -79,10 +81,12 @@ public:
     partition_writer(
         const partition_slice& slice,
         bytes_ostream::place_holder<uint32_t> count_ph,
+        bytes_ostream::position pos,
         bytes_ostream& w)
         : _w(w)
         , _slice(slice)
         , _count_ph(count_ph)
+        , _pos(pos)
     { }
 
     ~partition_writer() {
@@ -108,12 +112,27 @@ public:
     }
 
     uint32_t row_count() const {
-        return std::max(_row_count, (uint32_t)_static_row_added);
+        return _row_count;
     }
 
     void finish() {
         _w.set(_count_ph, _row_count);
+
+        // The partition is live. If there are no clustered rows, there
+        // must be something live in the static row, which counts as one row.
+        _row_count = std::max<uint32_t>(_row_count, 1);
+
         _finished = true;
+    }
+
+    void retract() {
+        _row_count = 0;
+        _w.retract(_pos);
+        _finished = true;
+    }
+
+    const partition_slice& slice() const {
+        return _slice;
     }
 };
 
@@ -126,16 +145,21 @@ public:
     // Starts new partition and returns a builder for its contents.
     // Invalidates all previously obtained builders
     partition_writer add_partition(const partition_key& key) {
+        auto pos = _w.pos();
         auto count_place_holder = _w.write_place_holder<uint32_t>();
         if (_slice.options.contains<partition_slice::option::send_partition_key>()) {
             _w.write_blob(key);
         }
-        return partition_writer(_slice, count_place_holder, _w);
+        return partition_writer(_slice, count_place_holder, pos, _w);
     }
 
     result build() {
         return result(std::move(_w));
     };
+
+    const partition_slice& slice() const {
+        return _slice;
+    }
 };
 
 }

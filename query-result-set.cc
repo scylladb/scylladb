@@ -15,6 +15,7 @@ class result_set_builder {
     const partition_slice& _slice;
     std::vector<result_set_row> _rows;
     std::unordered_map<sstring, data_value> _pkey_cells;
+    uint32_t _row_count;
 public:
     // Keep slice live as long as the builder is used.
     result_set_builder(schema_ptr schema, const partition_slice& slice);
@@ -34,7 +35,7 @@ std::ostream& operator<<(std::ostream& out, const result_set_row& row) {
     for (auto&& cell : row._cells) {
         auto&& type = cell.second.type();
         auto&& value = cell.second.value();
-        out << cell.first << "=\"" << type->decompose(value) << "\" ";
+        out << cell.first << "=\"" << type->to_string(type->decompose(value)) << "\" ";
     }
     return out;
 }
@@ -57,10 +58,12 @@ result_set result_set_builder::build() const {
 void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)
 {
     _pkey_cells = deserialize(key);
+    accept_new_partition(row_count);
 }
 
 void result_set_builder::accept_new_partition(uint32_t row_count)
 {
+    _row_count = row_count;
 }
 
 void result_set_builder::accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row)
@@ -91,6 +94,13 @@ void result_set_builder::accept_new_row(const query::result_row_view &static_row
 
 void result_set_builder::accept_partition_end(const result_row_view& static_row)
 {
+    if (_row_count == 0) {
+        auto static_cells = deserialize(static_row, true);
+        std::unordered_map<sstring, data_value> cells;
+        cells.insert(_pkey_cells.begin(), _pkey_cells.end());
+        cells.insert(static_cells.begin(), static_cells.end());
+        _rows.emplace_back(_schema, std::move(cells));
+    }
     _pkey_cells.clear();
 }
 

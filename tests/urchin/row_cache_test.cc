@@ -73,13 +73,6 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-static
-mutation_source as_data_source(lw_shared_ptr<memtable> mt) {
-    return [mt] (const query::partition_range& range) {
-        return mt->make_reader(range);
-    };
-}
-
 // Less-comparator on partition_key yielding the ring order.
 struct decorated_key_order {
     schema_ptr s;
@@ -110,7 +103,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
         }
 
         cache_tracker tracker;
-        row_cache cache(s, as_data_source(mt), tracker);
+        row_cache cache(s, mt->as_data_source(), tracker);
 
         auto get_partition_range = [] (const mutation& m) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));

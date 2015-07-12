@@ -34,11 +34,6 @@
 
 thread_local logging::logger dblog("database");
 
-memtable::memtable(schema_ptr schema)
-        : _schema(std::move(schema))
-        , partitions(dht::decorated_key::less_comparator(_schema)) {
-}
-
 column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))
     , _config(std::move(config))
@@ -58,13 +53,6 @@ column_family::sstables_as_mutation_source() {
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
-}
-
-memtable::const_mutation_partition_ptr
-memtable::find_partition(const dht::decorated_key& key) const {
-    auto i = partitions.find(key);
-    // FIXME: remove copy if only one data source
-    return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
 }
 
 static
@@ -186,31 +174,6 @@ column_family::find_row(const dht::decorated_key& partition_key, clustering_key 
     });
 }
 
-mutation_partition&
-memtable::find_or_create_partition_slow(partition_key_view key) {
-    // FIXME: Perform lookup using std::pair<token, partition_key_view>
-    // to avoid unconditional copy of the partition key.
-    // We can't do it right now because std::map<> which holds
-    // partitions doesn't support heterogenous lookup.
-    // We could switch to boost::intrusive_map<> similar to what we have for row keys.
-    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
-}
-
-mutation_partition&
-memtable::find_or_create_partition(const dht::decorated_key& key) {
-    // call lower_bound so we have a hint for the insert, just in case.
-    auto i = partitions.lower_bound(key);
-    if (i == partitions.end() || !key.equal(*_schema, i->first)) {
-        i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
-    }
-    return i->second;
-}
-
-const memtable::partitions_type&
-memtable::all_partitions() const {
-    return partitions;
-}
-
 struct column_family::merge_comparator {
     schema_ptr _schema;
     using ptr = boost::iterator_range<memtable::partitions_type::const_iterator>*;
@@ -219,44 +182,6 @@ struct column_family::merge_comparator {
         return y->front().first.less_compare(*_schema, x->front().first);
     }
 };
-
-boost::iterator_range<memtable::partitions_type::const_iterator>
-memtable::slice(const query::partition_range& range) const {
-    if (range.is_singular()) {
-        const query::ring_position& pos = range.start_value();
-
-        if (!pos.has_key()) {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
-
-        auto i = partitions.find(pos.as_decorated_key());
-        if (i != partitions.end()) {
-            return boost::make_iterator_range(i, std::next(i));
-        } else {
-            return boost::make_iterator_range(i, i);
-        }
-    } else {
-        if (!range.is_full()) {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
-
-        return boost::make_iterator_range(partitions.begin(), partitions.end());
-    }
-}
-
-mutation_reader
-memtable::make_reader(const query::partition_range& range) const {
-    auto r = slice(range);
-    return [begin = r.begin(), end = r.end(), self = shared_from_this()] () mutable {
-        if (begin != end) {
-            auto m = mutation(self->_schema, begin->first, begin->second);
-            ++begin;
-            return make_ready_future<mutation_opt>(std::experimental::make_optional(std::move(m)));
-        } else {
-            return make_ready_future<mutation_opt>();
-        }
-    };
-}
 
 mutation_reader
 column_family::make_reader(const query::partition_range& range) const {
@@ -313,13 +238,6 @@ column_family::for_all_partitions(Func&& func) const {
 future<bool>
 column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
     return for_all_partitions(std::move(func));
-}
-
-
-row&
-memtable::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition& p = find_or_create_partition_slow(partition_key);
-    return p.clustered_row(clustering_key).cells();
 }
 
 class lister {
@@ -936,27 +854,6 @@ database::existing_index_names(const sstring& cf_to_exclude) const {
     return names;
 }
 
-void
-memtable::update(const db::replay_position& rp) {
-    if (_replay_position < rp) {
-        _replay_position = rp;
-    }
-}
-
-void
-memtable::apply(const mutation& m, const db::replay_position& rp) {
-    mutation_partition& p = find_or_create_partition(m.decorated_key());
-    p.apply(*_schema, m.partition());
-    update(rp);
-}
-
-void
-memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
-    mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
-    p.apply(*_schema, m.partition());
-    update(rp);
-}
-
 // Based on:
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
@@ -1025,8 +922,7 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
                 return qs.reader().then([this, &qs](mutation_opt mo) {
                     if (mo) {
                         auto p_builder = qs.builder.add_partition(mo->key());
-                        mo->partition().query(p_builder, *_schema, qs.cmd.slice, qs.cmd.timestamp, qs.limit);
-                        p_builder.finish();
+                        mo->partition().query(p_builder, *_schema, qs.cmd.timestamp, qs.limit);
                         qs.limit -= p_builder.row_count();
                     } else {
                         qs.range_empty = true;
