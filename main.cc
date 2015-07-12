@@ -51,6 +51,7 @@ int main(int ac, char** av) {
         auto&& opts = app.configuration();
 
         return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &opts]() {
+            dht::set_global_partitioner(cfg->partitioner());
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = opts["api-port"].as<uint16_t>();

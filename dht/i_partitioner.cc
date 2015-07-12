@@ -5,6 +5,7 @@
 #include "i_partitioner.hh"
 #include "core/reactor.hh"
 #include "murmur3_partitioner.hh"
+#include "utils/class_registrator.hh"
 
 namespace dht {
 
@@ -157,13 +158,17 @@ std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
     return out << "{key: " << dk._key << ", token:" << dk._token << "}";
 }
 
-// FIXME: get from global config
 // FIXME: make it per-keyspace
-murmur3_partitioner default_partitioner;
+std::unique_ptr<i_partitioner> default_partitioner { new murmur3_partitioner };
+
+void set_global_partitioner(const sstring& class_name)
+{
+    default_partitioner = create_object<i_partitioner>(class_name);
+}
 
 i_partitioner&
 global_partitioner() {
-    return default_partitioner;
+    return *default_partitioner;
 }
 
 bool

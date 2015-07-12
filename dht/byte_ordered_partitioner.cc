@@ -3,6 +3,7 @@
  */
 
 #include "byte_ordered_partitioner.hh"
+#include "utils/class_registrator.hh"
 
 namespace dht {
 
@@ -23,5 +24,9 @@ token byte_ordered_partitioner::midpoint(const token& t1, const token& t2) const
 {
     throw std::runtime_error("not implemented");
 }
+
+using registry = class_registrator<i_partitioner, byte_ordered_partitioner>;
+static registry registrator("org.apache.cassandra.dht.ByteOrderedPartitioner");
+static registry registrator_short_name("ByteOrderedPartitioner");
 
 }
