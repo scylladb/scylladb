@@ -109,13 +109,13 @@ public:
 };
 
 inline
-std::unique_ptr<file_impl>
+shared_ptr<file_impl>
 make_file_impl(int fd) {
     auto r = ::ioctl(fd, BLKGETSIZE);
     if (r != -1) {
-        return std::unique_ptr<file_impl>(new blockdev_file_impl(fd));
+        return make_shared<blockdev_file_impl>(fd);
     } else {
-        return std::unique_ptr<file_impl>(new posix_file_impl(fd));
+        return make_shared<posix_file_impl>(fd);
     }
 }
 
@@ -131,13 +131,23 @@ make_file_impl(int fd) {
 /// restrictions on file offsets and data pointers.  The former must be aligned
 /// on a 4096 byte boundary, while a 512 byte boundary suffices for the latter.
 class file {
-    std::unique_ptr<file_impl> _file_impl;
+    shared_ptr<file_impl> _file_impl;
 private:
     explicit file(int fd) : _file_impl(make_file_impl(fd)) {}
 
 public:
+    /// Copies a file object.  The new and old objects refer to the
+    /// same underlying file.
+    ///
+    /// \param x file object to be copied
+    file(const file& x) = default;
     /// Moves a file object.
     file(file&& x) : _file_impl(std::move(x._file_impl)) {}
+    /// Assigns a file object.  After assignent, the destination and source refer
+    /// to the same underlying file.
+    ///
+    /// \param x file object to assign to `this`.
+    file& operator=(const file& x) noexcept = default;
     /// Moves assigns a file object.
     file& operator=(file&& x) noexcept = default;
 

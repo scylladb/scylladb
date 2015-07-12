@@ -1995,6 +1995,53 @@ future<> touch_directory(sstring name) {
     });
 }
 
+/// \cond internal
+future<> do_flush_directory(sstring name) {
+    if (name.empty()) {
+        return make_ready_future<>();
+    }
+
+    return open_directory(name).then([] (file f) {
+        auto fptr = std::make_unique<file>(std::move(f));
+        auto fut = fptr->flush();
+        return fut.then([fptr = std::move(fptr)] {
+            return fptr->close();
+        });
+    });
+}
+
+future<> do_recursive_touch_directory(sstring base, sstring name) {
+    static const sstring::value_type separator = '/';
+
+    if (name.empty()) {
+        return make_ready_future<>();
+    }
+
+    size_t pos = std::min(name.find(separator), name.size() - 1);
+    base += name.substr(0 , pos + 1);
+    name = name.substr(pos + 1);
+    return touch_directory(base).then([base, name] {
+        return do_recursive_touch_directory(base, name);
+    }).then([base] {
+        // We will now flush the directory that holds the entry we potentially
+        // created. Technically speaking, we only need to touch when we did
+        // create. But flushing the unchanged ones should be cheap enough - and
+        // it simplifies the code considerably.
+        return do_flush_directory(base);
+    });
+}
+/// \endcond
+
+future<> recursive_touch_directory(sstring name) {
+    // If the name is empty,  it will be of the type a/b/c, which should be interpreted as
+    // a relative path. This means we have to flush our current directory
+    sstring base = "";
+    if (name[0] == '/' || name[0] == '.') {
+        base = "./";
+    }
+    return do_recursive_touch_directory(base, name);
+}
+
 future<> remove_file(sstring pathname) {
     return engine().remove_file(std::move(pathname));
 }
