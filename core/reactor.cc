@@ -706,11 +706,13 @@ blockdev_file_impl::allocate(uint64_t position, uint64_t length) {
     return make_ready_future<>();
 }
 
-future<size_t>
+future<uint64_t>
 posix_file_impl::size(void) {
-    return posix_file_impl::stat().then([] (struct stat&& st) {
-        return make_ready_future<size_t>(st.st_size);
-    });
+    auto r = ::lseek(_fd, 0, SEEK_END);
+    if (r == -1) {
+        return make_exception_future<uint64_t>(std::system_error(errno, std::system_category()));
+    }
+    return make_ready_future<uint64_t>(r);
 }
 
 future<>
@@ -723,15 +725,15 @@ posix_file_impl::close() {
     });
 }
 
-future<size_t>
+future<uint64_t>
 blockdev_file_impl::size(void) {
     return engine()._thread_pool.submit<syscall_result_extra<size_t>>([this] {
-        size_t size;
+        uint64_t size;
         int ret = ::ioctl(_fd, BLKGETSIZE64, &size);
         return wrap_syscall(ret, size);
-    }).then([] (syscall_result_extra<size_t> ret) {
+    }).then([] (syscall_result_extra<uint64_t> ret) {
         ret.throw_if_error();
-        return make_ready_future<size_t>(ret.extra);
+        return make_ready_future<uint64_t>(ret.extra);
     });
 }
 
@@ -1643,13 +1645,22 @@ void smp::pin(unsigned cpu_id) {
 #endif
 
 void smp::allocate_reactor() {
-    static thread_local std::unique_ptr<reactor> reactor_holder;
+    struct reactor_deleter {
+        void operator()(reactor* p) {
+            p->~reactor();
+            free(p);
+        }
+    };
+    static thread_local std::unique_ptr<reactor, reactor_deleter>
+        reactor_holder;
 
     assert(!reactor_holder);
 
     // we cannot just write "local_engin = new reactor" since reactor's constructor
     // uses local_engine
-    auto buf = new (with_alignment(64)) char[sizeof(reactor)];
+    void *buf;
+    int r = posix_memalign(&buf, 64, sizeof(reactor));
+    assert(r == 0);
     local_engine = reinterpret_cast<reactor*>(buf);
     new (buf) reactor;
     reactor_holder.reset(local_engine);
