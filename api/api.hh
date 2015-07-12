@@ -7,6 +7,7 @@
 
 #include "http/httpd.hh"
 #include "database.hh"
+#include "service/storage_proxy.hh"
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -17,7 +18,9 @@ struct http_context {
     sstring api_dir;
     http_server_control http_server;
     distributed<database>& db;
-    http_context(distributed<database>& _db) : db(_db) {}
+    distributed<service::storage_proxy>& sp;
+    http_context(distributed<database>& _db, distributed<service::storage_proxy>&
+            _sp) : db(_db), sp(_sp) {}
 };
 
 future<> set_server(http_context& ctx);
