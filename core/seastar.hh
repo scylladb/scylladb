@@ -169,6 +169,17 @@ future<> make_directory(sstring name);
 /// containing directory is sync'ed.
 future<> touch_directory(sstring name);
 
+/// Recursively ensures a directory exists
+///
+/// Checks whether each component of a directory exists, and if not, creates it.
+///
+/// \param name name of the directory to potentially create
+/// \param separator character used as directory separator
+///
+/// \note
+/// This function fsyncs each component created, and is therefore guaranteed to be stable on disk.
+future<> recursive_touch_directory(sstring name);
+
 /// Removes (unlinks) a file.
 ///
 /// \param name name of the file to remove
