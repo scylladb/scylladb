@@ -30,10 +30,10 @@
 #include "schema_builder.hh"
 
 cql3::statements::create_index_statement::create_index_statement(
-        ::shared_ptr<cf_name> name, sstring index_name,
+        ::shared_ptr<cf_name> name, ::shared_ptr<index_name> index_name,
         ::shared_ptr<index_target::raw> raw_target,
         ::shared_ptr<index_prop_defs> properties, bool if_not_exists)
-        : schema_altering_statement(name), _index_name(index_name), _raw_target(
+        : schema_altering_statement(name), _index_name(index_name->get_idx()), _raw_target(
                 raw_target), _properties(properties), _if_not_exists(
                 if_not_exists) {
 }

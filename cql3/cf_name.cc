@@ -22,25 +22,23 @@
  * Modified by Cloudius Systems
  */
 
-#pragma once
-
-#include "cql3/keyspace_element_name.hh"
-
-#include "core/shared_ptr.hh"
 #include "cql3/cf_name.hh"
 
 namespace cql3 {
 
-class index_name : public keyspace_element_name {
-    sstring _idx_name = "";
-public:
-    void set_index(const sstring& idx, bool keep_case);
+void cf_name::set_column_family(const sstring& cf, bool keep_case)
+{
+    _cf_name = to_internal_name(cf, keep_case);
+}
 
-    const sstring& get_idx() const;
+const sstring& cf_name::get_column_family() const
+{
+    return _cf_name;
+}
 
-    ::shared_ptr<cf_name> get_cf_name() const;
-
-    virtual sstring to_string() const override;
-};
+sstring cf_name::to_string() const
+{
+    return keyspace_element_name::to_string() + _cf_name;
+}
 
 }

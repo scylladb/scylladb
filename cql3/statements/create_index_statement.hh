@@ -29,6 +29,7 @@
 #include "index_target.hh"
 #include "cf_statement.hh"
 
+#include "cql3/index_name.hh"
 #include "cql3/cql3_type.hh"
 
 #include "service/migration_manager.hh"
@@ -55,7 +56,7 @@ class create_index_statement : public schema_altering_statement {
 
 
 public:
-    create_index_statement(::shared_ptr<cf_name> name, sstring index_name,
+    create_index_statement(::shared_ptr<cf_name> name, ::shared_ptr<index_name> index_name,
             ::shared_ptr<index_target::raw> raw_target,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 
