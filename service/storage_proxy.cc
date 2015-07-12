@@ -1377,9 +1377,7 @@ class abstract_read_executor : public enable_shared_from_this<abstract_read_exec
     }
 protected:
     bool waiting_for(gms::inet_address ep) {
-        return db::is_datacenter_local(_cl) ?
-            true : //DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(message.from)) :
-            true;
+        return db::is_datacenter_local(_cl) ? is_me(ep) || db::is_local(ep) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_done) {
