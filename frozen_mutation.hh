@@ -27,6 +27,9 @@ public:
     frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes&& b);
     frozen_mutation(frozen_mutation&& m) = default;
+    frozen_mutation(const frozen_mutation& m) = default;
+    frozen_mutation& operator=(frozen_mutation&&) = default;
+    frozen_mutation& operator=(const frozen_mutation&) = default;
 
     bytes_view representation() const { return _bytes; }
     utils::UUID column_family_id() const;

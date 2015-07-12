@@ -403,10 +403,10 @@ public:
     const legacy_compound_view<c_type> legacy_form(const schema& s) const;
 
     // A trichotomic comparator for ordering compatible with Origin.
-    int legacy_tri_compare(const schema& s, const partition_key& o) const;
+    int legacy_tri_compare(const schema& s, partition_key_view o) const;
 
     // Checks if keys are equal in a way which is compatible with Origin.
-    bool legacy_equal(const schema& s, const partition_key& o) const {
+    bool legacy_equal(const schema& s, partition_key_view o) const {
         return legacy_tri_compare(s, o) == 0;
     }
 

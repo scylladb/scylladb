@@ -46,6 +46,7 @@
 #include "row_cache.hh"
 
 class frozen_mutation;
+class reconcilable_result;
 
 namespace service {
 class storage_proxy;
@@ -111,6 +112,8 @@ public:
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
     mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+
+    mutation_source as_mutation_source() const;
 
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
@@ -377,6 +380,7 @@ public:
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<reconcilable_result> query_mutations(const query::read_command& cmd, const query::partition_range& range);
     future<> apply(const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
     const sstring& get_snitch_name() const;

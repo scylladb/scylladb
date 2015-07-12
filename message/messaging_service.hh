@@ -16,7 +16,9 @@
 #include <unordered_map>
 #include "db/config.hh"
 #include "frozen_mutation.hh"
+#include "query-request.hh"
 #include "db/serializer.hh"
+#include "mutation_query.hh"
 
 namespace net {
 
@@ -28,6 +30,7 @@ enum class messaging_verb : int32_t {
     READ_REPAIR,
     READ,
     READ_DATA,
+    READ_MUTATION_DATA, // urchin-only
     READ_DIGEST,
     REQUEST_RESPONSE, // client-initiated reads and writes
     STREAM_INITIATE, // Deprecated
@@ -96,12 +99,48 @@ future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
 future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
 future<> ser_sstring(output_stream<char>& out, sstring& v);
 future<> des_sstring(input_stream<char>& in, sstring& v);
-future<> ser_frozen_mutation(output_stream<char>& out, const frozen_mutation& v);
-future<> des_frozen_mutation(input_stream<char>& in, frozen_mutation& v);
 
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
 struct serializer {
+    template<typename T>
+    inline future<T> read_integral(input_stream<char>& in) {
+        static_assert(std::is_integral<T>::value, "T should be integral");
+
+        return in.read_exactly(sizeof(T)).then([] (temporary_buffer<char> buf) {
+            if (buf.size() != sizeof(T)) {
+                throw rpc::closed_error();
+            }
+            return make_ready_future<T>(net::ntoh(*unaligned_cast<T*>(buf.get())));
+        });
+    }
+
+    // Adaptor for writing objects having db::serializer<>
+    template<typename Serializable>
+    inline future<> write_serializable(output_stream<char>& out, const Serializable& v) {
+        db::serializer<Serializable> ser(v);
+        bytes b(bytes::initialized_later(), ser.size() + data_output::serialized_size<uint32_t>());
+        data_output d_out(b);
+        d_out.write<uint32_t>(ser.size());
+        ser.write(d_out);
+        return out.write(reinterpret_cast<const char*>(b.c_str()), b.size());
+    }
+
+    // Adaptor for reading objects having db::serializer<>
+    template<typename Serializable>
+    inline future<> read_serializable(input_stream<char>& in, Serializable& v) {
+        return read_integral<uint32_t>(in).then([&in, &v] (auto sz) mutable {
+            return in.read_exactly(sz).then([sz, &v] (temporary_buffer<char> buf) mutable {
+                if (buf.size() != sz) {
+                    throw rpc::closed_error();
+                }
+                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
+                data_input in(bv);
+                db::serializer<Serializable>::read(v, in);
+            });
+        });
+    }
+
     // For integer type
     template<typename T>
     inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<std::is_integral<std::remove_reference_t<T>>::value, void*> = nullptr) {
@@ -130,11 +169,7 @@ struct serializer {
     template<typename T>
     inline auto operator()(input_stream<char>& in, std::vector<T>& v) {
         using size_type = typename  std::vector<T>::size_type;
-        return in.read_exactly(sizeof(size_type)).then([&v, &in, this] (temporary_buffer<char> buf) {
-            if (buf.size() != sizeof(size_type)) {
-                throw rpc::closed_error();
-            }
-            size_type c = net::ntoh(*reinterpret_cast<const net::packed<size_type>*>(buf.get()));
+        return read_integral<size_type>(in).then([&v, &in, this] (size_type c) {
             new (&v) std::vector<T>;
             v.reserve(c);
             union U {
@@ -171,13 +206,24 @@ struct serializer {
 
     // For frozen_mutation
     inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
-        return ser_frozen_mutation(out, v);
+        return write_serializable(out, v);
     }
     inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
-        return operator()(out, const_cast<const frozen_mutation&>(v));
+        return write_serializable(out, v);
     }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
-        return des_frozen_mutation(in, v);
+        return read_serializable(in, v);
+    }
+
+    // For reconcilable_result
+    inline auto operator()(output_stream<char>& out, const reconcilable_result& v) {
+        return write_serializable(out, v);
+    }
+    inline auto operator()(output_stream<char>& out, reconcilable_result& v) {
+        return write_serializable(out, v);
+    }
+    inline auto operator()(input_stream<char>& in, reconcilable_result& v) {
+        return read_serializable(in, v);
     }
 
     // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2

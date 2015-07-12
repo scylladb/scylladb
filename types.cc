@@ -1346,6 +1346,27 @@ do_serialize_mutation_form(
     return collection_mutation::one{std::move(ret)};
 }
 
+bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_clock::time_point query_time) {
+    bool any_live = false;
+    tomb.apply(base_tomb);
+    std::vector<std::pair<bytes, atomic_cell>> survivors;
+    for (auto&& name_and_cell : cells) {
+        atomic_cell& cell = name_and_cell.second;
+        if (cell.is_covered_by(tomb)) {
+            continue;
+        }
+        if (cell.has_expired(query_time)) {
+            survivors.emplace_back(std::make_pair(
+                std::move(name_and_cell.first), atomic_cell::make_dead(cell.timestamp(), cell.deletion_time())));
+        } else {
+            any_live |= cell.is_live();
+            survivors.emplace_back(std::move(name_and_cell));
+        }
+    }
+    cells = std::move(survivors);
+    return any_live;
+}
+
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) const {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));

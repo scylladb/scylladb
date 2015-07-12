@@ -24,7 +24,7 @@ partition_key_view::legacy_form(const schema& s) const {
 }
 
 int
-partition_key_view::legacy_tri_compare(const schema& s, const partition_key& o) const {
+partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) const {
     auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
     return cmp(this->representation(), o.representation());
 }

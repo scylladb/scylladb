@@ -109,12 +109,25 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
 
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
+    /*
+     * Executes data query on the whole cluster.
+     *
+     * Partitions for each range will be ordered according to decorated_key ordering. Results for
+     * each range from "partition_ranges" may appear in any order.
+     */
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        std::vector<query::partition_range>&& partition_ranges,
+        db::consistency_level cl);
+
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_local(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges);
 
     future<lw_shared_ptr<query::result_set>>
     query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key,
                 const std::vector<query::clustering_range>& row_ranges = {query::clustering_range::make_open_ended_both_sides()});
+
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
+        lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
 
     future<> stop() { return make_ready_future<>(); }
 

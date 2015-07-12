@@ -2,9 +2,13 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include "db/serializer.hh"
 #include "query-request.hh"
+#include "query-result.hh"
 #include "to_string.hh"
 #include "bytes.hh"
+#include "mutation.hh"
+#include "mutation_partition_serializer.hh"
 
 namespace query {
 
