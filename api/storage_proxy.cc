@@ -3,11 +3,13 @@
  */
 
 #include "storage_proxy.hh"
+#include "service/storage_proxy.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 
 namespace api {
 
 namespace sp = httpd::storage_proxy_json;
+using proxy = service::storage_proxy;
 
 void set_storage_proxy(http_context& ctx, routes& r) {
     sp::get_total_hints.set(r, [](std::unique_ptr<request> req)  {
@@ -202,34 +204,28 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_read_metrics_timeouts.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::read_timeouts);
     });
 
-    sp::get_read_metrics_unavailables.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::read_unavailables);
     });
 
-    sp::get_range_metrics_timeouts.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_range_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::range_slice_timeouts);
     });
 
-    sp::get_range_metrics_unavailables.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_range_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::range_slice_unavailables);
     });
 
-    sp::get_write_metrics_timeouts.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_write_metrics_timeouts.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::write_timeouts);
     });
 
-    sp::get_write_metrics_unavailables.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_write_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_stats(ctx.sp, &proxy::stats::write_unavailables);
     });
 }
 
