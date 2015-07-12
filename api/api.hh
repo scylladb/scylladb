@@ -6,6 +6,7 @@
 #define API_API_HH_
 
 #include "http/httpd.hh"
+#include "json/json_elements.hh"
 #include "database.hh"
 #include "service/storage_proxy.hh"
 #include <boost/lexical_cast.hpp>
@@ -88,6 +89,19 @@ inline std::vector<sstring> split(const sstring& text, const char* separator) {
  */
 inline std::vector<sstring> split_cf(const sstring& cf) {
     return split(cf, ",");
+}
+
+/**
+ * A helper function to sum values on an a distributed object that
+ * has a get_stats method.
+ *
+ */
+template<class T, class F>
+future<json::json_return_type>  sum_stats(distributed<T>& d, uint64_t F::*f) {
+    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, 0,
+            std::plus<uint64_t>()).then([](uint64_t val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
 }
 
 }
