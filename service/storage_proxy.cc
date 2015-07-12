@@ -2830,9 +2830,7 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_handler(net::messaging_verb::READ_DATA, [this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
-            return query_singular_local(cmd, pr).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-                return result;
-            });
+            return query_singular_local(cmd, pr);
         });
     });
     ms.register_handler(net::messaging_verb::READ_MUTATION_DATA, [this] (query::read_command cmd, query::partition_range pr) {
