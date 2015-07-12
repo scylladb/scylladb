@@ -100,19 +100,19 @@ public:
 
 private:
     template<typename U>
-    auto serialized_size(U& t) -> decltype(t.serialized_size()) {
+    static auto serialized_size(U& t) -> decltype(t.serialized_size()) {
         return t.serialized_size();
     }
     template<typename U>
-    auto serialized_size(U& t) -> decltype(t.representation().size()) {
+    static auto serialized_size(U& t) -> decltype(t.representation().size()) {
         return t.representation().size() + serialize_int32_size;
     }
     template<typename U>
-    auto serialize(bytes::iterator& out, const U& t) const -> decltype(t.serialize(out)) {
+    static auto serialize(bytes::iterator& out, const U& t) -> decltype(t.serialize(out)) {
         return t.serialize(out);
     }
     template<typename U>
-    auto serialize(bytes::iterator& out, const U& t) const -> decltype(t.representation(), void()) {
+    static auto serialize(bytes::iterator& out, const U& t) -> decltype(t.representation(), void()) {
         auto v = t.representation();
         serialize_int32(out, v.size());
         out = std::copy(v.begin(), v.end(), out);
