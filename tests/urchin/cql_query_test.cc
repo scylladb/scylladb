@@ -369,6 +369,26 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
     });
 }
 
+SEASTAR_TEST_CASE(test_insert_without_clustering_key) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (k blob, v blob, primary key (k));").discard_result().then([&e] {
+            return e.execute_cql("insert into cf (k) values (0x01);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), {}}
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("select k from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")}
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table cf (k blob, c blob, v blob, s1 blob static, primary key (k, c));").discard_result().then([&e] {
@@ -1083,14 +1103,14 @@ SEASTAR_TEST_CASE(test_ttl) {
                 {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", my_list_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql(
-                "insert into cf (p1, r1, r3) values ('key1', 'value1_1', ['a', 'b', 'c']) using ttl 1000;").discard_result();
+                "update cf using ttl 1000 set r1 = 'value1_1', r3 = ['a', 'b', 'c'] where p1 = 'key1';").discard_result();
         }).then([&e] {
             return e.execute_cql(
-                "insert into cf (p1, r1, r3) values ('key3', 'value1_3', ['a', 'b', 'c']) using ttl 1;").discard_result();
+                "update cf using ttl 1 set r1 = 'value1_3', r3 = ['a', 'b', 'c'] where p1 = 'key3';").discard_result();
         }).then([&e] {
             return e.execute_cql("update cf using ttl 1 set r3[1] = 'b' where p1 = 'key1';").discard_result();
         }).then([&e] {
-            return e.execute_cql("insert into cf (p1, r1) values ('key2', 'value1_2') using ttl 1;").discard_result();
+            return e.execute_cql("update cf using ttl 1 set r1 = 'value1_2' where p1 = 'key2';").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, r2) values ('key2', 'value2_2');").discard_result();
         }).then([&e] {
