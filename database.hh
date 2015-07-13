@@ -140,18 +140,6 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) const;
 
     future<> populate(sstring datadir);
-    // One does not need to wait on this future if all we are interested in, is
-    // initiating the write.  The writes initiated here will eventually
-    // complete, and the seastar::gate below will make sure they are all
-    // completed before we stop() this column_family.
-    //
-    // But it is possible to synchronously wait for the seal to complete by
-    // waiting on this future. This is useful in situations where we want to
-    // synchronously flush data to disk.
-    //
-    // FIXME: A better interface would guarantee that all writes before this
-    // one are also complete
-    future<> seal_active_memtable();
 
     future<> stop() {
         seal_active_memtable();
@@ -169,6 +157,19 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
 private:
+    // One does not need to wait on this future if all we are interested in, is
+    // initiating the write.  The writes initiated here will eventually
+    // complete, and the seastar::gate below will make sure they are all
+    // completed before we stop() this column_family.
+    //
+    // But it is possible to synchronously wait for the seal to complete by
+    // waiting on this future. This is useful in situations where we want to
+    // synchronously flush data to disk.
+    //
+    // FIXME: A better interface would guarantee that all writes before this
+    // one are also complete
+    future<> seal_active_memtable();
+
     seastar::gate _in_flight_seals;
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
