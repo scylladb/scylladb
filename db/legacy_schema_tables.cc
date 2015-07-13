@@ -437,7 +437,7 @@ future<> save_system_keyspace_schema() {
         auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
-        return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
+        return db::system_keyspace::query(proxy, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }
@@ -449,7 +449,7 @@ future<> save_system_keyspace_schema() {
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         auto clustering_range = {query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({to_bytes(table_name)})))};
-        return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
+        return db::system_keyspace::query(proxy, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }

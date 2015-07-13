@@ -1608,31 +1608,6 @@ storage_proxy::query_local(lw_shared_ptr<query::read_command> cmd, std::vector<q
     }).finally([cmd] {});
 }
 
-
-// The query_local() method returns a result set value object (which is
-// copyable) that is accessible on the local CPU without having to use
-// the foreign_ptr<> annotation. The result set object is constructed by
-// first performing the query on shard CPU and the building the result
-// set on the local CPU.
-future<lw_shared_ptr<query::result_set>>
-storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key, const std::vector<query::clustering_range>& row_ranges)
-{
-    auto&& db = _db.local();
-    auto schema = db.find_schema(ks_name, cf_name);
-    std::vector<column_id> regular_cols;
-    boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-    std::vector<column_id> static_cols;
-    boost::range::push_back(static_cols, schema->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-    auto opts = query::partition_slice::option_set::of<
-        query::partition_slice::option::send_partition_key,
-        query::partition_slice::option::send_clustering_key>();
-    query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
-    return query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
-        return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
-    });
-}
-
 #if 0
     public static List<Row> read(List<ReadCommand> commands, ConsistencyLevel consistencyLevel)
     throws UnavailableException, IsBootstrappingException, ReadTimeoutException, InvalidRequestException
