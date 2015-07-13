@@ -153,6 +153,9 @@ public:
         return notifier.getNotificationInfo();
     }
 #endif
+    future<> stop() {
+        return make_ready_future<>();
+    }
 };
 
 extern distributed<stream_manager> _the_stream_manager;

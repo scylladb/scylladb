@@ -123,11 +123,15 @@ stream_session::~stream_session() = default;
 future<> stream_session::init_streaming_service(distributed<database>& db) {
     _db = &db;
     engine().at_exit([] {
-        return _handlers.stop();
+        return _handlers.stop().then([]{
+            return get_stream_manager().stop();
+        });
     });
-    return _handlers.start().then([] {
-        return _handlers.invoke_on_all([] (handler& h) {
-            init_messaging_service_handler();
+    return get_stream_manager().start().then([] {
+        return _handlers.start().then([] {
+            return _handlers.invoke_on_all([] (handler& h) {
+                init_messaging_service_handler();
+            });
         });
     });
 }
