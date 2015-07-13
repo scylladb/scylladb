@@ -6,6 +6,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "mutation_reader.hh"
+#include "mutation_assertions.hh"
 
 // Intended to be called in a seastar thread
 class reader_assertions {
