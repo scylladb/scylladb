@@ -51,7 +51,7 @@ void stream_transfer_task::start() {
     for (auto& x : files) {
         auto& seq = x.first;
         auto& msg = x.second;
-        auto id = shard_id{session->peer, 0};
+        auto id = shard_id{session->peer, session->dst_cpu_id};
         do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
