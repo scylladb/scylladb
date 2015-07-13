@@ -178,7 +178,7 @@ private:
 
     void validate_utf8(sstring_view s) {
         try {
-            boost::locale::conv::utf_to_utf<char>(s.data(), boost::locale::conv::stop);
+            boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
         } catch (const boost::locale::conv::conversion_error& ex) {
             throw transport::protocol_exception("Cannot decode string as UTF8");
         }
