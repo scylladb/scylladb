@@ -25,6 +25,7 @@
 #include "service/migration_manager.hh"
 
 #include "message/messaging_service.hh"
+#include "service/storage_service.hh"
 #include "gms/gossiper.hh"
 
 namespace service {
@@ -449,19 +450,23 @@ future<> migration_manager::announce(distributed<service::storage_proxy>& proxy,
     });
 }
 
-#if 0
 /**
  * Announce my version passively over gossip.
  * Used to notify nodes as they arrive in the cluster.
  *
  * @param version The schema version to announce
  */
-public static void passiveAnnounce(UUID version)
+future<> migration_manager::passive_announce(utils::UUID version)
 {
-    Gossiper.instance.addLocalApplicationState(ApplicationState.SCHEMA, StorageService.instance.valueFactory.schema(version));
-    logger.debug("Gossiping my schema version {}", version);
+    return gms::get_gossiper().invoke_on(0, [version] (auto&& gossiper) {
+        auto& ss = service::get_local_storage_service();
+        gossiper.add_local_application_state(gms::application_state::SCHEMA, ss.value_factory.schema(version));
+        logger.debug("Gossiping my schema version {}", version);
+        return make_ready_future<>();
+    });
 }
 
+#if 0
 /**
  * Clear all locally stored schema information and reset schema to initial state.
  * Called by user (via JMX) who wants to get rid of schema disagreement.
