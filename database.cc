@@ -188,15 +188,6 @@ column_family::find_row(const dht::decorated_key& partition_key, clustering_key 
     });
 }
 
-struct column_family::merge_comparator {
-    schema_ptr _schema;
-    using ptr = boost::iterator_range<memtable::partitions_type::const_iterator>*;
-    merge_comparator(schema_ptr schema) : _schema(std::move(schema)) {}
-    bool operator()(ptr x, ptr y) const {
-        return y->front().first.less_compare(*_schema, x->front().first);
-    }
-};
-
 mutation_reader
 column_family::make_reader(const query::partition_range& range) const {
     std::vector<mutation_reader> readers;
