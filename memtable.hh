@@ -14,15 +14,61 @@
 
 class frozen_mutation;
 
+
+namespace bi = boost::intrusive;
+
+class partition_entry : public bi::set_base_hook<> {
+    dht::decorated_key _key;
+    mutation_partition _p;
+public:
+    friend class memtable;
+
+    partition_entry(dht::decorated_key key, mutation_partition p)
+        : _key(std::move(key))
+        , _p(std::move(p))
+    { }
+
+    const dht::decorated_key& key() const { return _key; }
+    const mutation_partition& partition() const { return _p; }
+    mutation_partition& partition() { return _p; }
+
+    struct compare {
+        dht::decorated_key::less_comparator _c;
+
+        compare(schema_ptr s)
+            : _c(std::move(s))
+        {}
+
+        bool operator()(const dht::decorated_key& k1, const partition_entry& k2) const {
+            return _c(k1, k2._key);
+        }
+
+        bool operator()(const partition_entry& k1, const partition_entry& k2) const {
+            return _c(k1._key, k2._key);
+        }
+
+        bool operator()(const partition_entry& k1, const dht::decorated_key& k2) const {
+            return _c(k1._key, k2);
+        }
+
+        bool operator()(const partition_entry& k1, const dht::ring_position& k2) const {
+            return _c(k1._key, k2);
+        }
+
+        bool operator()(const dht::ring_position& k1, const partition_entry& k2) const {
+            return _c(k1, k2._key);
+        }
+    };
+};
+
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable> {
 public:
-    using partitions_type = std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>;
+    using partitions_type = bi::set<partition_entry, bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
     partitions_type partitions;
     db::replay_position _replay_position;
-
     void update(const db::replay_position&);
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
