@@ -469,9 +469,11 @@ private:
             cleanup();
             if (_rcv._data_received_promise) {
                 _rcv._data_received_promise->set_exception(tcp_reset_error());
+                _rcv._data_received_promise = std::experimental::nullopt;
             }
             if (_snd._all_data_acked_promise) {
                 _snd._all_data_acked_promise->set_exception(tcp_reset_error());
+                _snd._all_data_acked_promise = std::experimental::nullopt;
             }
         }
         void do_time_wait() {
