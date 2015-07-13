@@ -24,6 +24,13 @@ public:
         return *this;
     }
 
+    reader_assertions& produces(const std::vector<mutation>& mutations) {
+        for (auto&& m : mutations) {
+            produces(m);
+        }
+        return *this;
+    }
+
     reader_assertions& produces_end_of_stream() {
         _reader().then([this] (mutation_opt&& mo) mutable {
             if (bool(mo)) {
