@@ -44,6 +44,14 @@ class storage_proxy /*implements StorageProxyMBean*/ {
     };
 
 public:
+    struct stats {
+        uint64_t read_timeouts;
+        uint64_t read_unavailables;
+        uint64_t range_slice_timeouts;
+        uint64_t range_slice_unavailables;
+        uint64_t write_timeouts;
+        uint64_t write_unavailables;
+    };
     using response_id_type = uint64_t;
 private:
     distributed<database>& _db;
@@ -52,6 +60,7 @@ private:
     constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
     size_t _total_hints_in_progress = 0;
     std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
+    stats _stats;
 private:
     void init_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
@@ -128,6 +137,10 @@ public:
     future<> stop() { return make_ready_future<>(); }
 
     friend class abstract_read_executor;
+
+    const stats& get_stats() const {
+        return _stats;
+    }
 };
 
 }

@@ -544,7 +544,187 @@
                ]
             }
          ]
-      }
+      },
+      {
+      "path": "/storage_service/metrics/cas_write/unfinished_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "int",
+          "nickname": "get_cas_write_metrics_unfinished_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/cas_write/contention",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "array",
+          "nickname": "get_cas_write_metrics_contention",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/cas_write/condition_not_met",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas write metrics",
+          "type": "int",
+          "nickname": "get_cas_write_metrics_condition_not_met",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/cas_read/unfinished_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas read metrics",
+          "type": "int",
+          "nickname": "get_cas_read_metrics_unfinished_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/cas_read/contention",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas read metrics",
+          "type": "array",
+          "nickname": "get_cas_read_metrics_contention",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/cas_read/condition_not_met",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get cas read metrics",
+          "type": "int",
+          "nickname": "get_cas_read_metrics_condition_not_met",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/read/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "type": "int",
+          "nickname": "get_read_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/read/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "type": "int",
+          "nickname": "get_read_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/range/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "type": "int",
+          "nickname": "get_range_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/range/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "type": "int",
+          "nickname": "get_range_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/write/timeouts",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "type": "int",
+          "nickname": "get_write_metrics_timeouts",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_service/metrics/write/unavailables",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "type": "int",
+          "nickname": "get_write_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
    ],
    "models":{
       "mapper_list":{
