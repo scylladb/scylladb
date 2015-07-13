@@ -1163,11 +1163,6 @@ query(service::storage_proxy& proxy, const sstring& cf_name) {
     });
 }
 
-// The query() method returns a result set value object (which is
-// copyable) that is accessible on the local CPU without having to use
-// the foreign_ptr<> annotation. The result set object is constructed by
-// first performing the query on shard CPU and the building the result
-// set on the local CPU.
 future<lw_shared_ptr<query::result_set>>
 query(service::storage_proxy& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
 {
