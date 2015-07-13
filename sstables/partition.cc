@@ -498,8 +498,8 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
         min_idx = 0;
     }
 
-    auto position = _summary.entries[min_idx].position;
-    auto ipos_fut = read_indexes(position).then([this, min_token] (auto index_list) {
+    auto min_position = _summary.entries[min_idx].position;
+    auto ipos_fut = read_indexes(min_position).then([this, min_token] (auto index_list) {
         // Note that we have to adjust the binary search result here as
         // well.  We will never find the exact element, since we are not
         // using real keys.
@@ -527,7 +527,8 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
         return make_ready_future<uint64_t>(index_list[min_index_idx].position);
     });
 
-    auto epos_fut = read_indexes(position).then([this, max_idx, max_token] (auto index_list) {
+    auto max_position = _summary.entries[max_idx].position;
+    auto epos_fut = read_indexes(max_position).then([this, max_idx, max_token] (auto index_list) {
         auto m = adjust_binary_search_index(this->binary_search(index_list, maximum_key(), max_token));
         auto max_index_idx = m >= 0 ? m : int(index_list.size());
 
