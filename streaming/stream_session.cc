@@ -170,8 +170,10 @@ future<> stream_session::initiate() {
             is_for_outgoing, keep_ss_table_level());
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
+    streaming_debug("SEND SENDSTREAM_INIT_MESSAGE to %s\n", id);
     return ms().send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE,
             std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
+        streaming_debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id=%d\n", dst_cpu_id);
         this->dst_cpu_id = dst_cpu_id;
     });
 }
@@ -187,7 +189,7 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
-    streaming_debug("SEND PREPARE_MESSAGE id=%s\n", id);
+    streaming_debug("SEND PREPARE_MESSAGE to %s\n", id);
     return ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
             std::move(prepare), plan_id(), std::move(from), this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         streaming_debug("GOT PREPARE_MESSAGE Reply\n");
@@ -372,6 +374,7 @@ void stream_session::start_streaming_files() {
     }
 #endif
     set_state(stream_session_state::STREAMING);
+    streaming_debug("%s: %d transfers to send\n", __func__, _transfers.size());
     for (auto& x : _transfers) {
         stream_transfer_task& task = x.second;
         task.start();

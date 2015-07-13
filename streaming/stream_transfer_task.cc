@@ -48,14 +48,18 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
 void stream_transfer_task::start() {
     using shard_id = net::messaging_service::shard_id;
     using net::messaging_verb;
+    streaming_debug("stream_transfer_task: %d outgoing_file_message to send\n", files.size());
     for (auto& x : files) {
         auto& seq = x.first;
         auto& msg = x.second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
+        streaming_debug("stream_transfer_task: Sending outgoing_file_message seq=%d msg.detail.cf_id=%s\n", seq, msg.detail.cf_id);
         do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
+                streaming_debug("SEND STREAM_MUTATION to %s\n", id);
                 return session->ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session->dst_cpu_id).then([this, fm] {
+                    streaming_debug("GOT STREAM_MUTATION Reply\n");
                     return stop_iteration::no;
                 });
             });
