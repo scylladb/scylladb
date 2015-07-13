@@ -376,7 +376,7 @@ column_family::update_cache(memtable& m) {
 }
 
 future<>
-column_family::seal_active_memtable(database* db) {
+column_family::seal_active_memtable() {
     auto old = _memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
@@ -398,18 +398,18 @@ column_family::seal_active_memtable(database* db) {
         return make_ready_future<>();
     }
 
-    return seastar::with_gate(_in_flight_seals, [gen, old, name, this, db] {
+    return seastar::with_gate(_in_flight_seals, [gen, old, name, this] {
         sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
             sstables::sstable::version_types::la,
             sstables::sstable::format_types::big);
 
-        return do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
+        return do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
             // FIXME: write all components
             return newtab.write_components(*old).then([name, this, &newtab, old] {
                 return newtab.load();
             }).then([this, old] {
                 return update_cache(*old);
-            }).then_wrapped([name, this, &newtab, old, db] (future<> ret) {
+            }).then_wrapped([name, this, &newtab, old] (future<> ret) {
                 try {
                     ret.get();
                     add_sstable(std::move(newtab));
@@ -423,9 +423,8 @@ column_family::seal_active_memtable(database* db) {
                     // Note that the whole scheme is also dependent on memtables being "allocated" in order,
                     // i.e. we may not flush a younger memtable before and older, and we need to use the
                     // highest rp.
-                    auto cl = db ? db->commitlog() : nullptr;
-                    if (cl != nullptr) {
-                        cl->discard_completed_segments(_schema->id(), old->replay_position());
+                    if (_commitlog) {
+                        _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
                     }
                     _memtables->erase(boost::range::find(*_memtables, old));
                 } catch (std::exception& e) {
@@ -1010,7 +1009,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
 future<> database::apply_in_memory(const frozen_mutation& m, const db::replay_position& rp) {
     try {
         auto& cf = find_column_family(m.column_family_id());
-        cf.apply(m, rp, this);
+        cf.apply(m, rp);
     } catch (no_such_column_family&) {
         // TODO: log a warning
         // FIXME: load keyspace meta-data from storage
@@ -1107,7 +1106,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 future<>
 database::stop() {
     return parallel_for_each(_column_families, [this] (auto& val_pair) {
-        return val_pair.second->stop(this);
+        return val_pair.second->stop();
     });
 }
 

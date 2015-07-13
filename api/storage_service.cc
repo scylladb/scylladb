@@ -217,7 +217,7 @@ void set_storage_service(http_context& ctx, routes& r) {
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
             for (auto cf : column_families) {
-                db.find_column_family(keyspace, cf).seal_active_memtable(&db);
+                db.find_column_family(keyspace, cf).seal_active_memtable();
             }
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());

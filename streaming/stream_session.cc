@@ -79,7 +79,7 @@ void stream_session::init_messaging_service_handler() {
             auto cf_id = fm.column_family_id();
             auto& db = stream_session::get_local_db();
             auto& cf = db.find_column_family(cf_id);
-            cf.apply(fm, db::replay_position(), &db);
+            cf.apply(fm, db::replay_position());
             return make_ready_future<>();
         });
     });
