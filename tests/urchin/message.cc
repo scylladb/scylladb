@@ -7,7 +7,6 @@
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/gossip_digest.hh"
 #include "core/sleep.hh"
-#include "http/httpd.hh"
 #include "api/api.hh"
 
 using namespace std::chrono_literals;
@@ -176,9 +175,8 @@ int main(int ac, char ** av) {
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
 
     distributed<database> db;
-    api::http_context ctx(db);
 
-    return app.run(ac, av, [&app, &ctx] {
+    return app.run(ac, av, [&app] {
         auto config = app.configuration();
         uint16_t api_port = config["api-port"].as<uint16_t>();
         bool stay_alive = config["stay-alive"].as<bool>();
@@ -186,21 +184,13 @@ int main(int ac, char ** av) {
             api_port++;
         }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        net::get_messaging_service().start(listen).then([config, api_port, &ctx, stay_alive] () {
+        net::get_messaging_service().start(listen).then([config, api_port, stay_alive] () {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
                 auto& server = net::get_local_messaging_service();
                 auto port = server.port();
                 std::cout << "Messaging server listening on port " << port << " ...\n";
                 return testers->invoke_on_all(&tester::init_handler);
-            }).then([api_port, &ctx] {
-                return ctx.http_server.start();
-            }).then([api_port, &ctx] {
-                return set_server(ctx);
-            }).then([&ctx, api_port] {
-                return ctx.http_server.listen(api_port);
-            }).then([api_port] {
-                    std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
             }).then([testers, config, stay_alive] {
                 auto t = &testers->local();
                 if (!config.count("server")) {
