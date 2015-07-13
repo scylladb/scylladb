@@ -369,6 +369,13 @@ static int adjust_binary_search_index(int idx) {
     return idx;
 }
 
+static int get_binary_search_insertion_index(int idx) {
+    if (idx < 0) {
+        return -(idx + 1);
+    }
+    return idx;
+}
+
 future<uint64_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
     if (uint64_t(index_idx + 1) < il.size()) {
         return make_ready_future<uint64_t>(il[index_idx + 1].position);
@@ -499,32 +506,18 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
     }
 
     auto min_position = _summary.entries[min_idx].position;
-    auto ipos_fut = read_indexes(min_position).then([this, min_token] (auto index_list) {
-        // Note that we have to adjust the binary search result here as
-        // well.  We will never find the exact element, since we are not
-        // using real keys.
+    auto ipos_fut = read_indexes(min_position).then([this, min_idx, min_token] (auto index_list) {
+        // We will never find the exact element, since we are not using real keys.
         //
         // So what we really want here is to know in which bucket does the
         // set of keys that compute the token of interest starts.
-        auto m = adjust_binary_search_index(this->binary_search(index_list, minimum_key(), min_token));
-        auto min_index_idx = m >= 0 ? m : 0;
 
-        // We will be given an element that is guaranteed to be before the
-        // minimum token in token order.  This can happen in two
-        // situations:
-        //
-        //  1) if both elements compute the same token (differing in the key comparator)
-        //  2) if the element returned computes a token that precedes the minimum token.
-        //
-        // In the former case, we will retain the element. But in the
-        // latter we want to discard it.  Otherwise we would be returning a
-        // token that is smaller than the minimum requested.
-        auto candidate = key_view(bytes_view(index_list[min_index_idx]));
-        auto tcandidate = dht::global_partitioner().get_token(candidate);
-        if (tcandidate < min_token) {
-            min_index_idx++;
+        auto m = this->binary_search(index_list, minimum_key(), min_token);
+        if (m < 0) {
+            m = get_binary_search_insertion_index(m);
+            return this->data_end_position(min_idx, m - 1, index_list);
         }
-        return make_ready_future<uint64_t>(index_list[min_index_idx].position);
+        return make_ready_future<uint64_t>(index_list[m].position);
     });
 
     auto max_position = _summary.entries[max_idx].position;
