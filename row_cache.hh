@@ -107,7 +107,7 @@ public:
     };
 private:
     cache_tracker& _tracker;
-    stats _stats;
+    stats _stats{};
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
