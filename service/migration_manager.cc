@@ -29,6 +29,8 @@
 
 namespace service {
 
+static thread_local logging::logger logger("Migration Manager");
+
 #if 0
 public void register(IMigrationListener listener)
 {
@@ -225,9 +227,7 @@ future<> migration_manager::announce_new_keyspace(distributed<service::storage_p
     if (proxy.local().get_db().local().has_keyspace(ksm->name())) {
         throw exceptions::already_exists_exception{ksm->name()};
     }
-#if 0
-    logger.info(String.format("Create new Keyspace: %s", ksm));
-#endif
+    logger.info("Create new Keyspace: {}", ksm->name());
     auto mutations = db::legacy_schema_tables::make_create_keyspace_mutations(ksm, timestamp);
     return announce(proxy, std::move(mutations), announce_locally);
 }
@@ -242,9 +242,7 @@ future<> migration_manager::announce_new_column_family(distributed<service::stor
         if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
-#if 0
-        logger.info(String.format("Create new table: %s", cfm));
-#endif
+        logger.info("Create new table: {}", cfm->cf_name());
         auto mutations = db::legacy_schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
         return announce(proxy, std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
