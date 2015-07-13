@@ -86,6 +86,14 @@ void make(database& db, bool durable);
 // Intended to be used by code which is not performance critical.
 future<lw_shared_ptr<query::result_set>> query(service::storage_proxy& proxy, const sstring& cf_name);
 
+// Returns a slice of given system table.
+// Intended to be used by code which is not performance critical.
+future<lw_shared_ptr<query::result_set>> query(
+    service::storage_proxy& proxy,
+    const sstring& cf_name,
+    const dht::decorated_key& key,
+    query::clustering_range row_ranges = query::clustering_range::make_open_ended_both_sides());
+
 /**
  * Return a map of IP addresses containing a map of dc and rack info
  */
