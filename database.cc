@@ -565,16 +565,28 @@ future<> column_family::populate(sstring sstdir) {
     });
 }
 
+utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
+
 database::database() : database(db::config())
 {}
 
-database::database(const db::config& cfg) : _cfg(std::make_unique<db::config>(cfg))
+database::database(const db::config& cfg)
+    : _cfg(std::make_unique<db::config>(cfg))
+    , _version(empty_version)
 {
     bool durable = cfg.data_file_directories().size() > 0;
     db::system_keyspace::make(*this, durable);
 }
 
 database::~database() {
+}
+
+void database::update_version(const utils::UUID& version) {
+    _version = version;
+}
+
+const utils::UUID& database::get_version() const {
+    return _version;
 }
 
 future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
