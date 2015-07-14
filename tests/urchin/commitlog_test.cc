@@ -5,6 +5,8 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
+#include <boost/filesystem.hpp>
+
 #include <stdlib.h>
 #include <iostream>
 #include <unordered_map>
@@ -38,8 +40,7 @@ struct tmpdir {
     tmpdir(const tmpdir&) = delete;
     ~tmpdir() {
         if (!path.empty()) {
-            // deal with non-empty?
-            ::rmdir(path.c_str());
+            boost::filesystem::remove_all(path.c_str());
         }
     }
     tmpdir & operator=(tmpdir&& v) {
