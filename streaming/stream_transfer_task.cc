@@ -19,6 +19,7 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "log.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
@@ -29,6 +30,8 @@
 #include "message/messaging_service.hh"
 
 namespace streaming {
+
+extern thread_local logging::logger sslog;
 
 stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id)
     : stream_task(session, cf_id) {
@@ -48,18 +51,18 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
 void stream_transfer_task::start() {
     using shard_id = net::messaging_service::shard_id;
     using net::messaging_verb;
-    streaming_debug("stream_transfer_task: %d outgoing_file_message to send\n", files.size());
+    sslog.debug("stream_transfer_task: {} outgoing_file_message to send", files.size());
     for (auto& x : files) {
         auto& seq = x.first;
         auto& msg = x.second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
-        streaming_debug("stream_transfer_task: Sending outgoing_file_message seq=%d msg.detail.cf_id=%s\n", seq, msg.detail.cf_id);
+        sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
         do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
-                streaming_debug("SEND STREAM_MUTATION to %s\n", id);
+                sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
                 return session->ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session->dst_cpu_id).then([this, fm] {
-                    streaming_debug("GOT STREAM_MUTATION Reply\n");
+                    sslog.debug("GOT STREAM_MUTATION Reply");
                     return stop_iteration::no;
                 });
             });

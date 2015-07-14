@@ -44,13 +44,6 @@ namespace streaming {
 
 class stream_result_future;
 
-template <typename... Args>
-void streaming_debug(const char* fmt, Args&&... args) {
-#if STREAMING_DEBUG
-    print(fmt, std::forward<Args>(args)...);
-#endif
-}
-
 /**
  * Handles the streaming a one or more section of one of more sstables to and from a specific
  * remote node.

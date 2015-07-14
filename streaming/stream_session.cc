@@ -19,6 +19,7 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "log.hh"
 #include "message/messaging_service.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/messages/stream_init_message.hh"
@@ -39,10 +40,12 @@
 
 namespace streaming {
 
+thread_local logging::logger sslog("stream_session");
+
 void stream_session::init_messaging_service_handler() {
     ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg, unsigned src_cpu_id) {
         auto dst_cpu_id = engine().cpu_id();
-        streaming_debug("GOT STREAM_INIT_MESSAGE\n");
+        sslog.debug("GOT STREAM_INIT_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), src_cpu_id, dst_cpu_id] () mutable {
             stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
                 msg.description, msg.from, msg.keep_ss_table_level);
@@ -50,17 +53,17 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting,  unsigned dst_cpu_id) {
-        streaming_debug("GOT PREPARE_MESSAGE\n");
+        sslog.debug("GOT PREPARE_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id = std::move(plan_id), from, connecting] () mutable {
             auto& sm = get_local_stream_manager();
             auto f = sm.get_receiving_stream(plan_id);
-            streaming_debug("PREPARE_MESSAGE: plan_id=%s, description=%s, from=%s, connecting=%s\n", f->plan_id, f->description, from, connecting);
+            sslog.debug("PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
                 auto session = coordinator->get_or_create_next_session(from, from);
                 assert(session);
-                streaming_debug("PREPARE_MESSAGE: get session peer=%s connecting=%s\n", session->peer, session->connecting);
+                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={}", session->peer, session->connecting);
                 auto msg_ret = session->prepare(std::move(msg.requests), std::move(msg.summaries));
                 return make_ready_future<messages::prepare_message>(std::move(msg_ret));
             }
@@ -71,7 +74,7 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm, unsigned dst_cpu_id) {
-        streaming_debug("GOT STREAM_MUTATION\n");
+        sslog.debug("GOT STREAM_MUTATION");
         return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
             auto cf_id = fm.column_family_id();
             auto& db = stream_session::get_local_db();
@@ -100,7 +103,7 @@ void stream_session::init_messaging_service_handler() {
             try {
                 f.get();
             } catch (...) {
-                streaming_debug("stream_session: SESSION_FAILED_MESSAGE error\n");
+                sslog.debug("stream_session: SESSION_FAILED_MESSAGE error");
             }
         });
         return messaging_service::no_wait();
@@ -141,7 +144,7 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
 future<> stream_session::test() {
     if (utils::fb_utilities::get_broadcast_address() == inet_address("127.0.0.1")) {
         return sleep(std::chrono::seconds(5)).then([] {
-            streaming_debug("================ STREAM_PLAN TEST ==============\n");
+            sslog.debug("================ STREAM_PLAN TEST ==============\n");
             auto sp = stream_plan("MYPLAN");
             auto to = inet_address("127.0.0.2");
             std::vector<query::range<token>> ranges;
@@ -170,10 +173,10 @@ future<> stream_session::initiate() {
             is_for_outgoing, keep_ss_table_level());
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
-    streaming_debug("SEND SENDSTREAM_INIT_MESSAGE to %s\n", id);
+    sslog.debug("SEND SENDSTREAM_INIT_MESSAGE to {}", id);
     return ms().send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE,
             std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
-        streaming_debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id=%d\n", dst_cpu_id);
+        sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
         this->dst_cpu_id = dst_cpu_id;
     });
 }
@@ -189,10 +192,10 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
-    streaming_debug("SEND PREPARE_MESSAGE to %s\n", id);
+    sslog.debug("SEND PREPARE_MESSAGE to {}", id);
     return ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
             std::move(prepare), plan_id(), std::move(from), this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
-        streaming_debug("GOT PREPARE_MESSAGE Reply\n");
+        sslog.debug("GOT PREPARE_MESSAGE Reply");
         for (auto& request : msg.requests) {
             // always flush on stream request
             add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
@@ -374,7 +377,7 @@ void stream_session::start_streaming_files() {
     }
 #endif
     set_state(stream_session_state::STREAMING);
-    streaming_debug("%s: %d transfers to send\n", __func__, _transfers.size());
+    sslog.debug("{}: {} transfers to send", __func__, _transfers.size());
     for (auto& x : _transfers) {
         stream_transfer_task& task = x.second;
         task.start();
