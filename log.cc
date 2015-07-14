@@ -10,6 +10,8 @@
 
 namespace logging {
 
+registry& logger_registry();
+
 const std::map<log_level, sstring> log_level_names = {
         { log_level::trace, "trace" },
         { log_level::debug, "debug" },
@@ -39,15 +41,15 @@ std::istream& operator>>(std::istream& in, log_level& level) {
 }
 
 logger::logger(sstring name) : _name(std::move(name)) {
-    g_registry.register_logger(this);
+    logger_registry().register_logger(this);
 }
 
-logger::logger(logger&& x) : _name(std::move(x._name)), _level(x._level) {
-    g_registry.moved(&x, this);
+logger::logger(logger&& x) : _name(std::move(x._name)), _level(x._level.load(std::memory_order_relaxed)) {
+    logger_registry().moved(&x, this);
 }
 
 logger::~logger() {
-    g_registry.unregister_logger(this);
+    logger_registry().unregister_logger(this);
 }
 
 void
@@ -71,6 +73,7 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
 
 void
 registry::set_all_loggers_level(log_level level) {
+    std::lock_guard<std::mutex> g(_mutex);
     for (auto&& l : _loggers | boost::adaptors::map_values) {
         l->set_level(level);
     }
@@ -78,32 +81,38 @@ registry::set_all_loggers_level(log_level level) {
 
 log_level
 registry::get_logger_level(sstring name) const {
+    std::lock_guard<std::mutex> g(_mutex);
     return _loggers.at(name)->level();
 }
 
 void
 registry::set_logger_level(sstring name, log_level level) {
+    std::lock_guard<std::mutex> g(_mutex);
     _loggers.at(name)->set_level(level);
 }
 
 std::vector<sstring>
 registry::get_all_logger_names() {
+    std::lock_guard<std::mutex> g(_mutex);
     auto ret = _loggers | boost::adaptors::map_keys;
     return std::vector<sstring>(ret.begin(), ret.end());
 }
 
 void
 registry::register_logger(logger* l) {
+    std::lock_guard<std::mutex> g(_mutex);
     _loggers[l->name()] = l;
 }
 
 void
 registry::unregister_logger(logger* l) {
+    std::lock_guard<std::mutex> g(_mutex);
     _loggers.erase(l->name());
 }
 
 void
 registry::moved(logger* from, logger* to) {
+    std::lock_guard<std::mutex> g(_mutex);
     _loggers[from->name()] = to;
 }
 
@@ -114,7 +123,10 @@ sstring pretty_type_name(const std::type_info& ti) {
     return result.get() ? result.get() : ti.name();
 }
 
-thread_local registry g_registry;
+registry& logger_registry() {
+    static registry g_registry;
+    return g_registry;
+}
 
 }
 

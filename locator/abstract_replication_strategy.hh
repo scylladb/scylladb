@@ -33,7 +33,7 @@ private:
     uint64_t _cache_hits_count = 0;
 
     static logging::logger& logger() {
-        static thread_local logging::logger lgr("replication_strategy_logger");
+        static logging::logger lgr("replication_strategy_logger");
 
         return lgr;
     }

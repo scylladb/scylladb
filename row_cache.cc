@@ -7,7 +7,7 @@
 #include "core/do_with.hh"
 #include "core/future-util.hh"
 
-static thread_local logging::logger logger("cache");
+static logging::logger logger("cache");
 
 cache_tracker& global_cache_tracker() {
     static thread_local cache_tracker instance;

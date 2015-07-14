@@ -15,7 +15,7 @@
 #include "core/do_with.hh"
 #include "log.hh"
 
-static thread_local logging::logger logger("config");
+static logging::logger logger("config");
 
 db::config::config()
 :

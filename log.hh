@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <exception>
 #include <iosfwd>
+#include <atomic>
+#include <mutex>
 
 namespace logging {
 
@@ -33,7 +35,7 @@ class registry;
 
 class logger {
     sstring _name;
-    log_level _level = log_level::warn;
+    std::atomic<log_level> _level = { log_level::warn };
 private:
     struct stringer {
         // no need for virtual dtor, since not dynamically destroyed
@@ -59,7 +61,7 @@ public:
     ~logger();
     template <typename... Args>
     void log(log_level level, const char* fmt, Args&&... args) {
-        if (level <= _level) {
+        if (level <= _level.load(std::memory_order_relaxed)) {
             do_log(level, fmt, std::forward<Args>(args)...);
         }
     }
@@ -87,14 +89,15 @@ public:
         return _name;
     }
     log_level level() const {
-        return _level;
+        return _level.load(std::memory_order_relaxed);
     }
     void set_level(log_level level) {
-        _level = level;
+        _level.store(level, std::memory_order_relaxed);
     }
 };
 
 class registry {
+    mutable std::mutex _mutex;
     std::unordered_map<sstring, logger*> _loggers;
 public:
     void set_all_loggers_level(log_level level);
@@ -108,7 +111,7 @@ public:
 
 sstring pretty_type_name(const std::type_info&);
 
-extern thread_local registry g_registry;
+registry& logger_registry();
 
 template <typename T>
 class logger_for : public logger {

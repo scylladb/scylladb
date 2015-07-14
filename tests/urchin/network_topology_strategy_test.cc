@@ -13,7 +13,7 @@
 #include <iostream>
 #include <sstream>
 
-thread_local logging::logger logger("NetworkTopologyStrategyLogger");
+logging::logger logger("NetworkTopologyStrategyLogger");
 
 using namespace locator;
 

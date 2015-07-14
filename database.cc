@@ -33,7 +33,7 @@
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
 
-thread_local logging::logger dblog("database");
+logging::logger dblog("database");
 
 column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))

@@ -3,7 +3,7 @@
 #include "bloom_calculations.hh"
 
 namespace utils {
-static thread_local logging::logger filterlog("bloom_filter");
+static logging::logger filterlog("bloom_filter");
 
 filter_ptr i_filter::get_filter(long num_elements, double max_false_pos_probability) {
     if (max_false_pos_probability > 1.0) {

@@ -55,7 +55,7 @@ public:
     }
 };
 
-thread_local logging::logger sstlog("sstable");
+logging::logger sstlog("sstable");
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::la , "la" }

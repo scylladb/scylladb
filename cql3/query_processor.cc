@@ -36,7 +36,7 @@ namespace cql3 {
 using namespace statements;
 using namespace transport::messages;
 
-thread_local logging::logger log("query_processor");
+logging::logger log("query_processor");
 
 const sstring query_processor::CQL_VERSION = "3.2.0";
 

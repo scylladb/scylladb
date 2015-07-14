@@ -44,7 +44,7 @@ namespace statements {
  *
  */
 class batch_statement : public cql_statement {
-    static thread_local logging::logger _logger;
+    static logging::logger _logger;
 public:
     enum class type {
         LOGGED, UNLOGGED, COUNTER
