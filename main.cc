@@ -16,6 +16,7 @@
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "dns.hh"
+#include "log.hh"
 #include <cstdio>
 
 namespace bpo = boost::program_options;
@@ -28,18 +29,36 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
+void do_help_loggers() {
+    print("Available loggers:\n");
+    for (auto&& name : logging::logger_registry().get_all_logger_names()) {
+        print("    %s\n", name);
+    }
+}
+
+void apply_logger_settings(sstring default_level, db::config::string_map levels) {
+    logging::logger_registry().set_all_loggers_level(boost::lexical_cast<logging::log_level>(std::string(default_level)));
+    for (auto&& kv: levels) {
+        auto&& k = kv.first;
+        auto&& v = kv.second;
+        logging::logger_registry().set_logger_level(k, boost::lexical_cast<logging::log_level>(std::string(v)));
+    }
+}
+
 int main(int ac, char** av) {
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template app;
     auto opt_add = app.add_options();
 
     auto cfg = make_lw_shared<db::config>();
+    bool help_loggers = false;
     cfg->add_options(opt_add)
         ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
         ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
                 "The directory location of the API GUI")
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "cassandra.yaml file to read options from")
+        ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
         ;
 
     distributed<database> db;
@@ -48,9 +67,15 @@ int main(int ac, char** av) {
     api::http_context ctx(db, proxy);
 
     return app.run(ac, av, [&] {
+        if (help_loggers) {
+            do_help_loggers();
+            engine().exit(1);
+            return make_ready_future<>();
+        }
         auto&& opts = app.configuration();
 
         return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &opts]() {
+            apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level());
             dht::set_global_partitioner(cfg->partitioner());
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();

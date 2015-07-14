@@ -677,6 +677,11 @@ public:
     val(ssl_storage_port, uint32_t, 7001, Unused,     \
             "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
     )                                                   \
+    val(default_log_level, sstring, "warn", Used, \
+            "Default log level for log messages.  Valid values are trace, debug, info, warn, error.") \
+    val(logger_log_level, string_map, /* none */, Used,\
+            "map of logger name to log level.  Valid values are trace, debug, info, warn, error.  " \
+            "Use --help-loggers for a list of logger names") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
