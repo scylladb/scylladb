@@ -376,7 +376,7 @@ whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*
     ;
 
-orderByClause[select_statement::parameters::orderings_type orderings]
+orderByClause[select_statement::parameters::orderings_type& orderings]
     @init{
         bool reversed = false;
     }
