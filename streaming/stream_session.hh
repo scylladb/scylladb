@@ -26,18 +26,19 @@
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
-#include "streaming/connection_handler.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/messages/incoming_file_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/stream_detail.hh"
+#include "streaming/session_info.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include <map>
 #include <vector>
+#include <memory>
 
 namespace streaming {
 
@@ -107,7 +108,7 @@ class stream_result_future;
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-class stream_session : public gms::i_endpoint_state_change_subscriber {
+class stream_session : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_session> {
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
@@ -134,6 +135,7 @@ public:
     }
     static database& get_local_db() { return _db->local(); }
     static future<> init_streaming_service(distributed<database>& db);
+    static future<> test();
 public:
     /**
      * Streaming endpoint.
@@ -143,7 +145,6 @@ public:
     inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
     inet_address connecting;
-    connection_handler conn_handler;
     unsigned src_cpu_id;
     unsigned dst_cpu_id;
 private:
@@ -168,7 +169,7 @@ private:
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
 public:
-    stream_session() : conn_handler(*this) { }
+    stream_session();
     /**
      * Create new streaming session with the peer.
      *
@@ -176,14 +177,8 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
-        : peer(peer_)
-        , connecting(connecting_)
-        , conn_handler(*this)
-        , _index(index_)
-        , _keep_ss_table_level(keep_ss_table_level_) {
-        //this.metrics = StreamingMetrics.get(connecting);
-    }
+    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_);
+    ~stream_session();
 
     UUID plan_id();
 
@@ -305,10 +300,12 @@ public:
         }
     }
 #endif
+    future<> initiate();
+
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */
-    void on_initialization_complete();
+    future<> on_initialization_complete();
 
     /**l
      * Call back for handling exception during streaming.

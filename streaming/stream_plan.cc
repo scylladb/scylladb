@@ -29,8 +29,8 @@ stream_plan& stream_plan::request_ranges(inet_address from, inet_address connect
 }
 
 stream_plan& stream_plan::request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
-    auto& session = _coordinator.get_or_create_next_session(from, connecting);
-    session.add_stream_request(keyspace, ranges, std::move(column_families), _repaired_at);
+    auto session = _coordinator->get_or_create_next_session(from, connecting);
+    session->add_stream_request(keyspace, ranges, std::move(column_families), _repaired_at);
     return *this;
 }
 
@@ -43,13 +43,13 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
 }
 
 stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
-    auto& session = _coordinator.get_or_create_next_session(to, connecting);
-    session.add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer, _repaired_at);
+    auto session = _coordinator->get_or_create_next_session(to, connecting);
+    session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer, _repaired_at);
     return *this;
 }
 
 stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
-    _coordinator.transfer_files(to, std::move(sstable_details));
+    _coordinator->transfer_files(to, std::move(sstable_details));
     return *this;
 }
 

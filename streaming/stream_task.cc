@@ -19,18 +19,16 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "streaming/stream_task.hh"
 #include "streaming/stream_session.hh"
-#include "streaming/stream_receive_task.hh"
 
 namespace streaming {
 
-stream_receive_task::stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size)
-        : stream_task(_session, _cf_id)
-        , total_files(_total_files)
-        , total_size(_total_size) {
+stream_task::stream_task(shared_ptr<stream_session> _session, UUID _cf_id)
+    : session(_session)
+    , cf_id(std::move(_cf_id)) {
 }
 
-stream_receive_task::~stream_receive_task() {
-}
+stream_task::~stream_task() = default;
 
-} // namespace streaming
+}

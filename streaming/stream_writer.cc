@@ -24,8 +24,9 @@ namespace streaming {
 
 int64_t stream_writer::total_size() {
     int64_t size = 0;
-    for (auto section : sections)
+    for (auto section : sections) {
         size += section.second - section.first;
+    }
     return size;
 }
 

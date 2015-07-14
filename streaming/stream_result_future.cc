@@ -14,23 +14,26 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  * Modified by Cloudius Systems.
  * Copyright 2015 Cloudius Systems.
  */
 
-#include "streaming/stream_session.hh"
-#include "streaming/stream_receive_task.hh"
+#include "streaming/stream_result_future.hh"
+#include "streaming/stream_manager.hh"
 
 namespace streaming {
 
-stream_receive_task::stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size)
-        : stream_task(_session, _cf_id)
-        , total_files(_total_files)
-        , total_size(_total_size) {
-}
-
-stream_receive_task::~stream_receive_task() {
+void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
+    sstring description, inet_address from, bool keep_ss_table_level) {
+    auto& sm = get_local_stream_manager();
+    auto f = sm.get_receiving_stream(plan_id);
+    if (f == nullptr) {
+        // logger.info("[Stream #{} ID#{}] Creating new streaming plan for {}", planId, sessionIndex, description);
+        // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
+        // TODO: stream_result_future needs a ref to stream_coordinator.
+        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level));
+    }
+    // logger.info("[Stream #{}, ID#{}] Received streaming plan for {}", planId, sessionIndex, description);
 }
 
 } // namespace streaming

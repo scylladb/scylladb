@@ -19,18 +19,35 @@
  * Copyright 2015 Cloudius Systems.
  */
 
-#include "streaming/stream_session.hh"
-#include "streaming/stream_receive_task.hh"
+#include "core/distributed.hh"
+#include "streaming/stream_manager.hh"
+#include "streaming/stream_result_future.hh"
 
 namespace streaming {
 
-stream_receive_task::stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size)
-        : stream_task(_session, _cf_id)
-        , total_files(_total_files)
-        , total_size(_total_size) {
+distributed<stream_manager> _the_stream_manager;
+
+void stream_manager::register_receiving(shared_ptr<stream_result_future> result) {
+#if 0
+    result->add_event_listener(notifier);
+    // Make sure we remove the stream on completion (whether successful or not)
+    result.addListener(new Runnable()
+    {
+        public void run()
+        {
+            receivingStreams.remove(result.planId);
+        }
+    }, MoreExecutors.sameThreadExecutor());
+#endif
+    _receiving_streams[result->plan_id] = std::move(result);
 }
 
-stream_receive_task::~stream_receive_task() {
+shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_id) {
+    auto it = _receiving_streams.find(plan_id);
+    if (it != _receiving_streams.end()) {
+        return it->second;
+    }
+    return {};
 }
 
 } // namespace streaming

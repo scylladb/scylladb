@@ -19,7 +19,7 @@
 #include "streaming/stream_task.hh"
 #include "streaming/stream_event.hh"
 #include "streaming/stream_event_handler.hh"
-#include "streaming/connection_handler.hh"
 #include "streaming/compress/compression_info.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_result_future.hh"
+#include "streaming/stream_manager.hh"

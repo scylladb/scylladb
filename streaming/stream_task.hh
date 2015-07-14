@@ -23,6 +23,8 @@
 
 #include "utils/UUID.hh"
 #include "streaming/stream_summary.hh"
+#include <memory>
+#include "core/shared_ptr.hh"
 
 namespace streaming {
 
@@ -35,14 +37,12 @@ class stream_task {
 public:
     using UUID = utils::UUID;
     /** StreamSession that this task belongs */
-    stream_session& session;
+    shared_ptr<stream_session> session;
 
     UUID cf_id;
 
-    stream_task(stream_session& _session, UUID _cf_id)
-        : session(_session)
-        , cf_id(std::move(_cf_id)) {
-    }
+    stream_task(shared_ptr<stream_session> _session, UUID _cf_id);
+    ~stream_task();
 
 public:
     /**
