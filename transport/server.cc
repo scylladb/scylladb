@@ -9,6 +9,7 @@
 #include <boost/bimap.hpp>
 #include <boost/assign.hpp>
 #include <boost/locale/encoding_utf.hpp>
+#include <boost/range/adaptor/sliced.hpp>
 
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
@@ -575,7 +576,7 @@ public:
         _response->write(rs.get_metadata());
         _response->write_int(rs.size());
         for (auto&& row : rs.rows()) {
-            for (auto&& cell : row) {
+            for (auto&& cell : row | boost::adaptors::sliced(0, rs.get_metadata().column_count())) {
                 _response->write_value(cell);
             }
         }
