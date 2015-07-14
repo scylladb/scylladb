@@ -5,6 +5,7 @@
 #include "log.hh"
 #include <cxxabi.h>
 #include <system_error>
+#include <boost/range/adaptor/map.hpp>
 
 namespace logging {
 
@@ -37,6 +38,29 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
         }
     }
     std::cout << "\n";
+}
+
+void
+registry::set_all_loggers_level(log_level level) {
+    for (auto&& l : _loggers | boost::adaptors::map_values) {
+        l->set_level(level);
+    }
+}
+
+log_level
+registry::get_logger_level(sstring name) const {
+    return _loggers.at(name)->level();
+}
+
+void
+registry::set_logger_level(sstring name, log_level level) {
+    _loggers.at(name)->set_level(level);
+}
+
+std::vector<sstring>
+registry::get_all_logger_names() {
+    auto ret = _loggers | boost::adaptors::map_keys;
+    return std::vector<sstring>(ret.begin(), ret.end());
 }
 
 void

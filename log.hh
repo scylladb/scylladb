@@ -88,6 +88,10 @@ public:
 class registry {
     std::unordered_map<sstring, logger*> _loggers;
 public:
+    void set_all_loggers_level(log_level level);
+    log_level get_logger_level(sstring name) const;
+    void set_logger_level(sstring name, log_level level);
+    std::vector<sstring> get_all_logger_names();
     void register_logger(logger* l);
     void unregister_logger(logger* l);
     void moved(logger* from, logger* to);
