@@ -22,10 +22,11 @@
 
 using namespace db;
 
-// temp commitlog dir.
+// Creates a new empty directory with arbitrary name, which will be removed
+// automatically when tmpdir object goes out of scope.
 struct tmpdir {
     tmpdir() {
-        char tmp[16] = "commitlogXXXXXX";
+        char tmp[] = "tmpdir_XXXXXX";
         auto * dir = ::mkdtemp(tmp);
         if (dir == NULL) {
             throw std::runtime_error("Could not create temp dir");
