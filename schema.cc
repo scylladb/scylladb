@@ -58,7 +58,7 @@ schema::schema(const raw_schema& raw)
         auto i = cols.begin();
         auto e = cols.end();
         for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
-            auto j = std::partition(i, e, [k](const auto& c) {
+            auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
             count[size_t(k)] = std::distance(i, j);
@@ -86,9 +86,17 @@ schema::schema(const raw_schema& raw)
                     + column_offset(column_kind::regular_column),
             _raw._columns.end(), name_compare(regular_column_name_type()));
 
+    std::sort(_raw._columns.begin(),
+              _raw._columns.begin() + column_offset(column_kind::clustering_key),
+              [] (auto x, auto y) { return x.id < y.id; });
+    std::sort(_raw._columns.begin() + column_offset(column_kind::clustering_key),
+              _raw._columns.begin() + column_offset(column_kind::static_column),
+              [] (auto x, auto y) { return x.id < y.id; });
+
     column_id id = 0;
     for (auto& def : _raw._columns) {
         def.column_specification = make_column_specification(def);
+        assert(!def.id || def.id == id - column_offset(def.kind));
         def.id = id - column_offset(def.kind);
 
         def._thrift_bits = column_definition::thrift_bits();
@@ -192,8 +200,8 @@ index_info::index_info(::index_type idx_type,
     : index_type(idx_type), index_name(idx_name), index_options(idx_options)
 {}
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, index_info idx)
-        : _name(std::move(name)), type(std::move(type)), kind(kind), idx_info(std::move(idx))
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx)
+        : _name(std::move(name)), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
 {}
 
 const column_definition*
@@ -317,7 +325,7 @@ void schema_builder::add_default_index_names(database& db) {
 }
 
 schema_builder& schema_builder::with_column(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind));
+    return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind), c.position());
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind) {
@@ -325,7 +333,12 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
 }
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind) {
-    _raw._columns.emplace_back(name, type, kind, info);
+    // component_index will be determined by schema cosntructor
+    return with_column(name, type, info, kind, 0);
+}
+
+schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
+    _raw._columns.emplace_back(name, type, kind, component_index, info);
     return *this;
 }
 
