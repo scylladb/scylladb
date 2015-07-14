@@ -83,6 +83,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
     };
+    struct no_commitlog {};
 private:
     schema_ptr _schema;
     config _config;
@@ -93,6 +94,8 @@ private:
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
+    // Provided by the database that owns this commitlog
+    db::commitlog* _commitlog;
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
@@ -122,7 +125,8 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
 public:
-    column_family(schema_ptr schema, config cfg);
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl);
+    column_family(schema_ptr schema, config cfg, no_commitlog);
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }

@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    auto cf = make_lw_shared<column_family>(s, cfg);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog());
 
     const column_definition& r1_col = *s->get_column_definition("r1");
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -267,7 +267,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    return do_with(make_lw_shared<column_family>(s, cfg), [s] (auto& cf_ptr) mutable {
+    return do_with(make_lw_shared<column_family>(s, cfg, column_family::no_commitlog()), [s] (auto& cf_ptr) mutable {
         column_family& cf = *cf_ptr;
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
