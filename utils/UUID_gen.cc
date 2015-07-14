@@ -107,16 +107,22 @@ static int64_t make_clock_seq_and_node()
     return lsb;
 }
 
+UUID UUID_gen::get_name_UUID(bytes_view b) {
+    return get_name_UUID(reinterpret_cast<const unsigned char*>(b.begin()), b.size());
+}
 
-UUID UUID_gen::get_name_UUID(sstring_view str) {
+UUID UUID_gen::get_name_UUID(sstring_view s) {
+    static_assert(sizeof(char) == sizeof(sstring_view::value_type), "Assumed that str.size() counts in chars");
+    return get_name_UUID(reinterpret_cast<const unsigned char*>(s.begin()), s.size());
+}
+
+UUID UUID_gen::get_name_UUID(const unsigned char *s, size_t len) {
     static_assert(CryptoPP::Weak1::MD5::DIGESTSIZE == 16, "MD5 digests should be 16 bytes long");
     int8_t digest[16];
 
     CryptoPP::Weak::MD5 hash;
-    static_assert(sizeof(char) == sizeof(sstring_view::value_type), "Assumed that str.size() counts in chars");
     static_assert(sizeof(char) == sizeof(int8_t), "Assumed that chars are bytes");
-    hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest),
-        reinterpret_cast<const unsigned char*>(str.begin()), str.size());
+    hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest), s, len);
 
     // set version to 3
     digest[6] &= 0x0f;
