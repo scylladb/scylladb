@@ -20,6 +20,10 @@ const std::map<log_level, sstring> log_level_names = {
         { log_level::error, "error" },
 };
 
+}
+
+using namespace logging;
+
 std::ostream& operator<<(std::ostream& out, log_level level) {
     return out << log_level_names.at(level);
 }
@@ -39,6 +43,8 @@ std::istream& operator>>(std::istream& in, log_level& level) {
     in.setstate(std::ios::failbit);
     return in;
 }
+
+namespace logging {
 
 logger::logger(sstring name) : _name(std::move(name)) {
     logger_registry().register_logger(this);
