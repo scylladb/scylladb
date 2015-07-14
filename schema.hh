@@ -279,6 +279,10 @@ public:
         return _raw._gc_grace_seconds;
     }
 
+    void set_gc_grace_seconds(int32_t gc) {
+        _raw._gc_grace_seconds = gc;
+    }
+
     double dc_local_read_repair_chance() const {
         return _raw._dc_local_read_repair_chance;
     }
