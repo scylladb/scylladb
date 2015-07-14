@@ -1261,3 +1261,58 @@ SEASTAR_TEST_CASE(test_types) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_order_by) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table torder (p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2));").discard_result().then([&e] {
+            e.require_table_exists("ks", "torder");
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 1, 2, 3);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 2, 1, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select  c1, c2, r1 from torder where p1 = 0 order by c1 asc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 order by c1 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+            });
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 1, 1, 4);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (0, 2, 2, 5);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 order by c1 desc, c2 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+                {int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(4)},
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_order_by_validate) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table torderv (p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2));").discard_result().then([&e] {
+            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c desc;");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c2 desc;");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c1 desc, c2 asc;");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("select c2, r1 from torderv order by c1 asc;");
+        }).then_wrapped([] (auto f) {
+            assert_that_failed(f);
+        });
+    });
+}
