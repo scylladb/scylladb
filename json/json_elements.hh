@@ -151,6 +151,19 @@ public:
         return formatter::to_json(_elements);
     }
 
+    /**
+     * Assignment can be done from any object that support const range
+     * iteration and that it's elements can be assigned to the list elements
+     */
+    template<class C>
+    json_list& operator=(const C& list) {
+        _elements.clear();
+        for  (auto i : list) {
+            push(i);
+        }
+        return *this;
+    }
+
     std::vector<T> _elements;
 };
 

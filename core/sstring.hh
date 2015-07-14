@@ -413,6 +413,26 @@ public:
             return 0;
         }
     }
+
+    int compare(size_t pos, size_t sz, const basic_sstring& x) const {
+        if (pos > size()) {
+            throw std::out_of_range("pos larger than string size");
+        }
+
+        sz = std::min(size() - pos, sz);
+        auto n = traits_type::compare(begin() + pos, x.begin(), std::min(sz, x.size()));
+        if (n != 0) {
+            return n;
+        }
+        if (sz < x.size()) {
+            return -1;
+        } else if (sz > x.size()) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+
     void swap(basic_sstring& x) noexcept {
         contents tmp;
         tmp = x.u;
