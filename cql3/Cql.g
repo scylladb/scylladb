@@ -380,7 +380,7 @@ orderByClause[select_statement::parameters::orderings_type& orderings]
     @init{
         bool reversed = false;
     }
-    : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.emplace(c, reversed); }
+    : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.emplace_back(c, reversed); }
     ;
 
 /**
