@@ -394,8 +394,13 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     } else {
         // TODO: We can move this to database class and use shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {
-            auto& x = db.find_column_family(keyspace, cf_name);
-            stores.push_back(&x);
+            try {
+                auto& x = db.find_column_family(keyspace, cf_name);
+                stores.push_back(&x);
+            } catch (no_such_column_family) {
+                sslog.warn("stream_session: {}.{} does not exist\n", keyspace, cf_name);
+                continue;
+            }
         }
     }
     return stores;
@@ -426,7 +431,9 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         long estimated_keys = 0;
         sstable_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
     }
-    add_transfer_files(std::move(sstable_details));
+    if (!sstable_details.empty()) {
+        add_transfer_files(std::move(sstable_details));
+    }
 }
 
 void stream_session::add_transfer_files(std::vector<stream_detail> sstable_details) {
