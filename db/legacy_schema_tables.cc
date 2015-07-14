@@ -1409,11 +1409,11 @@ future<> save_system_keyspace_schema() {
     {
         auto kind = deserialize_kind(row.get_nonnull<sstring>("type"));
 
+        column_id component_index = 0;
         if (row.has("component_index")) {
 	    // FIXME: We need to pass component_index to schema_builder
 	    // to ensure columns are instantiated in the correct order.
-	    auto component_index = row.get_nonnull<int32_t>("component_index");
-            assert(component_index == 0);
+	    component_index = row.get_nonnull<int32_t>("component_index");
         }
 #if 0
         else if (kind == ColumnDefinition.Kind.CLUSTERING_COLUMN && isSuper)
@@ -1444,7 +1444,8 @@ future<> save_system_keyspace_schema() {
         if (row.has("index_name"))
             indexName = row.getString("index_name");
 #endif
-        return column_definition{to_bytes(name), validator, kind};
+        auto c = column_definition{to_bytes(name), validator, kind, component_index};
+        return c;
     }
 
 #if 0
