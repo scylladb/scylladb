@@ -76,8 +76,8 @@ schema_ptr hints() {
         //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
-        //    .gcGraceSeconds(0);
        ));
+    hints->set_gc_grace_seconds(0);
     return hints;
 }
 
@@ -98,8 +98,8 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
-        //    .gcGraceSeconds(0);
        ));
+    batchlog->set_gc_grace_seconds(0);
     return batchlog;
 }
 

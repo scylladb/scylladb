@@ -50,6 +50,8 @@ namespace legacy_schema_tables {
 
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES };
 
+using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
+
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(LegacySchemaTables.class);
 #endif
@@ -75,9 +77,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         // FIXME: the original Java code also had:
         // in CQL statement creating the table:
         //    "WITH COMPACT STORAGE"
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    keyspaces->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return keyspaces;
 }
 
@@ -120,10 +121,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "table definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    columnfamilies->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return columnfamilies;
 }
 
@@ -148,10 +147,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "column definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    columns->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return columns;
 }
 
@@ -171,10 +168,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "trigger definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    triggers->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return triggers;
 }
 
@@ -195,10 +190,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "user defined type definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    usertypes->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return usertypes;
 }
 
@@ -223,10 +216,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "user defined type definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    functions->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return functions;
 }
 
@@ -251,10 +242,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         utf8_type,
         // comment
         "user defined aggregate definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    aggregates->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
     return aggregates;
 }
 
