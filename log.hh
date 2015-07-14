@@ -11,6 +11,7 @@
 #include <iosfwd>
 #include <atomic>
 #include <mutex>
+#include <boost/lexical_cast.hpp>
 
 namespace logging {
 
@@ -27,6 +28,15 @@ enum class log_level {
 // Must exist logging namespace, or ADL gets confused in logger::stringer
 std::ostream& operator<<(std::ostream& out, logging::log_level level);
 std::istream& operator>>(std::istream& in, logging::log_level& level);
+
+// Boost doesn't auto-deduce the existence of the streaming operators for some reason
+
+namespace boost {
+
+template <>
+logging::log_level lexical_cast(const std::string& source);
+
+}
 
 namespace logging {
 

@@ -136,6 +136,22 @@ registry& logger_registry() {
 
 }
 
+namespace boost {
+
+template <>
+logging::log_level lexical_cast(const std::string& source) {
+    std::istringstream in(source);
+    logging::log_level level;
+    // Using the operator normall fails.
+    if (!::operator>>(in, level)) {
+        throw boost::bad_lexical_cast();
+    }
+    return level;
+}
+
+}
+
+
 std::ostream& operator<<(std::ostream&out, std::exception_ptr eptr) {
     if (!eptr) {
         out << "<no exception>";
