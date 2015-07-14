@@ -6,8 +6,37 @@
 #include <cxxabi.h>
 #include <system_error>
 #include <boost/range/adaptor/map.hpp>
+#include <map>
 
 namespace logging {
+
+const std::map<log_level, sstring> log_level_names = {
+        { log_level::trace, "trace" },
+        { log_level::debug, "debug" },
+        { log_level::info, "info" },
+        { log_level::warn, "warn" },
+        { log_level::error, "error" },
+};
+
+std::ostream& operator<<(std::ostream& out, log_level level) {
+    return out << log_level_names.at(level);
+}
+
+std::istream& operator>>(std::istream& in, log_level& level) {
+    sstring s;
+    in >> s;
+    if (!in) {
+        return in;
+    }
+    for (auto&& x : log_level_names) {
+        if (s == x.second) {
+            level = x.first;
+            return in;
+        }
+    }
+    in.setstate(std::ios::failbit);
+    return in;
+}
 
 logger::logger(sstring name) : _name(std::move(name)) {
     g_registry.register_logger(this);

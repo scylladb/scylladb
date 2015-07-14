@@ -8,6 +8,7 @@
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <exception>
+#include <iosfwd>
 
 namespace logging {
 
@@ -18,6 +19,14 @@ enum class log_level {
     debug,
     trace,
 };
+
+}
+
+// Must exist logging namespace, or ADL gets confused in logger::stringer
+std::ostream& operator<<(std::ostream& out, logging::log_level level);
+std::istream& operator>>(std::istream& in, logging::log_level& level);
+
+namespace logging {
 
 class logger;
 class registry;
