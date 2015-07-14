@@ -77,6 +77,12 @@ public:
     const sstring& name() const {
         return _name;
     }
+    log_level level() const {
+        return _level;
+    }
+    void set_level(log_level level) {
+        _level = level;
+    }
 };
 
 class registry {
