@@ -279,6 +279,10 @@ public:
         return _raw._gc_grace_seconds;
     }
 
+    void set_gc_grace_seconds(int32_t gc) {
+        _raw._gc_grace_seconds = gc;
+    }
+
     double dc_local_read_repair_chance() const {
         return _raw._dc_local_read_repair_chance;
     }
@@ -394,6 +398,10 @@ public:
     }
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
+    }
+
+    void set_default_time_to_live(gc_clock::duration ttl) {
+        _raw._default_time_to_live = ttl;
     }
 
     const data_type& default_validator() const {

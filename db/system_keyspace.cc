@@ -42,6 +42,8 @@
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
 
+using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
+
 namespace db {
 
 std::unique_ptr<query_context> qctx = {};
@@ -77,8 +79,8 @@ schema_ptr hints() {
         //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
-        //    .gcGraceSeconds(0);
        ));
+    hints->set_gc_grace_seconds(0);
     return hints;
 }
 
@@ -99,8 +101,8 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
-        //    .gcGraceSeconds(0);
        ));
+    batchlog->set_gc_grace_seconds(0);
     return batchlog;
 }
 
@@ -287,9 +289,8 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "week-long compaction history"
-        // FIXME: the original Java code also had:
-        //.defaultTimeToLive((int) TimeUnit.DAYS.toSeconds(7));
         ));
+    compaction_history->set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
     return compaction_history;
 }
 
