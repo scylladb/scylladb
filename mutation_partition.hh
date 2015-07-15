@@ -120,6 +120,7 @@ public:
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
+    bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
 };
 
 class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
