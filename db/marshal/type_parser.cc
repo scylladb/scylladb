@@ -27,6 +27,7 @@
 #include "exceptions/exceptions.hh"
 
 #include <stdexcept>
+#include <string>
 
 namespace db {
 
@@ -85,6 +86,21 @@ data_type type_parser::parse()
     skip_blank();
 
     sstring name = read_next_identifier();
+    if (_str[_idx] == ':') {
+        _idx++;
+        try {
+            size_t pos;
+            std::stoul(name, &pos, 0x10);
+            if (pos != name.size()) {
+                throw exceptions::syntax_exception(sprint("expected 8-byte hex number, found %s", name));
+            }
+        } catch (const std::invalid_argument & e) {
+            throw exceptions::syntax_exception(sprint("expected 8-byte hex number, found %s", name));
+        } catch (const std::out_of_range& e) {
+            throw exceptions::syntax_exception(sprint("expected 8-byte hex number, found %s", name));
+        }
+        name = read_next_identifier();
+    }
 
     skip_blank();
     if (!is_eos() && _str[_idx] == '(')
