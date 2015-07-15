@@ -99,4 +99,26 @@ future<> init_messaging_service(sstring listen_address, db::config::seed_provide
     });
 }
 
+bool operator==(const shard_id& x, const shard_id& y) {
+    return x.addr == y.addr && x.cpu_id == y.cpu_id ;
+}
+
+bool operator<(const shard_id& x, const shard_id& y) {
+    if (x.addr < y.addr) {
+        return true;
+    } else if (y.addr < x.addr) {
+        return false;
+    } else {
+        return x.cpu_id < y.cpu_id;
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const shard_id& x) {
+    return os << x.addr << ":" << x.cpu_id;
+}
+
+size_t shard_id::hash::operator()(const shard_id& id) const {
+    return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
+}
+
 } // namespace net

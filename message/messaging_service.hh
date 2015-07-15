@@ -258,35 +258,24 @@ struct serializer {
     }
 };
 
+struct shard_id {
+    gms::inet_address addr;
+    uint32_t cpu_id;
+    friend bool operator==(const shard_id& x, const shard_id& y);
+    friend bool operator<(const shard_id& x, const shard_id& y);
+    friend std::ostream& operator<<(std::ostream& os, const shard_id& x);
+    struct hash {
+        size_t operator()(const shard_id& id) const;
+    };
+};
+
 class messaging_service {
 public:
+    using shard_id = net::shard_id;
+
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
 
-    struct shard_id {
-        gms::inet_address addr;
-        uint32_t cpu_id;
-        friend inline bool operator==(const shard_id& x, const shard_id& y) {
-            return x.addr == y.addr && x.cpu_id == y.cpu_id ;
-        }
-        friend inline bool operator<(const shard_id& x, const shard_id& y) {
-            if (x.addr < y.addr) {
-                return true;
-            } else if (y.addr < x.addr) {
-                return false;
-            } else {
-                return x.cpu_id < y.cpu_id;
-            }
-        }
-        friend inline std::ostream& operator<<(std::ostream& os, const shard_id& x) {
-            return os << x.addr << ":" << x.cpu_id;
-        }
-        struct hash {
-            size_t operator()(const shard_id& id) const {
-                return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
-            }
-        };
-    };
     struct shard_info {
         shard_info(std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client>&& client)
             : rpc_client(std::move(client)) {
