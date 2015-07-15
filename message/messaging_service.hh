@@ -25,6 +25,12 @@ namespace streaming { namespace messages {
     class stream_init_message;
 }}
 
+namespace gms {
+    class gossip_digest_syn;
+    class gossip_digest_ack;
+    class gossip_digest_ack2;
+}
+
 namespace net {
 
 /* All verb handler identifiers */
@@ -277,6 +283,7 @@ struct shard_id {
 class messaging_service {
 public:
     using shard_id = net::shard_id;
+    using inet_address = gms::inet_address;
 
     using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
     struct rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
@@ -353,9 +360,25 @@ public:
         return send_message<rpc::no_wait_type>(std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
     }
 
-    // Wrapper fro STREAM_INIT_MESSAGE verb
-    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id);
+    // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
+    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
+
+    // Wrapper for ECHO verb
+    void register_echo(std::function<future<> ()>&& func);
+    future<> send_echo(shard_id id);
+
+    // Wrapper for GOSSIP_SHUTDOWN
+    void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
+    future<> send_gossip_shutdown(shard_id id, inet_address from);
+
+    // Wrapper for GOSSIP_DIGEST_SYN
+    void register_gossip_digest_syn(std::function<future<gms::gossip_digest_ack> (gms::gossip_digest_syn)>&& func);
+    future<gms::gossip_digest_ack> send_gossip_digest_syn(shard_id id, gms::gossip_digest_syn msg);
+
+    // Wrapper for GOSSIP_DIGEST_ACK2
+    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
+    future<> send_gossip_digest_ack2(shard_id id, gms::gossip_digest_ack2 msg);
 
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.

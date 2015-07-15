@@ -8,8 +8,16 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "streaming/messages/stream_init_message.hh"
+#include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest_ack.hh"
+#include "gms/gossip_digest_ack2.hh"
 
 namespace net {
+
+using inet_address = gms::inet_address;
+using gossip_digest_syn = gms::gossip_digest_syn;
+using gossip_digest_ack = gms::gossip_digest_ack;
+using gossip_digest_ack2 = gms::gossip_digest_ack2;
 
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
     bytes b(bytes::initialized_later(), sizeof(v));
@@ -199,12 +207,39 @@ void messaging_service::remove_rpc_client(shard_id id) {
     _clients.erase(id);
 }
 
-future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id) {
+void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
+    register_handler(messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
+}
+future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id) {
     return send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg), std::move(src_cpu_id));
 }
 
-void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
-    register_handler(messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
+void messaging_service::register_echo(std::function<future<> ()>&& func) {
+    register_handler(messaging_verb::ECHO, std::move(func));
+}
+future<> messaging_service::send_echo(shard_id id) {
+    return send_message<void>(messaging_verb::ECHO, std::move(id));
+}
+
+void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
+    register_handler(messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
+}
+future<> messaging_service::send_gossip_shutdown(shard_id id, inet_address from) {
+    return send_message_oneway(messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
+}
+
+void messaging_service::register_gossip_digest_syn(std::function<future<gossip_digest_ack> (gossip_digest_syn)>&& func) {
+    register_handler(messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
+}
+future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(shard_id id, gossip_digest_syn msg) {
+    return send_message<gossip_digest_ack>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
+}
+
+void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
+    register_handler(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
+}
+future<> messaging_service::send_gossip_digest_ack2(shard_id id, gossip_digest_ack2 msg) {
+    return send_message_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
 }
 
 } // namespace net
