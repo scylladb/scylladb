@@ -43,7 +43,7 @@ namespace streaming {
 thread_local logging::logger sslog("stream_session");
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg, unsigned src_cpu_id) {
+    ms().register_stream_init_message([] (messages::stream_init_message msg, unsigned src_cpu_id) {
         auto dst_cpu_id = engine().cpu_id();
         sslog.debug("GOT STREAM_INIT_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), src_cpu_id, dst_cpu_id] () mutable {
@@ -174,8 +174,7 @@ future<> stream_session::initiate() {
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
     sslog.debug("SEND SENDSTREAM_INIT_MESSAGE to {}", id);
-    return ms().send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE,
-            std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
+    return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
         sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
         this->dst_cpu_id = dst_cpu_id;
     });

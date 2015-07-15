@@ -7,6 +7,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
+#include "streaming/messages/stream_init_message.hh"
 
 namespace net {
 
@@ -196,6 +197,14 @@ rpc_protocol::client& messaging_service::get_rpc_client(shard_id id) {
 
 void messaging_service::remove_rpc_client(shard_id id) {
     _clients.erase(id);
+}
+
+future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id) {
+    return send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg), std::move(src_cpu_id));
+}
+
+void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
+    register_handler(messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
 }
 
 } // namespace net

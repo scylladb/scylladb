@@ -20,6 +20,11 @@
 #include "db/serializer.hh"
 #include "mutation_query.hh"
 
+// forward declarations
+namespace streaming { namespace messages {
+    class stream_init_message;
+}}
+
 namespace net {
 
 /* All verb handler identifiers */
@@ -342,6 +347,11 @@ public:
     auto send_message_oneway(messaging_verb verb, shard_id id, MsgOut&&... msg) {
         return send_message<rpc::no_wait_type>(std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
     }
+
+    // Wrapper fro STREAM_INIT_MESSAGE verb
+    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id);
+    void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
+
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     rpc_protocol::client& get_rpc_client(shard_id id);
