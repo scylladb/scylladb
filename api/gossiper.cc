@@ -7,6 +7,7 @@
 #include <gms/gossiper.hh>
 
 namespace api {
+using namespace json;
 
 void set_gossiper(http_context& ctx, routes& r) {
     httpd::gossiper_json::get_down_endpoint.set(r, [](std::unique_ptr<request> req) {
@@ -38,11 +39,11 @@ void set_gossiper(http_context& ctx, routes& r) {
     httpd::gossiper_json::assassinate_endpoint.set(r, [](std::unique_ptr<request> req) {
         if (req->get_query_param("unsafe") != "True") {
             return gms::assassinate_endpoint(req->param["addr"]).then([] {
-                    return make_ready_future<json::json_return_type>("");
+                    return make_ready_future<json::json_return_type>(json_void());
             });
         }
         return gms::unsafe_assassinate_endpoint(req->param["addr"]).then([] {
-                return make_ready_future<json::json_return_type>("");
+                return make_ready_future<json::json_return_type>(json_void());
         });
     });
 }
