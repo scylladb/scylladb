@@ -141,7 +141,7 @@ struct serializer {
                 }
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
                 data_input in(bv);
-                db::serializer<Serializable>::read(v, in);
+                new (&v) Serializable(db::serializer<Serializable>::read(in));
             });
         });
     }
