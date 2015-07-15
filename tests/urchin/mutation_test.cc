@@ -227,7 +227,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    auto cf = make_lw_shared<column_family>(s, cfg);
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog());
 
     const column_definition& r1_col = *s->get_column_definition("r1");
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -237,7 +237,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
         cf->apply(std::move(m));
-        cf->seal_active_memtable();
+        cf->flush();
     };
     insert_row(1001, 2001);
     insert_row(1002, 2002);
@@ -267,7 +267,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    return do_with(make_lw_shared<column_family>(s, cfg), [s] (auto& cf_ptr) mutable {
+    return do_with(make_lw_shared<column_family>(s, cfg, column_family::no_commitlog()), [s] (auto& cf_ptr) mutable {
         column_family& cf = *cf_ptr;
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
@@ -290,7 +290,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             for (unsigned j = 0; j < 100; ++j) {
                 insert_row(pk_distribution(random_engine), ck_distribution(random_engine), r_distribution(random_engine));
             }
-            cf.seal_active_memtable();
+            cf.flush();
         }
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {

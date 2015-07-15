@@ -499,7 +499,7 @@ future<> save_system_keyspace_schema() {
                proxy.get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
                    return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
                        auto& cf = db.find_column_family(id);
-                       return cf.flush(&db);
+                       return cf.flush();
                    });
                }).get();
            }

@@ -83,6 +83,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
     };
+    struct no_commitlog {};
 private:
     schema_ptr _schema;
     config _config;
@@ -93,6 +94,8 @@ private:
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
+    // Provided by the database that owns this commitlog
+    db::commitlog* _commitlog;
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
@@ -122,20 +125,38 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
 public:
-    column_family(schema_ptr schema, config cfg);
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl);
+    column_family(schema_ptr schema, config cfg, no_commitlog);
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }
     future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
     future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
-    void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position(), database* = nullptr);
-    void apply(const mutation& m, const db::replay_position& = db::replay_position(), database* = nullptr);
+    void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
+    void apply(const mutation& m, const db::replay_position& = db::replay_position());
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) const;
 
     future<> populate(sstring datadir);
+
+    future<> stop() {
+        seal_active_memtable();
+        return _in_flight_seals.close();
+    }
+
+    future<> flush() {
+        // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
+        // anything about previous writes.
+        return seal_active_memtable();
+    }
+    // FIXME: this is just an example, should be changed to something more
+    // general. compact_all_sstables() starts a compaction of all sstables.
+    // It doesn't flush the current memtable first. It's just a ad-hoc method,
+    // not a real compaction policy.
+    future<> compact_all_sstables();
+private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
     // complete, and the seastar::gate below will make sure they are all
@@ -147,24 +168,8 @@ public:
     //
     // FIXME: A better interface would guarantee that all writes before this
     // one are also complete
-    future<> seal_active_memtable(database* = nullptr);
+    future<> seal_active_memtable();
 
-    future<> stop(database* db = nullptr) {
-        seal_active_memtable(db);
-        return _in_flight_seals.close();
-    }
-
-    future<> flush(database* db) {
-        // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
-        // anything about previous writes.
-        return seal_active_memtable(db);
-    }
-    // FIXME: this is just an example, should be changed to something more
-    // general. compact_all_sstables() starts a compaction of all sstables.
-    // It doesn't flush the current memtable first. It's just a ad-hoc method,
-    // not a real compaction policy.
-    future<> compact_all_sstables();
-private:
     seastar::gate _in_flight_seals;
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
@@ -173,7 +178,7 @@ private:
     template <typename Func>
     future<bool> for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
-    void seal_on_overflow(database*);
+    void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
@@ -407,18 +412,18 @@ class secondary_index_manager {};
 
 inline
 void
-column_family::apply(const mutation& m, const db::replay_position& rp, database* db) {
+column_family::apply(const mutation& m, const db::replay_position& rp) {
     active_memtable().apply(m, rp);
-    seal_on_overflow(db);
+    seal_on_overflow();
 }
 
 inline
 void
-column_family::seal_on_overflow(database* db) {
+column_family::seal_on_overflow() {
     // FIXME: something better
     if (++_mutation_count == 100000) {
         _mutation_count = 0;
-        seal_active_memtable(db);
+        seal_active_memtable();
     }
 }
 
@@ -432,10 +437,10 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
 
 inline
 void
-column_family::apply(const frozen_mutation& m, const db::replay_position& rp, database* db) {
+column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
     check_valid_rp(rp);
     active_memtable().apply(m, rp);
-    seal_on_overflow(db);
+    seal_on_overflow();
 }
 
 #endif /* DATABASE_HH_ */
