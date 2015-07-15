@@ -80,21 +80,7 @@ public:
     shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
-    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
-        auto future = create_and_register(plan_id_, description_, coordinator_);
-        for (auto& listener : listeners_) {
-            future->add_event_listener(listener);
-        }
-
-        //logger.info("[Stream #{}] Executing streaming plan for {}", plan_id,  description);
-
-        // Initialize and start all sessions
-        for (auto& session : coordinator_->get_all_stream_sessions()) {
-            session->init(future);
-        }
-        coordinator_->connect_all_stream_sessions();
-    }
-
+    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
     static void init_receiving_side(int session_index, UUID plan_id,
         sstring description, inet_address from, bool keep_ss_table_level);
 
