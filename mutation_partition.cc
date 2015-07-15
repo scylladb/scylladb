@@ -522,3 +522,30 @@ deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time
     return _created_at > base_tombstone.timestamp
            || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
 }
+
+bool
+mutation_partition::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
+    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
+        return s.static_column_at(id);
+    };
+
+    return has_any_live_data(static_row(), _tombstone, static_column_resolver, query_time);
+}
+
+size_t
+mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_time) const {
+    size_t count = 0;
+
+    for (const rows_entry& e : _rows) {
+        tombstone base_tombstone = range_tombstone_for_row(s, e.key());
+        if (e.row().is_live(s, base_tombstone, query_time)) {
+            ++count;
+        }
+    }
+
+    if (count == 0 && is_static_row_live(s, query_time)) {
+        return 1;
+    }
+
+    return count;
+}

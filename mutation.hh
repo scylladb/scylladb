@@ -43,6 +43,9 @@ public:
     bool operator!=(const mutation&) const;
 public:
     query::result query(const query::partition_slice&, gc_clock::time_point now = gc_clock::now(), uint32_t row_limit = query::max_rows) const;
+
+    // See mutation_partition::live_row_count()
+    size_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };

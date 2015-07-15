@@ -106,3 +106,8 @@ mutation::query(const query::partition_slice& slice, gc_clock::time_point now, u
     _p.query(pb, *_schema, now, row_limit);
     return builder.build();
 }
+
+size_t
+mutation::live_row_count(gc_clock::time_point query_time) const {
+    return _p.live_row_count(*_schema, query_time);
+}

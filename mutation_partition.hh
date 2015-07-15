@@ -335,4 +335,16 @@ public:
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
     // Returns at most "limit" rows. The limit must be greater than 0.
     void query(query::result::partition_writer& pw, const schema& s, gc_clock::time_point now, uint32_t limit = query::max_rows) const;
+
+    // Returns the number of live CQL rows in this partition.
+    //
+    // Note: If no regular rows are live, but there's something live in the
+    // static row, the static row counts as one row. If there is at least one
+    // regular row live, static row doesn't count.
+    //
+    size_t live_row_count(const schema&,
+        gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
+    bool is_static_row_live(const schema&,
+        gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 };
