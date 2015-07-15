@@ -444,7 +444,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
 }
 
 void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
-    std::vector<stream_detail> sstable_details;
+    std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
     if (flush_tables) {
         // FIXME: flushSSTables(stores);
@@ -466,15 +466,15 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        sstable_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
     }
-    if (!sstable_details.empty()) {
-        add_transfer_files(std::move(sstable_details));
+    if (!stream_details.empty()) {
+        add_transfer_files(std::move(stream_details));
     }
 }
 
-void stream_session::add_transfer_files(std::vector<stream_detail> sstable_details) {
-    for (auto& detail : sstable_details) {
+void stream_session::add_transfer_files(std::vector<stream_detail> stream_details) {
+    for (auto& detail : stream_details) {
 #if 0
         if (details.sections.empty()) {
             // A reference was acquired on the sstable and we won't stream it
