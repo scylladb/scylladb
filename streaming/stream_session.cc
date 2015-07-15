@@ -83,6 +83,7 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
+#if 0
     ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
@@ -108,6 +109,7 @@ void stream_session::init_messaging_service_handler() {
         });
         return messaging_service::no_wait();
     });
+#endif
 }
 
 distributed<stream_session::handler> stream_session::_handlers;
