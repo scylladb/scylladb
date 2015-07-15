@@ -73,7 +73,7 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
-    ms().register_handler(messaging_verb::STREAM_MUTATION, [] (frozen_mutation fm, unsigned dst_cpu_id) {
+    ms().register_stream_mutation([] (frozen_mutation fm, unsigned dst_cpu_id) {
         sslog.debug("GOT STREAM_MUTATION");
         return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
             auto cf_id = fm.column_family_id();
