@@ -10,6 +10,7 @@ namespace api {
 
 namespace sp = httpd::storage_proxy_json;
 using proxy = service::storage_proxy;
+using namespace json;
 
 void set_storage_proxy(http_context& ctx, routes& r) {
     sp::get_total_hints.set(r, [](std::unique_ptr<request> req)  {
@@ -25,7 +26,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("enable");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_hinted_handoff_enabled_by_dc.set(r, [](std::unique_ptr<request> req)  {
@@ -37,7 +38,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_hinted_handoff_enabled_by_dc_list.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("dcs");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_max_hint_window.set(r, [](std::unique_ptr<request> req)  {
@@ -48,7 +49,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_max_hint_window.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("ms");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_max_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
@@ -59,7 +60,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_max_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("qs");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_hints_in_progress.set(r, [](std::unique_ptr<request> req)  {
@@ -75,7 +76,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -86,7 +87,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -97,7 +98,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -107,7 +108,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -118,7 +119,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -129,7 +130,7 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -140,12 +141,12 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         auto enable = req->get_query_param("timeout");
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::reload_trigger_classes.set(r, [](std::unique_ptr<request> req)  {
         //TBD
-        return make_ready_future<json::json_return_type>("");
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     sp::get_read_repair_attempted.set(r, [](std::unique_ptr<request> req)  {
