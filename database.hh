@@ -44,6 +44,7 @@
 #include <list>
 #include "mutation_reader.hh"
 #include "row_cache.hh"
+#include "compaction_strategy.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -96,6 +97,9 @@ private:
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
+    sstables::compaction_strategy _compaction_strategy;
+    future<> _compaction_done = make_ready_future<>();
+    semaphore _compaction_sem;
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
@@ -141,10 +145,7 @@ public:
 
     future<> populate(sstring datadir);
 
-    future<> stop() {
-        seal_active_memtable();
-        return _in_flight_seals.close();
-    }
+    future<> stop();
 
     future<> flush() {
         // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
@@ -156,6 +157,12 @@ public:
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
     // not a real compaction policy.
     future<> compact_all_sstables();
+
+    size_t sstables_count();
+
+    void start_compaction();
+    void trigger_compaction();
+    void set_compaction_strategy(sstables::compaction_strategy_type strategy);
 private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

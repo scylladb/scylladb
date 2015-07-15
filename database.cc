@@ -427,6 +427,8 @@ column_family::seal_active_memtable() {
                         _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
                     }
                     _memtables->erase(boost::range::find(*_memtables, old));
+
+                    trigger_compaction();
                 } catch (std::exception& e) {
                     dblog.error("failed to write sstable: {}", e.what());
                 } catch (...) {
@@ -437,6 +439,18 @@ column_family::seal_active_memtable() {
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
+}
+
+future<>
+column_family::stop() {
+    seal_active_memtable();
+
+    return _in_flight_seals.close().then([this] {
+        _compaction_sem.broken();
+        return _compaction_done.then([this] {
+            return make_ready_future<>();
+        });
+    });
 }
 
 // FIXME: this is just an example, should be changed to something more general
@@ -489,6 +503,59 @@ column_family::compact_all_sstables() {
     });
 }
 
+void column_family::start_compaction() {
+    set_compaction_strategy(sstables::compaction_strategy_type::null);
+
+    // NOTE: Compaction code runs in parallel to the rest of the system, so
+    // when it's time to stop a column family, we need to prevent any new
+    // compaction from starting and wait for a possible ongoing compaction.
+    // That's possible by closing gate, busting semaphore and waiting for
+    // _compaction_done future to resolve.
+    _compaction_done = keep_doing([this] {
+        // Semaphore is used here to allow at most one compaction to happen
+        // at any time yet queueing pending requests.
+        return _compaction_sem.wait().then([this] {
+            return with_gate(_in_flight_seals, [this] {
+                sstables::compaction_strategy strategy = _compaction_strategy;
+                return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
+                    dblog.info("started compaction for column_family {}/{}", _schema->ks_name(), _schema->cf_name());
+                    return cs.compact(*this);
+                });
+            });
+        }).then_wrapped([this] (future<> f) {
+            // NOTE: broken_semaphore and seastar::gate_closed_exception
+            // exceptions are used to finish keep_doing().
+            try {
+                f.get();
+            } catch (broken_semaphore& e) {
+                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+                throw;
+            } catch (seastar::gate_closed_exception& e) {
+                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+                throw;
+            } catch (std::exception& e) {
+                dblog.error("compaction failed: {}", e.what());
+                throw;
+            } catch (...) {
+                dblog.error("compaction failed: unknown error");
+                throw;
+            }
+        });
+    });
+}
+
+void column_family::trigger_compaction() {
+    // Compaction task is triggered by signaling the semaphore waited on.
+    _compaction_sem.signal();
+}
+
+void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
+    _compaction_strategy = make_compaction_strategy(strategy);
+}
+
+size_t column_family::sstables_count() {
+    return _sstables->size();
+}
 
 future<> column_family::populate(sstring sstdir) {
 

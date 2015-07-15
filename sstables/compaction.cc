@@ -10,6 +10,7 @@
 
 #include "sstables.hh"
 #include "compaction.hh"
+#include "compaction_strategy.hh"
 #include "mutation_reader.hh"
 
 namespace sstables {
@@ -74,6 +75,69 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     // exception on read_done, and then we don't handle write_done's
     // exception, causing a warning message of "ignored exceptional future".
     return read_done.then([write_done = std::move(write_done)] () mutable { return std::move(write_done); });
+}
+
+class compaction_strategy_impl {
+public:
+    virtual ~compaction_strategy_impl() {}
+    virtual future<> compact(column_family& cfs) = 0;
+};
+
+//
+// Null compaction strategy is the default compaction strategy.
+// As the name implies, it does nothing.
+//
+class null_compaction_strategy : public compaction_strategy_impl {
+public:
+    virtual future<> compact(column_family& cfs) override {
+        return make_ready_future<>();
+    }
+};
+
+//
+// Major compaction strategy is about compacting all available sstables into one.
+//
+class major_compaction_strategy : public compaction_strategy_impl {
+public:
+    virtual future<> compact(column_family& cfs) override {
+        static constexpr size_t min_compact_threshold = 2;
+
+        // At least, two sstables must be available for compaction to take place.
+        if (cfs.sstables_count() < min_compact_threshold) {
+            return make_ready_future<>();
+        }
+
+        return cfs.compact_all_sstables();
+    }
+};
+
+compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
+    : _compaction_strategy_impl(std::move(impl)) {}
+compaction_strategy::compaction_strategy() = default;
+compaction_strategy::~compaction_strategy() = default;
+compaction_strategy::compaction_strategy(const compaction_strategy&) = default;
+compaction_strategy::compaction_strategy(compaction_strategy&&) = default;
+compaction_strategy& compaction_strategy::operator=(compaction_strategy&&) = default;
+
+future<> compaction_strategy::compact(column_family& cfs) {
+    return _compaction_strategy_impl->compact(cfs);
+}
+
+compaction_strategy make_compaction_strategy(compaction_strategy_type strategy) {
+    ::shared_ptr<compaction_strategy_impl> impl;
+
+    switch(strategy) {
+    case compaction_strategy_type::null:
+        impl = make_shared<null_compaction_strategy>(null_compaction_strategy());
+        break;
+    case compaction_strategy_type::major:
+        impl = make_shared<major_compaction_strategy>(major_compaction_strategy());
+        break;
+    default:
+        throw std::runtime_error("strategy not supported");
+    }
+
+    return compaction_strategy(std::move(impl));
 }
 
 }
