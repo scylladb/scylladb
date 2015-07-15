@@ -682,6 +682,8 @@ public:
     val(logger_log_level, string_map, /* none */, Used,\
             "map of logger name to log level.  Valid values are trace, debug, info, warn, error.  " \
             "Use --help-loggers for a list of logger names") \
+    val(log_to_stdout, bool, true, Used, "Send log output to stdout") \
+    val(log_to_syslog, bool, false, Used, "Send log output to syslog") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
