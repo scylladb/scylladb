@@ -5,6 +5,7 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
+
 #include <stdlib.h>
 #include <iostream>
 #include <unordered_map>
@@ -16,42 +17,10 @@
 #include "core/file.hh"
 #include "core/reactor.hh"
 #include "utils/UUID_gen.hh"
+#include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
 
 using namespace db;
-
-// temp commitlog dir.
-struct tmpdir {
-    tmpdir() {
-        char tmp[16] = "commitlogXXXXXX";
-        auto * dir = ::mkdtemp(tmp);
-        if (dir == NULL) {
-            throw std::runtime_error("Could not create temp dir");
-        }
-        path = dir;
-        //std::cout << path << std::endl;
-    }
-    tmpdir(tmpdir&& v)
-            : path(std::move(v.path)) {
-        assert(v.path.empty());
-    }
-    tmpdir(const tmpdir&) = delete;
-    ~tmpdir() {
-        if (!path.empty()) {
-            // deal with non-empty?
-            ::rmdir(path.c_str());
-        }
-    }
-    tmpdir & operator=(tmpdir&& v) {
-        if (&v != this) {
-            this->~tmpdir();
-            new (this) tmpdir(std::move(v));
-        }
-        return *this;
-    }
-    tmpdir & operator=(const tmpdir&) = delete;
-    sstring path;
-};
 
 typedef std::pair<tmpdir, commitlog> tmplog;
 typedef lw_shared_ptr<tmplog> tmplog_ptr;

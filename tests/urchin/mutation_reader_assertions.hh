@@ -6,6 +6,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "mutation_reader.hh"
+#include "mutation_assertions.hh"
 
 // Intended to be called in a seastar thread
 class reader_assertions {
@@ -20,6 +21,13 @@ public:
             BOOST_REQUIRE(bool(mo));
             assert_that(*mo).is_equal_to(m);
         }).get0();
+        return *this;
+    }
+
+    reader_assertions& produces(const std::vector<mutation>& mutations) {
+        for (auto&& m : mutations) {
+            produces(m);
+        }
         return *this;
     }
 

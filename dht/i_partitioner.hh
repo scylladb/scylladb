@@ -97,7 +97,7 @@ inline auto get_random_number() {
 // Total ordering defined by comparators is compatible with Origin's ordering.
 class decorated_key {
 public:
-    token _token;
+    dht::token _token;
     partition_key _key;
 
     struct less_comparator {
@@ -115,6 +115,14 @@ public:
 
     int tri_compare(const schema& s, const decorated_key& other) const;
     int tri_compare(const schema& s, const ring_position& other) const;
+
+    const dht::token& token() const {
+        return _token;
+    }
+
+    const partition_key& key() const {
+        return _key;
+    }
 };
 
 class i_partitioner {
