@@ -20,6 +20,14 @@
 
 using column_id = uint32_t;
 
+class schema;
+
+// Useful functions to manipulate the schema's comparator field
+namespace cell_comparator {
+sstring to_sstring(const schema& s);
+bool check_compound(sstring comparator);
+}
+
 // make sure these match the order we like columns back from schema
 enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
@@ -55,8 +63,6 @@ inline cf_type sstring_to_cf_type(sstring name) {
 }
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
-
-class schema;
 
 struct index_info {
     index_info(::index_type = ::index_type::none
