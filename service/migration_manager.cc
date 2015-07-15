@@ -420,7 +420,7 @@ future<> migration_manager::announce(distributed<service::storage_proxy>& proxy,
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
     net::messaging_service::shard_id id{endpoint, 0};
-    auto fm = make_lw_shared<std::vector<frozen_mutation>>(schema.begin(), schema.end());
+    auto fm =std::vector<frozen_mutation>(schema.begin(), schema.end());
     return net::get_local_messaging_service().send_message_oneway(net::messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
