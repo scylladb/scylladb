@@ -123,7 +123,7 @@ protected:
     }
 
 protected:
-    static thread_local logging::logger snitch_logger;
+    static logging::logger snitch_logger;
 
     promise<> _snitch_is_ready;
     enum class snitch_state {

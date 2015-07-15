@@ -925,7 +925,7 @@ struct empty_type_impl : abstract_type {
 };
 
 
-thread_local logging::logger collection_type_impl::_logger("collection_type_impl");
+logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
 
 const collection_type_impl::kind collection_type_impl::kind::map(

@@ -368,7 +368,7 @@ bool equal(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 class collection_type_impl : public abstract_type {
-    static thread_local logging::logger _logger;
+    static logging::logger _logger;
     mutable shared_ptr<cql3::cql3_type> _cql3_type;  // initialized on demand, so mutable
 public:
     static constexpr size_t max_elements = 65535;

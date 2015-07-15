@@ -26,7 +26,7 @@ namespace cql3 {
 
 namespace statements {
 
-thread_local logging::logger batch_statement::_logger("BatchStatement");
+logging::logger batch_statement::_logger("BatchStatement");
 
 }
 

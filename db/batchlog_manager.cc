@@ -35,7 +35,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 
-static thread_local logging::logger logger("BatchLog Manager");
+static logging::logger logger("BatchLog Manager");
 
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;

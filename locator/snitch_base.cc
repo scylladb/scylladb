@@ -23,8 +23,7 @@
 
 namespace locator {
 
-thread_local logging::logger
-i_endpoint_snitch::snitch_logger("snitch_logger");
+logging::logger i_endpoint_snitch::snitch_logger("snitch_logger");
 
 std::vector<inet_address> snitch_base::get_sorted_list_by_proximity(
     inet_address address,

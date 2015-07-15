@@ -8,6 +8,10 @@
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <exception>
+#include <iosfwd>
+#include <atomic>
+#include <mutex>
+#include <boost/lexical_cast.hpp>
 
 namespace logging {
 
@@ -19,12 +23,29 @@ enum class log_level {
     trace,
 };
 
+}
+
+// Must exist logging namespace, or ADL gets confused in logger::stringer
+std::ostream& operator<<(std::ostream& out, logging::log_level level);
+std::istream& operator>>(std::istream& in, logging::log_level& level);
+
+// Boost doesn't auto-deduce the existence of the streaming operators for some reason
+
+namespace boost {
+
+template <>
+logging::log_level lexical_cast(const std::string& source);
+
+}
+
+namespace logging {
+
 class logger;
 class registry;
 
 class logger {
     sstring _name;
-    log_level _level = log_level::warn;
+    std::atomic<log_level> _level = { log_level::warn };
 private:
     struct stringer {
         // no need for virtual dtor, since not dynamically destroyed
@@ -50,7 +71,7 @@ public:
     ~logger();
     template <typename... Args>
     void log(log_level level, const char* fmt, Args&&... args) {
-        if (level <= _level) {
+        if (level <= _level.load(std::memory_order_relaxed)) {
             do_log(level, fmt, std::forward<Args>(args)...);
         }
     }
@@ -77,11 +98,22 @@ public:
     const sstring& name() const {
         return _name;
     }
+    log_level level() const {
+        return _level.load(std::memory_order_relaxed);
+    }
+    void set_level(log_level level) {
+        _level.store(level, std::memory_order_relaxed);
+    }
 };
 
 class registry {
+    mutable std::mutex _mutex;
     std::unordered_map<sstring, logger*> _loggers;
 public:
+    void set_all_loggers_level(log_level level);
+    log_level get_logger_level(sstring name) const;
+    void set_logger_level(sstring name, log_level level);
+    std::vector<sstring> get_all_logger_names();
     void register_logger(logger* l);
     void unregister_logger(logger* l);
     void moved(logger* from, logger* to);
@@ -89,7 +121,7 @@ public:
 
 sstring pretty_type_name(const std::type_info&);
 
-extern thread_local registry g_registry;
+registry& logger_registry();
 
 template <typename T>
 class logger_for : public logger {
