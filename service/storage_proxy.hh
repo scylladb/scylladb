@@ -149,4 +149,15 @@ public:
     }
 };
 
+extern distributed<storage_proxy> _the_storage_proxy;
+
+inline distributed<storage_proxy>& get_storage_proxy() {
+    return _the_storage_proxy;
+}
+
+inline storage_proxy& get_local_storage_proxy() {
+    return _the_storage_proxy.local();
+}
+
+
 }

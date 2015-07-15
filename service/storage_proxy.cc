@@ -52,6 +52,8 @@
 
 namespace service {
 
+distributed<service::storage_proxy> _the_storage_proxy;
+
 struct mutation_write_timeout_error : public std::exception {
     size_t total_block_for;
     size_t acks;
