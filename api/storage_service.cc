@@ -4,6 +4,7 @@
 
 #include "storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "db/config.hh"
 #include <service/storage_service.hh>
 #include <db/commitlog/commitlog.hh>
 #include <gms/gossiper.hh>

@@ -11,6 +11,7 @@
 #include "utils/UUID_gen.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "db/config.hh"
 
 class in_memory_cql_env : public cql_test_env {
 public:

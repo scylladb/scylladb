@@ -14,6 +14,24 @@ class file;
 
 namespace db {
 
+typedef std::unordered_map<sstring, sstring> string_map;
+
+/*
+ * This type is not use, and probably never will be.
+ * So it makes sense to jump through hoops just to ensure
+ * it is in fact handled properly...
+ */
+struct seed_provider_type {
+    seed_provider_type() = default;
+    seed_provider_type(sstring n,
+            std::initializer_list<string_map::value_type> opts =
+                    { })
+            : class_name(std::move(n)), parameters(std::move(opts)) {
+    }
+    sstring class_name;
+    string_map parameters;
+};
+
 class config {
 public:
     enum class value_status {
@@ -79,22 +97,7 @@ public:
 
     typedef std::unordered_map<sstring, sstring> string_map;
     typedef std::vector<sstring> string_list;
-
-    /*
-     * This type is not use, and probably never will be.
-     * So it makes sense to jump through hoops just to ensure
-     * it is in fact handled properly...
-     */
-    struct seed_provider_type {
-        seed_provider_type() = default;
-        seed_provider_type(sstring n,
-                std::initializer_list<typename string_map::value_type> opts =
-                        { })
-                : class_name(std::move(n)), parameters(std::move(opts)) {
-        }
-        sstring class_name;
-        string_map parameters;
-    };
+    using seed_provider_type = db::seed_provider_type;
 
     /*
      * All values and documentation taken from
