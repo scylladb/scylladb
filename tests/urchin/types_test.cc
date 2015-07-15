@@ -11,6 +11,8 @@
 #include <net/ip.hh>
 #include "types.hh"
 #include "compound.hh"
+#include "db/marshal/type_parser.hh"
+#include "cql3/cql3_type.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -319,4 +321,78 @@ BOOST_AUTO_TEST_CASE(test_uuid_type_validation) {
     auto random = utils::make_random_uuid();
     uuid_type->validate(random.to_bytes());
     test_validation_fails(uuid_type, from_hex("00"));
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_bad_hex) {
+    auto parser = db::marshal::type_parser("636f6c75kd6h:org.apache.cassandra.db.marshal.ListType(org.apache.cassandra.db.marshal.Int32Type)");
+    BOOST_REQUIRE_THROW(parser.parse(), exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_long_hex) {
+    auto parser = db::marshal::type_parser("6636f6c756d6e636f6c756d6e36f6c756d6e:org.apache.cassandra.db.marshal.ListType(org.apache.cassandra.db.marshal.Int32Type)");
+    BOOST_REQUIRE_THROW(parser.parse(), exceptions::syntax_exception);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_list) {
+    auto parser = db::marshal::type_parser("636f6c756d6e:org.apache.cassandra.db.marshal.ListType(org.apache.cassandra.db.marshal.Int32Type)");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "list<int>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_set) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type)");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "set<int>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_map) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.MapType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "map<int, int>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_tuple) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.TupleType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "tuple<int, int>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_invalid_tuple) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.TupleType()");
+    BOOST_REQUIRE_THROW(parser.parse(), exceptions::configuration_exception);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_frozen_set) {
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.FrozenType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "frozen<set<int>>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_set_frozen_set) {
+    sstring frozen = "org.apache.cassandra.db.marshal.FrozenType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))";
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.SetType(" + frozen + ")");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "set<frozen<set<int>>>");
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_valid_set_frozen_set_set) {
+    sstring set_set = "org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.SetType(org.apache.cassandra.db.marshal.Int32Type))";
+    sstring frozen = "org.apache.cassandra.db.marshal.FrozenType(" + set_set + ")";
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.SetType(" + frozen + ")");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "set<frozen<set<set<int>>>>");
+}
+
+
+BOOST_AUTO_TEST_CASE(test_parse_invalid_type) {
+    auto parser = db::marshal::type_parser("636f6c756d6e:org.apache.cassandra.db.marshal.ListType(org.apache.cassandra.db.marshal.Int32Type, org.apache.cassandra.db.marshal.UTF8Type)");
+    BOOST_REQUIRE_THROW(parser.parse(), exceptions::configuration_exception);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_recursive_type) {
+    sstring key("org.apache.cassandra.db.marshal.Int32Type");
+    sstring value("org.apache.cassandra.db.marshal.TupleType(org.apache.cassandra.db.marshal.Int32Type,org.apache.cassandra.db.marshal.Int32Type)");
+    auto parser = db::marshal::type_parser("org.apache.cassandra.db.marshal.MapType(" + key + "," + value + ")");
+    auto type = parser.parse();
+    BOOST_REQUIRE(type->as_cql3_type()->to_string() == "map<int, tuple<int, int>>");
 }
