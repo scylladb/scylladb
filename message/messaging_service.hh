@@ -298,7 +298,7 @@ private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
-    rpc_protocol _rpc;
+    std::unique_ptr<rpc_protocol> _rpc;
     rpc_protocol::server _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
@@ -313,14 +313,14 @@ public:
     // Register a handler (a callback lambda) for verb
     template <typename Func>
     void register_handler(messaging_verb verb, Func&& func) {
-        _rpc.register_handler(verb, std::move(func));
+        _rpc->register_handler(verb, std::move(func));
     }
 
     // Send a message for verb
     template <typename MsgIn, typename... MsgOut>
     auto send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
         auto& rpc_client = get_rpc_client(id);
-        auto rpc_handler = _rpc.make_client<MsgIn(MsgOut...)>(verb);
+        auto rpc_handler = _rpc->make_client<MsgIn(MsgOut...)>(verb);
         return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id, verb] (auto&& f) {
             try {
                 if (f.failed()) {

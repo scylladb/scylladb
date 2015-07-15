@@ -158,8 +158,8 @@ bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
 messaging_service::messaging_service(gms::inet_address ip)
     : _listen_address(ip)
     , _port(_default_port)
-    , _rpc(serializer{})
-    , _server(_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
+    , _rpc(new rpc_protocol(serializer{}))
+    , _server(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
 }
 
 uint16_t messaging_service::port() {
@@ -186,7 +186,7 @@ rpc_protocol::client& messaging_service::get_rpc_client(shard_id id) {
     auto it = _clients.find(id);
     if (it == _clients.end()) {
         auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-        auto client = std::make_unique<rpc_protocol::client>(_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+        auto client = std::make_unique<rpc_protocol::client>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
         it = _clients.emplace(id, shard_info(std::move(client))).first;
         return *it->second.rpc_client;
     } else {
