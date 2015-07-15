@@ -36,6 +36,7 @@ enum class cause {
     CONSISTENCY,
     HINT,
     SUPER,
+    WRAP_AROUND, // Support for handling wrap around ranges in queries on database level and below
 };
 
 void fail(cause what) __attribute__((noreturn));

@@ -189,6 +189,9 @@ public:
     mutation_reader read_range_rows(schema_ptr schema,
             const dht::token& min, const dht::token& max);
 
+    // Returns a mutation_reader for given range of partitions
+    mutation_reader read_range_rows(schema_ptr schema, const query::partition_range& range);
+
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
     // This function is implemented efficiently - doing buffered, sequential

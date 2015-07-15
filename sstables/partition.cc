@@ -572,10 +572,30 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
     if (max_token < min_token) {
         return std::make_unique<mutation_reader::impl>();
     }
-
-    return std::make_unique<mutation_reader::impl>(
-            *this, schema, lower_bound({min_token}), upper_bound({max_token}));
+    return read_range_rows(std::move(schema),
+        query::range<dht::ring_position>::make({min_token}, {max_token}));
 }
 
+mutation_reader
+sstable::read_range_rows(schema_ptr schema, const query::partition_range& range) {
+    if (is_wrap_around(range, *schema)) {
+        fail(unimplemented::cause::WRAP_AROUND);
+    }
+
+    future<uint64_t> start = range.start()
+        ? (range.start()->is_inclusive()
+                 ? lower_bound(schema, range.start()->value())
+                 : upper_bound(schema, range.start()->value()))
+        : make_ready_future<uint64_t>(0);
+
+    future<uint64_t> end = range.end()
+        ? (range.end()->is_inclusive()
+                 ? upper_bound(schema, range.end()->value())
+                 : lower_bound(schema, range.end()->value()))
+        : make_ready_future<uint64_t>(data_size());
+
+    return std::make_unique<mutation_reader::impl>(
+        *this, std::move(schema), std::move(start), std::move(end));
+}
 
 }

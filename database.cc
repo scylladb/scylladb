@@ -75,25 +75,18 @@ bool belongs_to_current_shard(const mutation& m) {
 }
 
 class range_sstable_reader {
-    dht::token _min_token;
-    dht::token _max_token;
+    const query::partition_range& _pr;
     lw_shared_ptr<sstable_list> _sstables;
     mutation_reader _reader;
 public:
     range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr)
-        : _min_token(dht::minimum_token())
-        , _max_token(dht::maximum_token())
+        : _pr(pr)
         , _sstables(std::move(sstables))
     {
-        if (!pr.is_full()) {
-            // FIXME: make sstable::read_range_rows() accept query::partition_range
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
-
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-            mutation_reader reader = [r = make_lw_shared(sst->read_range_rows(s, _min_token, _max_token))] () mutable { return r->read(); };
+            mutation_reader reader = [r = make_lw_shared(sst->read_range_rows(s, _pr))] () mutable { return r->read(); };
             if (sst->is_shared()) {
                 reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
             }
