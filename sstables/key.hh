@@ -29,6 +29,10 @@ public:
     explicit operator bytes_view() const {
         return _bytes;
     }
+
+    int tri_compare(key_view other) const {
+        return compare_unsigned(_bytes, other._bytes);
+    }
 };
 
 enum class composite_marker : bytes::value_type {
@@ -82,7 +86,7 @@ public:
         if (_kind == kind::after_all_keys) {
             return 1;
         }
-        return compare_unsigned(bytes_view(_bytes), bytes_view(k));
+        return key_view(_bytes).tri_compare(k);
     }
     operator key_view() const {
         return key_view(_bytes);
