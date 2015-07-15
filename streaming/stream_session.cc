@@ -81,9 +81,15 @@ void stream_session::init_messaging_service_handler() {
         sslog.debug("GOT STREAM_MUTATION");
         return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
             auto cf_id = fm.column_family_id();
-            auto& db = stream_session::get_local_db();
-            auto& cf = db.find_column_family(cf_id);
-            cf.apply(fm, db::replay_position());
+            sslog.debug("STREAM_MUTATION: cf_id={}", cf_id);
+            try {
+                auto& db = stream_session::get_local_db();
+                auto& cf = db.find_column_family(cf_id);
+                cf.apply(fm, db::replay_position());
+            } catch (no_such_column_family) {
+                // TODO: Send error msg back
+                sslog.warn("stream_session: {} does not exist\n", cf_id);
+            }
             return make_ready_future<>();
         });
     });
