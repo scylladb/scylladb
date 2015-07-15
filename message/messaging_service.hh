@@ -272,13 +272,14 @@ struct shard_id {
 class messaging_service {
 public:
     using shard_id = net::shard_id;
+    using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
 
     struct shard_info {
-        shard_info(std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client>&& client);
-        std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client> rpc_client;
+        shard_info(std::unique_ptr<rpc_protocol::client>&& client);
+        std::unique_ptr<rpc_protocol::client> rpc_client;
     };
 
     void foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const;
@@ -297,8 +298,8 @@ private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
-    rpc::protocol<serializer, messaging_verb> _rpc;
-    rpc::protocol<serializer, messaging_verb>::server _server;
+    rpc_protocol _rpc;
+    rpc_protocol::server _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
@@ -343,7 +344,7 @@ public:
     }
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    rpc::protocol<serializer, messaging_verb>::client& get_rpc_client(shard_id id);
+    rpc_protocol::client& get_rpc_client(shard_id id);
     void remove_rpc_client(shard_id id);
 };
 
