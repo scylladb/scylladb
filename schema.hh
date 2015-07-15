@@ -174,6 +174,7 @@ private:
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
         bool _is_dense = false;
+        bool _is_compound = true;
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = 864000;
         double _dc_local_read_repair_chance = 0.1;
@@ -240,6 +241,11 @@ public:
     bool is_dense() const {
         return _raw._is_dense;
     }
+
+    bool is_compound() const {
+        return _raw._is_compound;
+    }
+
     thrift_schema& thrift() {
         return _thrift;
     }
