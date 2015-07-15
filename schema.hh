@@ -90,15 +90,14 @@ private:
     thrift_bits _thrift_bits;
     friend class schema;
 public:
-    column_definition(bytes name, data_type type, column_kind kind, index_info = index_info());
+    column_definition(bytes name, data_type type, column_kind kind, column_id component_index = 0, index_info = index_info());
 
     data_type type;
 
     // Unique within (kind, schema instance).
     // schema::position() and component_index() depend on the fact that for PK columns this is
     // equivalent to component index.
-    // Note: set by schema::build()
-    column_id id = 0;
+    column_id id;
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;

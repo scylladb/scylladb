@@ -570,7 +570,7 @@ void select_statement::raw_statement::check_needs_filtering(
 
 bool select_statement::raw_statement::contains_alias(::shared_ptr<column_identifier> name) {
     return std::any_of(_select_clause.begin(), _select_clause.end(), [name] (auto raw) {
-        return *name == *raw->alias;
+        return raw->alias && *name == *raw->alias;
     });
 }
 

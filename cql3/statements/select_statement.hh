@@ -50,8 +50,7 @@ class select_statement : public cql_statement {
 public:
     class parameters final {
     public:
-        using orderings_type = std::unordered_map<shared_ptr<column_identifier::raw>, bool,
-            shared_ptr_value_hash<column_identifier::raw>, shared_ptr_equal_by_value<column_identifier::raw>>;
+        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, bool>>;
     private:
         const orderings_type _orderings;
         const bool _is_distinct;
