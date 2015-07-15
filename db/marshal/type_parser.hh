@@ -265,7 +265,7 @@ public:
 
     static data_type get_abstract_type(const sstring& compare_with);
 
-    static data_type get_abstract_type(const sstring& compare_with, type_parser parser);
+    static data_type get_abstract_type(const sstring& compare_with, type_parser& parser);
 
 #if 0
     private static AbstractType<?> getRawAbstractType(Class<? extends AbstractType<?>> typeClass) throws ConfigurationException

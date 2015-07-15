@@ -155,7 +155,7 @@ data_type type_parser::get_abstract_type(const sstring& compare_with)
     return abstract_type::parse_type(class_name);
 }
 
-data_type type_parser::get_abstract_type(const sstring& compare_with, type_parser parser)
+data_type type_parser::get_abstract_type(const sstring& compare_with, type_parser& parser)
 {
     sstring class_name;
     if (compare_with.find('.') != sstring::npos) {
