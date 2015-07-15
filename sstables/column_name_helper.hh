@@ -20,6 +20,8 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "core/sstring.hh"
 #include <cmath>
 #include <algorithm>
