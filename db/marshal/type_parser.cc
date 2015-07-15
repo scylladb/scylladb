@@ -156,6 +156,12 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
             throw exceptions::configuration_exception("MapType takes exactly 2 type parameters");
         }
         return map_type_impl::get_instance(l[0], l[1], multicell);
+    } else if (class_name == "org.apache.cassandra.db.marshal.TupleType") {
+        auto l = parser.get_type_parameters();
+        if (l.size() == 0) {
+            throw exceptions::configuration_exception("TupleType takes exactly at least 1 type parameter");
+        }
+        return tuple_type_impl::get_instance(l);
     } else {
         throw std::runtime_error("unknown type: " + class_name);
     }
