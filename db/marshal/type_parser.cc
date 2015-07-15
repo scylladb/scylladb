@@ -81,7 +81,11 @@ data_type type_parser::parse(const sstring& str) {
     return type;
 }
 
-data_type type_parser::parse()
+data_type type_parser::parse() {
+    return do_parse(true);
+}
+
+data_type type_parser::do_parse(bool multicell)
 {
     skip_blank();
 
@@ -104,12 +108,12 @@ data_type type_parser::parse()
 
     skip_blank();
     if (!is_eos() && _str[_idx] == '(')
-        return get_abstract_type(name, *this);
+        return get_abstract_type(name, *this, multicell);
     else
         return get_abstract_type(name);
 }
 
-std::vector<data_type> type_parser::get_type_parameters()
+std::vector<data_type> type_parser::get_type_parameters(bool multicell)
 {
     std::vector<data_type> list;
 
@@ -131,7 +135,7 @@ std::vector<data_type> type_parser::get_type_parameters()
         }
 
         try {
-            list.emplace_back(parse());
+            list.emplace_back(do_parse(multicell));
         } catch (exceptions::syntax_exception e) {
             // FIXME
 #if 0
@@ -155,7 +159,7 @@ data_type type_parser::get_abstract_type(const sstring& compare_with)
     return abstract_type::parse_type(class_name);
 }
 
-data_type type_parser::get_abstract_type(const sstring& compare_with, type_parser& parser)
+data_type type_parser::get_abstract_type(const sstring& compare_with, type_parser& parser, bool multicell)
 {
     sstring class_name;
     if (compare_with.find('.') != sstring::npos) {
@@ -163,24 +167,30 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
     } else {
         class_name = "org.apache.cassandra.db.marshal." + compare_with;
     }
-    if (class_name == "org.apache.cassandra.db.marshal.ListType") {
+    if (class_name == "org.apache.cassandra.db.marshal.FrozenType") {
+        auto l = parser.get_type_parameters(false);
+        if (l.size() != 1) {
+            throw exceptions::configuration_exception("FrozenType takes exactly 1 type parameter");
+        }
+        return l[0];
+    } else if (class_name == "org.apache.cassandra.db.marshal.ListType") {
         auto l = parser.get_type_parameters();
         if (l.size() != 1) {
             throw exceptions::configuration_exception("ListType takes exactly 1 type parameter");
         }
-        return list_type_impl::get_instance(l[0], true);
+        return list_type_impl::get_instance(l[0], multicell);
     } else if (class_name == "org.apache.cassandra.db.marshal.SetType") {
         auto l = parser.get_type_parameters();
         if (l.size() != 1) {
             throw exceptions::configuration_exception("SetType takes exactly 1 type parameter");
         }
-        return set_type_impl::get_instance(l[0], true);
+        return set_type_impl::get_instance(l[0], multicell);
     } else if (class_name == "org.apache.cassandra.db.marshal.MapType") {
         auto l = parser.get_type_parameters();
         if (l.size() != 2) {
             throw exceptions::configuration_exception("MapType takes exactly 2 type parameters");
         }
-        return map_type_impl::get_instance(l[0], l[1], true);
+        return map_type_impl::get_instance(l[0], l[1], multicell);
     } else {
         throw std::runtime_error("unknown type: " + class_name);
     }
