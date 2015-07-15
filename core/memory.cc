@@ -88,6 +88,7 @@ class page_list;
 static thread_local uint64_t g_allocs;
 static thread_local uint64_t g_frees;
 static thread_local uint64_t g_cross_cpu_frees;
+static thread_local uint64_t g_reclaims;
 
 using std::experimental::optional;
 
@@ -653,6 +654,7 @@ void cpu_pages::resize(size_t new_size, allocate_system_memory_fn alloc_memory) 
 void cpu_pages::reclaim() {
     current_min_free_pages = 0;
     reclaim_hook([this] {
+        ++g_reclaims;
         for (auto&& r : reclaimers) {
             r->do_reclaim();
         }
@@ -871,7 +873,8 @@ void configure(std::vector<resource::memory> m,
 }
 
 statistics stats() {
-    return statistics{g_allocs, g_frees, g_cross_cpu_frees};
+    return statistics{g_allocs, g_frees, g_cross_cpu_frees,
+        cpu_mem.nr_free_pages * page_size, g_reclaims};
 }
 
 bool drain_cross_cpu_freelist() {

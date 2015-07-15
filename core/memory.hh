@@ -114,9 +114,13 @@ class statistics {
     uint64_t _mallocs;
     uint64_t _frees;
     uint64_t _cross_cpu_frees;
+    size_t _free_memory;
+    uint64_t _reclaims;
 private:
-    statistics(uint64_t mallocs, uint64_t frees, uint64_t cross_cpu_frees)
-        : _mallocs(mallocs), _frees(frees), _cross_cpu_frees(cross_cpu_frees) {}
+    statistics(uint64_t mallocs, uint64_t frees, uint64_t cross_cpu_frees,
+            uint64_t free_memory, uint64_t reclaims)
+        : _mallocs(mallocs), _frees(frees), _cross_cpu_frees(cross_cpu_frees)
+        , _free_memory(free_memory), _reclaims(reclaims) {}
 public:
     /// Total number of memory allocations calls since the system was started.
     uint64_t mallocs() const { return _mallocs; }
@@ -127,6 +131,10 @@ public:
     uint64_t cross_cpu_frees() const { return _cross_cpu_frees; }
     /// Total number of objects which were allocated but not freed.
     size_t live_objects() const { return mallocs() - frees(); }
+    /// Total free memory (in bytes)
+    size_t free_memory() const { return _free_memory; }
+    /// Number of reclaims performed due to low memory
+    uint64_t reclaims() const { return _reclaims; }
     friend statistics stats();
 };
 
