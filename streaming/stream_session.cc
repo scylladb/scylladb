@@ -52,7 +52,7 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
-    ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting,  unsigned dst_cpu_id) {
+    ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting,  unsigned dst_cpu_id) {
         sslog.debug("GOT PREPARE_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id = std::move(plan_id), from, connecting] () mutable {
             auto& sm = get_local_stream_manager();
@@ -192,8 +192,7 @@ future<> stream_session::on_initialization_complete() {
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
     sslog.debug("SEND PREPARE_MESSAGE to {}", id);
-    return ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id),
-            std::move(prepare), plan_id(), std::move(from), this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         sslog.debug("GOT PREPARE_MESSAGE Reply");
         for (auto& request : msg.requests) {
             // always flush on stream request

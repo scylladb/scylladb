@@ -23,6 +23,7 @@
 // forward declarations
 namespace streaming { namespace messages {
     class stream_init_message;
+    class prepare_message;
 }}
 
 namespace gms {
@@ -32,6 +33,10 @@ namespace gms {
 }
 
 class frozen_mutation;
+
+namespace utils {
+    class UUID;
+}
 
 namespace net {
 
@@ -286,6 +291,7 @@ class messaging_service {
 public:
     using shard_id = net::shard_id;
     using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
 
     using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
     struct rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
@@ -365,6 +371,12 @@ public:
     // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
     future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
+
+    // Wrapper for PREPARE_MESSAGE verb
+    void register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
+        inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
+        inet_address from, inet_address connecting, unsigned dst_cpu_id);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);

@@ -8,6 +8,7 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "streaming/messages/stream_init_message.hh"
+#include "streaming/messages/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
@@ -212,6 +213,16 @@ void messaging_service::register_stream_init_message(std::function<future<unsign
 }
 future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id) {
     return send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg), std::move(src_cpu_id));
+}
+
+void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
+    inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
+    register_handler(messaging_verb::PREPARE_MESSAGE, std::move(func));
+}
+future<streaming::messages::prepare_message> messaging_service::send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
+    inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+    return send_message<streaming::messages::prepare_message>(messaging_verb::PREPARE_MESSAGE, std::move(id), std::move(msg),
+            std::move(plan_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
 }
 
 void messaging_service::register_echo(std::function<future<> ()>&& func) {
