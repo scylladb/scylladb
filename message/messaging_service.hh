@@ -299,7 +299,7 @@ private:
     gms::inet_address _listen_address;
     uint16_t _port;
     std::unique_ptr<rpc_protocol> _rpc;
-    rpc_protocol::server _server;
+    std::unique_ptr<rpc_protocol::server> _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:

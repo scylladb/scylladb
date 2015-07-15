@@ -159,7 +159,7 @@ messaging_service::messaging_service(gms::inet_address ip)
     : _listen_address(ip)
     , _port(_default_port)
     , _rpc(new rpc_protocol(serializer{}))
-    , _server(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
+    , _server(new rpc_protocol::server(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
 }
 
 uint16_t messaging_service::port() {
@@ -171,7 +171,7 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop() {
-    return when_all(_server.stop(),
+    return when_all(_server->stop(),
         parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
             return c.second.rpc_client->stop();
         })
