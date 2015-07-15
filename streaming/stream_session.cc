@@ -195,17 +195,7 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
 }
 
 future<> stream_session::initiate() {
-#if 0
-    logger.debug("[Stream #{}] Sending stream init for incoming stream", session.planId());
-    Socket incomingSocket = session.createConnection();
-    incoming.start(incomingSocket, StreamMessage.CURRENT_VERSION);
-    incoming.sendInitMessage(incomingSocket, true);
-
-    logger.debug("[Stream #{}] Sending stream init for outgoing stream", session.planId());
-    Socket outgoingSocket = session.createConnection();
-    outgoing.start(outgoingSocket, StreamMessage.CURRENT_VERSION);
-    outgoing.sendInitMessage(outgoingSocket, false);
-#endif
+    sslog.debug("[Stream #{}] Sending stream init for incoming stream", plan_id());
     auto from = utils::fb_utilities::get_broadcast_address();
     bool is_for_outgoing = true;
     messages::stream_init_message msg(from, session_index(), plan_id(), description(),
@@ -248,8 +238,8 @@ future<> stream_session::on_initialization_complete() {
 }
 
 void stream_session::on_error() {
+    sslog.error("[Stream #{}] Streaming error occurred", plan_id());
 #if 0
-    //logger.error("[Stream #{}] Streaming error occurred", planId(), e);
     // send session failure message
     if (handler.is_outgoing_connected()) {
        handler.sendMessage(session_failed_message());
@@ -516,13 +506,15 @@ void stream_session::close_session(stream_session_state final_state) {
 
 void stream_session::start() {
     if (_requests.empty() && _transfers.empty()) {
-        //logger.info("[Stream #{}] Session does not have any tasks.", planId());
+        sslog.info("[Stream #{}] Session does not have any tasks.", plan_id());
         close_session(stream_session_state::COMPLETE);
         return;
     }
-
-    // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
-    //                                                        peer, peer == connecting ? "" : " through " + connecting);
+    if (peer == connecting) {
+        sslog.info("[Stream #{}] Starting streaming to {}", plan_id(), peer);
+    } else {
+        sslog.info("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
+    }
     initiate().then([this] {
         return on_initialization_complete();
     }).then_wrapped([this] (auto&& f) {
