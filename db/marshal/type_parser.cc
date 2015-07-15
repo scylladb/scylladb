@@ -43,42 +43,7 @@ type_parser::type_parser(const sstring& str)
 { }
 
 data_type type_parser::parse(const sstring& str) {
-#if 0
-   if (str == null)
-       return BytesType.instance;
-
-   AbstractType<?> type = cache.get(str);
-
-   if (type != null)
-       return type;
-#endif
-
-    // This could be simplier (i.e. new TypeParser(str).parse()) but we avoid creating a TypeParser object if not really necessary.
-    size_t i = 0;
-    i = skip_blank(str, i);
-    size_t j = i;
-    while (!is_eos(str, i) && is_identifier_char(str[i])) {
-        ++i;
-    }
-    if (i == j) {
-        return bytes_type;
-    }
-    sstring name = str.substr(j, i-j);
-    i = skip_blank(str, i);
-
-    data_type type;
-
-    if (!is_eos(str, i) && str[i] == '(') {
-        type = get_abstract_type(name, type_parser{str, i});
-    } else {
-        type = get_abstract_type(name);
-    }
-
-#if 0
-    // We don't really care about concurrency here. Worst case scenario, we do some parsing unnecessarily
-    cache.put(str, type);
-#endif
-    return type;
+    return type_parser(str).parse();
 }
 
 data_type type_parser::parse() {
