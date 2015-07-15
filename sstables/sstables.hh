@@ -311,10 +311,10 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
-    future<uint64_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
+    future<uint64_t> data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il);
 
     // Returns data file position for an entry right after all entries mapped by given summary page.
-    future<uint64_t> data_end_position(int summary_idx);
+    future<uint64_t> data_end_position(uint64_t summary_idx);
 
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);
@@ -323,6 +323,20 @@ private:
     int binary_search(const T& entries, const key& sk) {
         return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
+
+    // Returns position in the data file of the first entry which is not
+    // smaller than the supplied ring_position. If no such entry exists, a
+    // position right after all entries is returned.
+    //
+    // The ring_position doesn't have to survive deferring.
+    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&);
+
+    // Returns position in the data file of the first partition which is
+    // greater than the supplied ring_position. If no such entry exists, a
+    // position right after all entries is returned.
+    //
+    // The ring_position doesn't have to survive deferring.
+    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&);
 
     future<summary_entry&> read_summary_entry(size_t i);
 

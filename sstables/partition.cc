@@ -368,14 +368,7 @@ static int adjust_binary_search_index(int idx) {
     return idx;
 }
 
-static int get_binary_search_insertion_index(int idx) {
-    if (idx < 0) {
-        return -(idx + 1);
-    }
-    return idx;
-}
-
-future<uint64_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
+future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il) {
     if (uint64_t(index_idx + 1) < il.size()) {
         return make_ready_future<uint64_t>(il[index_idx + 1].position);
     }
@@ -383,7 +376,7 @@ future<uint64_t> sstables::sstable::data_end_position(int summary_idx, int index
     return data_end_position(summary_idx);
 }
 
-future<uint64_t> sstables::sstable::data_end_position(int summary_idx) {
+future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx) {
     // We should only go to the end of the file if we are in the last summary group.
     // Otherwise, we will determine the end position of the current data read by looking
     // at the first index in the next summary group.
@@ -492,52 +485,89 @@ mutation_reader sstable::read_rows(schema_ptr schema) {
     return std::make_unique<mutation_reader::impl>(*this, schema);
 }
 
+// Less-comparator for lookups in the partition index.
+class index_comparator {
+    const schema& _s;
+public:
+    index_comparator(const schema& s) : _s(s) {}
+
+    int tri_cmp(key_view k2, const dht::ring_position& pos) const {
+        auto k2_token = dht::global_partitioner().get_token(k2);
+
+        if (k2_token == pos.token()) {
+            if (pos.has_key()) {
+                return k2.tri_compare(_s, *pos.key());
+            } else {
+                return 0;
+            }
+        } else {
+            return k2_token < pos.token() ? -1 : 1;
+        }
+    }
+
+    bool operator()(const summary_entry& e, const dht::ring_position& rp) const {
+        return tri_cmp(e.get_key(), rp) < 0;
+    }
+
+    bool operator()(const index_entry& e, const dht::ring_position& rp) const {
+        return tri_cmp(e.get_key(), rp) < 0;
+    }
+
+    bool operator()(const dht::ring_position& rp, const summary_entry& e) const {
+        return tri_cmp(e.get_key(), rp) > 0;
+    }
+
+    bool operator()(const dht::ring_position& rp, const index_entry& e) const {
+        return tri_cmp(e.get_key(), rp) > 0;
+    }
+};
+
+future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos) {
+    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
+        std::lower_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
+
+    if (summary_idx == 0) {
+        return make_ready_future<uint64_t>(0);
+    }
+
+    --summary_idx;
+
+    return read_indexes(_summary.entries[summary_idx].position).then([this, s, pos, summary_idx] (index_list il) {
+        auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(*s));
+        if (i == il.end()) {
+            return this->data_end_position(summary_idx);
+        }
+        return make_ready_future<uint64_t>(i->position);
+    });
+}
+
+future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos) {
+    uint64_t summary_idx = std::distance(std::begin(_summary.entries),
+        std::upper_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
+
+    if (summary_idx == 0) {
+        return make_ready_future<uint64_t>(0);
+    }
+
+    --summary_idx;
+
+    return read_indexes(_summary.entries[summary_idx].position).then([this, s, pos, summary_idx] (index_list il) {
+        auto i = std::upper_bound(il.begin(), il.end(), pos, index_comparator(*s));
+        if (i == il.end()) {
+            return this->data_end_position(summary_idx);
+        }
+        return make_ready_future<uint64_t>(i->position);
+    });
+}
+
 mutation_reader sstable::read_range_rows(schema_ptr schema,
         const dht::token& min_token, const dht::token& max_token) {
     if (max_token < min_token) {
         return std::make_unique<mutation_reader::impl>();
     }
-    auto& summary = _summary;
-
-    auto min_idx = adjust_binary_search_index(binary_search(summary.entries, minimum_key(), min_token));
-    auto max_idx = adjust_binary_search_index(binary_search(summary.entries, maximum_key(), max_token));
-
-    if (max_idx < 0) {
-        return std::make_unique<mutation_reader::impl>();
-    }
-
-    if (min_idx < 0) {
-        min_idx = 0;
-    }
-
-    auto min_position = _summary.entries[min_idx].position;
-    auto ipos_fut = read_indexes(min_position).then([this, min_idx, min_token] (auto index_list) {
-        // We will never find the exact element, since we are not using real keys.
-        //
-        // So what we really want here is to know in which bucket does the
-        // set of keys that compute the token of interest starts.
-
-        auto m = this->binary_search(index_list, minimum_key(), min_token);
-        if (m < 0) {
-            m = get_binary_search_insertion_index(m);
-            return this->data_end_position(min_idx, m - 1, index_list);
-        }
-        return make_ready_future<uint64_t>(index_list[m].position);
-    });
-
-    auto max_position = _summary.entries[max_idx].position;
-    auto epos_fut = read_indexes(max_position).then([this, max_idx, max_token] (auto index_list) {
-        auto m = adjust_binary_search_index(this->binary_search(index_list, maximum_key(), max_token));
-        auto max_index_idx = m >= 0 ? m : int(index_list.size());
-
-        // For the max case, we don't need to do the index adjustment.
-        // Since we compare greater than any key that computes max_token,
-        // they are all guaranteed to be in the final set.
-        return this->data_end_position(max_idx, max_index_idx, index_list);
-    });
 
     return std::make_unique<mutation_reader::impl>(
-            *this, schema, std::move(ipos_fut), std::move(epos_fut));
+            *this, schema, lower_bound({min_token}), upper_bound({max_token}));
 }
 
 
