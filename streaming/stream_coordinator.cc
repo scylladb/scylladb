@@ -22,11 +22,13 @@
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_coordinator.hh"
+#include "log.hh"
 
 namespace streaming {
 
+extern logging::logger sslog;
+
 using gms::inet_address;
-//using stream_coordinator::host_streaming_data;
 
 bool stream_coordinator::has_active_sessions() {
     for (auto& x : _peer_sessions) {
@@ -166,4 +168,17 @@ std::vector<session_info> stream_coordinator::host_streaming_data::get_all_sessi
     return sessions;
 }
 
+void stream_coordinator::connect_all_stream_sessions() {
+    for (auto& data : _peer_sessions) {
+        data.second.connect_all_stream_sessions();
+    }
+}
+
+void stream_coordinator::host_streaming_data::connect_all_stream_sessions() {
+    for (auto& x : _stream_sessions) {
+        auto& session = x.second;
+        session->start();
+        sslog.info("[Stream #{}, ID#{}] Beginning stream session with {}", session->plan_id(), session->session_index(), session->peer);
+    }
+}
 } // namespace streaming
