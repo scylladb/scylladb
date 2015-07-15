@@ -10,6 +10,8 @@
 
 namespace net {
 
+using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
+
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
     bytes b(bytes::initialized_later(), sizeof(v));
     auto _out = b.begin();
@@ -97,6 +99,103 @@ future<> init_messaging_service(sstring listen_address, db::config::seed_provide
             });
         });
     });
+}
+
+bool operator==(const shard_id& x, const shard_id& y) {
+    return x.addr == y.addr && x.cpu_id == y.cpu_id ;
+}
+
+bool operator<(const shard_id& x, const shard_id& y) {
+    if (x.addr < y.addr) {
+        return true;
+    } else if (y.addr < x.addr) {
+        return false;
+    } else {
+        return x.cpu_id < y.cpu_id;
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const shard_id& x) {
+    return os << x.addr << ":" << x.cpu_id;
+}
+
+size_t shard_id::hash::operator()(const shard_id& id) const {
+    return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
+}
+
+messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol::client>&& client)
+    : rpc_client(std::move(client)) {
+}
+
+void messaging_service::foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const {
+    for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
+        f(i->first, i->second);
+    }
+}
+
+void messaging_service::increment_dropped_messages(messaging_verb verb) {
+    _dropped_messages[static_cast<int32_t>(verb)]++;
+}
+
+uint64_t messaging_service::get_dropped_messages(messaging_verb verb) const {
+    return _dropped_messages[static_cast<int32_t>(verb)];
+}
+
+const uint64_t* messaging_service::get_dropped_messages() const {
+    return _dropped_messages;
+}
+
+int32_t messaging_service::get_raw_version(const gms::inet_address& endpoint) const {
+    // FIXME: messaging service versioning
+    return current_version;
+}
+
+bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
+    // FIXME: messaging service versioning
+    return true;
+}
+
+messaging_service::messaging_service(gms::inet_address ip)
+    : _listen_address(ip)
+    , _port(_default_port)
+    , _rpc(new rpc_protocol(serializer{}))
+    , _server(new rpc_protocol::server(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
+}
+
+uint16_t messaging_service::port() {
+    return _port;
+}
+
+gms::inet_address messaging_service::listen_address() {
+    return _listen_address;
+}
+
+future<> messaging_service::stop() {
+    return when_all(_server->stop(),
+        parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
+            return c.second.rpc_client->stop();
+        })
+    ).discard_result();
+}
+
+rpc::no_wait_type messaging_service::no_wait() {
+    return rpc::no_wait;
+}
+
+rpc_protocol::client& messaging_service::get_rpc_client(shard_id id) {
+    auto it = _clients.find(id);
+    if (it == _clients.end()) {
+        auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
+        auto client = std::make_unique<rpc_protocol::client>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+        it = _clients.emplace(id, shard_info(std::move(client))).first;
+        return *it->second.rpc_client;
+    } else {
+        return *it->second.rpc_client;
+    }
+}
+
+void messaging_service::remove_rpc_client(shard_id id) {
+    _clients.erase(id);
 }
 
 } // namespace net

@@ -258,116 +258,69 @@ struct serializer {
     }
 };
 
+struct shard_id {
+    gms::inet_address addr;
+    uint32_t cpu_id;
+    friend bool operator==(const shard_id& x, const shard_id& y);
+    friend bool operator<(const shard_id& x, const shard_id& y);
+    friend std::ostream& operator<<(std::ostream& os, const shard_id& x);
+    struct hash {
+        size_t operator()(const shard_id& id) const;
+    };
+};
+
 class messaging_service {
 public:
+    using shard_id = net::shard_id;
+    using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
+
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
 
-    struct shard_id {
-        gms::inet_address addr;
-        uint32_t cpu_id;
-        friend inline bool operator==(const shard_id& x, const shard_id& y) {
-            return x.addr == y.addr && x.cpu_id == y.cpu_id ;
-        }
-        friend inline bool operator<(const shard_id& x, const shard_id& y) {
-            if (x.addr < y.addr) {
-                return true;
-            } else if (y.addr < x.addr) {
-                return false;
-            } else {
-                return x.cpu_id < y.cpu_id;
-            }
-        }
-        friend inline std::ostream& operator<<(std::ostream& os, const shard_id& x) {
-            return os << x.addr << ":" << x.cpu_id;
-        }
-        struct hash {
-            size_t operator()(const shard_id& id) const {
-                return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
-            }
-        };
-    };
     struct shard_info {
-        shard_info(std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client>&& client)
-            : rpc_client(std::move(client)) {
-        }
-        std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client> rpc_client;
+        shard_info(std::unique_ptr<rpc_protocol::client>&& client);
+        std::unique_ptr<rpc_protocol::client> rpc_client;
     };
 
-    void foreach_client(std::function<void(const messaging_service::shard_id& id,
-                    const messaging_service::shard_info& info)> f) const {
-        for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
-            f(i->first, i->second);
-        }
-    }
+    void foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const;
 
-    void increment_dropped_messages(messaging_verb verb) {
-        _dropped_messages[static_cast<int32_t>(verb)]++;
-    }
+    void increment_dropped_messages(messaging_verb verb);
 
-    uint64_t get_dropped_messages(messaging_verb verb) const {
-        return _dropped_messages[static_cast<int32_t>(verb)];
-    }
+    uint64_t get_dropped_messages(messaging_verb verb) const;
 
-    const uint64_t* get_dropped_messages() const {
-        return _dropped_messages;
-    }
+    const uint64_t* get_dropped_messages() const;
 
-    int32_t get_raw_version(const gms::inet_address& endpoint) const {
-        // FIXME: messaging service versioning
-        return current_version;
-    }
+    int32_t get_raw_version(const gms::inet_address& endpoint) const;
 
-    bool knows_version(const gms::inet_address& endpoint) const {
-        // FIXME: messaging service versioning
-        return true;
-    }
+    bool knows_version(const gms::inet_address& endpoint) const;
 
 private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
-    rpc::protocol<serializer, messaging_verb> _rpc;
-    rpc::protocol<serializer, messaging_verb>::server _server;
+    std::unique_ptr<rpc_protocol> _rpc;
+    std::unique_ptr<rpc_protocol::server> _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
-    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"))
-        : _listen_address(ip)
-        , _port(_default_port)
-        , _rpc(serializer{})
-        , _server(_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
-    }
+    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
 public:
-    uint16_t port() {
-        return _port;
-    }
-    auto listen_address() {
-        return _listen_address;
-    }
-    future<> stop() {
-        return when_all(_server.stop(),
-            parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
-                return c.second.rpc_client->stop();
-            })
-        ).discard_result();
-    }
-
-    static auto no_wait() {
-        return rpc::no_wait;
-    }
+    uint16_t port();
+    gms::inet_address listen_address();
+    future<> stop();
+    static rpc::no_wait_type no_wait();
 public:
     // Register a handler (a callback lambda) for verb
     template <typename Func>
     void register_handler(messaging_verb verb, Func&& func) {
-        _rpc.register_handler(verb, std::move(func));
+        _rpc->register_handler(verb, std::move(func));
     }
 
     // Send a message for verb
     template <typename MsgIn, typename... MsgOut>
     auto send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
         auto& rpc_client = get_rpc_client(id);
-        auto rpc_handler = _rpc.make_client<MsgIn(MsgOut...)>(verb);
+        auto rpc_handler = _rpc->make_client<MsgIn(MsgOut...)>(verb);
         return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id, verb] (auto&& f) {
             try {
                 if (f.failed()) {
@@ -391,21 +344,8 @@ public:
     }
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    rpc::protocol<serializer, messaging_verb>::client& get_rpc_client(shard_id id) {
-        auto it = _clients.find(id);
-        if (it == _clients.end()) {
-            auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-            auto client = std::make_unique<rpc::protocol<serializer, messaging_verb>::client>(_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
-            it = _clients.emplace(id, shard_info(std::move(client))).first;
-            return *it->second.rpc_client;
-        } else {
-            return *it->second.rpc_client;
-        }
-    }
-
-    void remove_rpc_client(shard_id id) {
-        _clients.erase(id);
-    }
+    rpc_protocol::client& get_rpc_client(shard_id id);
+    void remove_rpc_client(shard_id id);
 };
 
 extern distributed<messaging_service> _the_messaging_service;
