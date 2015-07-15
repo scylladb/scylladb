@@ -1044,7 +1044,7 @@ future<> save_system_keyspace_schema() {
             adder.add("subcomparator", table.comparator.subtype(1).toString());
 #endif
         } else {
-            m.set_clustered_cell(ckey, "comparator", table->regular_column_name_type()->name(), timestamp);
+            m.set_clustered_cell(ckey, "comparator", cell_comparator::to_sstring(*table), timestamp);
         }
 
         m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
@@ -1279,6 +1279,8 @@ future<> save_system_keyspace_schema() {
             throw std::runtime_error("not implemented");
         }
 
+        bool is_compound = cell_comparator::check_compound(table_row.get_nonnull<sstring>("comparator"));
+        builder.set_is_compound(is_compound);
 #if 0
         CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
 
