@@ -313,6 +313,9 @@ private:
 
     future<uint64_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
 
+    // Returns data file position for an entry right after all entries mapped by given summary page.
+    future<uint64_t> data_end_position(int summary_idx);
+
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);
 
