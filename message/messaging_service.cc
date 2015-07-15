@@ -11,8 +11,6 @@
 
 namespace net {
 
-using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
-
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
     bytes b(bytes::initialized_later(), sizeof(v));
     auto _out = b.begin();
@@ -124,7 +122,7 @@ size_t shard_id::hash::operator()(const shard_id& id) const {
     return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
 }
 
-messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol::client>&& client)
+messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client)
     : rpc_client(std::move(client)) {
 }
 
@@ -159,8 +157,8 @@ bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
 messaging_service::messaging_service(gms::inet_address ip)
     : _listen_address(ip)
     , _port(_default_port)
-    , _rpc(new rpc_protocol(serializer{}))
-    , _server(new rpc_protocol::server(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
+    , _rpc(new rpc_protocol_wrapper(serializer{}))
+    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
 }
 
 uint16_t messaging_service::port() {
@@ -183,11 +181,11 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
-rpc_protocol::client& messaging_service::get_rpc_client(shard_id id) {
+messaging_service::rpc_protocol_client_wrapper& messaging_service::get_rpc_client(shard_id id) {
     auto it = _clients.find(id);
     if (it == _clients.end()) {
         auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-        auto client = std::make_unique<rpc_protocol::client>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+        auto client = std::make_unique<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
         it = _clients.emplace(id, shard_info(std::move(client))).first;
         return *it->second.rpc_client;
     } else {
