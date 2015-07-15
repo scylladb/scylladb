@@ -145,12 +145,18 @@ bool operator<(const token& t1, const token& t2)
 }
 
 std::ostream& operator<<(std::ostream& out, const token& t) {
-    auto flags = out.flags();
-    for (auto c : t._data) {
-        unsigned char x = c;
-        out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
+    if (t._kind == token::kind::after_all_keys) {
+        out << "maximum token";
+    } else if (t._kind == token::kind::before_all_keys) {
+        out << "minimum token";
+    } else {
+        auto flags = out.flags();
+        for (auto c : t._data) {
+            unsigned char x = c;
+            out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
+        }
+        out.flags(flags);
     }
-    out.flags(flags);
     return out;
 }
 
@@ -284,6 +290,16 @@ unsigned shard_of(const token& t) {
     uint16_t v = uint8_t(t._data[t._data.size() - 1])
             | (uint8_t(t._data[t._data.size() - 2]) << 8);
     return v % smp::count;
+}
+
+int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
+    if (lh.less_compare(s, rh)) {
+        return -1;
+    } else if (lh.equal(s, rh)) {
+        return 0;
+    } else {
+        return 1;
+    }
 }
 
 }

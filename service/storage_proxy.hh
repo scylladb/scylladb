@@ -61,6 +61,7 @@ private:
     size_t _total_hints_in_progress = 0;
     std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
     stats _stats;
+    static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
 private:
     void init_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
@@ -81,6 +82,11 @@ private:
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
     future<query::result_digest> query_singular_local_digest(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, query::partition_range&& range, db::consistency_level cl);
+    std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
+    float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
+    static std::vector<gms::inet_address> intersection(const std::vector<gms::inet_address>& l1, const std::vector<gms::inet_address>& l2);
+    future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i, std::vector<query::partition_range>&& ranges, int concurrency_factor);
 
 public:
     storage_proxy(distributed<database>& db);

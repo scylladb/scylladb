@@ -122,39 +122,50 @@ private:
             public std::iterator<std::input_iterator_tag, token> {
     private:
         tokens_iterator(std::vector<token>::const_iterator it, size_t pos)
-        : _cur_it(it), _ring_pos(pos) {}
+        : _cur_it(it), _ring_pos(pos), _insert_min(false) {}
 
     public:
-        tokens_iterator(const token& start, token_metadata* token_metadata)
+        tokens_iterator(const token& start, token_metadata* token_metadata, bool include_min = false)
         : _token_metadata(token_metadata) {
-            _cur_it = _token_metadata->sorted_tokens().begin() +
-                      _token_metadata->first_token_index(start);
+            _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
+            _insert_min = include_min && *_token_metadata->sorted_tokens().begin() != dht::minimum_token();
+            if (_token_metadata->sorted_tokens().empty()) {
+                _min = true;
+            }
         }
 
         bool operator==(const tokens_iterator& it) const {
-            return _cur_it == it._cur_it;
+            return _min == it._min && _cur_it == it._cur_it;
         }
 
         bool operator!=(const tokens_iterator& it) const {
-            return _cur_it != it._cur_it;
+            return _min != it._min || _cur_it != it._cur_it;
         }
 
         const token& operator*() {
-            return *_cur_it;
+            if (_min) {
+                return _min_token;
+            } else {
+                return *_cur_it;
+            }
         }
 
         tokens_iterator& operator++() {
-            if (_ring_pos >= _token_metadata->sorted_tokens().size()) {
-                _cur_it = _token_metadata->sorted_tokens().end();
-            } else {
-                ++_cur_it;
-                ++_ring_pos;
+            if (!_min) {
+                if (_ring_pos >= _token_metadata->sorted_tokens().size()) {
+                    _cur_it = _token_metadata->sorted_tokens().end();
+                } else {
+                    ++_cur_it;
+                    ++_ring_pos;
 
-                if (_cur_it == _token_metadata->sorted_tokens().end()) {
-                    _cur_it = _token_metadata->sorted_tokens().begin();
+                    if (_cur_it == _token_metadata->sorted_tokens().end()) {
+                        _cur_it = _token_metadata->sorted_tokens().begin();
+                        _min = _insert_min;
+                    }
                 }
+            } else {
+                _min = false;
             }
-
             return *this;
         }
 
@@ -165,6 +176,9 @@ private:
         // "start"
         //
         size_t _ring_pos = 0;
+        bool _insert_min;
+        bool _min = false;
+        const token _min_token = dht::minimum_token();
         token_metadata* _token_metadata = nullptr;
 
         friend class token_metadata;
@@ -208,8 +222,8 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    auto ring_range(const token& start) {
-        auto begin = tokens_iterator(start, this);
+    auto ring_range(const token& start, bool include_min = false) {
+        auto begin = tokens_iterator(start, this, include_min);
         auto end = tokens_end();
         return boost::make_iterator_range(begin, end);
     }

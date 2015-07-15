@@ -41,6 +41,37 @@ public:
         , _singular(true)
     { }
     range() : range({}, {}) {}
+private:
+    // the point is before the range (works only for non wrapped ranges)
+    template<typename Comparator>
+    bool before(const T& point, Comparator&& cmp) const {
+        if (!_start) {
+            return false; //open start, no points before
+        }
+        auto r = cmp(point, start_value());
+        if (r < 0) {
+            return true;
+        }
+        if (!_start->is_inclusive() && r == 0) {
+            return true;
+        }
+        return false;
+    }
+    // the point is after the range (works only for non wrapped ranges)
+    template<typename Comparator>
+    bool after(const T& point, Comparator&& cmp) const {
+        if (!_end) {
+            return false; //open end, no points after
+        }
+        auto r = cmp(end_value(), point);
+        if (r < 0) {
+            return true;
+        }
+        if (!_end->is_inclusive() && r == 0) {
+            return true;
+        }
+        return false;
+    }
 public:
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
@@ -74,15 +105,40 @@ public:
     const T& end_value() const {
         return _end->value();
     }
-
     const optional<bound>& start() const {
         return _start;
     }
-
     const optional<bound>& end() const {
         return _end;
     }
-
+    // end is smaller than start
+    template<typename Comparator>
+    bool is_wrap_around(Comparator&& cmp) const {
+        if (_end && _start) {
+            return cmp(end_value(), start_value()) < 0;
+        } else {
+            return false; // open ended range never wraps around
+        }
+    }
+    // the point is inside the range
+    template<typename Comparator>
+    bool contains(const T& point, Comparator&& cmp) const {
+        if (is_wrap_around(cmp)) {
+            // wrapped range contains point if reverse does not contain it
+            return !range::make({end_value(), !_end->is_inclusive()}, {start_value(), !_start->is_inclusive()}).contains(point, cmp);
+        } else {
+            return !before(point, cmp) && !after(point, cmp);
+        }
+    }
+    // split range in two around a split_point. split_point has to be inside the range
+    // split_point will belong to first range
+    template<typename Comparator>
+    std::pair<range<T>, range<T>> split(const T& split_point, Comparator&& cmp) const {
+        assert(contains(split_point, std::forward<Comparator>(cmp)));
+        range left(_start, bound(split_point));
+        range right(bound(split_point, false), _end);
+        return std::make_pair(std::move(left), std::move(right));
+    }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename U, typename Transformer>
