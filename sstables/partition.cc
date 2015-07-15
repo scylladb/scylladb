@@ -33,7 +33,7 @@ namespace sstables {
  * the extra information when not needed.
  *
  * This code should work in all kinds of vectors in whose's elements is possible to aquire
- * a key view.
+ * a key view via get_key().
  */
 template <typename T>
 int sstable::binary_search(const T& entries, const key& sk, const dht::token& token) {
@@ -47,8 +47,7 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
         // creation by keeping only a key view, and then manually carrying out
         // both parts of the comparison ourselves.
         mid = low + ((high - low) >> 1);
-        auto mid_bytes = bytes_view(entries[mid]);
-        auto mid_key = key_view(mid_bytes);
+        key_view mid_key = entries[mid].get_key();
         auto mid_token = partitioner.get_token(mid_key);
 
         if (token == mid_token) {
