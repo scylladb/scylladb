@@ -2785,7 +2785,7 @@ bool storage_proxy::should_hint(gms::inet_address ep) {
 
 void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
-    ms.register_handler(net::messaging_verb::DEFINITIONS_UPDATE, [this] (std::vector<frozen_mutation> m) {
+    ms.register_definitions_update( [this] (std::vector<frozen_mutation> m) {
         do_with(std::move(m), [this] (const std::vector<frozen_mutation>& mutations) mutable {
             std::vector<mutation> schema;
             for (auto& m : mutations) {

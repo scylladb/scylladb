@@ -242,4 +242,11 @@ future<> messaging_service::send_gossip_digest_ack2(shard_id id, gossip_digest_a
     return send_message_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
 }
 
+void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func) {
+    register_handler(net::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
+}
+future<> messaging_service::send_definitions_update(shard_id id, std::vector<frozen_mutation> fm) {
+    return send_message_oneway(messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
+}
+
 } // namespace net

@@ -31,6 +31,8 @@ namespace gms {
     class gossip_digest_ack2;
 }
 
+class frozen_mutation;
+
 namespace net {
 
 /* All verb handler identifiers */
@@ -379,6 +381,10 @@ public:
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
     future<> send_gossip_digest_ack2(shard_id id, gms::gossip_digest_ack2 msg);
+
+    // Wrapper for DEFINITIONS_UPDATE
+    void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
+    future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
 
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
