@@ -37,6 +37,9 @@
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include "core/sleep.hh"
+#include "service/storage_service.hh"
+#include "core/thread.hh"
+#include "cql3/query_processor.hh"
 
 namespace streaming {
 
@@ -143,16 +146,43 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
     });
 }
 
-future<> stream_session::test() {
+future<> stream_session::test(distributed<cql3::query_processor>& qp) {
     if (utils::fb_utilities::get_broadcast_address() == inet_address("127.0.0.1")) {
-        return sleep(std::chrono::seconds(5)).then([] {
-            sslog.debug("================ STREAM_PLAN TEST ==============\n");
-            auto sp = stream_plan("MYPLAN");
-            auto to = inet_address("127.0.0.2");
-            std::vector<query::range<token>> ranges;
-            std::vector<sstring> cfs{"local"};
-            sp.transfer_ranges(to, to, "system", std::move(ranges), std::move(cfs)).execute();
+        auto tester = make_shared<timer<lowres_clock>>();
+        tester->set_callback ([tester, &qp] {
+            seastar::async([&qp] {
+                sslog.debug("================ STREAM_PLAN TEST ==============");
+                auto cs = service::client_state::for_external_calls();
+                service::query_state qs(cs);
+                auto opts = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
+                qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, *opts).get();
+                sslog.debug("CREATE KEYSPACE = KS DONE");
+                qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, *opts).get();
+                sslog.debug("CREATE TABLE = TB DONE");
+                qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 1");
+                qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 2");
+                qp.local().process("insert into ks.tb (key,c0) values ('3','3');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 3");
+                qp.local().process("insert into ks.tb (key,c0) values ('4','4');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 4");
+                qp.local().process("insert into ks.tb (key,c0) values ('5','5');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 5");
+                qp.local().process("insert into ks.tb (key,c0) values ('6','6');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 6");
+            }).then([] {
+                sleep(std::chrono::seconds(10)).then([] {
+                    sslog.debug("================ START STREAM  ==============");
+                    auto sp = stream_plan("MYPLAN");
+                    auto to = inet_address("127.0.0.2");
+                    std::vector<query::range<token>> ranges = {query::range<token>::make_open_ended_both_sides()};
+                    std::vector<sstring> cfs{"tb"};
+                    sp.transfer_ranges(to, to, "ks", std::move(ranges), std::move(cfs)).execute();
+                });
+            });
         });
+        tester->arm(std::chrono::seconds(10));
     }
     return make_ready_future<>();
 }

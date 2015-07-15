@@ -23,6 +23,7 @@
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "core/distributed.hh"
+#include "cql3/query_processor.hh"
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
@@ -135,7 +136,7 @@ public:
     }
     static database& get_local_db() { return _db->local(); }
     static future<> init_streaming_service(distributed<database>& db);
-    static future<> test();
+    static future<> test(distributed<cql3::query_processor>& qp);
 public:
     /**
      * Streaming endpoint.
