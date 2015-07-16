@@ -159,7 +159,7 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
     } else if (class_name == "org.apache.cassandra.db.marshal.TupleType") {
         auto l = parser.get_type_parameters();
         if (l.size() == 0) {
-            throw exceptions::configuration_exception("TupleType takes exactly at least 1 type parameter");
+            throw exceptions::configuration_exception("TupleType takes at least 1 type parameter");
         }
         return tuple_type_impl::get_instance(l);
     } else {
