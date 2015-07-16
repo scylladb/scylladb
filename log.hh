@@ -46,6 +46,8 @@ class registry;
 class logger {
     sstring _name;
     std::atomic<log_level> _level = { log_level::warn };
+    static std::atomic<bool> _stdout;
+    static std::atomic<bool> _syslog;
 private:
     struct stringer {
         // no need for virtual dtor, since not dynamically destroyed
@@ -104,6 +106,8 @@ public:
     void set_level(log_level level) {
         _level.store(level, std::memory_order_relaxed);
     }
+    static void set_stdout_enabled(bool enabled);
+    static void set_syslog_enabled(bool enabled);
 };
 
 class registry {

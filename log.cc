@@ -3,10 +3,12 @@
  */
 
 #include "log.hh"
+#include "core/array_map.hh"
 #include <cxxabi.h>
 #include <system_error>
 #include <boost/range/adaptor/map.hpp>
 #include <map>
+#include <syslog.h>
 
 namespace logging {
 
@@ -46,6 +48,9 @@ std::istream& operator>>(std::istream& in, log_level& level) {
 
 namespace logging {
 
+std::atomic<bool> logger::_stdout = { true };
+std::atomic<bool> logger::_syslog = { false };
+
 logger::logger(sstring name) : _name(std::move(name)) {
     logger_registry().register_logger(this);
 }
@@ -60,21 +65,52 @@ logger::~logger() {
 
 void
 logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) {
+    std::ostringstream out;
     const char* p = fmt;
     while (*p != '\0') {
         if (*p == '{' && *(p+1) == '}') {
             p += 2;
             if (n > 0) {
-                (*s++)->append(std::cout);
+                (*s++)->append(out);
                 --n;
             } else {
-                std::cout << "???";
+                out << "???";
             }
         } else {
-            std::cout << *p++;
+            out << *p++;
         }
     }
-    std::cout << "\n";
+    out << "\n";
+    auto msg = out.str();
+    if (_stdout.load(std::memory_order_relaxed)) {
+        std::cout << out;
+    }
+    if (_syslog.load(std::memory_order_relaxed)) {
+        static array_map<int, 20> level_map = {
+                { int(log_level::debug), LOG_DEBUG },
+                { int(log_level::info), LOG_INFO },
+                { int(log_level::trace), LOG_DEBUG },  // no LOG_TRACE
+                { int(log_level::warn), LOG_WARNING },
+                { int(log_level::error), LOG_ERR },
+        };
+        // NOTE: syslog() can block, which will stall the reactor thread.
+        //       this should be rare (will have to fill the pipe buffer
+        //       before syslogd can clear it) but can happen.  If it does,
+        //       we'll have to implement some internal buffering (which
+        //       still means the problem can happen, just less frequently).
+        // syslog() interprets % characters, so send msg as a parameter
+        syslog(level_map[int(level)], "%s", msg.c_str());
+    }
+}
+
+void
+logger::set_stdout_enabled(bool enabled) {
+    _stdout.store(enabled, std::memory_order_relaxed);
+}
+
+void
+logger::set_syslog_enabled(bool enabled) {
+    _syslog.store(enabled, std::memory_order_relaxed);
 }
 
 void
