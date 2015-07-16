@@ -171,6 +171,8 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     }
 public:
     virtual future<> compact(column_family& cfs) override;
+
+    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
@@ -302,6 +304,17 @@ future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
     }
 
     return cfs.compact_sstables(std::move(most_interesting));
+}
+
+std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
+    size_tiered_compaction_strategy cs;
+
+    auto buckets = cs.get_buckets(*candidates);
+
+    std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
+        DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
+
+    return most_interesting;
 }
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
