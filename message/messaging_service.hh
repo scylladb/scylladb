@@ -38,6 +38,10 @@ namespace utils {
     class UUID;
 }
 
+namespace rpc {
+    class client_info;
+}
+
 namespace net {
 
 /* All verb handler identifiers */
@@ -409,6 +413,10 @@ public:
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
     future<> send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id);
+
+    // Wrapper for MUTATION_DONE
+    void register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func);
+    future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
 
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.

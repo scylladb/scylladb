@@ -277,4 +277,11 @@ future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm
         std::move(reply_to), std::move(shard), std::move(response_id));
 }
 
+void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func) {
+    register_handler(net::messaging_verb::MUTATION_DONE, std::move(func));
+}
+future<> messaging_service::send_mutation_done(shard_id id, unsigned shard, response_id_type response_id) {
+    return send_message_oneway(messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
+}
+
 } // namespace net

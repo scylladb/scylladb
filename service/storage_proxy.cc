@@ -2801,7 +2801,7 @@ void storage_proxy::init_messaging_service() {
             return when_all(
                     mutate_locally(m).then([reply_to, shard, response_id] () mutable {
                 auto& ms = net::get_local_messaging_service();
-                ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
+                ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id);
                 // return void, no need to wait for send to complete
             }),
             parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
@@ -2817,7 +2817,7 @@ void storage_proxy::init_messaging_service() {
         }).discard_result();
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::MUTATION_DONE, [this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation_done([this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
         gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
         smp::submit_to(shard, [this, from, response_id] {
             got_response(response_id, from);
