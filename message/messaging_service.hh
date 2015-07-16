@@ -339,39 +339,6 @@ public:
     future<> stop();
     static rpc::no_wait_type no_wait();
 public:
-    // Register a handler (a callback lambda) for verb
-    template <typename Func>
-    void register_handler(messaging_verb verb, Func&& func) {
-        _rpc->register_handler(verb, std::move(func));
-    }
-
-    // Send a message for verb
-    template <typename MsgIn, typename... MsgOut>
-    auto send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
-        auto& rpc_client = get_rpc_client(id);
-        auto rpc_handler = _rpc->make_client<MsgIn(MsgOut...)>(verb);
-        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id, verb] (auto&& f) {
-            try {
-                if (f.failed()) {
-                    this->increment_dropped_messages(verb);
-                    f.get();
-                    assert(false); // never reached
-                }
-                return std::move(f);
-            } catch(...) {
-                // FIXME: we need to distinguish between a transport error and
-                // a server error.
-                // remove_rpc_client(id);
-                throw;
-            }
-        });
-    }
-
-    template <typename... MsgOut>
-    auto send_message_oneway(messaging_verb verb, shard_id id, MsgOut&&... msg) {
-        return send_message<rpc::no_wait_type>(std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
-    }
-
     // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
     future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
@@ -431,10 +398,11 @@ public:
     void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
     future<query::result_digest> send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
-private:
+public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     rpc_protocol_client_wrapper& get_rpc_client(shard_id id);
     void remove_rpc_client(shard_id id);
+    std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 
 extern distributed<messaging_service> _the_messaging_service;
