@@ -47,6 +47,8 @@
 #include <boost/range/algorithm/find_if.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <boost/range/numeric.hpp>
+#include <boost/range/algorithm/sort.hpp>
 
 namespace service {
 
@@ -1429,19 +1431,88 @@ public:
 };
 
 class data_read_resolver : public abstract_read_resolver {
-    std::unordered_map<gms::inet_address, foreign_ptr<lw_shared_ptr<reconcilable_result>>> _data_results;
+    struct reply {
+        gms::inet_address from;
+        foreign_ptr<lw_shared_ptr<reconcilable_result>> result;
+        reply(gms::inet_address from_, foreign_ptr<lw_shared_ptr<reconcilable_result>> result_) : from(std::move(from_)), result(std::move(result_)) {}
+    };
+    struct version {
+        gms::inet_address from;
+        partition par;
+        version(gms::inet_address from_, partition par_) : from(std::move(from_)), par(std::move(par_)) {}
+    };
+
+    std::vector<reply> _data_results;
 
 public:
-    data_read_resolver(size_t targets_count) : abstract_read_resolver(targets_count) {}
+    data_read_resolver(size_t targets_count) : abstract_read_resolver(targets_count) {
+        _data_results.reserve(targets_count);
+    }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-        _data_results[from] = std::move(result);
+        _data_results.emplace_back(std::move(from), std::move(result));
         if (_data_results.size() == _targets_count) {
             _done_promise.set_value();
         }
     }
-    foreign_ptr<lw_shared_ptr<reconcilable_result>> resolve() {
+    reconcilable_result resolve(schema_ptr schema) {
         assert(_data_results.size());
-        return std::move((*_data_results.begin()).second);
+        const auto& s = *schema;
+
+        // return true if lh > rh
+        auto cmp = [&s](reply& lh, reply& rh) {
+            if (lh.result->partitions().size() == 0) {
+                return false; // reply with empty partition array goes to the end of the sorted array
+            } else if (rh.result->partitions().size() == 0) {
+                return true;
+            } else {
+                auto lhk = lh.result->partitions().back().mut().key(s);
+                auto rhk = rh.result->partitions().back().mut().key(s);
+                return lhk.legacy_tri_compare(s, rhk) > 0;
+            }
+        };
+
+        // this array will have an entry for each partition which will hold all available versions
+        std::vector<std::vector<version>> versions;
+        versions.reserve(_data_results.front().result->partitions().size());
+
+        do {
+            // after this sort reply with largest key is at the beginning
+            boost::sort(_data_results, cmp);
+            if (_data_results.front().result->partitions().empty()) {
+                break; // if top of the heap is empty all others are empty too
+            }
+            const auto& max_key = _data_results.front().result->partitions().back().mut().key(s);
+            versions.emplace_back();
+            std::vector<version>& v = versions.back();
+            v.reserve(_targets_count);
+            for (reply& r : _data_results) {
+                auto pit = r.result->partitions().rbegin();
+                if (pit != r.result->partitions().rend() && pit->mut().key(s).legacy_equal(s, max_key)) {
+                    v.emplace_back(r.from, std::move(*pit));
+                    r.result->partitions().pop_back();
+                } else {
+                    // put empty partition for destination without result
+                    v.emplace_back(r.from, partition(0, freeze(mutation(max_key, schema))));
+                }
+            }
+        } while(true);
+
+        std::vector<partition> reconciliated_partitions;
+        reconciliated_partitions.reserve(versions.size());
+        uint32_t row_count = 0;
+
+        // traverse backwards since large keys are at the start
+        boost::range::transform(boost::make_iterator_range(versions.rbegin(), versions.rend()), std::back_inserter(reconciliated_partitions), [this, &row_count, schema] (std::vector<version>& v) {
+            mutation m = boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
+                m.partition().apply(*schema, ver.par.mut().partition());
+                return m;
+            });
+            auto count = m.live_row_count();
+            row_count += count;
+            return partition(count, freeze(m));
+        });
+
+        return reconcilable_result(row_count, std::move(reconciliated_partitions));
     }
 };
 
@@ -1528,9 +1599,9 @@ protected:
         data_resolver->done().then_wrapped([exec, data_resolver] (future<>&& f){
             try {
                 f.get();
-                auto rr = data_resolver->resolve(); // reconciliation happens here
                 schema_ptr s = exec->_proxy._db.local().find_schema(exec->_cmd->cf_id);
-                auto result = ::make_foreign(::make_lw_shared(to_data_query_result(*rr, std::move(s), exec->_cmd->slice)));
+                auto rr = data_resolver->resolve(s); // reconciliation happens here
+                auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), exec->_cmd->slice)));
                 exec->_result_promise.set_value(std::move(result));
             } catch(read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(std::current_exception());
