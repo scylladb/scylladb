@@ -300,4 +300,11 @@ future<reconcilable_result> messaging_service::send_read_mutation_data(shard_id 
     return send_message<reconcilable_result>(messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
 }
 
+void messaging_service::register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func) {
+    register_handler(net::messaging_verb::READ_DIGEST, std::move(func));
+}
+future<query::result_digest> messaging_service::send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+    return send_message<query::result_digest>(net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
+}
+
 } // namespace net

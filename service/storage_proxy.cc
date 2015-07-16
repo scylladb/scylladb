@@ -1490,7 +1490,7 @@ protected:
             return _proxy.query_singular_local_digest(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message<query::result_digest>(net::messaging_verb::READ_DIGEST, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
+            return ms.send_read_digest(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
         }
     }
     future<> make_mutation_data_requests(data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
@@ -2834,7 +2834,7 @@ void storage_proxy::init_messaging_service() {
             return query_mutations_locally(cmd, pr);
         });
     });
-    ms.register_handler(net::messaging_verb::READ_DIGEST, [this] (query::read_command cmd, query::partition_range pr) {
+    ms.register_read_digest([this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
             return query_singular_local_digest(cmd, pr);
         });
