@@ -225,6 +225,8 @@ public:
         return true; // FIXME: set to false for sstables created by compaction process
     }
 
+    uint64_t data_size();
+
     // Returns the total bytes of all components.
     future<uint64_t> bytes_on_disk();
 private:
@@ -269,8 +271,6 @@ private:
 
     template <sstable::component_type Type, typename T>
     future<> write_simple(T& comp);
-
-    uint64_t data_size();
 
     future<> read_toc();
     future<> write_toc();

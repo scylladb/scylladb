@@ -2,8 +2,29 @@
  * Copyright 2015 Cloudius Systems
  */
 
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <vector>
+#include <map>
 #include <functional>
+#include <utility>
+#include <assert.h>
 
 #include "core/future-util.hh"
 #include "core/pipe.hh"
@@ -77,6 +98,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     return read_done.then([write_done = std::move(write_done)] () mutable { return std::move(write_done); });
 }
 
+static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
+static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
+
 class compaction_strategy_impl {
 public:
     virtual ~compaction_strategy_impl() {}
@@ -111,6 +135,178 @@ public:
     }
 };
 
+class size_tiered_compaction_strategy : public compaction_strategy_impl {
+    static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
+    static constexpr double DEFAULT_BUCKET_LOW = 0.5;
+    static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
+    static constexpr double DEFAULT_COLD_READS_TO_OMIT = 0.05;
+
+    // FIXME: user should be able to configure these values.
+    uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+    double bucket_low = DEFAULT_BUCKET_LOW;
+    double bucket_high = DEFAULT_BUCKET_HIGH;
+    double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
+
+    // Return a list of pair of shared_sstable and its respective size.
+    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const sstable_list& sstables);
+
+    // Group files of similar size into buckets.
+    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const sstable_list& sstables);
+
+    // Maybe return a bucket of sstables to compact
+    std::vector<sstables::shared_sstable>
+    most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets, unsigned min_threshold, unsigned max_threshold);
+
+    // Return the average size of a given list of sstables.
+    uint64_t avg_size(std::vector<sstables::shared_sstable>& sstables) {
+        assert(sstables.size() > 0); // this should never fail
+        uint64_t n = 0;
+
+        for (auto& sstable : sstables) {
+            // FIXME: Switch to sstable->bytes_on_disk() afterwards. That's what C* uses.
+            n += sstable->data_size();
+        }
+
+        return n / sstables.size();
+    }
+public:
+    virtual future<> compact(column_family& cfs) override;
+};
+
+std::vector<std::pair<sstables::shared_sstable, uint64_t>>
+size_tiered_compaction_strategy::create_sstable_and_length_pairs(const sstable_list& sstables) {
+
+    std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
+    sstable_length_pairs.reserve(sstables.size());
+
+    for(auto& entry : sstables) {
+        auto& sstable = entry.second;
+        auto sstable_size = sstable->data_size();
+        assert(sstable_size != 0);
+
+        sstable_length_pairs.emplace_back(sstable, sstable_size);
+    }
+
+    return sstable_length_pairs;
+}
+
+std::vector<std::vector<sstables::shared_sstable>>
+size_tiered_compaction_strategy::get_buckets(const sstable_list& sstables) {
+    // sstables sorted by size of its data file.
+    auto sorted_sstables = create_sstable_and_length_pairs(sstables);
+
+    std::sort(sorted_sstables.begin(), sorted_sstables.end(), [] (auto& i, auto& j) {
+        return i.second < j.second;
+    });
+
+    std::map<size_t, std::vector<sstables::shared_sstable>> buckets;
+
+    bool found;
+    for (auto& pair : sorted_sstables) {
+        found = false;
+        size_t size = pair.second;
+
+        // look for a bucket containing similar-sized files:
+        // group in the same bucket if it's w/in 50% of the average for this bucket,
+        // or this file and the bucket are all considered "small" (less than `minSSTableSize`)
+        for (auto& entry : buckets) {
+            auto& bucket = entry.second;
+            size_t old_average_size = entry.first;
+
+            if ((size > (old_average_size * bucket_low) && size < (old_average_size * bucket_high))
+                || (size < min_sstable_size && old_average_size < min_sstable_size))
+            {
+                size_t total_size = bucket.size() * old_average_size;
+                size_t new_average_size = (total_size + size) / (bucket.size() + 1);
+
+                bucket.push_back(pair.first);
+                buckets.insert({ new_average_size, std::move(bucket) });
+
+                // remove and re-add under new new average size
+                // NOTE: we must remove bucket just here because we move its vector right above.
+                buckets.erase(old_average_size);
+
+                found = true;
+                break;
+            }
+        }
+
+        // no similar bucket found; put it in a new one
+        if (!found) {
+            std::vector<sstables::shared_sstable> new_bucket;
+            new_bucket.push_back(pair.first);
+            buckets.insert({ size, std::move(new_bucket) });
+        }
+    }
+
+    std::vector<std::vector<sstables::shared_sstable>> bucket_list;
+    bucket_list.reserve(buckets.size());
+
+    for (auto& entry : buckets) {
+        bucket_list.push_back(std::move(entry.second));
+    }
+
+    return bucket_list;
+}
+
+std::vector<sstables::shared_sstable>
+size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector<sstables::shared_sstable>> buckets,
+        unsigned min_threshold, unsigned max_threshold)
+{
+    std::vector<std::pair<std::vector<sstables::shared_sstable>, uint64_t>> pruned_buckets_and_hotness;
+    pruned_buckets_and_hotness.reserve(buckets.size());
+
+    // FIXME: add support to get hotness for each bucket.
+
+    for (auto& bucket : buckets) {
+        // FIXME: the coldest sstables will be trimmed to meet the threshold, so we must add support to this feature
+        // by converting SizeTieredCompactionStrategy::trimToThresholdWithHotness.
+        // By the time being, we will only compact buckets that meet the threshold.
+        if (bucket.size() >= min_threshold && bucket.size() <= max_threshold) {
+            auto avg = avg_size(bucket);
+            pruned_buckets_and_hotness.push_back({ std::move(bucket), avg });
+        }
+    }
+
+    if (pruned_buckets_and_hotness.empty()) {
+        return std::vector<sstables::shared_sstable>();
+    }
+
+    // NOTE: Compacting smallest sstables first, located at the beginning of the sorted vector.
+    auto& min = *std::min_element(pruned_buckets_and_hotness.begin(), pruned_buckets_and_hotness.end(), [] (auto& i, auto& j) {
+        // FIXME: ignoring hotness by the time being.
+
+        return i.second < j.second;
+    });
+    auto hottest = std::move(min.first);
+
+    return hottest;
+}
+
+future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
+    // make local copies so they can't be changed out from under us mid-method
+    // FIXME: instead, we should get these values from column family.
+    int min_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
+    int max_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
+
+    auto candidates = cfs.get_sstables();
+
+    // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
+
+    auto buckets = get_buckets(*candidates);
+
+    std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
+#ifdef __DEBUG__
+    printf("size-tiered: Compacting %ld out of %ld sstables\n", most_interesting.size(), candidates->size());
+#endif
+    if (most_interesting.empty()) {
+        // nothing to do
+        return make_ready_future<>();
+    }
+
+    return cfs.compact_sstables(std::move(most_interesting));
+}
+
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
 compaction_strategy::compaction_strategy() = default;
@@ -132,6 +328,9 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy) 
         break;
     case compaction_strategy_type::major:
         impl = make_shared<major_compaction_strategy>(major_compaction_strategy());
+        break;
+    case compaction_strategy_type::size_tiered:
+        impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy());
         break;
     default:
         throw std::runtime_error("strategy not supported");
