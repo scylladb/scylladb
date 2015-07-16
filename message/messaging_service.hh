@@ -12,7 +12,6 @@
 #include "net/api.hh"
 #include "util/serialization.hh"
 #include "gms/inet_address.hh"
-#include "rpc/rpc.hh"
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
 #include "db/config.hh"
