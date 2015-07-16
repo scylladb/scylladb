@@ -22,6 +22,11 @@ using inet_address = gms::inet_address;
 using gossip_digest_syn = gms::gossip_digest_syn;
 using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
+using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
+
+struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
+struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
+struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
     bytes b(bytes::initialized_later(), sizeof(v));

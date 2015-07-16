@@ -294,10 +294,9 @@ public:
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
 
-    using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
-    struct rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
-    struct rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
-    struct rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
+    struct rpc_protocol_wrapper;
+    struct rpc_protocol_client_wrapper;
+    struct rpc_protocol_server_wrapper;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
