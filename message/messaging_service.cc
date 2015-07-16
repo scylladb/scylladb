@@ -12,6 +12,8 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
+#include "query-request.hh"
+#include "query-result.hh"
 
 namespace net {
 
@@ -282,6 +284,13 @@ void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (
 }
 future<> messaging_service::send_mutation_done(shard_id id, unsigned shard, response_id_type response_id) {
     return send_message_oneway(messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
+}
+
+void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
+    register_handler(net::messaging_verb::READ_DATA, std::move(func));
+}
+future<query::result> messaging_service::send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+    return send_message<query::result>(messaging_verb::READ_DATA, std::move(id), cmd, pr);
 }
 
 } // namespace net

@@ -1480,8 +1480,8 @@ protected:
             return _proxy.query_singular_local(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message<query::result>(net::messaging_verb::READ_DATA, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
-                    return make_foreign(::make_lw_shared<query::result>(std::move(result)));
+            return ms.send_read_data(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
+                return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
         }
     }
@@ -2824,7 +2824,7 @@ void storage_proxy::init_messaging_service() {
         });
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::READ_DATA, [this] (query::read_command cmd, query::partition_range pr) {
+    ms.register_read_data([this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
             return query_singular_local(cmd, pr);
         });

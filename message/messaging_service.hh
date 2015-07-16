@@ -418,6 +418,11 @@ public:
     void register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func);
     future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
 
+    // Wrapper for READ_DATA
+    // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
+    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    future<query::result> send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     rpc_protocol_client_wrapper& get_rpc_client(shard_id id);
