@@ -999,6 +999,20 @@ reactor::register_collectd_metrics() {
                 scollectd::make_typed(scollectd::data_type::GAUGE,
                         [] { return memory::stats().live_objects(); })
             ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "memory", "free_memory"),
+                scollectd::make_typed(scollectd::data_type::GAUGE,
+                        [] { return memory::stats().free_memory(); })
+            ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "total_operations", "reclaims"),
+                scollectd::make_typed(scollectd::data_type::DERIVE,
+                        [] { return memory::stats().reclaims(); })
+            ),
     } };
 }
 
