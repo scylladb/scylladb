@@ -757,7 +757,12 @@ void database::drop_keyspace(const sstring& name) {
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     auto uuid = schema->id();
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog);
+    lw_shared_ptr<column_family> cf;
+    if (_commitlog) {
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog);
+    } else {
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog());
+    }
     auto ks = _keyspaces.find(schema->ks_name());
     if (ks == _keyspaces.end()) {
         throw std::invalid_argument("Keyspace " + schema->ks_name() + " not defined");
