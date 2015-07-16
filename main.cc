@@ -36,13 +36,16 @@ void do_help_loggers() {
     }
 }
 
-void apply_logger_settings(sstring default_level, db::config::string_map levels) {
+void apply_logger_settings(sstring default_level, db::config::string_map levels,
+        bool log_to_stdout, bool log_to_syslog) {
     logging::logger_registry().set_all_loggers_level(boost::lexical_cast<logging::log_level>(std::string(default_level)));
     for (auto&& kv: levels) {
         auto&& k = kv.first;
         auto&& v = kv.second;
         logging::logger_registry().set_logger_level(k, boost::lexical_cast<logging::log_level>(std::string(v)));
     }
+    logging::logger::set_stdout_enabled(log_to_stdout);
+    logging::logger::set_syslog_enabled(log_to_syslog);
 }
 
 int main(int ac, char** av) {
@@ -75,7 +78,8 @@ int main(int ac, char** av) {
         auto&& opts = app.configuration();
 
         return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &opts]() {
-            apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level());
+            apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
+                    cfg->log_to_stdout(), cfg->log_to_syslog());
             dht::set_global_partitioner(cfg->partitioner());
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
