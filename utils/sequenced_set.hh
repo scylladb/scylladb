@@ -39,6 +39,10 @@ struct sequenced_set {
         return _vec;
     }
 
+    std::vector<T>& get_vector() {
+        return _vec;
+    }
+
     void reserve(size_t sz) {
         _set.reserve(sz);
         _vec.reserve(sz);
