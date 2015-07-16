@@ -138,6 +138,10 @@ messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol_client_wr
     : rpc_client(std::move(client)) {
 }
 
+rpc::stats messaging_service::shard_info::get_stats() const {
+    return rpc_client->get_stats();
+}
+
 void messaging_service::foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const {
     for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
         f(i->first, i->second);

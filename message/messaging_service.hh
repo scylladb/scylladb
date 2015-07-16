@@ -305,6 +305,7 @@ public:
     struct shard_info {
         shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client);
         std::unique_ptr<rpc_protocol_client_wrapper> rpc_client;
+        rpc::stats get_stats() const;
     };
 
     void foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const;
