@@ -423,6 +423,10 @@ public:
     void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     future<query::result> send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
+    // Wrapper for READ_MUTATION_DATA
+    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    future<reconcilable_result> send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     rpc_protocol_client_wrapper& get_rpc_client(shard_id id);
