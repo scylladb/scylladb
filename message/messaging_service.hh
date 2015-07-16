@@ -14,7 +14,6 @@
 #include "gms/inet_address.hh"
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
-#include "db/config.hh"
 #include "frozen_mutation.hh"
 #include "query-request.hh"
 #include "db/serializer.hh"
@@ -36,6 +35,10 @@ class frozen_mutation;
 
 namespace utils {
     class UUID;
+}
+
+namespace db {
+class seed_provider_type;
 }
 
 namespace net {
@@ -411,5 +414,5 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
-future<> init_messaging_service(sstring listen_address, db::config::seed_provider_type seed_provider);
+future<> init_messaging_service(sstring listen_address, db::seed_provider_type seed_provider);
 } // namespace net

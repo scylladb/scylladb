@@ -41,6 +41,7 @@
 #include "db/serializer.hh"
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
+#include "db/config.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 

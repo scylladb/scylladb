@@ -34,6 +34,7 @@
 #include "db_clock.hh"
 #include "database.hh"
 #include "unimplemented.hh"
+#include "db/config.hh"
 
 static logging::logger logger("BatchLog Manager");
 

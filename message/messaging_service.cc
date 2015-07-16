@@ -15,6 +15,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "rpc/rpc.hh"
+#include "db/config.hh"
 
 namespace net {
 
@@ -85,7 +86,7 @@ future<> deinit_messaging_service() {
     });
 }
 
-future<> init_messaging_service(sstring listen_address, db::config::seed_provider_type seed_provider) {
+future<> init_messaging_service(sstring listen_address, db::seed_provider_type seed_provider) {
     const gms::inet_address listen(listen_address);
     std::set<gms::inet_address> seeds;
     if (seed_provider.parameters.count("seeds") > 0) {

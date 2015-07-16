@@ -37,6 +37,7 @@
 #include "storage_service.hh"
 #include "core/future-util.hh"
 #include "db/read_repair_decision.hh"
+#include "db/config.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/iterator/counting_iterator.hpp>
