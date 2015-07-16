@@ -152,14 +152,14 @@ class marshal_exception : public std::exception {
 public:
     marshal_exception() : _why("marshalling error") {}
     marshal_exception(sstring why) : _why(sstring("marshaling error: ") + why) {}
-    virtual const char* why() const { return _why.c_str(); }
+    virtual const char* what() const noexcept override { return _why.c_str(); }
 };
 
 struct runtime_exception : public std::exception {
     sstring _why;
 public:
     runtime_exception(sstring why) : _why(sstring("runtime error: ") + why) {}
-    virtual const char* why() const { return _why.c_str(); }
+    virtual const char* what() const noexcept override { return _why.c_str(); }
 };
 
 inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
