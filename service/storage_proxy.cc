@@ -1091,8 +1091,8 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
         } else {
             auto response_id_ = response_id; // make local copy since capture is reused
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
-                    engine().cpu_id(), std::move(response_id_));
+            return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
+                std::move(forward), my_address, engine().cpu_id(), response_id_);
         }
     }).finally([mptr] {
         // make mutation alive until it is sent or processed locally, otherwise it
@@ -1470,7 +1470,7 @@ protected:
             return _proxy.query_mutations_locally(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message<reconcilable_result>(net::messaging_verb::READ_MUTATION_DATA, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](reconcilable_result&& result) {
+            return ms.send_read_mutation_data(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](reconcilable_result&& result) {
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
         }
@@ -1480,8 +1480,8 @@ protected:
             return _proxy.query_singular_local(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message<query::result>(net::messaging_verb::READ_DATA, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
-                    return make_foreign(::make_lw_shared<query::result>(std::move(result)));
+            return ms.send_read_data(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
+                return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
         }
     }
@@ -1490,7 +1490,7 @@ protected:
             return _proxy.query_singular_local_digest(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message<query::result_digest>(net::messaging_verb::READ_DIGEST, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
+            return ms.send_read_digest(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
         }
     }
     future<> make_mutation_data_requests(data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
@@ -2785,7 +2785,7 @@ bool storage_proxy::should_hint(gms::inet_address ep) {
 
 void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
-    ms.register_handler(net::messaging_verb::DEFINITIONS_UPDATE, [this] (std::vector<frozen_mutation> m) {
+    ms.register_definitions_update( [this] (std::vector<frozen_mutation> m) {
         do_with(std::move(m), [this] (const std::vector<frozen_mutation>& mutations) mutable {
             std::vector<mutation> schema;
             for (auto& m : mutations) {
@@ -2796,12 +2796,12 @@ void storage_proxy::init_messaging_service() {
         }).discard_result();
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation([this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
             return when_all(
                     mutate_locally(m).then([reply_to, shard, response_id] () mutable {
                 auto& ms = net::get_local_messaging_service();
-                ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
+                ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id);
                 // return void, no need to wait for send to complete
             }),
             parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
@@ -2811,31 +2811,30 @@ void storage_proxy::init_messaging_service() {
                 auto reply_to_ = reply_to;
                 auto shard_ = shard;
                 auto response_id_ = response_id;
-                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(),
-                        std::move(reply_to_), std::move(shard_), std::move(response_id_));
+                return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to_, shard_, response_id_);
             })
             );
         }).discard_result();
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::MUTATION_DONE, [this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation_done([this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
         gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
         smp::submit_to(shard, [this, from, response_id] {
             got_response(response_id, from);
         });
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::READ_DATA, [this] (query::read_command cmd, query::partition_range pr) {
+    ms.register_read_data([this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
             return query_singular_local(cmd, pr);
         });
     });
-    ms.register_handler(net::messaging_verb::READ_MUTATION_DATA, [this] (query::read_command cmd, query::partition_range pr) {
+    ms.register_read_mutation_data([this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
             return query_mutations_locally(cmd, pr);
         });
     });
-    ms.register_handler(net::messaging_verb::READ_DIGEST, [this] (query::read_command cmd, query::partition_range pr) {
+    ms.register_read_digest([this] (query::read_command cmd, query::partition_range pr) {
         return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
             return query_singular_local_digest(cmd, pr);
         });

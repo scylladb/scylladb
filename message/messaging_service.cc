@@ -8,8 +8,25 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "streaming/messages/stream_init_message.hh"
+#include "streaming/messages/prepare_message.hh"
+#include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest_ack.hh"
+#include "gms/gossip_digest_ack2.hh"
+#include "query-request.hh"
+#include "query-result.hh"
+#include "rpc/rpc.hh"
 
 namespace net {
+
+using inet_address = gms::inet_address;
+using gossip_digest_syn = gms::gossip_digest_syn;
+using gossip_digest_ack = gms::gossip_digest_ack;
+using gossip_digest_ack2 = gms::gossip_digest_ack2;
+using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
+
+struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
+struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
+struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
     bytes b(bytes::initialized_later(), sizeof(v));
@@ -126,6 +143,10 @@ messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol_client_wr
     : rpc_client(std::move(client)) {
 }
 
+rpc::stats messaging_service::shard_info::get_stats() const {
+    return rpc_client->get_stats();
+}
+
 void messaging_service::foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const {
     for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
         f(i->first, i->second);
@@ -160,6 +181,8 @@ messaging_service::messaging_service(gms::inet_address ip)
     , _rpc(new rpc_protocol_wrapper(serializer{}))
     , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
 }
+
+messaging_service::~messaging_service() = default;
 
 uint16_t messaging_service::port() {
     return _port;
@@ -197,12 +220,140 @@ void messaging_service::remove_rpc_client(shard_id id) {
     _clients.erase(id);
 }
 
-future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id) {
-    return send_message<unsigned>(messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg), std::move(src_cpu_id));
+std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {
+    return _rpc;
 }
 
+// Register a handler (a callback lambda) for verb
+template <typename Func>
+void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
+    ms->rpc()->register_handler(verb, std::move(func));
+}
+
+// Send a message for verb
+template <typename MsgIn, typename... MsgOut>
+auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
+    auto& rpc_client = ms->get_rpc_client(id);
+    auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
+    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb] (auto&& f) {
+        try {
+            if (f.failed()) {
+                ms->increment_dropped_messages(verb);
+                f.get();
+                assert(false); // never reached
+            }
+            return std::move(f);
+        } catch(...) {
+            // FIXME: we need to distinguish between a transport error and
+            // a server error.
+            // remove_rpc_client(id);
+            throw;
+        }
+    });
+}
+
+// Send one way message for verb
+template <typename... MsgOut>
+auto send_message_oneway(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
+    return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
+}
+
+// Wrappers for verbs
 void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
-    register_handler(messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
+    register_handler(this, messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
+}
+future<unsigned> messaging_service::send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id) {
+    return send_message<unsigned>(this, messaging_verb::STREAM_INIT_MESSAGE, std::move(id), std::move(msg), std::move(src_cpu_id));
+}
+
+void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
+    inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
+    register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
+}
+future<streaming::messages::prepare_message> messaging_service::send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
+    inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+    return send_message<streaming::messages::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, std::move(id), std::move(msg),
+            std::move(plan_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
+}
+
+void messaging_service::register_stream_mutation(std::function<future<> (frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
+    register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
+}
+future<> messaging_service::send_stream_mutation(shard_id id, frozen_mutation fm, unsigned dst_cpu_id) {
+    return send_message<void>(this, messaging_verb::STREAM_MUTATION, std::move(id), std::move(fm), std::move(dst_cpu_id));
+}
+
+void messaging_service::register_echo(std::function<future<> ()>&& func) {
+    register_handler(this, messaging_verb::ECHO, std::move(func));
+}
+future<> messaging_service::send_echo(shard_id id) {
+    return send_message<void>(this, messaging_verb::ECHO, std::move(id));
+}
+
+void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
+}
+future<> messaging_service::send_gossip_shutdown(shard_id id, inet_address from) {
+    return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
+}
+
+void messaging_service::register_gossip_digest_syn(std::function<future<gossip_digest_ack> (gossip_digest_syn)>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
+}
+future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(shard_id id, gossip_digest_syn msg) {
+    return send_message<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
+}
+
+void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
+}
+future<> messaging_service::send_gossip_digest_ack2(shard_id id, gossip_digest_ack2 msg) {
+    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
+}
+
+void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func) {
+    register_handler(this, net::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
+}
+future<> messaging_service::send_definitions_update(shard_id id, std::vector<frozen_mutation> fm) {
+    return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
+}
+
+void messaging_service::register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+    inet_address reply_to, unsigned shard, response_id_type response_id)>&& func) {
+    register_handler(this, net::messaging_verb::MUTATION, std::move(func));
+}
+future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+    inet_address reply_to, unsigned shard, response_id_type response_id) {
+    return send_message_oneway(this, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
+        std::move(reply_to), std::move(shard), std::move(response_id));
+}
+
+void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func) {
+    register_handler(this, net::messaging_verb::MUTATION_DONE, std::move(func));
+}
+future<> messaging_service::send_mutation_done(shard_id id, unsigned shard, response_id_type response_id) {
+    return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
+}
+
+void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
+    register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
+}
+future<query::result> messaging_service::send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+    return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
+}
+
+void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
+    register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
+}
+future<reconcilable_result> messaging_service::send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+    return send_message<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
+}
+
+void messaging_service::register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func) {
+    register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
+}
+future<query::result_digest> messaging_service::send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+    return send_message<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
 }
 
 } // namespace net

@@ -61,7 +61,7 @@ void stream_transfer_task::start() {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
                 sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-                return session->ms().send_message<void>(messaging_verb::STREAM_MUTATION, id, *fm, session->dst_cpu_id).then([this, fm] {
+                return session->ms().send_stream_mutation(id, *fm, session->dst_cpu_id).then([this, fm] {
                     sslog.debug("GOT STREAM_MUTATION Reply");
                     return stop_iteration::no;
                 });

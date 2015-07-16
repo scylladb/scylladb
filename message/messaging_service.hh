@@ -12,7 +12,7 @@
 #include "net/api.hh"
 #include "util/serialization.hh"
 #include "gms/inet_address.hh"
-#include "rpc/rpc.hh"
+#include "rpc/rpc_types.hh"
 #include <unordered_map>
 #include "db/config.hh"
 #include "frozen_mutation.hh"
@@ -23,7 +23,20 @@
 // forward declarations
 namespace streaming { namespace messages {
     class stream_init_message;
+    class prepare_message;
 }}
+
+namespace gms {
+    class gossip_digest_syn;
+    class gossip_digest_ack;
+    class gossip_digest_ack2;
+}
+
+class frozen_mutation;
+
+namespace utils {
+    class UUID;
+}
 
 namespace net {
 
@@ -277,11 +290,12 @@ struct shard_id {
 class messaging_service {
 public:
     using shard_id = net::shard_id;
+    using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
 
-    using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
-    struct rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
-    struct rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
-    struct rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
+    struct rpc_protocol_wrapper;
+    struct rpc_protocol_client_wrapper;
+    struct rpc_protocol_server_wrapper;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
@@ -289,6 +303,7 @@ public:
     struct shard_info {
         shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client);
         std::unique_ptr<rpc_protocol_client_wrapper> rpc_client;
+        rpc::stats get_stats() const;
     };
 
     void foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const;
@@ -313,53 +328,77 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
+    ~messaging_service();
 public:
     uint16_t port();
     gms::inet_address listen_address();
     future<> stop();
     static rpc::no_wait_type no_wait();
 public:
-    // Register a handler (a callback lambda) for verb
-    template <typename Func>
-    void register_handler(messaging_verb verb, Func&& func) {
-        _rpc->register_handler(verb, std::move(func));
-    }
-
-    // Send a message for verb
-    template <typename MsgIn, typename... MsgOut>
-    auto send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
-        auto& rpc_client = get_rpc_client(id);
-        auto rpc_handler = _rpc->make_client<MsgIn(MsgOut...)>(verb);
-        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id, verb] (auto&& f) {
-            try {
-                if (f.failed()) {
-                    this->increment_dropped_messages(verb);
-                    f.get();
-                    assert(false); // never reached
-                }
-                return std::move(f);
-            } catch(...) {
-                // FIXME: we need to distinguish between a transport error and
-                // a server error.
-                // remove_rpc_client(id);
-                throw;
-            }
-        });
-    }
-
-    template <typename... MsgOut>
-    auto send_message_oneway(messaging_verb verb, shard_id id, MsgOut&&... msg) {
-        return send_message<rpc::no_wait_type>(std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
-    }
-
-    // Wrapper fro STREAM_INIT_MESSAGE verb
-    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message&& msg, unsigned src_cpu_id);
+    // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
+    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
 
-private:
+    // Wrapper for PREPARE_MESSAGE verb
+    void register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
+        inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
+        inet_address from, inet_address connecting, unsigned dst_cpu_id);
+
+    // Wrapper for STREAM_MUTATION verb
+    void register_stream_mutation(std::function<future<> (frozen_mutation fm, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation(shard_id id, frozen_mutation fm, unsigned dst_cpu_id);
+
+    // Wrapper for ECHO verb
+    void register_echo(std::function<future<> ()>&& func);
+    future<> send_echo(shard_id id);
+
+    // Wrapper for GOSSIP_SHUTDOWN
+    void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
+    future<> send_gossip_shutdown(shard_id id, inet_address from);
+
+    // Wrapper for GOSSIP_DIGEST_SYN
+    void register_gossip_digest_syn(std::function<future<gms::gossip_digest_ack> (gms::gossip_digest_syn)>&& func);
+    future<gms::gossip_digest_ack> send_gossip_digest_syn(shard_id id, gms::gossip_digest_syn msg);
+
+    // Wrapper for GOSSIP_DIGEST_ACK2
+    void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
+    future<> send_gossip_digest_ack2(shard_id id, gms::gossip_digest_ack2 msg);
+
+    // Wrapper for DEFINITIONS_UPDATE
+    void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
+    future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
+
+    // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
+    using response_id_type = uint64_t;
+    // Wrapper for MUTATION
+    void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
+    future<> send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id);
+
+    // Wrapper for MUTATION_DONE
+    void register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func);
+    future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
+
+    // Wrapper for READ_DATA
+    // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
+    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    future<query::result> send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+
+    // Wrapper for READ_MUTATION_DATA
+    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    future<reconcilable_result> send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+
+    // Wrapper for READ_DIGEST
+    void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
+    future<query::result_digest> send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr);
+
+public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     rpc_protocol_client_wrapper& get_rpc_client(shard_id id);
     void remove_rpc_client(shard_id id);
+    std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 
 extern distributed<messaging_service> _the_messaging_service;
