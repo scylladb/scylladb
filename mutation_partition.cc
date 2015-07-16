@@ -198,14 +198,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
-    if (r.is_full()) {
-        return boost::make_iterator_range(_rows.cbegin(), _rows.cend());
-    }
     auto cmp = rows_entry::key_comparator(clustering_key::prefix_equality_less_compare(schema));
-    if (r.is_singular()) {
-        auto&& prefix = r.start()->value();
-        return boost::make_iterator_range(_rows.lower_bound(prefix, cmp), _rows.upper_bound(prefix, cmp));
-    }
     auto i1 = r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
             : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();
