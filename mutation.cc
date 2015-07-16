@@ -111,3 +111,8 @@ size_t
 mutation::live_row_count(gc_clock::time_point query_time) const {
     return _p.live_row_count(*_schema, query_time);
 }
+
+bool
+mutation_decorated_key_less_comparator::operator()(const mutation& m1, const mutation& m2) const {
+    return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
+}

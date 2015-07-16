@@ -50,6 +50,10 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
+struct mutation_decorated_key_less_comparator {
+    bool operator()(const mutation& m1, const mutation& m2) const;
+};
+
 using mutation_opt = std::experimental::optional<mutation>;
 
 inline
