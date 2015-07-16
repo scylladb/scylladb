@@ -4,6 +4,7 @@
 
 #include "messaging_service.hh"
 #include "message/messaging_service.hh"
+#include "rpc/rpc_types.hh"
 #include "api/api-doc/messaging_service.json.hh"
 #include <iostream>
 #include <sstream>
@@ -12,7 +13,10 @@ using namespace httpd::messaging_service_json;
 using namespace net;
 
 namespace api {
-using client = rpc::protocol<serializer, messaging_verb>::client;
+
+using shard_info = messaging_service::shard_info;
+using shard_id = messaging_service::shard_id;
+
 static const int32_t num_verb = static_cast<int32_t>(messaging_verb::UNUSED_3) + 1;
 
 std::vector<message_counter> map_to_message_counters(
@@ -32,15 +36,14 @@ std::vector<message_counter> map_to_message_counters(
  * according to a function that it gets as a parameter.
  *
  */
-future_json_function get_client_getter(std::function<uint64_t(const client&)> f) {
+future_json_function get_client_getter(std::function<uint64_t(const shard_info&)> f) {
     return [f](std::unique_ptr<request> req) {
         using map_type = std::unordered_map<gms::inet_address, uint64_t>;
         auto get_shard_map = [f](messaging_service& ms) {
             std::unordered_map<gms::inet_address, unsigned long> map;
-            ms.foreach_client([&map, f] (const messaging_service::shard_id& id,
-                            const messaging_service::shard_info& info) {
-                        map[id.addr] = f(*info.rpc_client.get());
-                    });
+            ms.foreach_client([&map, f] (const shard_id& id, const shard_info& info) {
+                map[id.addr] = f(info);
+            });
             return map;
         };
         return  get_messaging_service().map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
@@ -52,19 +55,19 @@ future_json_function get_client_getter(std::function<uint64_t(const client&)> f)
 
 void set_messaging_service(http_context& ctx, routes& r) {
 
-    get_sent_messages.set(r, get_client_getter([](const client& c) {
+    get_sent_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().sent_messages;
     }));
 
-    get_exception_messages.set(r, get_client_getter([](const client& c) {
+    get_exception_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().exception_received;
     }));
 
-    get_pending_messages.set(r, get_client_getter([](const client& c) {
+    get_pending_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().pending;
     }));
 
-    get_respond_pending_messages.set(r, get_client_getter([](const client& c) {
+    get_respond_pending_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().wait_reply;
     }));
 
