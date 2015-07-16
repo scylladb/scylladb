@@ -1,3 +1,4 @@
+#if 0
 #include "core/reactor.hh"
 #include "core/app-template.hh"
 #include "core/sstring.hh"
@@ -224,3 +225,5 @@ int main(int ac, char ** av) {
         });
     });
 }
+#endif
+int main(int ac, char ** av) {}
