@@ -97,6 +97,7 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
+public:
     gms::versioned_value::versioned_value_factory value_factory;
 #if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());

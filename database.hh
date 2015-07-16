@@ -10,6 +10,7 @@
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/UUID.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
@@ -329,6 +330,7 @@ class database {
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
+    utils::UUID _version;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
@@ -343,11 +345,17 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable);
 
 public:
+    static utils::UUID empty_version;
+
     future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
     database(const db::config&);
     database(database&&) = default;
     ~database();
+
+    void update_version(const utils::UUID& version);
+
+    const utils::UUID& get_version() const;
 
     db::commitlog* commitlog() const {
         return _commitlog.get();

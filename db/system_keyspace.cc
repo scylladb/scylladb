@@ -416,8 +416,8 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     auto new_ctx = std::make_unique<query_context>(db, qp);
     qctx.swap(new_ctx);
     assert(!new_ctx);
-    return setup_version().then([] {
-        return update_schema_version(utils::make_random_uuid()); // FIXME: should not be random
+    return setup_version().then([&db] {
+        return update_schema_version(db.local().get_version());
     }).then([] {
         return build_dc_rack_info();
     }).then([] {
@@ -1152,6 +1152,15 @@ future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info() {
     return _local_cache.local()._cached_dc_rack_info;
+}
+
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+query_mutations(service::storage_proxy& proxy, const sstring& cf_name) {
+    database& db = proxy.get_db().local();
+    schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
+    auto slice = partition_slice_builder(*schema).build();
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
+    return proxy.query_mutations_locally(cmd, query::full_partition_range);
 }
 
 future<lw_shared_ptr<query::result_set>>

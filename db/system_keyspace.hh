@@ -82,6 +82,9 @@ future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
 
+future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
+query_mutations(service::storage_proxy& proxy, const sstring& cf_name);
+
 // Returns all data from given system table.
 // Intended to be used by code which is not performance critical.
 future<lw_shared_ptr<query::result_set>> query(service::storage_proxy& proxy, const sstring& cf_name);

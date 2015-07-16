@@ -108,7 +108,9 @@ public:
     /**
      * Creates a type 3 (name based) UUID based on the specified byte array.
      */
+    static UUID get_name_UUID(bytes_view b);
     static UUID get_name_UUID(sstring_view str);
+    static UUID get_name_UUID(const unsigned char* s, size_t len);
 
     /** decomposes a uuid into raw bytes. */
     static std::array<int8_t, 16> decompose(const UUID& uuid)

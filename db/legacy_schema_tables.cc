@@ -24,10 +24,11 @@
 #include "utils/UUID_gen.hh"
 #include "legacy_schema_tables.hh"
 
+#include "service/migration_manager.hh"
+#include "partition_slice_builder.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
 #include "query_context.hh"
-
 #include "query-result-set.hh"
 #include "schema_builder.hh"
 #include "map_difference.hh"
@@ -313,40 +314,46 @@ future<> save_system_keyspace_schema() {
         for (String table : ALL)
             SystemKeyspace.forceBlockingFlush(table);
     }
+#endif
 
     /**
      * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
      * will be converted into UUID which would act as content-based version of the schema.
      */
-    public static UUID calculateSchemaDigest()
+    future<utils::UUID> calculate_schema_digest(service::storage_proxy& proxy)
     {
-        MessageDigest digest;
-        try
-        {
-            digest = MessageDigest.getInstance("MD5");
-        }
-        catch (NoSuchAlgorithmException e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        for (String table : ALL)
-        {
-            for (Row partition : getSchemaPartitionsForTable(table))
-            {
-                if (isEmptySchemaPartition(partition) || isSystemKeyspaceSchemaPartition(partition))
-                    continue;
-
-                // we want to digest only live columns
-                ColumnFamilyStore.removeDeletedColumnsOnly(partition.cf, Integer.MAX_VALUE, SecondaryIndexManager.nullUpdater);
-                partition.cf.purgeTombstones(Integer.MAX_VALUE);
-                partition.cf.updateDigest(digest);
+        auto map = [&proxy] (sstring table) {
+            return db::system_keyspace::query_mutations(proxy, table).then([&proxy, table] (auto rs) {
+                auto s = proxy.get_db().local().find_schema(system_keyspace::NAME, table);
+                std::vector<query::result> results;
+                for (auto&& p : rs->partitions()) {
+                    auto mut = p.mut().unfreeze(s);
+                    auto partition_key = boost::any_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+                    if (partition_key == system_keyspace::NAME) {
+                        continue;
+                    }
+                    auto slice = partition_slice_builder(*s).build();
+                    results.emplace_back(mut.query(slice));
+                }
+                return results;
+            });
+        };
+        auto reduce = [] (auto&& hash, auto&& results) {
+            for (auto&& rs : results) {
+                for (auto&& f : rs.buf().fragments()) {
+                    hash->Update(reinterpret_cast<const unsigned char*>(f.begin()), f.size());
+                }
             }
-        }
-
-        return UUID.nameUUIDFromBytes(digest.digest());
+            return std::move(hash);
+        };
+        return map_reduce(ALL.begin(), ALL.end(), map, std::move(std::make_unique<CryptoPP::Weak::MD5>()), reduce).then([] (auto&& hash) {
+            bytes digest{bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE};
+            hash->Final(reinterpret_cast<unsigned char*>(digest.begin()));
+            return utils::UUID_gen::get_name_UUID(digest);
+        });
     }
 
+#if 0
     /**
      * @param schemaTableName The name of the table responsible for part of the schema
      * @return CFS responsible to hold low-level serialized schema
@@ -466,11 +473,17 @@ future<> save_system_keyspace_schema() {
      */
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
     {
-        return merge_schema(proxy, std::move(mutations), true).then([] {
-#if 0
-            Schema.instance.updateVersionAndAnnounce();
-#endif
-            return make_ready_future<>();
+        return merge_schema(proxy, std::move(mutations), true).then([&proxy] {
+            return calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
+                return proxy.get_db().invoke_on_all([uuid] (database& db) {
+                    db.update_version(uuid);
+                    return make_ready_future<>();
+                }).then([uuid] {
+                    return db::system_keyspace::update_schema_version(uuid).then([uuid] {
+                        return service::migration_manager::passive_announce(uuid);
+                    });
+                });
+            });
         });
     }
 
