@@ -161,6 +161,8 @@ messaging_service::messaging_service(gms::inet_address ip)
     , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
 }
 
+messaging_service::~messaging_service() = default;
+
 uint16_t messaging_service::port() {
     return _port;
 }

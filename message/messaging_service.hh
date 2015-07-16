@@ -313,6 +313,7 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
+    ~messaging_service();
 public:
     uint16_t port();
     gms::inet_address listen_address();
