@@ -13,6 +13,7 @@
 #include "util/serialization.hh"
 #include "gms/inet_address.hh"
 #include "rpc/rpc.hh"
+#include "rpc/rpc_types.hh"
 #include <unordered_map>
 #include "db/config.hh"
 #include "frozen_mutation.hh"
@@ -36,10 +37,6 @@ class frozen_mutation;
 
 namespace utils {
     class UUID;
-}
-
-namespace rpc {
-    class client_info;
 }
 
 namespace net {
