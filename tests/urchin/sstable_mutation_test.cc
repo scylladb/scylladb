@@ -253,7 +253,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_absent(row2.cells(), *s, "reg_set");
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_list");
- 
+
         return make_ready_future<>();
     });
 }
@@ -414,29 +414,17 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     return [rd = make_lw_shared(std::move(rd))] () mutable { return rd->read(); };
 }
 
+// partitions must be sorted by decorated key
 static
-std::vector<mutation> get_partitions_in_order_with_distinct_tokens(schema_ptr s, const memtable& mt) {
-    std::vector<mutation> result;
-    size_t token_duplicates = 0;
+void require_no_token_duplicates(const std::vector<mutation>& partitions) {
     std::experimental::optional<dht::token> last_token;
-
-    for (auto&& p : mt.all_partitions()) {
-        const dht::decorated_key& key = p.first;
-        const mutation_partition& partition = p.second;
-        // Filter token duplicates. Should be rare, but we rely on not having them
-        if (!last_token || key.token() != *last_token) {
-            result.emplace_back(s, key, partition);
-        } else {
-            ++token_duplicates;
+    for (auto&& p : partitions) {
+        const dht::decorated_key& key = p.decorated_key();
+        if (last_token && key.token() == *last_token) {
+            BOOST_FAIL("token duplicate detected");
         }
         last_token = key.token();
     }
-
-    if (token_duplicates) {
-        BOOST_MESSAGE(sprint("token duplicates: %d", token_duplicates));
-    }
-
-    return result;
 }
 
 SEASTAR_TEST_CASE(test_range_reads_on_large_sstable) {
@@ -467,54 +455,112 @@ SEASTAR_TEST_CASE(test_range_reads_on_large_sstable) {
                 make_partition_mutation(to_bytes(sprint("key_%d", i))));
         }
 
+        std::sort(partitions.begin(), partitions.end(), mutation_decorated_key_less_comparator());
+        require_no_token_duplicates(partitions);
+
+        dht::decorated_key key_before_all = partitions.front().decorated_key();
+        partitions.erase(partitions.begin());
+
+        dht::decorated_key key_after_all = partitions.back().decorated_key();
+        partitions.pop_back();
+
         auto mt = make_lw_shared<memtable>(s);
 
         for (auto&& m : partitions) {
             mt->apply(m);
         }
 
-        std::vector<mutation> ordered_partitions =
-            get_partitions_in_order_with_distinct_tokens(s, *mt);
-
         sst->write_components(*mt).get();
         sst->load().get();
 
-        auto query_range = query::partition_range::make_ending_with({
-            ordered_partitions[ordered_partitions.size() - 1].decorated_key()});
-
-        auto test_slice = [&] (size_t min_index, size_t max_index) {
-            BOOST_MESSAGE(sprint("Testing range [%d, %d]", min_index, max_index));
-
-            auto reader = as_mutation_reader(sst->read_range_rows(s,
-                ordered_partitions[min_index].token(),
-                ordered_partitions[max_index].token()));
-
-            assert_that(reader)
-                .produces(std::vector<mutation>(
-                    ordered_partitions.begin() + min_index,
-                    ordered_partitions.begin() + max_index + 1))
+        auto test_slice = [&] (query::range<dht::ring_position> r) {
+            BOOST_MESSAGE(sprint("Testing range %s", r));
+            assert_that(as_mutation_reader(sst->read_range_rows(s, r)))
+                .produces(slice(partitions, r))
                 .produces_end_of_stream();
         };
 
-        test_slice(0, 0);
-        test_slice(1, 1);
-        test_slice(2, 4);
-        test_slice(4, 8);
-        test_slice(8, 16);
-        test_slice(127, 128);
-        test_slice(128, 128);
-        test_slice(128, 129);
-        test_slice(127, 129);
-        test_slice(ordered_partitions.size() - 1, ordered_partitions.size() - 1);
+        auto inclusive_token_range = [&] (size_t start, size_t end) {
+            return query::partition_range::make(
+                {partitions[start].token(), true},
+                {partitions[end].token(), true});
+        };
 
-        test_slice(0, ordered_partitions.size() - 1);
-        test_slice(0, ordered_partitions.size() - 2);
-        test_slice(0, ordered_partitions.size() - 3);
-        test_slice(0, ordered_partitions.size() - 128);
+        test_slice(query::partition_range::make(
+            {key_before_all, true}, {partitions.front().decorated_key(), true}));
 
-        test_slice(1, ordered_partitions.size() - 1);
-        test_slice(2, ordered_partitions.size() - 1);
-        test_slice(3, ordered_partitions.size() - 1);
-        test_slice(128, ordered_partitions.size() - 1);
+        test_slice(query::partition_range::make(
+            {key_before_all, false}, {partitions.front().decorated_key(), true}));
+
+        test_slice(query::partition_range::make(
+            {key_before_all, false}, {partitions.front().decorated_key(), false}));
+
+        test_slice(query::partition_range::make(
+            {key_before_all.token(), true}, {partitions.front().token(), true}));
+
+        test_slice(query::partition_range::make(
+            {key_before_all.token(), false}, {partitions.front().token(), true}));
+
+        test_slice(query::partition_range::make(
+            {key_before_all.token(), false}, {partitions.front().token(), false}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().decorated_key(), true}, {key_after_all, true}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().decorated_key(), true}, {key_after_all, false}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().decorated_key(), false}, {key_after_all, false}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().token(), true}, {key_after_all.token(), true}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().token(), true}, {key_after_all.token(), false}));
+
+        test_slice(query::partition_range::make(
+            {partitions.back().token(), false}, {key_after_all.token(), false}));
+
+        test_slice(query::partition_range::make(
+            {partitions[0].decorated_key(), false},
+            {partitions[1].decorated_key(), true}));
+
+        test_slice(query::partition_range::make(
+            {partitions[0].decorated_key(), true},
+            {partitions[1].decorated_key(), false}));
+
+        test_slice(query::partition_range::make(
+            {partitions[1].decorated_key(), true},
+            {partitions[3].decorated_key(), false}));
+
+        test_slice(query::partition_range::make(
+            {partitions[1].decorated_key(), false},
+            {partitions[3].decorated_key(), true}));
+
+        test_slice(query::partition_range::make_ending_with(
+            {partitions[3].decorated_key(), true}));
+
+        test_slice(query::partition_range::make_starting_with(
+            {partitions[partitions.size() - 4].decorated_key(), true}));
+
+        test_slice(inclusive_token_range(0, 0));
+        test_slice(inclusive_token_range(1, 1));
+        test_slice(inclusive_token_range(2, 4));
+        test_slice(inclusive_token_range(127, 128));
+        test_slice(inclusive_token_range(128, 128));
+        test_slice(inclusive_token_range(128, 129));
+        test_slice(inclusive_token_range(127, 129));
+        test_slice(inclusive_token_range(partitions.size() - 1, partitions.size() - 1));
+
+        test_slice(inclusive_token_range(0, partitions.size() - 1));
+        test_slice(inclusive_token_range(0, partitions.size() - 2));
+        test_slice(inclusive_token_range(0, partitions.size() - 3));
+        test_slice(inclusive_token_range(0, partitions.size() - 128));
+
+        test_slice(inclusive_token_range(1, partitions.size() - 1));
+        test_slice(inclusive_token_range(2, partitions.size() - 1));
+        test_slice(inclusive_token_range(3, partitions.size() - 1));
+        test_slice(inclusive_token_range(128, partitions.size() - 1));
     });
 }
