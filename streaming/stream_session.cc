@@ -223,10 +223,6 @@ future<> stream_session::on_initialization_complete() {
     sslog.debug("SEND PREPARE_MESSAGE to {}", id);
     return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         sslog.debug("GOT PREPARE_MESSAGE Reply");
-        for (auto& request : msg.requests) {
-            // always flush on stream request
-            add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
-        }
         for (auto& summary : msg.summaries) {
             prepare_receiving(summary);
         }
