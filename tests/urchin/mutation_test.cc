@@ -501,3 +501,54 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
                 .with_column("v2", {}));
     });
 }
+
+SEASTAR_TEST_CASE(test_row_counting) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("sc1", bytes_type, column_kind::static_column)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+        auto col_v = *s->get_column_definition("v");
+
+        mutation m(partition_key::from_single_value(*s, "key1"), s);
+
+        BOOST_REQUIRE_EQUAL(0, m.live_row_count());
+
+        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A")));
+        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("B")));
+
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(2, bytes_type->decompose(bytes("v:value"))));
+
+        BOOST_REQUIRE_EQUAL(1, m.live_row_count());
+
+        m.partition().static_row().apply(*s->get_column_definition("sc1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("sc1:value"))));
+
+        BOOST_REQUIRE_EQUAL(1, m.live_row_count());
+
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_dead(2, gc_clock::now()));
+
+        BOOST_REQUIRE_EQUAL(1, m.live_row_count());
+
+        m.partition().static_row().apply(*s->get_column_definition("sc1"),
+            atomic_cell::make_dead(2, gc_clock::now()));
+
+        BOOST_REQUIRE_EQUAL(0, m.live_row_count());
+
+        m.partition().clustered_row(*s, ckey1).apply(api::timestamp_type(3));
+
+        BOOST_REQUIRE_EQUAL(1, m.live_row_count());
+
+        m.partition().apply(tombstone(3, gc_clock::now()));
+
+        BOOST_REQUIRE_EQUAL(0, m.live_row_count());
+
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(4, bytes_type->decompose(bytes("v:value"))));
+        m.set_clustered_cell(ckey2, col_v, atomic_cell::make_live(4, bytes_type->decompose(bytes("v:value"))));
+
+        BOOST_REQUIRE_EQUAL(2, m.live_row_count());
+    });
+}

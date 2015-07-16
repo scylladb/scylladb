@@ -307,22 +307,12 @@ mutation_partition::query(query::result::partition_writer& pw,
         // only one lookup for a full-tuple singular range though.
         for (const rows_entry& e : range(s, row_range)) {
             auto& row = e.row();
-            auto&& cells = row.cells();
-
             auto row_tombstone = tombstone_for_row(s, e);
-            auto row_is_live = row.created_at() > row_tombstone.timestamp;
 
-            // row_is_live is true for rows created using 'insert' statement
-            // which are not deleted yet. Such rows are considered as present
-            // even if no regular columns are live. Otherwise, a row is
-            // considered present if it has any cell which is live. So if
-            // we've got no live cell in the results we still have to check if
-            // any of the row's cell is live and we should return the row in
-            // such case.
-            if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver, now)) {
+            if (row.is_live(s, row_tombstone, now)) {
                 any_live = true;
                 auto row_builder = pw.add_row(e.key());
-                get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
+                get_row_slice(row.cells(), slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
                     break;
@@ -516,4 +506,46 @@ mutation_partition::compact_for_query(
     // FIXME: purge unneeded prefix tombstones based on row_ranges
 
     return row_count;
+}
+
+bool
+deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
+    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
+        return s.regular_column_at(id);
+    };
+
+    // _created_at corresponds to the row marker cell, present for rows
+    // created with the 'insert' statement. If row marker is live, we know the
+    // row is live. Otherwise, a row is considered live if it has any cell
+    // which is live.
+    base_tombstone.apply(_deleted_at);
+    return _created_at > base_tombstone.timestamp
+           || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
+}
+
+bool
+mutation_partition::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
+    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
+        return s.static_column_at(id);
+    };
+
+    return has_any_live_data(static_row(), _tombstone, static_column_resolver, query_time);
+}
+
+size_t
+mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_time) const {
+    size_t count = 0;
+
+    for (const rows_entry& e : _rows) {
+        tombstone base_tombstone = range_tombstone_for_row(s, e.key());
+        if (e.row().is_live(s, base_tombstone, query_time)) {
+            ++count;
+        }
+    }
+
+    if (count == 0 && is_static_row_live(s, query_time)) {
+        return 1;
+    }
+
+    return count;
 }
