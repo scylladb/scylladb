@@ -1091,3 +1091,144 @@ SEASTAR_TEST_CASE(compact) {
 
     // verify that the compacted sstable look like
 }
+
+// Used to be compatible with API provided by size_tiered_most_interesting_bucket().
+static lw_shared_ptr<sstable_list> create_sstable_list(std::vector<sstables::shared_sstable>& sstables) {
+    sstable_list list;
+    for (auto& sst : sstables) {
+        list.insert({sst->generation(), sst});
+    }
+    return make_lw_shared<sstable_list>(std::move(list));
+}
+
+static future<> compact_sstables(std::vector<unsigned long> generations_to_compact, unsigned long new_generation, bool create_sstables = true) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(generations_to_compact));
+    auto sstables = make_lw_shared<std::vector<sstables::shared_sstable>>();
+
+    auto f = make_ready_future<>();
+
+    return f.then([generations, sstables, s, create_sstables] () mutable {
+        if (!create_sstables) {
+            return open_sstables("tests/urchin/sstables/tests-temporary", *generations).then([sstables] (auto opened_sstables) mutable {
+                for (auto& sst : opened_sstables) {
+                    sstables->push_back(sst);
+                }
+                return make_ready_future<>();
+            });
+        }
+        return do_for_each(*generations, [generations, sstables, s] (unsigned long generation) {
+            auto mt = make_lw_shared<memtable>(s);
+
+            const column_definition& r1_col = *s->get_column_definition("r1");
+
+            sstring k = "key" + to_sstring(generation);
+            auto key = partition_key::from_exploded(*s, {to_bytes(k)});
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+            mt->apply(std::move(m));
+
+            auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", generation, la, big);
+
+            return sst->write_components(*mt).then([mt, sst, s, sstables] {
+                return sst->load().then([sst, sstables] {
+                    sstables->push_back(sst);
+                    return make_ready_future<>();
+                });
+            });
+        });
+    }).then([s, sstables, new_generation, generations] {
+        unsigned long generation = new_generation;
+        auto new_sstable = [generation] {
+            return make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
+                    generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+        };
+        // We must have opened at least all original candidates.
+        BOOST_REQUIRE(generations->size() == sstables->size());
+
+        auto sstable_list = create_sstable_list(*sstables);
+        // Calling function that will return a list of sstables to compact based on size-tiered strategy.
+        auto sstables_to_compact = size_tiered_most_interesting_bucket(sstable_list);
+        // We do expect that all candidates were selected for compaction (in this case).
+        BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
+
+        return sstables::compact_sstables(std::move(sstables_to_compact), s, new_sstable).then([s] {});
+    });
+}
+
+static future<> check_compacted_sstables(unsigned long generation, std::vector<unsigned long> compacted_generations) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(compacted_generations));
+
+    return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s, generations] (shared_sstable sst) {
+        auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
+        auto keys = make_lw_shared<std::vector<bytes>>();
+
+        return do_for_each(*generations, [reader, s, keys] (unsigned long generation) {
+            return reader().then([generation, keys] (mutation_opt m) {
+                BOOST_REQUIRE(m);
+                bytes key = to_bytes(m->key().representation());
+                keys->push_back(key);
+                return make_ready_future<>();
+            });
+        }).then([keys, generations] {
+            // keys from compacted sstable aren't ordered lexographically,
+            // thus we must read all keys into a vector, sort the vector
+            // lexographically, then proceed with the comparison.
+            std::sort(keys->begin(), keys->end());
+            BOOST_REQUIRE(keys->size() == generations->size());
+            auto i = 0;
+            for (auto& k : *keys) {
+                sstring original_k = "key" + to_sstring((*generations)[i++]);
+                BOOST_REQUIRE(k == to_bytes(original_k));
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compact_02) {
+    // NOTE: generations 18 to 38 are used here.
+
+    // This tests size-tiered compaction strategy by creating 4 sstables of
+    // similar size and compacting them to create a new tier.
+    // The process above is repeated 4 times until you have 4 compacted
+    // sstables of similar size. Then you compact these 4 compacted sstables,
+    // and make sure that you have all partition keys.
+    // By the way, automatic compaction isn't tested here, instead the
+    // strategy algorithm that selects candidates for compaction.
+
+    return test_setup::do_with_test_directory([] {
+        // Compact 4 sstables into 1 using size-tiered strategy to select sstables.
+        // E.g.: generations 18, 19, 20 and 21 will be compacted into generation 22.
+        return compact_sstables({ 18, 19, 20, 21 }, 22).then([] {
+            // Check that generation 22 contains all keys of generations 18, 19, 20 and 21.
+            return check_compacted_sstables(22, { 18, 19, 20, 21 });
+        }).then([] {
+            return compact_sstables({ 23, 24, 25, 26 }, 27).then([] {
+                return check_compacted_sstables(27, { 23, 24, 25, 26 });
+            });
+        }).then([] {
+            return compact_sstables({ 28, 29, 30, 31 }, 32).then([] {
+                return check_compacted_sstables(32, { 28, 29, 30, 31 });
+            });
+        }).then([] {
+            return compact_sstables({ 33, 34, 35, 36 }, 37).then([] {
+                return check_compacted_sstables(37, { 33, 34, 35, 36 });
+            });
+        }).then([] {
+            // In this step, we compact 4 compacted sstables.
+            return compact_sstables({ 22, 27, 32, 37 }, 38, false).then([] {
+                // Check that the compacted sstable contains all keys.
+                return check_compacted_sstables(38,
+                    { 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36 });
+            });
+        });
+    });
+}
