@@ -109,8 +109,8 @@ public:
         throw new SyntaxException(String.format("Syntax error parsing '%s' at char %d: unexpected end of string", str, idx));
     }
 #endif
-
-    std::vector<data_type> get_type_parameters();
+    std::vector<data_type> get_type_parameters(bool multicell=true);
+    data_type do_parse(bool multicell = true);
 
 #if 0
     public Map<Byte, AbstractType<?>> getAliasParameters() throws SyntaxException, ConfigurationException
@@ -265,7 +265,7 @@ public:
 
     static data_type get_abstract_type(const sstring& compare_with);
 
-    static data_type get_abstract_type(const sstring& compare_with, type_parser parser);
+    static data_type get_abstract_type(const sstring& compare_with, type_parser& parser, bool multicell = true);
 
 #if 0
     private static AbstractType<?> getRawAbstractType(Class<? extends AbstractType<?>> typeClass) throws ConfigurationException
