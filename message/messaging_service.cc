@@ -267,4 +267,14 @@ future<> messaging_service::send_definitions_update(shard_id id, std::vector<fro
     return send_message_oneway(messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
+void messaging_service::register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+    inet_address reply_to, unsigned shard, response_id_type response_id)>&& func) {
+    register_handler(net::messaging_verb::MUTATION, std::move(func));
+}
+future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+    inet_address reply_to, unsigned shard, response_id_type response_id) {
+    return send_message_oneway(messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
+        std::move(reply_to), std::move(shard), std::move(response_id));
+}
+
 } // namespace net

@@ -1091,8 +1091,8 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
         } else {
             auto response_id_ = response_id; // make local copy since capture is reused
             auto& ms = net::get_local_messaging_service();
-            return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
-                    engine().cpu_id(), std::move(response_id_));
+            return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
+                std::move(forward), my_address, engine().cpu_id(), response_id_);
         }
     }).finally([mptr] {
         // make mutation alive until it is sent or processed locally, otherwise it
@@ -2796,7 +2796,7 @@ void storage_proxy::init_messaging_service() {
         }).discard_result();
         return net::messaging_service::no_wait();
     });
-    ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
+    ms.register_mutation([this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
             return when_all(
                     mutate_locally(m).then([reply_to, shard, response_id] () mutable {
@@ -2811,8 +2811,7 @@ void storage_proxy::init_messaging_service() {
                 auto reply_to_ = reply_to;
                 auto shard_ = shard;
                 auto response_id_ = response_id;
-                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(),
-                        std::move(reply_to_), std::move(shard_), std::move(response_id_));
+                return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to_, shard_, response_id_);
             })
             );
         }).discard_result();

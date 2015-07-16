@@ -382,7 +382,6 @@ public:
     void register_stream_mutation(std::function<future<> (frozen_mutation fm, unsigned dst_cpu_id)>&& func);
     future<> send_stream_mutation(shard_id id, frozen_mutation fm, unsigned dst_cpu_id);
 
-
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
     future<> send_echo(shard_id id);
@@ -402,6 +401,14 @@ public:
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
     future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
+
+    // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
+    using response_id_type = uint64_t;
+    // Wrapper for MUTATION
+    void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
+    future<> send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+        inet_address reply_to, unsigned shard, response_id_type response_id);
 
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
