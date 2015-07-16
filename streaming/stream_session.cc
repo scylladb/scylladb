@@ -245,6 +245,7 @@ void stream_session::on_error() {
     close_session(stream_session_state::FAILED);
 }
 
+// Only follower calls this function upon receiving of prepare_message from initiator
 messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
@@ -256,14 +257,13 @@ messages::prepare_message stream_session::prepare(std::vector<stream_request> re
         prepare_receiving(summary);
     }
 
-    // send back prepare message if prepare message contains stream request
+    // Always send a prepare_message back to follower
     messages::prepare_message prepare;
     if (!requests.empty()) {
         for (auto& x: _transfers) {
             auto& task = x.second;
             prepare.summaries.emplace_back(task.get_summary());
         }
-        //handler.send_message(std::move(prepare));
     }
 
     // if there are files to stream
