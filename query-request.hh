@@ -45,14 +45,14 @@ private:
     // the point is before the range (works only for non wrapped ranges)
     template<typename Comparator>
     bool before(const T& point, Comparator&& cmp) const {
-        if (!_start) {
+        if (!start()) {
             return false; //open start, no points before
         }
         auto r = cmp(point, start_value());
         if (r < 0) {
             return true;
         }
-        if (!_start->is_inclusive() && r == 0) {
+        if (!start()->is_inclusive() && r == 0) {
             return true;
         }
         return false;
@@ -60,14 +60,14 @@ private:
     // the point is after the range (works only for non wrapped ranges)
     template<typename Comparator>
     bool after(const T& point, Comparator&& cmp) const {
-        if (!_end) {
+        if (!end()) {
             return false; //open end, no points after
         }
         auto r = cmp(end_value(), point);
         if (r < 0) {
             return true;
         }
-        if (!_end->is_inclusive() && r == 0) {
+        if (!end()->is_inclusive() && r == 0) {
             return true;
         }
         return false;
@@ -100,16 +100,16 @@ public:
         }
     }
     const T& start_value() const {
-        return _start->value();
+        return start()->value();
     }
     const T& end_value() const {
-        return _end->value();
+        return end()->value();
     }
     const optional<bound>& start() const {
         return _start;
     }
     const optional<bound>& end() const {
-        return _end;
+        return _singular ? _start : _end;
     }
     // end is smaller than start
     template<typename Comparator>
@@ -135,8 +135,8 @@ public:
     template<typename Comparator>
     std::pair<range<T>, range<T>> split(const T& split_point, Comparator&& cmp) const {
         assert(contains(split_point, std::forward<Comparator>(cmp)));
-        range left(_start, bound(split_point));
-        range right(bound(split_point, false), _end);
+        range left(start(), bound(split_point));
+        range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
     // Transforms this range into a new range of a different value type
