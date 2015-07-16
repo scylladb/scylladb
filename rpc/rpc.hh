@@ -28,6 +28,7 @@
 #include "core/reactor.hh"
 #include "core/iostream.hh"
 #include "core/shared_ptr.hh"
+#include "rpc/rpc_types.hh"
 
 namespace rpc {
 
@@ -43,10 +44,6 @@ struct SerializerConcept {
     future<> operator()(input_stream<char>& in, id_type& v);
     future<> operator()(output_stream<char>& out, sstring& v);
     future<> operator()(input_stream<char>& in, sstring& v);
-};
-
-struct client_info {
-    socket_address addr;
 };
 
 // MsgType is a type that holds type of a message. The type should be hashable
@@ -199,21 +196,6 @@ private:
         _handlers.emplace(t, std::move(handler));
     }
 };
-
-class error : public std::runtime_error {
-public:
-    error(const std::string& msg) : std::runtime_error(msg) {}
-};
-
-class closed_error : public error {
-public:
-    closed_error() : error("connection is closed") {}
-};
-
-struct no_wait_type {};
-
-// return this from a callback if client does not want to waiting for a reply
-extern no_wait_type no_wait;
 }
 
 #include "rpc_impl.hh"
