@@ -140,8 +140,8 @@ public:
     future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
 
 
-    // data_consume_rows() iterates over all rows in the data file (or rows in
-    // a particular range), feeding them into the consumer. The iteration is
+    // data_consume_rows() iterates over rows in the data file from
+    // a particular range, feeding them into the consumer. The iteration is
     // done as efficiently as possible - reading only the data file (not the
     // summary or index files) and reading data in batches.
     //
@@ -156,8 +156,10 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    data_consume_context data_consume_rows(row_consumer& consumer,
-            uint64_t start = 0, uint64_t end = 0);
+    data_consume_context data_consume_rows(row_consumer& consumer, uint64_t start, uint64_t end);
+
+    // Like data_consume_rows() with bounds, but iterates over whole range
+    data_consume_context data_consume_rows(row_consumer& consumer);
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);

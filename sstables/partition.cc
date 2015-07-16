@@ -434,9 +434,12 @@ private:
     std::experimental::optional<data_consume_context> _context;
     std::experimental::optional<future<data_consume_context>> _context_future;
 public:
-    impl(sstable& sst, schema_ptr schema, uint64_t start = 0, uint64_t end = 0)
+    impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end)
         : _consumer(schema)
         , _context(sst.data_consume_rows(_consumer, start, end)) { }
+    impl(sstable& sst, schema_ptr schema)
+        : _consumer(schema)
+        , _context(sst.data_consume_rows(_consumer)) { }
     impl(sstable& sst, schema_ptr schema, future<uint64_t> start, future<uint64_t> end)
         : _consumer(schema)
         , _context_future(start.then([this, &sst, end = std::move(end)] (uint64_t start) mutable {
