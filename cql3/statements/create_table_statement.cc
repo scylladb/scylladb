@@ -77,7 +77,9 @@ std::vector<column_definition> create_table_statement::get_columns()
 }
 
 future<bool> create_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
-    return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
+    return make_ready_future<>().then([&] {
+        return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only);
+    }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
             return true;

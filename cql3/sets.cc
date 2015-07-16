@@ -115,7 +115,7 @@ sets::value::from_serialized(bytes_view v, set_type type, serialization_format s
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
-        throw exceptions::invalid_request_exception(e.why());
+        throw exceptions::invalid_request_exception(e.what());
     }
 }
 

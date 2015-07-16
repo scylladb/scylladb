@@ -244,7 +244,7 @@ result_set_builder::result_set_builder(selection& s, db_clock::time_point now, s
 void result_set_builder::add_empty() {
     current->emplace_back();
     if (!_timestamps.empty()) {
-        _timestamps[current->size() - 1] = api::min_timestamp;
+        _timestamps[current->size() - 1] = api::missing_timestamp;
     }
     if (!_ttls.empty()) {
         _ttls[current->size() - 1] = -1;
