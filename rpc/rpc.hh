@@ -35,15 +35,13 @@ namespace rpc {
 using id_type = int64_t;
 
 struct SerializerConcept {
-    template<typename T>
-    future<> operator()(output_stream<char>& out, T&& v);
-    template<typename T>
-    future<> operator()(input_stream<char>& in, T& v);
-    // id_type and sstring are needed for compilation to succeed
-    future<> operator()(output_stream<char>& out, id_type& v);
-    future<> operator()(input_stream<char>& in, id_type& v);
-    future<> operator()(output_stream<char>& out, sstring& v);
-    future<> operator()(input_stream<char>& in, sstring& v);
+    // For each serializable type T, implement
+    class T;
+    template <typename Output>
+    void write(Output& output, const T& data);
+    template <typename Input>
+    T read(Input& input, type<T> type_tag);  // type_tag used to disambiguate
+    // Input and Output expose void read(char*, size_t) and write(const char*, size_t).
 };
 
 // MsgType is a type that holds type of a message. The type should be hashable
@@ -84,11 +82,11 @@ public:
     public:
         class connection : public protocol::connection, public enable_lw_shared_from_this<connection> {
             server& _server;
-            MsgType _type;
             client_info _info;
         public:
             connection(server& s, connected_socket&& fd, socket_address&& addr, protocol& proto);
             future<> process();
+            future<> respond(int64_t msg_id, sstring&& data);
             auto& info() { return _info; }
         };
     private:
@@ -115,9 +113,8 @@ public:
     class client : public protocol::connection {
         promise<> _connected;
         id_type _message_id = 1;
-        id_type _rcv_msg_id = 0;
         struct reply_handler_base {
-            virtual future<> operator()(client&, id_type) = 0;
+            virtual void operator()(client&, id_type, temporary_buffer<char> data) = 0;
             virtual ~reply_handler_base() {};
         };
     public:
@@ -126,8 +123,8 @@ public:
             Func func;
             Reply reply;
             reply_handler(Func&& f) : func(std::move(f)) {}
-            virtual future<> operator()(client& client, id_type msg_id) override {
-                return func(reply, client, msg_id);
+            virtual void operator()(client& client, id_type msg_id, temporary_buffer<char> data) override {
+                return func(reply, client, msg_id, std::move(data));
             }
             virtual ~reply_handler() {}
         };
@@ -153,7 +150,8 @@ public:
     };
     friend server;
 private:
-    using rpc_handler = std::function<future<>(lw_shared_ptr<typename server::connection>)>;
+    using rpc_handler = std::function<void (lw_shared_ptr<typename server::connection>, int64_t msgid,
+                                            temporary_buffer<char> data)>;
     std::unordered_map<MsgType, rpc_handler> _handlers;
     Serializer _serializer;
     std::function<void(const sstring&)> _logger;

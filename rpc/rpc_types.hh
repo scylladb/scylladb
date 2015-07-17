@@ -27,6 +27,11 @@
 
 namespace rpc {
 
+// used to tag a type for serializers
+template <typename T>
+struct type {
+};
+
 struct stats {
     using counter_type = uint64_t;
     counter_type replied = 0;
