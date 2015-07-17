@@ -53,7 +53,7 @@ future<> storage_service::prepare_to_join() {
 
             _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
             // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-            gms::inet_address broadcast_rpc_address;
+            auto broadcast_rpc_address = this->get_broadcast_address();
             app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
             app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
             app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
