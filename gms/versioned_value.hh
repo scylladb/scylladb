@@ -31,6 +31,7 @@
 #include "to_string.hh"
 #include <unordered_set>
 #include <vector>
+#include "message/messaging_service.hh"
 
 namespace gms {
 
@@ -250,9 +251,7 @@ public:
 
         versioned_value network_version()
         {
-            // FIXME: MessagingService.current_version
-            sstring ver("ms_1_0");
-            return versioned_value(ver);
+            return versioned_value(sprint("%s",net::messaging_service::current_version));
         }
 
         versioned_value internalIP(const sstring &private_ip)
