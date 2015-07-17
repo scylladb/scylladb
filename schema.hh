@@ -231,9 +231,6 @@ public:
         return _raw._bloom_filter_fp_chance;
     }
     sstring thrift_key_validator() const;
-    void set_compressor_params(compression_parameters c) {
-        _raw._compressor_params = c;
-    }
     const compression_parameters& get_compressor_params() const {
         return _raw._compressor_params;
     }
