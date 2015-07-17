@@ -114,7 +114,7 @@ public:
     /**
      * @return total number of files to send in the session
      */
-    long getTotalFilesToSend() {
+    long get_total_files_to_send() {
         return get_total_files(sending_summaries);
     }
 
