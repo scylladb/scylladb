@@ -27,6 +27,7 @@
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/progress_info.hh"
 #include <vector>
 
 namespace streaming {
@@ -125,14 +126,7 @@ public:
 
     void handle_session_complete(shared_ptr<stream_session> session);
 
-#if 0
-    public void handleProgress(ProgressInfo progress)
-    {
-        coordinator.updateProgress(progress);
-        fireStreamEvent(new StreamEvent.ProgressEvent(planId, progress));
-    }
-:A
-#endif
+    void handle_progress(progress_info progress);
 
     template <typename Event>
     void fire_stream_event(Event event);
