@@ -43,7 +43,7 @@
 
 namespace streaming {
 
-thread_local logging::logger sslog("stream_session");
+logging::logger sslog("stream_session");
 
 void stream_session::init_messaging_service_handler() {
     ms().register_stream_init_message([] (messages::stream_init_message msg, unsigned src_cpu_id) {

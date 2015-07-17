@@ -31,7 +31,7 @@
 
 namespace streaming {
 
-extern thread_local logging::logger sslog;
+extern logging::logger sslog;
 
 stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id)
     : stream_task(session, cf_id) {
