@@ -135,6 +135,9 @@ struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc
 struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
+
+constexpr int32_t messaging_service::current_version;
+
 distributed<messaging_service> _the_messaging_service;
 
 future<> deinit_messaging_service() {
