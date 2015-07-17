@@ -26,6 +26,7 @@
 namespace streaming {
 
 class stream_event_handler /* extends FutureCallback<StreamState> */ {
+public:
     /**
      * Callback for various streaming events.
      *
