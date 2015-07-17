@@ -509,6 +509,10 @@ struct futurize {
     /// and return the result, as a future (if it wasn't already).
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, FuncArgs&&... args);
+
+    /// Makes an exceptional future of type \ref type.
+    template <typename Arg>
+    static type make_exception_future(Arg&& arg);
 };
 
 /// \cond internal
@@ -522,6 +526,9 @@ struct futurize<void> {
 
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, FuncArgs&&... args);
+
+    template <typename Arg>
+    static type make_exception_future(Arg&& arg);
 };
 
 template <typename... Args>
@@ -534,6 +541,9 @@ struct futurize<future<Args...>> {
 
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, FuncArgs&&... args);
+
+    template <typename Arg>
+    static type make_exception_future(Arg&& arg);
 };
 /// \endcond
 
@@ -965,6 +975,29 @@ template<typename... Args>
 template<typename Func, typename... FuncArgs>
 typename futurize<future<Args...>>::type futurize<future<Args...>>::apply(Func&& func, FuncArgs&&... args) {
     return func(std::forward<FuncArgs>(args)...);
+}
+
+template <typename T>
+template <typename Arg>
+inline
+future<T>
+futurize<T>::make_exception_future(Arg&& arg) {
+    return ::make_exception_future<T>(std::forward<Arg>(arg));
+}
+
+template <typename... T>
+template <typename Arg>
+inline
+future<T...>
+futurize<future<T...>>::make_exception_future(Arg&& arg) {
+    return ::make_exception_future<T...>(std::forward<Arg>(arg));
+}
+
+template <typename Arg>
+inline
+future<>
+futurize<void>::make_exception_future(Arg&& arg) {
+    return ::make_exception_future<>(std::forward<Arg>(arg));
 }
 
 /// \endcond
