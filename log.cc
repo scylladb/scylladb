@@ -83,7 +83,7 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
     out << "\n";
     auto msg = out.str();
     if (_stdout.load(std::memory_order_relaxed)) {
-        std::cout << out;
+        std::cout << msg;
     }
     if (_syslog.load(std::memory_order_relaxed)) {
         static array_map<int, 20> level_map = {
