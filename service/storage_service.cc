@@ -6,6 +6,8 @@
 #include "core/distributed.hh"
 #include "locator/snitch_base.hh"
 #include "db/system_keyspace.hh"
+#include "utils/UUID.hh"
+#include "gms/inet_address.hh"
 
 namespace service {
 
@@ -675,24 +677,9 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return;
         }
-
-        if (state == application_state::RELEASE_VERSION) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
-        } else if (state == application_state::DC) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
-        } else if (state == application_state::RACK) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
-        } else if (state == application_state::RPC_ADDRESS) {
-            // try {
-            //     SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
-            // } catch (UnknownHostException e) {
-            //     throw new RuntimeException(e);
-            // }
-        } else if (state == application_state::SCHEMA) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
+        do_update_system_peers_table(endpoint, state, value);
+        if (state == application_state::SCHEMA) {
             // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-        } else if (state == application_state::HOST_ID) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
         }
     }
     replicate_to_all_cores();
@@ -722,6 +709,48 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
 #endif
 }
 
+void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
+    ss_debug("storage_service:: Update ep=%s, state=%d, value=%s\n", endpoint, int(state), value.value);
+    if (state == application_state::RELEASE_VERSION) {
+        auto col = sstring("release_version");
+        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    } else if (state == application_state::DC) {
+        auto col = sstring("data_center");
+        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    } else if (state == application_state::RACK) {
+        auto col = sstring("rack");
+        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    } else if (state == application_state::RPC_ADDRESS) {
+        auto col = sstring("rpc_address");
+        inet_address ep;
+        try {
+            ep = gms::inet_address(value.value);
+        } catch (...) {
+            print("storage_service: fail to update %s for %s: invalid rcpaddr %s\n", col, endpoint, value.value);
+            return;
+        }
+        db::system_keyspace::update_peer_info(endpoint, col, ep.addr()).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    } else if (state == application_state::SCHEMA) {
+        auto col = sstring("schema_version");
+        db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    } else if (state == application_state::HOST_ID) {
+        auto col = sstring("host_id");
+        db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
+             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+        });
+    }
+}
+
 void storage_service::update_peer_info(gms::inet_address endpoint) {
     using namespace gms;
     auto& gossiper = gms::get_local_gossiper();
@@ -731,20 +760,8 @@ void storage_service::update_peer_info(gms::inet_address endpoint) {
     }
     for (auto& entry : ep_state->get_application_state_map()) {
         auto& app_state = entry.first;
-        //auto& value = entry.second.value
-        if (app_state == application_state::RELEASE_VERSION) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value);
-        } else if (app_state == application_state::DC) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value);
-        } else if (app_state == application_state::RACK) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "rack", value);
-        } else if (app_state == application_state::RPC_ADDRESS) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value));
-        } else if (app_state == application_state::SCHEMA) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value));
-        } else if (app_state == application_state::HOST_ID) {
-            // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value));
-        }
+        auto& value = entry.second;
+        do_update_system_peers_table(endpoint, app_state, value);
     }
 }
 
