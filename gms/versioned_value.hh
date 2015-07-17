@@ -237,9 +237,7 @@ public:
 
         versioned_value rpcaddress(gms::inet_address endpoint)
         {
-            // FIXME: endpoint.getHostAddress()
-            sstring addr;
-            return versioned_value(addr);
+            return versioned_value(sprint("%s", endpoint));
         }
 
         versioned_value release_version()
