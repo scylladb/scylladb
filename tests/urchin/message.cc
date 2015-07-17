@@ -1,4 +1,3 @@
-#if 0
 #include "core/reactor.hh"
 #include "core/app-template.hh"
 #include "core/sstring.hh"
@@ -7,25 +6,10 @@
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/gossip_digest.hh"
-#include "core/sleep.hh"
 #include "api/api.hh"
 
 using namespace std::chrono_literals;
 using namespace net;
-
-struct empty_msg {
-    void serialize(bytes::iterator& out) const {
-    }
-    static empty_msg deserialize(bytes_view& v) {
-        return empty_msg();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
-    friend inline std::ostream& operator<<(std::ostream& os, const empty_msg& ack) {
-        return os << "empty_msg";
-    }
-};
 
 class tester {
 private:
@@ -53,7 +37,7 @@ public:
     }
 public:
     void init_handler() {
-        ms.register_handler(messaging_verb::GOSSIP_DIGEST_SYN, [] (gms::gossip_digest_syn msg) {
+        ms.register_gossip_digest_syn([] (gms::gossip_digest_syn msg) {
             print("Server got syn msg = %s\n", msg);
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
@@ -68,25 +52,23 @@ public:
                 {ep2, endpoint_state()},
             };
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
-            return make_ready_future<gms::gossip_digest_ack>(ack);
+            return make_ready_future<gms::gossip_digest_ack>(std::move(ack));
         });
-        ms.register_handler(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gms::gossip_digest_ack2 msg) {
+
+        ms.register_gossip_digest_ack2([] (gms::gossip_digest_ack2 msg) {
             print("Server got ack2 msg = %s\n", msg);
             return messaging_service::no_wait();
         });
-        ms.register_handler(messaging_verb::GOSSIP_SHUTDOWN, [] (empty_msg msg) {
-            print("Server got shutdown msg = %s\n", msg);
+
+        ms.register_gossip_shutdown([] (inet_address from) {
+            print("Server got shutdown msg = %s\n", from);
             return messaging_service::no_wait();
         });
-        ms.register_handler(messaging_verb::ECHO, [] (int x, int y) {
-            print("Server got echo msg = (%d, %ld) \n", x, y);
-            return make_ready_future<int, long>(x*x, y*y);
-        });
-        ms.register_handler(messaging_verb::UNUSED_1, [] (int x, int y) {
-            print("Server got echo msg = (%d, %ld) \n", x, y);
+
+        ms.register_echo([] {
+            print("Server got echo msg\n");
             throw std::runtime_error("I'm throwing runtime_error exception");
-            long ret = x + y;
-            return make_ready_future<decltype(ret)>(ret);
+            return make_ready_future<>();
         });
     }
 
@@ -104,8 +86,7 @@ public:
             {ep2, gen++, ver++},
         };
         gms::gossip_digest_syn syn("my_cluster", "my_partition", digests);
-        using RetMsg = gms::gossip_digest_ack;
-        return ms.send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(syn)).then([this, id] (RetMsg ack) {
+        return ms.send_gossip_digest_syn(id, std::move(syn)).then([this, id] (gms::gossip_digest_ack ack) {
             print("Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack);
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
@@ -113,7 +94,7 @@ public:
                 {ep1, endpoint_state()},
             };
             gms::gossip_digest_ack2 ack2(std::move(eps));
-            return ms.send_message_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2)).then([] () {
+            return ms.send_gossip_digest_ack2(id, std::move(ack2)).then([] () {
                 print("Client sent gossip_digest_ack2 got reply = void\n");
                 return make_ready_future<>();
             });
@@ -123,8 +104,8 @@ public:
     future<> test_gossip_shutdown() {
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
-        empty_msg msg;
-        return ms.send_message_oneway(messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(msg)).then([] () {
+        inet_address from("127.0.0.1");
+        return ms.send_gossip_shutdown(id, from).then([] () {
             print("Client sent gossip_shutdown got reply = void\n");
             return make_ready_future<>();
         });
@@ -133,31 +114,12 @@ public:
     future<> test_echo() {
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
-        using RetMsg = future<int, long>;
-        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, 30, 60).then_wrapped([] (future<int, long> f) {
+        return ms.send_echo(id).then_wrapped([] (auto&& f) {
             try {
-                auto msg = f.get();
-                print("Client sent echo got reply = (%d , %ld)\n", std::get<0>(msg), std::get<1>(msg));
-                return sleep(100ms).then([]{
-                    return make_ready_future<>();
-                });
-            } catch (std::runtime_error& e) {
-                print("test_echo: %s\n", e.what());
-            }
-            return make_ready_future<>();
-        });
-    }
-
-    future<> test_exception() {
-        print("=== %s ===\n", __func__);
-        auto id = get_shard_id();
-        return ms.send_message<long>(messaging_verb::UNUSED_1, id, 3, 6).then_wrapped([] (future<long> f) {
-            try {
-                auto ret = std::get<0>(f.get());
-                print("Client sent UNUSED_1 got reply = %ld\n", ret);
+                f.get();
                 return make_ready_future<>();
             } catch (std::runtime_error& e) {
-                print("Client sent UNUSED_1 got exception: %s\n", e.what());
+                print("test_echo: %s\n", e.what());
             }
             return make_ready_future<>();
         });
@@ -207,8 +169,6 @@ int main(int ac, char ** av) {
                     return t->test_gossip_shutdown();
                 }).then([testers, t] {
                     return t->test_echo();
-                }).then([testers, t] {
-                    return t->test_exception();
                 }).then([testers, t, stay_alive] {
                     if (stay_alive) {
                         return;
@@ -225,5 +185,3 @@ int main(int ac, char ** av) {
         });
     });
 }
-#endif
-int main(int ac, char ** av) {}
