@@ -54,4 +54,26 @@ void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
     sslog.info("[Stream #{}, ID#{}] Received streaming plan for {}", plan_id, session_index, description);
 }
 
+void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
+    auto si = session->get_session_info();
+    sslog.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({} bytes), sending {} files({} bytes)",
+               session->plan_id(),
+               session->session_index(),
+               si.get_total_files_to_receive(),
+               si.get_total_size_to_receive(),
+               si.get_total_files_to_send(),
+               si.get_total_size_to_send());
+    auto event = session_prepared_event(plan_id, si);
+    _coordinator->add_session_info(std::move(si));
+    fire_stream_event(std::move(event));
+}
+
+template <typename Event>
+void stream_result_future::fire_stream_event(Event event) {
+    // delegate to listener
+    for (auto listener : _event_listeners) {
+        listener->handle_stream_event(std::move(event));
+    }
+}
+
 } // namespace streaming

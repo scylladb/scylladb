@@ -120,21 +120,11 @@ public:
     {
         return planId.hashCode();
     }
+#endif
 
-    void handleSessionPrepared(StreamSession session)
-    {
-        SessionInfo sessionInfo = session.getSessionInfo();
-        logger.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({} bytes), sending {} files({} bytes)",
-                              session.planId(),
-                              session.sessionIndex(),
-                              sessionInfo.getTotalFilesToReceive(),
-                              sessionInfo.getTotalSizeToReceive(),
-                              sessionInfo.getTotalFilesToSend(),
-                              sessionInfo.getTotalSizeToSend());
-        StreamEvent.SessionPreparedEvent event = new StreamEvent.SessionPreparedEvent(planId, sessionInfo);
-        coordinator.addSessionInfo(sessionInfo);
-        fireStreamEvent(event);
-    }
+    void handle_session_prepared(shared_ptr<stream_session> session);
+
+#if 0
 
     void handleSessionComplete(StreamSession session)
     {
@@ -150,14 +140,12 @@ public:
         coordinator.updateProgress(progress);
         fireStreamEvent(new StreamEvent.ProgressEvent(planId, progress));
     }
+#endif
 
-    synchronized void fireStreamEvent(StreamEvent event)
-    {
-        // delegate to listener
-        for (StreamEventHandler listener : eventListeners)
-            listener.handleStreamEvent(event);
-    }
+    template <typename Event>
+    void fire_stream_event(Event event);
 
+#if 0
     private synchronized void maybeComplete()
     {
         if (!coordinator.hasActiveSessions())
