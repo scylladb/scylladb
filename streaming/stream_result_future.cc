@@ -68,12 +68,38 @@ void stream_result_future::handle_session_prepared(shared_ptr<stream_session> se
     fire_stream_event(std::move(event));
 }
 
+void stream_result_future::handle_session_complete(shared_ptr<stream_session> session) {
+    sslog.info("[Stream #{}] Session with {} is complete", session->plan_id(), session->peer);
+    auto event = session_complete_event(session);
+    fire_stream_event(std::move(event));
+    auto si = session->get_session_info();
+    _coordinator->add_session_info(std::move(si));
+    maybe_complete();
+}
+
 template <typename Event>
 void stream_result_future::fire_stream_event(Event event) {
     // delegate to listener
     for (auto listener : _event_listeners) {
         listener->handle_stream_event(std::move(event));
     }
+}
+
+void stream_result_future::maybe_complete() {
+    if (!_coordinator->has_active_sessions()) {
+        auto final_state = get_current_state();
+        if (final_state.has_failed_session()) {
+            sslog.warn("[Stream #{}] Stream failed", plan_id);
+            // FIXME: setException(new StreamException(finalState, "Stream failed"));
+        } else {
+            sslog.info("[Stream #{}] All sessions completed", plan_id);
+            // FIXME: set(finalState);
+        }
+    }
+}
+
+stream_state stream_result_future::get_current_state() {
+    return stream_state(plan_id, description, _coordinator->get_all_session_info());
 }
 
 } // namespace streaming

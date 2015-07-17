@@ -26,6 +26,7 @@
 #include "gms/inet_address.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
+#include "streaming/stream_state.hh"
 #include <vector>
 
 namespace streaming {
@@ -97,14 +98,11 @@ public:
         _event_listeners.push_back(listener);
     }
 
-#if 0
     /**
      * @return Current snapshot of streaming progress.
      */
-    public StreamState getCurrentState()
-    {
-        return new StreamState(planId, description, coordinator.getAllSessionInfo());
-    }
+    stream_state get_current_state();
+#if 0
 
     @Override
     public boolean equals(Object o)
@@ -124,46 +122,23 @@ public:
 
     void handle_session_prepared(shared_ptr<stream_session> session);
 
+
+    void handle_session_complete(shared_ptr<stream_session> session);
+
 #if 0
-
-    void handleSessionComplete(StreamSession session)
-    {
-        logger.info("[Stream #{}] Session with {} is complete", session.planId(), session.peer);
-        fireStreamEvent(new StreamEvent.SessionCompleteEvent(session));
-        SessionInfo sessionInfo = session.getSessionInfo();
-        coordinator.addSessionInfo(sessionInfo);
-        maybeComplete();
-    }
-
     public void handleProgress(ProgressInfo progress)
     {
         coordinator.updateProgress(progress);
         fireStreamEvent(new StreamEvent.ProgressEvent(planId, progress));
     }
+:A
 #endif
 
     template <typename Event>
     void fire_stream_event(Event event);
 
-#if 0
-    private synchronized void maybeComplete()
-    {
-        if (!coordinator.hasActiveSessions())
-        {
-            StreamState finalState = getCurrentState();
-            if (finalState.hasFailedSession())
-            {
-                logger.warn("[Stream #{}] Stream failed", planId);
-                setException(new StreamException(finalState, "Stream failed"));
-            }
-            else
-            {
-                logger.info("[Stream #{}] All sessions completed", planId);
-                set(finalState);
-            }
-        }
-    }
-#endif
+private:
+    void maybe_complete();
 };
 
 } // namespace streaming
