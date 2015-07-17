@@ -230,10 +230,6 @@ public:
     double bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
-    schema& set_bloom_filter_fp_chance(double fp) {
-        _raw._bloom_filter_fp_chance = fp;
-        return *this;
-    }
     sstring thrift_key_validator() const;
     void set_compressor_params(compression_parameters c) {
         _raw._compressor_params = c;
