@@ -302,8 +302,8 @@ void stream_session::receive(messages::incoming_file_message message) {
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    // auto progress = progress_info(peer, _index, /* desc.filenameFor(Component.DATA),*/ dir, bytes, total);
-    // streamResult.handleProgress(progress);
+    auto progress = progress_info(peer, _index, "", dir, bytes, total);
+    _stream_result->handle_progress(std::move(progress));
 }
 
 void stream_session::received(UUID cf_id, int sequence_number) {
@@ -386,9 +386,8 @@ void stream_session::prepare_receiving(stream_summary& summary) {
 }
 
 void stream_session::start_streaming_files() {
+    _stream_result->handle_session_prepared(shared_from_this());
 #if 0
-    streamResult.handleSessionPrepared(this);
-
     state(State.STREAMING);
     for (StreamTransferTask task : transfers.values())
     {
@@ -495,8 +494,7 @@ void stream_session::close_session(stream_session_state final_state) {
         // Note that we shouldn't block on this close because this method is called on the handler
         // incoming thread (so we would deadlock).
         //handler.close();
-
-        //streamResult.handleSessionComplete(this);
+        _stream_result->handle_session_complete(shared_from_this());
     }
 }
 
