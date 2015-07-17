@@ -163,7 +163,7 @@ private:
         }
     }
     template <typename... A>
-    static lw_shared_ptr make(A&&... a) noexcept {
+    static lw_shared_ptr make(A&&... a) {
         return lw_shared_ptr(new typename shared_ptr_impl<T>::ctor(std::forward<A>(a)...));
     }
 public:
