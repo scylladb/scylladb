@@ -249,9 +249,6 @@ public:
     const sstring& comment() const {
         return _raw._comment;
     }
-    void set_comment(const sstring& comment) {
-        _raw._comment = comment;
-    }
     bool is_counter() const {
         return false;
     }
