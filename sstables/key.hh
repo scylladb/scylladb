@@ -9,6 +9,7 @@
 #include "core/future.hh"
 
 class partition_key;
+class partition_key_view;
 class clustering_key;
 
 namespace sstables {
@@ -33,6 +34,8 @@ public:
     int tri_compare(key_view other) const {
         return compare_unsigned(_bytes, other._bytes);
     }
+
+    int tri_compare(const schema& s, partition_key_view other) const;
 };
 
 enum class composite_marker : bytes::value_type {

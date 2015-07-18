@@ -185,4 +185,12 @@ std::vector<bytes> key_view::explode(const schema& s) const {
 std::vector<bytes> composite_view::explode() const {
     return explode_composite(_bytes);
 }
+
+int key_view::tri_compare(const schema& s, partition_key_view other) const {
+    auto lf = other.legacy_form(s);
+    return lexicographical_tri_compare(
+        _bytes.begin(), _bytes.end(), lf.begin(), lf.end(),
+        [] (uint8_t b1, uint8_t b2) { return (int)b1 - b2; });
+}
+
 }
