@@ -25,54 +25,115 @@ using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 
+template <typename Output>
+void net::serializer::write(Output& out, const gms::gossip_digest_syn& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+gms::gossip_digest_syn net::serializer::read(Input& in, rpc::type<gms::gossip_digest_syn>) const {
+    return read_gms<gms::gossip_digest_syn>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const gms::gossip_digest_ack2& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+gms::gossip_digest_ack2 net::serializer::read(Input& in, rpc::type<gms::gossip_digest_ack2>) const {
+    return read_gms<gms::gossip_digest_ack2>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const streaming::messages::stream_init_message& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+streaming::messages::stream_init_message net::serializer::read(Input& in, rpc::type<streaming::messages::stream_init_message>) const {
+    return read_gms<streaming::messages::stream_init_message>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const streaming::messages::prepare_message& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+streaming::messages::prepare_message net::serializer::read(Input& in, rpc::type<streaming::messages::prepare_message>) const {
+    return read_gms<streaming::messages::prepare_message>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const gms::inet_address& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+gms::inet_address net::serializer::read(Input& in, rpc::type<gms::inet_address>) const {
+    return read_gms<gms::inet_address>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const gms::gossip_digest_ack& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+gms::gossip_digest_ack net::serializer::read(Input& in, rpc::type<gms::gossip_digest_ack>) const {
+    return read_gms<gms::gossip_digest_ack>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const query::read_command& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+query::read_command net::serializer::read(Input& in, rpc::type<query::read_command>) const {
+    return read_gms<query::read_command>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const query::result& v) const {
+    // FIXME: allow const call to query::result::serialize()
+    uint32_t sz = v.serialized_size();
+    write(out, sz);
+    bytes b(bytes::initialized_later(), sz);
+    auto _out = b.begin();
+    const_cast<query::result&>(v).serialize(_out);
+    out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+}
+template <typename Input>
+query::result net::serializer::read(Input& in, rpc::type<query::result>) const {
+    return read_gms<query::result>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const query::result_digest& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+query::result_digest net::serializer::read(Input& in, rpc::type<query::result_digest>) const {
+    return read_gms<query::result_digest>(in);
+}
+
+template <typename Output>
+void net::serializer::write(Output& out, const utils::UUID& v) const {
+    return write_gms(out, v);
+}
+template <typename Input>
+utils::UUID net::serializer::read(Input& in, rpc::type<utils::UUID>) const {
+    return read_gms<utils::UUID>(in);
+}
+
+// for query::range<T>
+template <typename Output, typename T>
+void net::serializer::write(Output& out, const query::range<T>& v) const {
+    write_gms(out, v);
+}
+template <typename Input, typename T>
+query::range<T> net::serializer::read(Input& in, rpc::type<query::range<T>>) const {
+    return read_gms<query::range<T>>(in);
+}
+
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
 struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
-
-future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
-    bytes b(bytes::initialized_later(), sizeof(v));
-    auto _out = b.begin();
-    serialize_int32(_out, int32_t(v));
-    return out.write(reinterpret_cast<const char*>(b.c_str()), sizeof(v));
-}
-
-future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v) {
-    return in.read_exactly(sizeof(v)).then([&v] (temporary_buffer<char> buf) mutable {
-        if (buf.size() != sizeof(v)) {
-            throw rpc::closed_error();
-        }
-        bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sizeof(v));
-        v = messaging_verb(read_simple<int32_t>(bv));
-    });
-}
-
-future<> ser_sstring(output_stream<char>& out, sstring& v) {
-    auto serialize_string_size = serialize_int16_size + v.size();
-    auto sz = serialize_int16_size + serialize_string_size;
-    bytes b(bytes::initialized_later(), sz);
-    auto _out = b.begin();
-    serialize_int16(_out, serialize_string_size);
-    serialize_string(_out, v);
-    return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
-}
-
-future<> des_sstring(input_stream<char>& in, sstring& v) {
-    return in.read_exactly(serialize_int16_size).then([&in, &v] (temporary_buffer<char> buf) mutable {
-        if (buf.size() != serialize_int16_size) {
-            throw rpc::closed_error();
-        }
-        size_t serialize_string_size = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
-        return in.read_exactly(serialize_string_size).then([serialize_string_size, &v]
-            (temporary_buffer<char> buf) mutable {
-            if (buf.size() != serialize_string_size) {
-                throw rpc::closed_error();
-            }
-            bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
-            new (&v) sstring(read_simple_short_string(bv));
-            return make_ready_future<>();
-        });
-    });
-}
 
 distributed<messaging_service> _the_messaging_service;
 
@@ -329,7 +390,7 @@ future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm
         std::move(reply_to), std::move(shard), std::move(response_id));
 }
 
-void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func) {
+void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION_DONE, std::move(func));
 }
 future<> messaging_service::send_mutation_done(shard_id id, unsigned shard, response_id_type response_id) {

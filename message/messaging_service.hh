@@ -116,29 +116,27 @@ public:
 
 namespace net {
 
-future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
-future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
-future<> ser_sstring(output_stream<char>& out, sstring& v);
-future<> des_sstring(input_stream<char>& in, sstring& v);
-
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
 struct serializer {
-    template<typename T>
-    inline future<T> read_integral(input_stream<char>& in) {
+    template <typename T, typename Input>
+    inline T read_integral(Input& input) const {
         static_assert(std::is_integral<T>::value, "T should be integral");
+        T data;
+        input.read(reinterpret_cast<char*>(&data), sizeof(T));
+        return net::ntoh(data);
+    }
 
-        return in.read_exactly(sizeof(T)).then([] (temporary_buffer<char> buf) {
-            if (buf.size() != sizeof(T)) {
-                throw rpc::closed_error();
-            }
-            return make_ready_future<T>(net::ntoh(*unaligned_cast<T*>(buf.get())));
-        });
+    template <typename T, typename Output>
+    inline void write_integral(Output& output, T data) const {
+        static_assert(std::is_integral<T>::value, "T should be integral");
+        data = net::hton(data);
+        output.write(reinterpret_cast<const char*>(&data), sizeof(T));
     }
 
     // Adaptor for writing objects having db::serializer<>
-    template<typename Serializable>
-    inline future<> write_serializable(output_stream<char>& out, const Serializable& v) {
+    template <typename Serializable, typename Output>
+    inline void write_serializable(Output& out, const Serializable& v) const {
         db::serializer<Serializable> ser(v);
         bytes b(bytes::initialized_later(), ser.size() + data_output::serialized_size<uint32_t>());
         data_output d_out(b);
@@ -148,134 +146,207 @@ struct serializer {
     }
 
     // Adaptor for reading objects having db::serializer<>
-    template<typename Serializable>
-    inline future<> read_serializable(input_stream<char>& in, Serializable& v) {
-        return read_integral<uint32_t>(in).then([&in, &v] (auto sz) mutable {
-            return in.read_exactly(sz).then([sz, &v] (temporary_buffer<char> buf) mutable {
-                if (buf.size() != sz) {
-                    throw rpc::closed_error();
-                }
-                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
-                data_input in(bv);
-                new (&v) Serializable(db::serializer<Serializable>::read(in));
-            });
-        });
+    template <typename Serializable, typename Input>
+    inline Serializable read_serializable(Input& in) const {
+        auto sz = read_integral<uint32_t>(in);
+        bytes data(bytes::initialized_later(), sz);
+        in.read(reinterpret_cast<char*>(data.begin()), sz);
+        data_input din(data);
+        return db::serializer<Serializable>::read(din);
     }
 
     // For integer type
-    template<typename T>
-    inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<std::is_integral<std::remove_reference_t<T>>::value, void*> = nullptr) {
-        auto v_ = net::hton(v);
-        return out.write(reinterpret_cast<const char*>(&v_), sizeof(T));
-    }
-    template<typename T>
-    inline auto operator()(input_stream<char>& in, T& v, std::enable_if_t<std::is_integral<T>::value, void*> = nullptr) {
-        return in.read_exactly(sizeof(v)).then([&v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != sizeof(v)) {
-                throw rpc::closed_error();
-            }
-            v = net::ntoh(*reinterpret_cast<const net::packed<T>*>(buf.get()));
-        });
-    }
+    template <typename Input>
+    bool read(Input& input, rpc::type<bool>) const { return read(input, rpc::type<uint8_t>()); }
+    template <typename Input>
+    int8_t read(Input& input, rpc::type<int8_t>) const { return read_integral<int8_t>(input); }
+    template <typename Input>
+    uint8_t read(Input& input, rpc::type<uint8_t>) const { return read_integral<uint8_t>(input); }
+    template <typename Input>
+    int16_t read(Input& input, rpc::type<int16_t>) const { return read_integral<int16_t>(input); }
+    template <typename Input>
+    uint16_t read(Input& input, rpc::type<uint16_t>) const { return read_integral<uint16_t>(input); }
+    template <typename Input>
+    int32_t read(Input& input, rpc::type<int32_t>) const { return read_integral<int32_t>(input); }
+    template <typename Input>
+    uint32_t read(Input& input, rpc::type<uint32_t>) const { return read_integral<uint32_t>(input); }
+    template <typename Input>
+    int64_t read(Input& input, rpc::type<int64_t>) const { return read_integral<int64_t>(input); }
+    template <typename Input>
+    uint64_t read(Input& input, rpc::type<uint64_t>) const { return read_integral<uint64_t>(input); }
+    template <typename Output>
+    void write(Output& output, bool data) const { write(output, uint8_t(data)); }
+    template <typename Output>
+    void write(Output& output, int8_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, uint8_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, int16_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, uint16_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, int32_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, uint32_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, int64_t data) const { write_integral(output, data); }
+    template <typename Output>
+    void write(Output& output, uint64_t data) const { write_integral(output, data); }
 
     // For vectors
-    template<typename T>
-    inline auto operator()(output_stream<char>& out, std::vector<T>& v) {
-        return operator()(out, v.size()).then([&out, &v, this] {
-            return do_for_each(v.begin(), v.end(), [&out, this] (T& e) {
-                return operator()(out, e);
-            });
-        });
+    template <typename T, typename Output>
+    inline void write(Output& out, const std::vector<T>& v) const {
+        write(out, uint32_t(v.size()));
+        for (auto&& e : v) {
+            write(out, e);
+        }
     }
-    template<typename T>
-    inline auto operator()(input_stream<char>& in, std::vector<T>& v) {
-        using size_type = typename  std::vector<T>::size_type;
-        return read_integral<size_type>(in).then([&v, &in, this] (size_type c) {
-            new (&v) std::vector<T>;
-            v.reserve(c);
-            union U {
-                U(){}
-                ~U(){}
-                U(U&&) {}
-                T v;
-            };
-            return do_with(U(), [c, &v, &in, this] (U& u) {
-                return do_until([c = c] () mutable {return !c--;}, [&v, &in, &u, this] () mutable {
-                    return operator()(in, u.v).then([&u, &v] {
-                        v.emplace_back(std::move(u.v));
-                    });
-                });
-            });
-        });
+    template <typename T, typename Input>
+    inline std::vector<T> read(Input& in, rpc::type<std::vector<T>>) const {
+        auto sz = read(in, rpc::type<uint32_t>());
+        std::vector<T> v;
+        v.reserve(sz);
+        while (sz--) {
+            v.push_back(read(in, rpc::type<T>()));
+        }
+        return v;
     }
 
     // For messaging_verb
-    inline auto operator()(output_stream<char>& out, messaging_verb& v) {
-        return ser_messaging_verb(out, v);
+    template <typename Output>
+    void write(Output& out, messaging_verb v) const {
+        return write(out, std::underlying_type_t<messaging_verb>(v));
     }
-    inline auto operator()(input_stream<char>& in, messaging_verb& v) {
-        return des_messaging_verb(in, v);
+    template <typename Input>
+    messaging_verb operator()(Input& in, rpc::type<messaging_verb>) const {
+        return messaging_verb(read(in, rpc::type<std::underlying_type_t<messaging_verb>>()));
     }
 
     // For sstring
-    inline auto operator()(output_stream<char>& out, sstring& v) {
-        return ser_sstring(out, v);
+    template <typename Output>
+    void write(Output& out, const sstring& v) const {
+        write(out, uint32_t(v.size()));
+        out.write(v.begin(), v.size());
     }
-    inline auto operator()(input_stream<char>& in, sstring& v) {
-        return des_sstring(in, v);
+    template <typename Input>
+    void read(Input& in, rpc::type<sstring>) const {
+        auto sz = read(in, rpc::type<uint32_t>());
+        sstring v(sstring::initialized_later(), sz);
+        in.read(v.begin(), sz);
+        return v;
     }
 
     // For frozen_mutation
-    inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
+    template <typename Output>
+    void write(Output& out, const frozen_mutation& v) const{
         return write_serializable(out, v);
     }
-    inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
-        return write_serializable(out, v);
-    }
-    inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
-        return read_serializable(in, v);
+    template <typename Input>
+    frozen_mutation read(Input& in, rpc::type<frozen_mutation>) const {
+        return read_serializable<frozen_mutation>(in);
     }
 
     // For reconcilable_result
-    inline auto operator()(output_stream<char>& out, const reconcilable_result& v) {
+    template <typename Output>
+    void write(Output& out, const reconcilable_result& v) const{
         return write_serializable(out, v);
     }
-    inline auto operator()(output_stream<char>& out, reconcilable_result& v) {
-        return write_serializable(out, v);
-    }
-    inline auto operator()(input_stream<char>& in, reconcilable_result& v) {
-        return read_serializable(in, v);
+    template <typename Input>
+    reconcilable_result read(Input& in, rpc::type<reconcilable_result>) const {
+        return read_serializable<reconcilable_result>(in);
     }
 
     // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2
-    template<typename T>
-    inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<!std::is_integral<std::remove_reference_t<T>>::value &&
-                                                                             !std::is_enum<std::remove_reference_t<T>>::value, void*> = nullptr) {
-        auto sz = serialize_int32_size + v.serialized_size();
+    template <typename T, typename Output>
+    void write_gms(Output& out, const T& v) const {
+        uint32_t sz = v.serialized_size();
+        write(out, sz);
         bytes b(bytes::initialized_later(), sz);
         auto _out = b.begin();
-        serialize_int32(_out, int32_t(sz - serialize_int32_size));
         v.serialize(_out);
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+        out.write(reinterpret_cast<const char*>(b.c_str()), sz);
     }
-    template<typename T>
-    inline auto operator()(input_stream<char>& in, T& v, std::enable_if_t<!std::is_integral<T>::value &&
-                                                                          !std::is_enum<T>::value, void*> = nullptr) {
-        return in.read_exactly(serialize_int32_size).then([&in, &v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != serialize_int32_size) {
-                throw rpc::closed_error();
-            }
-            size_t sz = net::ntoh(*reinterpret_cast<const net::packed<int32_t>*>(buf.get()));
-            return in.read_exactly(sz).then([sz, &v] (temporary_buffer<char> buf) mutable {
-                if (buf.size() != sz) {
-                    throw rpc::closed_error();
-                }
-                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
-                new (&v) T(T::deserialize(bv));
-                assert(bv.size() == 0);
-                return make_ready_future<>();
-            });
-        });
+    template <typename T, typename Input>
+    T read_gms(Input& in) const {
+        auto sz = read(in, rpc::type<uint32_t>());
+        bytes b(bytes::initialized_later(), sz);
+        in.read(reinterpret_cast<char*>(b.begin()), sz);
+        bytes_view bv(b);
+        return T::deserialize(bv);
+    }
+
+    template <typename Output>
+    void write(Output& out, const gms::gossip_digest_syn& v) const;
+    template <typename Input>
+    gms::gossip_digest_syn read(Input& in, rpc::type<gms::gossip_digest_syn>) const;
+
+    template <typename Output>
+    void write(Output& out, const gms::gossip_digest_ack2& v) const;
+    template <typename Input>
+    gms::gossip_digest_ack2 read(Input& in, rpc::type<gms::gossip_digest_ack2>) const;
+
+    template <typename Output>
+    void write(Output& out, const streaming::messages::stream_init_message& v) const;
+    template <typename Input>
+    streaming::messages::stream_init_message read(Input& in, rpc::type<streaming::messages::stream_init_message>) const;
+
+    template <typename Output>
+    void write(Output& out, const streaming::messages::prepare_message& v) const;
+    template <typename Input>
+    streaming::messages::prepare_message read(Input& in, rpc::type<streaming::messages::prepare_message>) const;
+
+    template <typename Output>
+    void write(Output& out, const gms::inet_address& v) const;
+    template <typename Input>
+    gms::inet_address read(Input& in, rpc::type<gms::inet_address>) const;
+
+    template <typename Output>
+    void write(Output& out, const gms::gossip_digest_ack& v) const;
+    template <typename Input>
+    gms::gossip_digest_ack read(Input& in, rpc::type<gms::gossip_digest_ack>) const;
+
+    template <typename Output>
+    void write(Output& out, const query::read_command& v) const;
+    template <typename Input>
+    query::read_command read(Input& in, rpc::type<query::read_command>) const;
+
+    template <typename Output>
+    void write(Output& out, const query::result& v) const;
+    template <typename Input>
+    query::result read(Input& in, rpc::type<query::result>) const;
+
+    template <typename Output>
+    void write(Output& out, const query::result_digest& v) const;
+    template <typename Input>
+    query::result_digest read(Input& in, rpc::type<query::result_digest>) const;
+
+    template <typename Output>
+    void write(Output& out, const utils::UUID& v) const;
+    template <typename Input>
+    utils::UUID read(Input& in, rpc::type<utils::UUID>) const;
+
+    // for query::range<T>
+    template <typename Output, typename T>
+    void write(Output& out, const query::range<T>& v) const;
+    template <typename Input, typename T>
+    query::range<T> read(Input& input, rpc::type<query::range<T>>) const;
+
+    template <typename Output, typename T>
+    void write(Output& out, const foreign_ptr<T>& v) const {
+        return write(out, *v);
+    }
+    template <typename Input, typename T>
+    foreign_ptr<T> read(Input& in, rpc::type<foreign_ptr<T>>) const {
+        return make_foreign(read(in, rpc::type<T>()));
+    }
+
+    template <typename Output, typename T>
+    void write(Output& out, const lw_shared_ptr<T>& v) const {
+        return write(out, *v);
+    }
+    template <typename Input, typename T>
+    lw_shared_ptr<T> read(Input& in, rpc::type<lw_shared_ptr<T>>) const {
+        return make_lw_shared(read(in, rpc::type<T>()));
     }
 };
 
@@ -381,7 +452,7 @@ public:
         inet_address reply_to, unsigned shard, response_id_type response_id);
 
     // Wrapper for MUTATION_DONE
-    void register_mutation_done(std::function<rpc::no_wait_type (rpc::client_info cinfo, unsigned shard, response_id_type response_id)>&& func);
+    void register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
     future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
 
     // Wrapper for READ_DATA

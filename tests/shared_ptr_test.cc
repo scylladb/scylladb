@@ -26,6 +26,8 @@
 #include <boost/test/included/unit_test.hpp>
 #include "core/shared_ptr.hh"
 
+struct expected_exception : public std::exception {};
+
 struct A {
     static bool destroyed;
     A() {
@@ -92,4 +94,24 @@ struct F : enable_lw_shared_from_this<F> {
 BOOST_AUTO_TEST_CASE(test_shared_from_this_called_on_const_object) {
     auto ptr = make_lw_shared<F>();
     ptr->const_method();
+}
+
+BOOST_AUTO_TEST_CASE(test_exception_thrown_from_constructor_is_propagated) {
+    struct X {
+        X() {
+            throw expected_exception();
+        }
+    };
+    try {
+        auto ptr = make_lw_shared<X>();
+        BOOST_FAIL("Constructor should have thrown");
+    } catch (const expected_exception& e) {
+        BOOST_MESSAGE("Expected exception caught");
+    }
+    try {
+        auto ptr = ::make_shared<X>();
+        BOOST_FAIL("Constructor should have thrown");
+    } catch (const expected_exception& e) {
+        BOOST_MESSAGE("Expected exception caught");
+    }
 }

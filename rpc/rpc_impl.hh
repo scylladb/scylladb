@@ -25,124 +25,186 @@
 #include "core/shared_ptr.hh"
 #include "core/sstring.hh"
 #include "core/future-util.hh"
+#include "core/do_with.hh"
 #include "util/is_smart_ptr.hh"
 
 namespace rpc {
+
+struct wait_type {}; // opposite of no_wait_type
+
+// tags to tell whether we want a const client_info& parameter
+struct do_want_client_info {};
+struct dont_want_client_info {};
+
+// An rpc signature, in the form signature<Ret (In0, In1, In2)>.
+template <typename Function>
+struct signature;
+
+// General case
+template <typename Ret, typename... In>
+struct signature<Ret (In...)> {
+    using ret_type = Ret;
+    using arg_types = std::tuple<In...>;
+    using clean = signature;
+    using want_client_info = dont_want_client_info;
+};
+
+// Specialize 'clean' for handlers that receive client_info
+template <typename Ret, typename... In>
+struct signature<Ret (const client_info&, In...)> {
+    using ret_type = Ret;
+    using arg_types = std::tuple<In...>;
+    using clean = signature<Ret (In...)>;
+    using want_client_info = do_want_client_info;
+};
+
+template <typename T>
+struct wait_signature {
+    using type = wait_type;
+    using cleaned_type = T;
+};
+
+template <typename... T>
+struct wait_signature<future<T...>> {
+    using type = wait_type;
+    using cleaned_type = future<T...>;
+};
+
+template <>
+struct wait_signature<no_wait_type> {
+    using type = no_wait_type;
+    using cleaned_type = void;
+};
+
+template <>
+struct wait_signature<future<no_wait_type>> {
+    using type = no_wait_type;
+    using cleaned_type = future<void>;
+};
+
+template <typename T>
+using wait_signature_t = typename wait_signature<T>::type;
+
+template <typename... In>
+inline
+std::tuple<In...>
+maybe_add_client_info(dont_want_client_info, const client_info& ci, std::tuple<In...>&& args) {
+    return std::move(args);
+}
+
+template <typename... In>
+inline
+std::tuple<std::reference_wrapper<const client_info>, In...>
+maybe_add_client_info(do_want_client_info, const client_info& ci, std::tuple<In...>&& args) {
+    return std::tuple_cat(std::make_tuple(std::cref(ci)), std::move(args));
+}
 
 template <bool IsSmartPtr>
 struct serialize_helper;
 
 template <>
 struct serialize_helper<false> {
-    template <typename Serializer, typename T>
-    static inline future<> serialize(Serializer& serialize, output_stream<char>& out, T&& t) {
-        return serialize(out, std::forward<T>(t));
-
+    template <typename Serializer, typename Output, typename T>
+    static inline void serialize(Serializer& serializer, Output& out, const T& t) {
+        return serializer.write(out, t);
     }
 };
 
 template <>
 struct serialize_helper<true> {
-    template <typename Serializer, typename T>
-    static inline future<> serialize(Serializer& serialize, output_stream<char>& out, T&& t) {
-        return serialize(out, *t);
+    template <typename Serializer, typename Output, typename T>
+    static inline void serialize(Serializer& serializer, Output& out, const T& t) {
+        return serializer.write(out, *t);
     }
 };
 
-template<std::size_t N, typename Serializer, typename... T>
-inline std::enable_if_t<N == sizeof...(T), future<>> marshall(Serializer&, output_stream<char>& out, std::tuple<T...>&&) {
-    return out.flush();
+template <typename Serializer, typename Output, typename T>
+inline void marshall_one(Serializer& serializer, Output& out, const T& arg) {
+    using serialize_helper_type = serialize_helper<is_smart_ptr<typename std::remove_reference<T>::type>::value>;
+    serialize_helper_type::serialize(serializer, out, arg);
 }
 
-template<std::size_t N = 0, typename Serializer, typename... T>
-inline std::enable_if_t<N != sizeof...(T), future<>> marshall(Serializer& serialize, output_stream<char>& out, std::tuple<T...>&& args) {
-    using tuple_type = std::tuple<T...>;
-    using t_type = typename std::tuple_element<N, tuple_type>::type;
-    using serialize_helper_type = serialize_helper<is_smart_ptr<typename std::remove_reference<t_type>::type>::value>;
-    t_type arg = std::get<N>(args);
-    return serialize_helper_type::serialize(serialize, out, std::forward<t_type>(arg)).then([&serialize, &out, args = std::move(args)] () mutable {
-        return marshall<N + 1>(serialize, out, std::move(args));
-    });
-}
-
-// ArgsReady is a functor that will be called after each element is deserialized.
-// It gets element's position in a tuple as a parameter. It is used by argument
-// desererialization to mark already deserialized element as containing valid values
-// that needs to be destroyed by a destructor.
-template<std::size_t N, typename Serializer, typename ArgReady, typename... T>
-inline std::enable_if_t<N == sizeof...(T), future<>> unmarshall(Serializer&, input_stream<char>&, std::tuple<T&...>&&, ArgReady&& argready) {
-    return make_ready_future<>();
-}
-
-template<std::size_t N = 0, typename Serializer, typename ArgReady, typename... T>
-inline std::enable_if_t<N != sizeof...(T), future<>> unmarshall(Serializer& deserialize, input_stream<char>& in, std::tuple<T&...>&& args, ArgReady&& argready) {
-    // And you may ask yourself "What is that beautiful house?"^H^H^H^H "Why
-    // make_ready_future() here?". And there answer would be to convert
-    // exception thrown by deserialize info a future
-    return make_ready_future().then([&deserialize, &in, args = std::move(args), argready = std::forward<ArgReady>(argready)] () mutable {
-            return deserialize(in, std::get<N>(args)).then([&deserialize, &in, args = std::move(args), argready = std::forward<ArgReady>(argready)] () mutable {
-                argready(N);
-                return unmarshall<N + 1>(deserialize, in, std::move(args), std::forward<ArgReady>(argready));
-            });
-    });
-}
-
-template<typename Serializer, typename... T>
-inline future<> unmarshall(Serializer& deserializer, input_stream<char>& in, std::tuple<T&...>&& args) {
-    return unmarshall(deserializer, in, std::move(args), [](std::size_t n){});
-}
-
-// ref_tuple gets tuple and returns another tuple with references to members of received tuple
-template<typename... T, std::size_t... I>
-inline std::tuple<T&...> ref_tuple_impl(std::tuple<T...>& t, std::index_sequence<I...>) {
-    return std::tie(std::get<I>(t)...);
-}
-
-template<typename... T>
-inline std::tuple<T&...> ref_tuple(std::tuple<T...>& t) {
-    return ref_tuple_impl(t, std::make_index_sequence<sizeof...(T)>());
-}
-
-struct reply_payload_base {
-    sstring ex;
+struct ignorer {
+    template <typename... T>
+    ignorer(T&&...) {}
 };
 
-template <typename T>
-struct reply_payload : reply_payload_base {
-    void value_set() {
-        v_set = true;
+template <typename Serializer, typename Output, typename... T>
+inline void do_marshall(Serializer& serializer, Output& out, const T&... args) {
+    // C++ guarantees that brace-initialization expressions are evaluted in order
+    ignorer ignore{(marshall_one(serializer, out, args), 1)...};
+}
+
+class measuring_output_stream {
+    size_t _size = 0;
+public:
+    void write(const char* data, size_t size) {
+        _size += size;
     }
-    void value_set(T&& v) {
-        new (&u.v) T(std::move(v));
-        value_set();
+    size_t size() const {
+        return _size;
     }
-    union U {
-        U() {}
-        ~U() {}
-        typename std::aligned_storage<sizeof(T), alignof(T)>::type pad;
-        T v;
-    } u;
-    ~reply_payload() {
-        if (v_set) {
-            u.v.~T();
+};
+
+class simple_output_stream {
+    char* _p;
+public:
+    simple_output_stream(sstring& s) : _p(s.begin()) {}
+    void write(const char* data, size_t size) {
+        _p = std::copy_n(data, size, _p);
+    }
+};
+
+template <typename Serializer, typename... T>
+inline sstring marshall(Serializer& serializer, const T&... args) {
+    measuring_output_stream measure;
+    do_marshall(serializer, measure, args...);
+    sstring ret(sstring::initialized_later(), measure.size());
+    simple_output_stream out(ret);
+    do_marshall(serializer, out, args...);
+    return ret;
+}
+
+template <typename Serializer, typename Input>
+inline std::tuple<> do_unmarshall(Serializer& serializer, Input& in) {
+    return std::make_tuple();
+}
+
+template <typename Serializer, typename Input, typename T0, typename... Trest>
+inline std::tuple<T0, Trest...> do_unmarshall(Serializer& serializer, Input& in) {
+    // FIXME: something less recursive
+    auto first = std::make_tuple(serializer.template read(in, type<T0>()));
+    auto rest = do_unmarshall<Serializer, Input, Trest...>(serializer, in);
+    return std::tuple_cat(std::move(first), std::move(rest));
+}
+
+class simple_input_stream {
+    const char* _p;
+    size_t _size;
+public:
+    simple_input_stream(const char* p, size_t size) : _p(p), _size(size) {}
+    void read(char* p, size_t size) {
+        if (size > _size) {
+            throw error("buffer overflow");
         }
+        std::copy_n(_p, size, p);
+        _p += size;
+        _size -= size;
     }
-private:
-    bool v_set = false; // set it to true when U::v is valid object
 };
 
-template<>
-struct reply_payload<void> : reply_payload_base {
-    void value_set() {}
-};
+template <typename Serializer, typename... T>
+inline std::tuple<T...> unmarshall(Serializer& serializer, temporary_buffer<char> input) {
+    simple_input_stream in(input.get(), input.size());
+    return do_unmarshall<Serializer, simple_input_stream, T...>(serializer, in);
+}
 
-template<typename Payload, typename... T>
-struct rcv_reply_base : reply_payload<Payload> {
+template <typename Payload, typename... T>
+struct rcv_reply_base  {
     bool done = false;
     promise<T...> p;
     template<typename... V>
     void set_value(V&&... v) {
-        this->value_set();
         done = true;
         p.set_value(std::forward<V>(v)...);
     }
@@ -155,111 +217,42 @@ struct rcv_reply_base : reply_payload<Payload> {
 
 template<typename Serializer, typename MsgType, typename T>
 struct rcv_reply : rcv_reply_base<T, T> {
-    inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
-        return unmarshall(dst.serializer(), dst.in(), std::tie(this->u.v)).then([this] {
-            this->set_value(std::move(this->u.v));
-        });
+    inline void get_reply(typename protocol<Serializer, MsgType>::client& dst, temporary_buffer<char> input) {
+        this->set_value(unmarshall<Serializer, T>(dst.serializer(), std::move(input)));
     }
 };
 
 template<typename Serializer, typename MsgType, typename... T>
 struct rcv_reply<Serializer, MsgType, future<T...>> : rcv_reply_base<std::tuple<T...>, T...> {
-    inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
-        return unmarshall(dst.serializer(), dst.in(), ref_tuple(this->u.v)).then([this] {
-            this->set_value(std::move(this->u.v));
-        });
+    inline void get_reply(typename protocol<Serializer, MsgType>::client& dst, temporary_buffer<char> input) {
+        this->set_value(unmarshall<Serializer, T...>(dst.serializer(), std::move(input)));
     }
 };
 
 template<typename Serializer, typename MsgType>
 struct rcv_reply<Serializer, MsgType, void> : rcv_reply_base<void, void> {
-    inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
+    inline void get_reply(typename protocol<Serializer, MsgType>::client& dst, temporary_buffer<char> input) {
         this->set_value();
-        return make_ready_future<>();
     }
 };
 
 template<typename Serializer, typename MsgType>
 struct rcv_reply<Serializer, MsgType, future<>> : rcv_reply<Serializer, MsgType, void> {};
 
-// structure to hold outgoing message parameters on a client side
-// while they are serialized
-template<typename MsgType, typename... T>
-struct out_message {
-    MsgType t;
-    id_type id = 0;
-    std::tuple<T...> args;
-    out_message() = delete;
-    out_message(MsgType xt, id_type xid, T&&... xargs) : t(xt), id(xid), args(std::forward<T>(xargs)...) {}
-};
-
-// structure to desrialize incoming message parameters to on a server side
-template<typename MsgType, typename... T>
-struct in_message {
-    using args_type = std::tuple<T...>;
-    id_type id = 0;
-    bool ready[sizeof...(T)] = {};
-    union U {
-        U() {}
-        ~U() {}
-        typename std::aligned_storage<sizeof(args_type), alignof(args_type)>::type storage;
-        args_type args;
-    } u;
-
-    void set_ready(std::size_t n) {
-        assert(n < sizeof...(T));
-        ready[n] = true;
-    }
-
-    template<std::size_t... I>
-    inline void deleter(std::index_sequence<I...>) {
-        // this contraption calls tuple's element destructor if correspondent ready == true
-        int _[] = {0, (ready[I] && (std::get<I>(u.args).std::tuple_element<I, args_type>::type::~type(), true))...}; (void)_;
-    }
-
-    ~in_message() {
-        deleter(std::make_index_sequence<sizeof...(T)>());
-    }
-};
-
-template<typename T1, typename T2>
-inline void assert_type() {
-    static_assert(std::is_convertible<T1, T2>::value, "wrong type");
-}
-
-// helpers to calculate types of message::args tuple for sending
-// At is a type provided to rpc call
-// Ft is a type that rpc handler expects
-// If At is a lvalue reference the message type is Ft&, not need to copy an object into a message
-// If At is an rvalue reference the type is Ft since value will be copied into it
-// assert_type() will check that values are convertible before assigning
-template<typename Ft, typename At>
-struct build_msg_type;
-
-template<typename Ft, typename At>
-struct build_msg_type<Ft, At&> {
-    typedef Ft& type;
-};
-
-template<typename Ft, typename At>
-struct build_msg_type<Ft, At&&> {
-    typedef Ft type;
-};
-
-template<typename Ret, typename Serializer, typename MsgType>
-inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<> sent, std::enable_if_t<!std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+template <typename Serializer, typename MsgType, typename Ret, typename... InArgs>
+inline auto wait_for_reply(wait_type, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<> sent,
+        signature<Ret (InArgs...)> sig) {
     sent.finally([]{}); // discard result or exception, this path does not need to wait for message to be send
     using reply_type = rcv_reply<Serializer, MsgType, Ret>;
-    auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id) mutable {
+    auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, temporary_buffer<char> data) mutable {
         if (msg_id >= 0) {
             dst.get_stats_internal().replied++;
-            return r.get_reply(dst);
+            return r.get_reply(dst, std::move(data));
         } else {
             dst.get_stats_internal().exception_received++;
-            return unmarshall(dst.serializer(), dst.in(), std::tie(r.ex)).then([&r] {
-                r.done = true;
-                r.p.set_exception(std::runtime_error(r.ex.c_str()));
-            });
+            std::string ex_str(data.begin(), data.end());
+            r.done = true;
+            r.p.set_exception(std::runtime_error(ex_str));
         }
     };
     using handler_type = typename protocol<Serializer, MsgType>::client::template reply_handler<reply_type, decltype(lambda)>;
@@ -269,66 +262,44 @@ inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, 
     return fut;
 }
 
-template<typename Ret, typename Serializer, typename MsgType>
-inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<>&& sent, std::enable_if_t<std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+template<typename Serializer, typename MsgType, typename... InArgs>
+inline auto wait_for_reply(no_wait_type, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<>&& sent,
+        signature<no_wait_type (InArgs...)> sig) {  // no_wait overload
     return std::move(sent);
-}
-
-template<typename Ex, typename... T> struct make_send_exception_helper {
-    auto operator()(Ex&& ex) {
-        return make_exception_future<T...>(std::move(ex));
-    }
-};
-
-template<typename Ex, typename... T> struct make_send_exception_helper<Ex, future<T...>> {
-    auto operator()(Ex&& ex) {
-        return make_exception_future<T...>(std::move(ex));
-    }
-};
-
-template<typename Ex> struct make_send_exception_helper<Ex, no_wait_type> {
-    auto operator()(Ex&& ex) {
-        return make_exception_future<>(std::move(ex));
-    }
-};
-
-template<typename Ex> struct make_send_exception_helper<Ex, void> {
-    auto operator()(Ex&& ex) {
-        return make_exception_future<>(std::move(ex));
-    }
-};
-
-template<typename Ret, typename Ex>
-inline auto make_send_exception(Ex&& ex) {
-    make_send_exception_helper<Ex, Ret> ex_maker;
-    return ex_maker(std::move(ex));
 }
 
 // Returns lambda that can be used to send rpc messages.
 // The lambda gets client connection and rpc parameters as arguments, marshalls them sends
 // to a server and waits for a reply. After receiving reply it unmarshalls it and signal completion
 // to a caller.
-template<typename F, typename Serializer, typename MsgType, std::size_t... I>
-auto send_helper(MsgType t, std::index_sequence<I...>) {
-    return [t](typename protocol<Serializer, MsgType>::client& dst, auto&&... args) {
-        // check that number and type of parameters match registered remote function
-        static_assert(sizeof...(I) == sizeof...(args), "wrong number of parameters");
-        using types = std::tuple<typename build_msg_type<typename F::template arg<I>::type, decltype(args)>::type...>;
-        int _[] = { 0, (assert_type<decltype(args), typename std::tuple_element<I, types>::type>(), 0)... }; (void)_;
-
+template<typename Serializer, typename MsgType, typename Ret, typename... InArgs>
+auto send_helper(MsgType t, signature<Ret (InArgs...)> sig) {
+    return [t, sig] (typename protocol<Serializer, MsgType>::client& dst, const InArgs&... args) {
         if (dst.error()) {
-            return make_send_exception<typename F::return_type>(closed_error());
+            using cleaned_ret_type = typename wait_signature<Ret>::cleaned_type;
+            return futurize<cleaned_ret_type>::make_exception_future(closed_error());
         }
 
         // send message
         auto msg_id = dst.next_message_id();
-        auto m = std::make_unique<out_message<MsgType, typename std::tuple_element<I, types>::type...>>(t, msg_id, std::forward<decltype(args)>(args)...);
-        auto xargs = std::tie(m->t, m->id, std::get<I>(m->args)...); // holds references to all message elements
         promise<> sent; // will be fulfilled when data is sent
         auto fsent = sent.get_future();
         dst.get_stats_internal().pending++;
-        dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m)] () mutable {
-            return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
+        sstring data = marshall(dst.serializer(), args...);
+        sstring header(sstring::initialized_later(), 24);
+        auto p = header.begin();
+        *unaligned_cast<uint64_t*>(p) = net::hton(uint64_t(t));
+        *unaligned_cast<int64_t*>(p + 8) = net::hton(msg_id);
+        *unaligned_cast<uint64_t*>(p + 16) = net::hton(data.size());
+        dst.out_ready() = do_with(std::move(header), std::move(data),
+                [&dst] (sstring& header, sstring& data) {
+            return dst.out_ready().then([&dst, &header, &data] () mutable {
+                return dst.out().write(header).then([&dst, &data] {
+                    return dst.out().write(data).then([&dst] {
+                        return dst.out().flush();
+                    });
+                });
+            });
         }).finally([&dst, sent = std::move(sent)] () mutable {
             dst.get_stats_internal().pending--;
             dst.get_stats_internal().sent_messages++;
@@ -336,107 +307,57 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         });
 
         // prepare reply handler, if return type is now_wait_type this does nothing, since no reply will be sent
-        return wait_for_reply<typename F::return_type, Serializer, MsgType>(dst, msg_id, std::move(fsent));
+        using wait = wait_signature_t<Ret>;
+        return wait_for_reply<Serializer, MsgType>(wait(), dst, msg_id, std::move(fsent), sig);
     };
 }
 
-template<typename Serializer, typename MsgType, typename Payload>
-struct snd_reply_base : reply_payload<Payload> {
-    id_type id;
+template <typename Serializer, typename MsgType>
+inline
+future<>
+protocol<Serializer, MsgType>::server::connection::respond(int64_t msg_id, sstring&& data) {
+    std::array<char, 16> header;
+    *unaligned_cast<int64_t*>(header.data()) = net::hton(msg_id);
+    *unaligned_cast<uint64_t*>(header.data() + 8) = net::hton(data.size());
+    return do_with(header, std::move(data), [this, msg_id] (auto& header, const sstring& data) {
+        return this->out().write(header.data(), header.size()).then([this, &data] {
+            return this->out().write(data.begin(), data.size()).then([this] {
+                return this->out().flush();
+            });
+        });
+    });
+}
 
-    snd_reply_base(id_type xid) : id(xid) {}
-    inline future<> send_ex(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tie(id, this->ex));
+template<typename Serializer, typename MsgType, typename... RetTypes>
+inline future<> reply(wait_type, future<RetTypes...>&& r, int64_t msgid, typename protocol<Serializer, MsgType>::server::connection& client) {
+    try {
+        auto&& data = r.get();
+        auto str = ::apply(marshall<Serializer, const RetTypes&...>,
+                std::tuple_cat(std::make_tuple(std::ref(client.serializer())), std::move(data)));
+        return client.respond(msgid, std::move(str));
+    } catch (std::exception& ex) {
+        return client.respond(-msgid, ex.what());
     }
-};
-
-template<typename Serializer, typename MsgType, typename T>
-struct snd_reply : snd_reply_base<Serializer, MsgType, T> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T>(xid) {}
-    inline void set_val(std::tuple<T>&& val) {
-        this->value_set(std::move(std::get<0>(val)));
-    }
-    inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tie(this->id, this->u.v));
-    }
-};
-
-template<typename Serializer, typename MsgType, typename... T>
-struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>>(xid) {}
-    inline void set_val(std::tuple<T...>&& val) {
-        this->value_set(std::move(val));
-    }
-    inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tuple_cat(std::tie(this->id), ref_tuple(this->u.v)));
-    }
-};
-
-template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType, void> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, void>(xid) {}
-    inline void set_val(std::tuple<>&& val) {
-    }
-    inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tie(this->id));
-    }
-};
+}
 
 // specialization for no_wait_type which does not send a reply
 template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type>(xid) {}
-    inline void set_val(std::tuple<no_wait_type>&& val) {
-    }
-    inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return make_ready_future<>();
-    }
-    inline future<> send_ex(typename protocol<Serializer, MsgType>::server::connection& client) {
-        client.get_protocol().log(client.info(), -this->id, to_sstring("exception \"") + this->ex + "\" in no_wait handler ignored");
-        return make_ready_future<>();
-    }
-};
-
-
-template<typename Serializer, typename MsgType, typename Ret>
-inline future<> reply(std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>& r, typename protocol<Serializer, MsgType>::server::connection& client) {
-    if (r->id < 0) {
-        return r->send_ex(client);
-    } else {
-        return r->reply(client);
-    }
-}
-
-// build callback arguments tuple depending on whether it gets client_info as a first parameter
-template<bool Info, typename MsgType, typename... M>
-inline auto make_apply_args(client_info& info, std::unique_ptr<in_message<MsgType, M...>>& m, std::enable_if_t<!Info, void*> = nullptr) {
-    return std::move(m->u.args);
-}
-
-template<bool Info, typename MsgType, typename... M>
-inline auto make_apply_args(client_info& info, std::unique_ptr<in_message<MsgType, M...>>& m, std::enable_if_t<Info, void*> = nullptr) {
-    return std::tuple_cat(std::make_tuple(std::cref(info)), std::move(m->u.args));
-}
-
-template<typename Ret, bool Info, typename Serializer, typename MsgType, typename Func, typename... M>
-inline future<std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>> apply(Func& func, client_info& info, std::unique_ptr<in_message<MsgType, M...>>&& m) {
-    using futurator = futurize<Ret>;
-    auto r = std::make_unique<snd_reply<Serializer, MsgType, Ret>>(m->id);
+inline future<> reply(no_wait_type, future<no_wait_type>&& r, int64_t msgid, typename protocol<Serializer, MsgType>::server::connection& client) {
     try {
-        auto f = futurator::apply(func, make_apply_args<Info>(info, m));
-        return f.then_wrapped([r = std::move(r)] (typename futurator::type ret) mutable {
-            try {
-                r->set_val(std::move(ret.get()));
-            } catch(std::runtime_error& ex) {
-                r->id = -r->id;
-                r->ex = ex.what();
-            }
-            return make_ready_future<std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>>(std::move(r));
-        });
+        r.get();
+    } catch (std::exception& ex) {
+        client.get_protocol().log(client.info(), msgid, to_sstring("exception \"") + ex.what() + "\" in no_wait handler ignored");
+    }
+    return make_ready_future<>();
+}
+
+template<typename Ret, typename... InArgs, typename WantClientInfo, typename Func, typename ArgsTuple>
+inline futurize_t<Ret> apply(Func& func, client_info& info, WantClientInfo wci, signature<Ret (InArgs...)> sig, ArgsTuple&& args) {
+    using futurator = futurize<Ret>;
+    try {
+        return futurator::apply(func, maybe_add_client_info(wci, info, std::forward<ArgsTuple>(args)));
     } catch (std::runtime_error& ex) {
-        r->id = -r->id;
-        r->ex = ex.what();
-        return make_ready_future<std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>>(std::move(r));
+        return futurator::make_exception_future(std::current_exception());
     }
 }
 
@@ -453,25 +374,19 @@ auto lref_to_cref(T& x) {
 
 // Creates lambda to handle RPC message on a server.
 // The lambda unmarshalls all parameters, calls a handler, marshall return values and sends them back to a client
-template<typename F, typename Serializer, typename MsgType, bool Info, typename Func, std::size_t... I>
-auto recv_helper(std::index_sequence<I...>, Func&& func) {
-    return [func = lref_to_cref(std::forward<Func>(func))](lw_shared_ptr<typename protocol<Serializer, MsgType>::server::connection> client) mutable {
-        // create message to hold all received values
-        auto m = std::make_unique<in_message<MsgType, typename F::template arg<I>::type...>>();
-        auto argready = [mptr = m.get()] (std::size_t n) {
-            if (n) { // skip first element since it is not part of a message tuple
-                mptr->set_ready(n - 1);
-            }
-        };
-        auto xargs = std::tie(m->id, std::get<I>(m->u.args)...); // holds reference to all message elements
-        return unmarshall(client->serializer(), client->in(), std::move(xargs), std::move(argready)).then([client, m = std::move(m), &func] () mutable {
-            // note: apply is executed asynchronously with regards to networking so we cannot chain futures here by doing "return apply()"
-            apply<typename F::return_type, Info, Serializer>(func, client->info(), std::move(m)).then([client] (std::unique_ptr<snd_reply<Serializer, MsgType, typename F::return_type>>&& r) {
-                client->out_ready() = client->out_ready().then([client, r = std::move(r)] () mutable {
-                    auto f = reply(r, *client);
-                    // hold on r and client while reply is sent
-                    return f.then([client, r = std::move(r)] {});
-                });
+template <typename Serializer, typename MsgType, typename Func, typename Ret, typename... InArgs, typename WantClientInfo>
+auto recv_helper(signature<Ret (InArgs...)> sig, Func&& func, WantClientInfo wci) {
+    using signature = decltype(sig);
+    using wait_style = wait_signature_t<Ret>;
+    return [func = lref_to_cref(std::forward<Func>(func))](lw_shared_ptr<typename protocol<Serializer, MsgType>::server::connection> client,
+                                                           int64_t msg_id,
+                                                           temporary_buffer<char> data) mutable {
+        auto args = unmarshall<Serializer, InArgs...>(client->serializer(), std::move(data));
+        // note: apply is executed asynchronously with regards to networking so we cannot chain futures here by doing "return apply()"
+        apply(func, client->info(), WantClientInfo(), signature(), std::move(args)).then_wrapped(
+                [client, msg_id] (futurize_t<typename signature::ret_type> ret) {
+            client->out_ready() = client->out_ready().then([client, msg_id, ret = std::move(ret)] () mutable {
+                auto f = reply<Serializer, MsgType>(wait_style(), std::move(ret), msg_id, *client);
             });
         });
     };
@@ -571,15 +486,18 @@ template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::make_client(MsgType t) {
     using trait = function_traits<typename client_function_type<Func>::type>;
-    return send_helper<trait, Serializer>(t, std::make_index_sequence<trait::arity>());
+    using sig_type = signature<typename trait::signature>;
+    return send_helper<Serializer>(t, sig_type());
 }
 
 template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::register_handler(MsgType t, Func&& func) {
-    constexpr auto info = server_function_type<Func>::info;
-    using trait = function_traits<typename server_function_type<Func>::type>;
-    auto recv = recv_helper<trait, Serializer, MsgType, info>(std::make_index_sequence<trait::arity>(), std::forward<Func>(func));
+    using sig_type = signature<typename function_traits<Func>::signature>;
+    using clean_sig_type = typename sig_type::clean;
+    using want_client_info = typename sig_type::want_client_info;
+    auto recv = recv_helper<Serializer, MsgType>(clean_sig_type(), std::forward<Func>(func),
+            want_client_info());
     register_receiver(t, make_copyable_function(std::move(recv)));
     return make_client<Func>(t);
 }
@@ -616,16 +534,36 @@ protocol<Serializer, MsgType>::server::connection::connection(protocol<Serialize
     _info.addr = std::move(addr);
 }
 
+template <typename MsgType>
+future<MsgType, int64_t, temporary_buffer<char>>
+read_request_frame(input_stream<char>& in) {
+    return in.read_exactly(24).then([&in] (temporary_buffer<char> header) {
+        if (header.size() != 24) {
+            throw rpc::error("bad response frame header");
+        }
+        auto ptr = header.get();
+        auto type = MsgType(net::ntoh(*unaligned_cast<uint64_t>(ptr)));
+        auto msgid = net::ntoh(*unaligned_cast<int64_t*>(ptr + 8));
+        auto size = net::ntoh(*unaligned_cast<uint64_t*>(ptr + 16));
+        return in.read_exactly(size).then([type, msgid, size] (temporary_buffer<char> data) {
+            if (data.size() != size) {
+                throw rpc::error("truncated data frame");
+            }
+            return make_ready_future<MsgType, int64_t, temporary_buffer<char>>(type, msgid, std::move(data));
+        });
+    });
+}
+
 template<typename Serializer, typename MsgType>
 future<> protocol<Serializer, MsgType>::server::connection::process() {
     return do_until([this] { return this->_read_buf.eof() || this->_error; }, [this] () mutable {
-        return unmarshall(this->serializer(), this->_read_buf, std::tie(_type)).then([this] {
-            auto it = _server._proto._handlers.find(_type);
+        return read_request_frame<MsgType>(this->_read_buf).then([this] (MsgType type, int64_t msg_id, temporary_buffer<char> data) {
+            //return unmarshall(this->serializer(), this->_read_buf, std::tie(_type)).then([this] {
+            auto it = _server._proto._handlers.find(type);
             if (it != _server._proto._handlers.end()) {
-                return it->second(this->shared_from_this());
+                it->second(this->shared_from_this(), msg_id, std::move(data));
             } else {
                 this->_error = true;
-                return make_ready_future<>();
             }
         });
     }).finally([this, conn_ptr = this->shared_from_this()] () {
@@ -639,6 +577,26 @@ future<> protocol<Serializer, MsgType>::server::connection::process() {
     });
 }
 
+// FIXME: take out-of-line?
+inline
+future<int64_t, temporary_buffer<char>>
+read_response_frame(input_stream<char>& in) {
+    return in.read_exactly(16).then([&in] (temporary_buffer<char> header) {
+        if (header.size() != 16) {
+            throw rpc::error("bad response frame header");
+        }
+        auto ptr = header.get();
+        auto msgid = net::ntoh(*unaligned_cast<int64_t*>(ptr));
+        auto size = net::ntoh(*unaligned_cast<uint64_t*>(ptr + 8));
+        return in.read_exactly(size).then([msgid, size] (temporary_buffer<char> data) {
+            if (data.size() != size) {
+                throw rpc::error("truncated data frame");
+            }
+            return make_ready_future<int64_t, temporary_buffer<char>>(msgid, std::move(data));
+        });
+    });
+}
+
 template<typename Serializer, typename MsgType>
 protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& proto, ipv4_addr addr, ipv4_addr local) : protocol<Serializer, MsgType>::connection(proto) {
     this->_output_ready = _connected.get_future();
@@ -648,17 +606,15 @@ protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& pro
         this->_write_buf = this->_fd.output();
         this->_connected.set_value();
         do_until([this] { return this->_read_buf.eof() || this->_error; }, [this] () mutable {
-            return unmarshall(this->serializer(), this->_read_buf, std::tie(_rcv_msg_id)).then([this] {
-                auto it = _outstanding.find(::abs(_rcv_msg_id));
+            return read_response_frame(this->_read_buf).then([this] (int64_t msg_id, temporary_buffer<char> data) {
+                //auto unmarshall(this->serializer(), this->_read_buf, std::tie(_rcv_msg_id)).then([this] {
+                auto it = _outstanding.find(::abs(msg_id));
                 if (it != _outstanding.end()) {
                     auto handler = std::move(it->second);
                     _outstanding.erase(it);
-                    auto f = (*handler)(*this, _rcv_msg_id);
-                    // hold on to handler so it will not be deleted before reply is received
-                    return f.finally([handler = std::move(handler)] {});
+                    (*handler)(*this, msg_id, std::move(data));
                 } else {
                     this->_error = true;
-                    return make_ready_future<>();
                 }
             });
         }).finally([this] () {
