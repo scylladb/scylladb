@@ -277,7 +277,8 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr compaction_history() {
-    static thread_local auto compaction_history = make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
+    static thread_local auto compaction_history = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -297,8 +298,10 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "week-long compaction history"
-        ));
-    compaction_history->set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
+        )));
+        builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
+        return builder.build();
+    }();
     return compaction_history;
 }
 

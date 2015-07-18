@@ -382,10 +382,6 @@ public:
         return _raw._default_time_to_live;
     }
 
-    void set_default_time_to_live(gc_clock::duration ttl) {
-        _raw._default_time_to_live = ttl;
-    }
-
     const data_type& default_validator() const {
         return _raw._default_validator;
     }
