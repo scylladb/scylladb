@@ -11,6 +11,7 @@
 #include "sstables/compaction.hh"
 #include "tests/test-utils.hh"
 #include "schema.hh"
+#include "schema_builder.hh"
 #include "database.hh"
 #include <memory>
 #include "sstable_test.hh"
@@ -883,10 +884,10 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
 
 static future<> sstable_compression_test(compressor c, unsigned generation) {
     return test_setup::do_with_test_directory([c, generation] {
-        auto& cs = *complex_schema();
-        auto s = make_lw_shared(schema(cs));
         // NOTE: set a given compressor algorithm to schema.
-        s->set_compressor_params(c);
+        schema_builder builder(complex_schema());
+        builder.set_compressor_params(c);
+        auto s = builder.build();
 
         auto mtp = make_lw_shared<memtable>(s);
 

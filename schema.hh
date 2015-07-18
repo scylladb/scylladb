@@ -230,14 +230,7 @@ public:
     double bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
-    schema& set_bloom_filter_fp_chance(double fp) {
-        _raw._bloom_filter_fp_chance = fp;
-        return *this;
-    }
     sstring thrift_key_validator() const;
-    void set_compressor_params(compression_parameters c) {
-        _raw._compressor_params = c;
-    }
     const compression_parameters& get_compressor_params() const {
         return _raw._compressor_params;
     }
@@ -256,12 +249,6 @@ public:
     const sstring& comment() const {
         return _raw._comment;
     }
-    void set_comment(const sstring& comment) {
-        _raw._comment = comment;
-    }
-    void set_id(utils::UUID new_id) {
-        _raw._id = new_id;
-    }
     bool is_counter() const {
         return false;
     }
@@ -276,10 +263,6 @@ public:
 
     int32_t gc_grace_seconds() const {
         return _raw._gc_grace_seconds;
-    }
-
-    void set_gc_grace_seconds(int32_t gc) {
-        _raw._gc_grace_seconds = gc;
     }
 
     double dc_local_read_repair_chance() const {
@@ -397,10 +380,6 @@ public:
     }
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
-    }
-
-    void set_default_time_to_live(gc_clock::duration ttl) {
-        _raw._default_time_to_live = ttl;
     }
 
     const data_type& default_validator() const {

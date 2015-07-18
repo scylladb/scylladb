@@ -42,6 +42,7 @@
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "schema_builder.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -62,7 +63,8 @@ namespace system_keyspace {
 // functions will solve this problem. So we use functions right now.
 
 schema_ptr hints() {
-    static thread_local auto hints = make_lw_shared(schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
+    static thread_local auto hints = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
         // partition key
         {{"target_id", uuid_type}},
         // clustering key
@@ -80,13 +82,16 @@ schema_ptr hints() {
         //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
-       ));
-    hints->set_gc_grace_seconds(0);
+       )));
+       builder.set_gc_grace_seconds(0);
+       return builder.build();
+    }();
     return hints;
 }
 
 schema_ptr batchlog() {
-    static thread_local auto batchlog = make_lw_shared(schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
+    static thread_local auto batchlog = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -102,8 +107,10 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
-       ));
-    batchlog->set_gc_grace_seconds(0);
+       )));
+       builder.set_gc_grace_seconds(0);
+       return builder.build();
+    }();
     return batchlog;
 }
 
@@ -270,7 +277,8 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr compaction_history() {
-    static thread_local auto compaction_history = make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
+    static thread_local auto compaction_history = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -290,8 +298,10 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "week-long compaction history"
-        ));
-    compaction_history->set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
+        )));
+        builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
+        return builder.build();
+    }();
     return compaction_history;
 }
 
