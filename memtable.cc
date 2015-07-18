@@ -45,7 +45,7 @@ memtable::all_partitions() const {
 boost::iterator_range<memtable::partitions_type::const_iterator>
 memtable::slice(const query::partition_range& range) const {
     if (range.is_singular()) {
-        const query::ring_position& pos = range.start_value();
+        const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
             fail(unimplemented::cause::RANGE_QUERIES);

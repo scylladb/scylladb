@@ -1680,7 +1680,7 @@ enum class speculative_retry_type {
 };
 
 ::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl) {
-    const dht::token& token = pr.start_value().token();
+    const dht::token& token = pr.start()->value().token();
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
@@ -1742,7 +1742,7 @@ storage_proxy::query_singular_local_digest(lw_shared_ptr<query::read_command> cm
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
-    unsigned shard = _db.local().shard_of(pr.start_value().token());
+    unsigned shard = _db.local().shard_of(pr.start()->value().token());
     return _db.invoke_on(shard, [prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd] (database& db) {
         return db.query(*cmd, prv).then([](auto&& f) {
             return make_foreign(std::move(f));
@@ -1785,7 +1785,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
 
     while (i != ranges.end() && std::distance(i, concurrent_fetch_starting_index) < concurrency_factor) {
         query::partition_range& range = *i;
-        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, range.end_value().token());
+        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, range.end()->value().token());
         std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
         ++i;
 
@@ -1795,7 +1795,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
         while (i != ranges.end())
         {
             auto next_range = i;
-            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, next_range->end_value().token());
+            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, next_range->end()->value().token());
             std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints);
 
             // Origin has this to say here:
@@ -1805,7 +1805,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (range.end_value().token() == dht::minimum_token()) {
+            if (range.end()->value().token() == dht::minimum_token()) {
                 break;
             }
 
@@ -1898,7 +1898,7 @@ storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::
         return make_empty();
     }
 
-    if (partition_ranges[0].is_singular() && partition_ranges[0].start_value().has_key()) { // do not support mixed partitions (yet?)
+    if (partition_ranges[0].is_singular() && partition_ranges[0].start()->value().has_key()) { // do not support mixed partitions (yet?)
         try {
             return query_singular(cmd, std::move(partition_ranges), cl);
         } catch (const no_such_column_family&) {
@@ -2445,7 +2445,7 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
     std::vector<query::partition_range> ranges;
 
     // divide the queryRange into pieces delimited by the ring and minimum tokens
-    auto ring_iter = tm.ring_range(range.start_value().token(), true);
+    auto ring_iter = tm.ring_range(range.start()->value().token(), true);
     query::partition_range remainder = range;
     for(const dht::token& upper_bound_token: ring_iter)
     {
@@ -2981,7 +2981,7 @@ public:
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
     if (pr.is_singular()) {
-        unsigned shard = _db.local().shard_of(pr.start_value().token());
+        unsigned shard = _db.local().shard_of(pr.start()->value().token());
         return _db.invoke_on(shard, [cmd, &pr] (database& db) {
             return db.query_mutations(*cmd, pr).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));

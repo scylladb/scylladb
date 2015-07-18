@@ -139,11 +139,12 @@ public:
 
 mutation_reader
 column_family::make_sstable_reader(const query::partition_range& pr) const {
-    if (pr.is_singular() && pr.start_value().has_key()) {
-        if (dht::shard_of(pr.start_value().token()) != engine().cpu_id()) {
+    if (pr.is_singular() && pr.start()->value().has_key()) {
+        const dht::ring_position& pos = pr.start()->value();
+        if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return single_key_sstable_reader(_schema, _sstables, *pr.start_value().key());
+        return single_key_sstable_reader(_schema, _sstables, *pos.key());
     } else {
         // range_sstable_reader is not movable so we need to wrap it
         return [r = make_lw_shared<range_sstable_reader>(_schema, _sstables, pr)] () mutable {
