@@ -252,9 +252,6 @@ public:
     void set_comment(const sstring& comment) {
         _raw._comment = comment;
     }
-    void set_id(utils::UUID new_id) {
-        _raw._id = new_id;
-    }
     bool is_counter() const {
         return false;
     }
