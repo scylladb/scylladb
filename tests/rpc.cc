@@ -24,53 +24,51 @@
 #include "rpc/rpc.hh"
 
 struct serializer {
-    template<typename T>
-    inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<std::is_pod<std::remove_reference_t<T>>::value, void*> = nullptr) {
+    template <typename T, typename Output>
+    void write_arithmetic_type(Output& out, T v) const {
+        static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
         return out.write(reinterpret_cast<const char*>(&v), sizeof(T));
     }
+    template <typename T, typename Input>
+    T read_arithmetic_type(Input& in) const {
+        static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
+        T v;
+        in.read(reinterpret_cast<char*>(&v), sizeof(T));
+        return v;
+    }
+    template <typename Output>
+    void write(Output& output, int32_t v) const { return write_arithmetic_type(output, v); }
+    template <typename Output>
+    void write(Output& output, uint32_t v) const { return write_arithmetic_type(output, v); }
+    template <typename Output>
+    void write(Output& output, int64_t v) const { return write_arithmetic_type(output, v); }
+    template <typename Output>
+    void write(Output& output, uint64_t v) const { return write_arithmetic_type(output, v); }
+    template <typename Output>
+    void write(Output& output, double v) const { return write_arithmetic_type(output, v); }
+    template <typename Input>
+    int32_t read(Input& input, rpc::type<int32_t>) const { return read_arithmetic_type<int32_t>(input); }
+    template <typename Input>
+    uint32_t read(Input& input, rpc::type<uint32_t>) const { return read_arithmetic_type<uint32_t>(input); }
+    template <typename Input>
+    uint64_t read(Input& input, rpc::type<uint64_t>) const { return read_arithmetic_type<uint64_t>(input); }
+    template <typename Input>
+    uint64_t read(Input& input, rpc::type<int64_t>) const { return read_arithmetic_type<int64_t>(input); }
+    template <typename Input>
+    double read(Input& input, rpc::type<double>) const { return read_arithmetic_type<double>(input); }
 
-    template<typename T>
-    inline auto operator()(output_stream<char>& out, T&& v, std::enable_if_t<!std::is_pod<std::remove_reference_t<T>>::value, void*> = nullptr) {
-        return v.serialize(out);
+    template <typename Output>
+    void write(Output& out, const sstring& v) const {
+        write(out, v.size());
+        out.write(v.c_str(), v.size());
     }
 
-    inline auto operator()(output_stream<char>& out, sstring& v) {
-        auto l = std::make_unique<size_t>(v.size());
-        auto f = operator()(out, *l);
-        return f.then([v = std::forward<sstring>(v), &out, l = std::move(l)] {
-            return out.write(v.c_str(), v.size());
-        });
-    }
-
-    template<typename T>
-    inline auto operator()(input_stream<char>& in, T& v, std::enable_if_t<std::is_pod<T>::value, void*> = nullptr) {
-        return in.read_exactly(sizeof(v)).then([&v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() == 0) {
-                throw rpc::closed_error();
-            }
-            v = *reinterpret_cast<const T*>(buf.get());
-        });
-    }
-
-    template<typename T>
-    inline auto operator()(input_stream<char>& in, T& v, std::enable_if_t<!std::is_pod<T>::value, void*> = nullptr) {
-        return v.deserialize(in);
-    }
-
-    inline auto operator()(input_stream<char>& in, sstring& v) {
-        return in.read_exactly(sizeof(size_t)).then([] (temporary_buffer<char> buf) {
-            if (buf.size() == 0) {
-                throw rpc::closed_error();
-            }
-            return make_ready_future<size_t>(*reinterpret_cast<const size_t*>(buf.get()));
-        }).then([&in] (size_t l) {
-            return in.read_exactly(l);
-        }).then([&v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() == 0) {
-                throw rpc::closed_error();
-            }
-            v = sstring(buf.get(), buf.size());
-        });
+    template <typename Input>
+    sstring read(Input& in) const {
+        auto size = read<size_t>(in);
+        sstring ret(sstring::initialized_later(), size);
+        in.read(ret.begin(), size);
+        return ret;
     }
 };
 
