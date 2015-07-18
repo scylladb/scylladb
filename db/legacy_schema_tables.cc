@@ -58,7 +58,8 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 #endif
 
 /* static */ schema_ptr keyspaces() {
-    static thread_local auto keyspaces = make_lw_shared(schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
+    static thread_local auto keyspaces = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -78,13 +79,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         // FIXME: the original Java code also had:
         // in CQL statement creating the table:
         //    "WITH COMPACT STORAGE"
-        ));
-    keyspaces->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return keyspaces;
 }
 
 /* static */ schema_ptr columnfamilies() {
-    static thread_local auto columnfamilies = make_lw_shared(schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
+    static thread_local auto columnfamilies = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -122,13 +126,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "table definitions"
-        ));
-    columnfamilies->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return columnfamilies;
 }
 
 /* static */ schema_ptr columns() {
-    static thread_local auto columns = make_lw_shared(schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
+    static thread_local auto columns = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -148,13 +155,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "column definitions"
-        ));
-    columns->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return columns;
 }
 
 /* static */ schema_ptr triggers() {
-    static thread_local auto triggers = make_lw_shared(schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
+    static thread_local auto triggers = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -169,13 +179,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "trigger definitions"
-        ));
-    triggers->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return triggers;
 }
 
 /* static */ schema_ptr usertypes() {
-    static thread_local auto usertypes = make_lw_shared(schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
+    static thread_local auto usertypes = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -191,13 +204,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "user defined type definitions"
-        ));
-    usertypes->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return usertypes;
 }
 
 /* static */ schema_ptr functions() {
-    static thread_local auto functions = make_lw_shared(schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
+    static thread_local auto functions = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -217,13 +233,16 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "user defined type definitions"
-        ));
-    functions->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return functions;
 }
 
 /* static */ schema_ptr aggregates() {
-    static thread_local auto aggregates = make_lw_shared(schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
+    static thread_local auto aggregates = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -243,8 +262,10 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "user defined aggregate definitions"
-        ));
-    aggregates->set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        )));
+        builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
+        return builder.build();
+    }();
     return aggregates;
 }
 
