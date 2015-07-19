@@ -40,7 +40,9 @@ std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const tok
         assert(ep);
 
         endpoints.push_back(*ep);
-        if (endpoints.size() == replicas) break;
+        if (endpoints.size() == replicas) {
+           break;
+        }
     }
 
     return std::move(endpoints.get_vector());
