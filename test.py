@@ -77,18 +77,6 @@ if __name__ == "__main__":
             test_to_run.append((os.path.join(prefix, test),'other'))
         for test in boost_tests:
             test_to_run.append((os.path.join(prefix, test),'boost'))
-        test_to_run.append(('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''),'other'))
-        test_to_run.append((os.path.join(prefix, 'distributed_test') + ' -c 2','other'))
-
-
-        allocator_test_path = os.path.join(prefix, 'allocator_test')
-        if args.fast:
-            if mode == 'debug':
-                test_to_run.append((allocator_test_path + ' --iterations 5','other'))
-            else:
-                test_to_run.append((allocator_test_path + ' --time 0.1','other'))
-        else:
-            test_to_run.append((allocator_test_path,'other'))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
