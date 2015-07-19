@@ -30,6 +30,7 @@
 #include "query-result-set.hh"
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
+#include "utils/histogram.hh"
 
 namespace service {
 
@@ -51,6 +52,9 @@ public:
         uint64_t range_slice_unavailables;
         uint64_t write_timeouts;
         uint64_t write_unavailables;
+        utils::ihistogram read;
+        utils::ihistogram write;
+        utils::ihistogram range;
     };
     using response_id_type = uint64_t;
 private:
