@@ -38,9 +38,9 @@ struct SerializerConcept {
     // For each serializable type T, implement
     class T;
     template <typename Output>
-    void write(Output& output, const T& data);
+    friend void write(const SerializerConcept&, Output& output, const T& data);
     template <typename Input>
-    T read(Input& input, type<T> type_tag);  // type_tag used to disambiguate
+    friend T read(const SerializerConcept&, Input& input, type<T> type_tag);  // type_tag used to disambiguate
     // Input and Output expose void read(char*, size_t) and write(const char*, size_t).
 };
 

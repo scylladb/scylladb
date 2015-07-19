@@ -24,53 +24,58 @@
 #include "rpc/rpc.hh"
 
 struct serializer {
-    template <typename T, typename Output>
-    void write_arithmetic_type(Output& out, T v) const {
-        static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
-        return out.write(reinterpret_cast<const char*>(&v), sizeof(T));
-    }
-    template <typename T, typename Input>
-    T read_arithmetic_type(Input& in) const {
-        static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
-        T v;
-        in.read(reinterpret_cast<char*>(&v), sizeof(T));
-        return v;
-    }
-    template <typename Output>
-    void write(Output& output, int32_t v) const { return write_arithmetic_type(output, v); }
-    template <typename Output>
-    void write(Output& output, uint32_t v) const { return write_arithmetic_type(output, v); }
-    template <typename Output>
-    void write(Output& output, int64_t v) const { return write_arithmetic_type(output, v); }
-    template <typename Output>
-    void write(Output& output, uint64_t v) const { return write_arithmetic_type(output, v); }
-    template <typename Output>
-    void write(Output& output, double v) const { return write_arithmetic_type(output, v); }
-    template <typename Input>
-    int32_t read(Input& input, rpc::type<int32_t>) const { return read_arithmetic_type<int32_t>(input); }
-    template <typename Input>
-    uint32_t read(Input& input, rpc::type<uint32_t>) const { return read_arithmetic_type<uint32_t>(input); }
-    template <typename Input>
-    uint64_t read(Input& input, rpc::type<uint64_t>) const { return read_arithmetic_type<uint64_t>(input); }
-    template <typename Input>
-    uint64_t read(Input& input, rpc::type<int64_t>) const { return read_arithmetic_type<int64_t>(input); }
-    template <typename Input>
-    double read(Input& input, rpc::type<double>) const { return read_arithmetic_type<double>(input); }
-
-    template <typename Output>
-    void write(Output& out, const sstring& v) const {
-        write(out, v.size());
-        out.write(v.c_str(), v.size());
-    }
-
-    template <typename Input>
-    sstring read(Input& in) const {
-        auto size = read<size_t>(in);
-        sstring ret(sstring::initialized_later(), size);
-        in.read(ret.begin(), size);
-        return ret;
-    }
 };
+
+template <typename T, typename Output>
+inline
+void write_arithmetic_type(Output& out, T v) {
+    static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
+    return out.write(reinterpret_cast<const char*>(&v), sizeof(T));
+}
+
+template <typename T, typename Input>
+inline
+T read_arithmetic_type(Input& in) {
+    static_assert(std::is_arithmetic<T>::value, "must be arithmetic type");
+    T v;
+    in.read(reinterpret_cast<char*>(&v), sizeof(T));
+    return v;
+}
+
+template <typename Output>
+inline void write(serializer, Output& output, int32_t v) { return write_arithmetic_type(output, v); }
+template <typename Output>
+inline void write(serializer, Output& output, uint32_t v) { return write_arithmetic_type(output, v); }
+template <typename Output>
+inline void write(serializer, Output& output, int64_t v) { return write_arithmetic_type(output, v); }
+template <typename Output>
+inline void write(serializer, Output& output, uint64_t v) { return write_arithmetic_type(output, v); }
+template <typename Output>
+inline void write(serializer, Output& output, double v) { return write_arithmetic_type(output, v); }
+template <typename Input>
+inline int32_t read(serializer, Input& input, rpc::type<int32_t>) { return read_arithmetic_type<int32_t>(input); }
+template <typename Input>
+inline uint32_t read(serializer, Input& input, rpc::type<uint32_t>) { return read_arithmetic_type<uint32_t>(input); }
+template <typename Input>
+inline uint64_t read(serializer, Input& input, rpc::type<uint64_t>) { return read_arithmetic_type<uint64_t>(input); }
+template <typename Input>
+inline uint64_t read(serializer, Input& input, rpc::type<int64_t>) { return read_arithmetic_type<int64_t>(input); }
+template <typename Input>
+inline double read(serializer, Input& input, rpc::type<double>) { return read_arithmetic_type<double>(input); }
+
+template <typename Output>
+inline void write(serializer, Output& out, const sstring& v) {
+    write(out, v.size());
+    out.write(v.c_str(), v.size());
+}
+
+template <typename Input>
+inline sstring read(serializer, Input& in) {
+    auto size = read<size_t>(in);
+    sstring ret(sstring::initialized_later(), size);
+    in.read(ret.begin(), size);
+    return ret;
+}
 
 namespace bpo = boost::program_options;
 

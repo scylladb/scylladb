@@ -350,6 +350,21 @@ struct serializer {
     }
 };
 
+// thunk from new-style free function serialization to old-style member function
+template <typename Output, typename T>
+inline
+void
+write(serializer s, Output& out, const T& data) {
+    s.write(out, data);
+}
+
+template <typename Input, typename T>
+inline
+T
+read(serializer s, Input& in, rpc::type<T> type) {
+    return s.read(in, type);
+}
+
 struct shard_id {
     gms::inet_address addr;
     uint32_t cpu_id;
