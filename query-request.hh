@@ -266,6 +266,11 @@ using clustering_range = range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
 
+inline
+bool is_wrap_around(const query::partition_range& range, const schema& s) {
+    return range.is_wrap_around(dht::ring_position_comparator(s));
+}
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 class partition_slice {
