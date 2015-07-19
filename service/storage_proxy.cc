@@ -1889,18 +1889,6 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_local(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges) {
-    // FIXME: Respect cmd->row_limit to avoid unnecessary transfer
-    query::result_merger merger;
-    merger.reserve(smp::count);
-    return _db.map_reduce(std::move(merger), [cmd, partition_ranges = std::move(partition_ranges)] (database& db) {
-        return db.query(*cmd, partition_ranges).then([] (auto&& f) {
-            return make_foreign(std::move(f));
-        });
-    }).finally([cmd] {});
-}
-
-future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));

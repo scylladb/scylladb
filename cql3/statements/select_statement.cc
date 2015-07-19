@@ -213,7 +213,7 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy, s
     auto command = ::make_lw_shared<query::read_command>(_schema->id(), make_partition_slice(options), limit);
     auto partition_ranges = _restrictions->get_partition_key_ranges(options);
 
-    return proxy.local().query_local(command, std::move(partition_ranges)).then([command, this, &options, now](auto result) {
+    return proxy.local().query(_schema, command, std::move(partition_ranges), db::consistency_level::ONE).then([command, this, &options, now](auto result) {
         return this->process_results(std::move(result), command, options, now);
     }).finally([command] {});
 }
