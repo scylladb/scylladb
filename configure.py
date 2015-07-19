@@ -530,7 +530,7 @@ with open(buildfile, 'w') as f:
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar
+            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar -I seastar/build/{mode}/gen
             rule cxx.{mode}
               command = $cxx -MMD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} -c -o $out $in
               description = CXX $out
@@ -610,6 +610,7 @@ with open(buildfile, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
+            gen_headers += ['seastar/build/{}/http/request_parser.hh'.format(mode)]
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
@@ -647,5 +648,9 @@ with open(buildfile, 'w') as f:
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
         build cscope: cscope
+        rule request_parser_hh
+           command = ninja -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
+           description = GEN seastar/http/request_parser.hh
+        build seastar/build/release/http/request_parser.hh seastar/build/debug/http/request_parser.hh: request_parser_hh
         default {modes_list}
         ''').format(modes_list = ' '.join(build_modes), **globals()))
