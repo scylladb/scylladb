@@ -357,6 +357,7 @@ urchin_tests_dependencies = urchin_core + [
     'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
     'tests/urchin/result_set_assertions.cc',
+    'tests/urchin/mutation_source_test.cc',
 ]
 
 urchin_tests_seastar_deps = [
