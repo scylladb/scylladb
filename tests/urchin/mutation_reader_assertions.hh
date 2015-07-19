@@ -24,7 +24,8 @@ public:
         return *this;
     }
 
-    reader_assertions& produces(const std::vector<mutation>& mutations) {
+    template<typename RangeOfMutations>
+    reader_assertions& produces(const RangeOfMutations& mutations) {
         for (auto&& m : mutations) {
             produces(m);
         }
