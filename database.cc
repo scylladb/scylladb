@@ -184,6 +184,11 @@ column_family::find_row(const dht::decorated_key& partition_key, clustering_key 
 
 mutation_reader
 column_family::make_reader(const query::partition_range& range) const {
+    if (is_wrap_around(range, *_schema)) {
+        // make_combined_reader() can't handle streams that wrap around yet.
+        fail(unimplemented::cause::WRAP_AROUND);
+    }
+
     std::vector<mutation_reader> readers;
     readers.reserve(_memtables->size() + _sstables->size());
 

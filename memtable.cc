@@ -54,16 +54,30 @@ memtable::slice(const query::partition_range& range) const {
             return boost::make_iterator_range(i, i);
         }
     } else {
-        if (!range.is_full()) {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
+        auto cmp = partition_entry::compare(_schema);
 
-        return boost::make_iterator_range(partitions.begin(), partitions.end());
+        auto i1 = range.start()
+                  ? (range.start()->is_inclusive()
+                        ? partitions.lower_bound(range.start()->value(), cmp)
+                        : partitions.upper_bound(range.start()->value(), cmp))
+                  : partitions.cbegin();
+
+        auto i2 = range.end()
+                  ? (range.end()->is_inclusive()
+                        ? partitions.upper_bound(range.end()->value(), cmp)
+                        : partitions.lower_bound(range.end()->value(), cmp))
+                  : partitions.cend();
+
+        return boost::make_iterator_range(i1, i2);
     }
 }
 
 mutation_reader
 memtable::make_reader(const query::partition_range& range) const {
+    if (is_wrap_around(range, *_schema)) {
+        fail(unimplemented::cause::WRAP_AROUND);
+    }
+
     auto r = slice(range);
     return [begin = r.begin(), end = r.end(), self = shared_from_this()] () mutable {
         if (begin != end) {
