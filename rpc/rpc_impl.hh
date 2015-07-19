@@ -106,7 +106,7 @@ template <>
 struct serialize_helper<false> {
     template <typename Serializer, typename Output, typename T>
     static inline void serialize(Serializer& serializer, Output& out, const T& t) {
-        return serializer.write(out, t);
+        return write(serializer, out, t);
     }
 };
 
@@ -114,7 +114,7 @@ template <>
 struct serialize_helper<true> {
     template <typename Serializer, typename Output, typename T>
     static inline void serialize(Serializer& serializer, Output& out, const T& t) {
-        return serializer.write(out, *t);
+        return write(serializer, out, *t);
     }
 };
 
@@ -173,7 +173,7 @@ inline std::tuple<> do_unmarshall(Serializer& serializer, Input& in) {
 template <typename Serializer, typename Input, typename T0, typename... Trest>
 inline std::tuple<T0, Trest...> do_unmarshall(Serializer& serializer, Input& in) {
     // FIXME: something less recursive
-    auto first = std::make_tuple(serializer.template read(in, type<T0>()));
+    auto first = std::make_tuple(read(serializer, in, type<T0>()));
     auto rest = do_unmarshall<Serializer, Input, Trest...>(serializer, in);
     return std::tuple_cat(std::move(first), std::move(rest));
 }
