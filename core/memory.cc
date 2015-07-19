@@ -85,6 +85,8 @@ using pageidx = uint32_t;
 struct page;
 class page_list;
 
+static std::atomic<bool> live_cpus[max_cpus];
+
 static thread_local uint64_t g_allocs;
 static thread_local uint64_t g_frees;
 static thread_local uint64_t g_cross_cpu_frees;
@@ -316,6 +318,7 @@ struct cpu_pages {
     void replace_memory_backing(allocate_system_memory_fn alloc_sys_mem);
     void init_virt_to_phys_map();
     translation translate(const void* addr, size_t size);
+    ~cpu_pages();
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -462,6 +465,11 @@ size_t cpu_pages::object_size(void* ptr) {
 }
 
 void cpu_pages::free_cross_cpu(unsigned cpu_id, void* ptr) {
+    if (!live_cpus[cpu_id].load(std::memory_order_relaxed)) {
+        // Thread was destroyed; leak object
+        // should only happen for boost unit-tests.
+        return;
+    }
     auto p = reinterpret_cast<cross_cpu_free_item*>(ptr);
     auto& list = all_cpus[cpu_id]->xcpu_freelist;
     auto old = list.load(std::memory_order_relaxed);
@@ -510,6 +518,10 @@ void cpu_pages::free(void* ptr, size_t size) {
     }
 }
 
+cpu_pages::~cpu_pages() {
+    live_cpus[cpu_id].store(false, std::memory_order_relaxed);
+}
+
 bool cpu_pages::initialize() {
     if (nr_pages) {
         return false;
@@ -538,6 +550,7 @@ bool cpu_pages::initialize() {
     }
     pages[nr_pages].free = false;
     free_span_no_merge(reserved, nr_pages - reserved);
+    live_cpus[cpu_id].store(true, std::memory_order_relaxed);
     return true;
 }
 
