@@ -338,11 +338,11 @@ future<streaming::messages::prepare_message> messaging_service::send_prepare_mes
             std::move(plan_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
 }
 
-void messaging_service::register_stream_mutation(std::function<future<> (frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
 }
-future<> messaging_service::send_stream_mutation(shard_id id, frozen_mutation fm, unsigned dst_cpu_id) {
-    return send_message<void>(this, messaging_verb::STREAM_MUTATION, std::move(id), std::move(fm), std::move(dst_cpu_id));
+future<> messaging_service::send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
+    return send_message<void>(this, messaging_verb::STREAM_MUTATION, std::move(id), std::move(plan_id), std::move(fm), std::move(dst_cpu_id));
 }
 
 void messaging_service::register_echo(std::function<future<> ()>&& func) {
