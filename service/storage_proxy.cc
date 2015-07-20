@@ -163,7 +163,7 @@ public:
     }
 };
 
-storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
+storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
     auto id = _next_response_id++;
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
@@ -190,11 +190,11 @@ storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_
     return id;
 }
 
-void storage_proxy::remove_response_handler(storage_proxy::storage_proxy::response_id_type id) {
+void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
     _response_handlers.erase(id);
 }
 
-void storage_proxy::got_response(storage_proxy::storage_proxy::response_id_type id, gms::inet_address from) {
+void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         if (it->second.handler->response(from)) {
