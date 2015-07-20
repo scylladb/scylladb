@@ -349,7 +349,7 @@ void db::config::read_from_yaml(const char* yaml) {
 }
 
 future<> db::config::read_from_file(file f) {
-    auto sf = make_lw_shared<file>(std::move(f));
+    auto sf = make_lw_shared<file>(*std::move(f));
     return sf->size().then([this, sf](size_t s) {
         return do_with(make_file_input_stream(sf), [this, s](input_stream<char>& in) {
             return in.read_exactly(s).then([this](temporary_buffer<char> buf) {

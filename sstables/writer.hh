@@ -16,7 +16,7 @@ class file_writer {
     size_t _offset = 0;
 public:
     file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192)
-        : _out(make_file_output_stream(std::move(f), buffer_size)) {}
+        : _out(make_file_output_stream(*std::move(f), buffer_size)) {}
 
     file_writer(output_stream<char>&& out)
         : _out(std::move(out)) {}
@@ -127,7 +127,7 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     size_t _pos = 0;
 public:
     compressed_file_data_sink_impl(lw_shared_ptr<file> f, sstables::compression* cm, file_output_stream_options options)
-            : _out(make_file_output_stream(std::move(f), options))
+            : _out(make_file_output_stream(*std::move(f), options))
             , _compression_metadata(cm) {}
 
     future<> put(net::packet data) { abort(); }
