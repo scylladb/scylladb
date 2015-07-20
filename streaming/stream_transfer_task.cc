@@ -72,4 +72,20 @@ void stream_transfer_task::start() {
     }
 }
 
+void stream_transfer_task::complete(int sequence_number) {
+    // ScheduledFuture timeout = timeoutTasks.remove(sequenceNumber);
+    // if (timeout != null)
+    //     timeout.cancel(false);
+
+    files.erase(sequence_number);
+
+    sslog.debug("stream_transfer_task: complete cf_id = {}, seq = {}", this->cf_id, sequence_number);
+
+    auto signal_complete = files.empty();
+    // all file sent, notify session this task is complete.
+    if (signal_complete) {
+        session->task_completed(*this);
+    }
+}
+
 } // namespace streaming
