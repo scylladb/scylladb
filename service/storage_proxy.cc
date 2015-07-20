@@ -1479,7 +1479,7 @@ public:
             } else {
                 auto lhk = lh.result->partitions().back().mut().key(s);
                 auto rhk = rh.result->partitions().back().mut().key(s);
-                return lhk.legacy_tri_compare(s, rhk) > 0;
+                return lhk.ring_order_tri_compare(s, rhk) > 0;
             }
         };
 
@@ -2978,7 +2978,7 @@ public:
         auto cmp = [this] (const partition_run& r1, const partition_run& r2) {
             const partition& p1 = r1.current();
             const partition& p2 = r2.current();
-            return p1._m.key(*_schema).legacy_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
+            return p1._m.key(*_schema).ring_order_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
         };
 
         boost::range::make_heap(_runs, cmp);
