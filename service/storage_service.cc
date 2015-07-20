@@ -134,7 +134,7 @@ future<> storage_service::join_token_ring(int delay) {
             });
         }).then([this] {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
-            bootstrap(_bootstrap_tokens);
+            return bootstrap(_bootstrap_tokens);
         });
 #if 0
         if (SystemKeyspace.bootstrapInProgress())
