@@ -158,7 +158,10 @@ public:
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
     // not a real compaction policy.
     future<> compact_all_sstables();
+    // Compact all sstables provided in the vector.
+    future<> compact_sstables(std::vector<lw_shared_ptr<sstables::sstable>> sstables);
 
+    lw_shared_ptr<sstable_list> get_sstables();
     size_t sstables_count();
 
     void start_compaction();

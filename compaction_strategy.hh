@@ -11,7 +11,8 @@ namespace sstables {
 enum class compaction_strategy_type {
     null,
     major,
-    // FIXME: Add support to SizeTiered, LevelTiered, and DateTiered.
+    size_tiered,
+    // FIXME: Add support to LevelTiered, and DateTiered.
 };
 
 class compaction_strategy_impl;

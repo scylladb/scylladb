@@ -1319,6 +1319,19 @@ uint64_t sstable::data_size() {
     return _data_file_size;
 }
 
+future<uint64_t> sstable::bytes_on_disk() {
+    if (_bytes_on_disk) {
+        return make_ready_future<uint64_t>(_bytes_on_disk);
+    }
+    return do_for_each(_components, [this] (component_type c) {
+        return engine().file_size(filename(c)).then([this] (uint64_t bytes) {
+            _bytes_on_disk += bytes;
+        });
+    }).then([this] {
+        return make_ready_future<uint64_t>(_bytes_on_disk);
+    });
+}
+
 const bool sstable::has_component(component_type f) {
     return _components.count(f);
 }
