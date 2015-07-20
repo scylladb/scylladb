@@ -76,12 +76,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "keyspace definitions"
-        // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::yes);
     }();
     return keyspaces;
 }

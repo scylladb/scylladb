@@ -78,13 +78,11 @@ schema_ptr hints() {
         // comment
         "hints awaiting delivery"
         // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
        )));
        builder.set_gc_grace_seconds(0);
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
 }
@@ -139,7 +137,8 @@ schema_ptr batchlog() {
 }
 
 schema_ptr built_indexes() {
-    static thread_local auto built_indexes = make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
+    static thread_local auto built_indexes = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
         {{"table_name", utf8_type}},
         // clustering key
@@ -152,10 +151,9 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "built column indexes"
-        // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
-       ));
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
     return built_indexes;
 }
 
