@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include "keys.hh"
+#include "dht/i_partitioner.hh"
 
 std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
     return out << "pk{" << to_hex(pk) << "}";
@@ -27,4 +28,14 @@ int
 partition_key_view::legacy_tri_compare(const schema& s, partition_key_view o) const {
     auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
     return cmp(this->representation(), o.representation());
+}
+
+int
+partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k2) const {
+    auto t1 = dht::global_partitioner().get_token(s, *this);
+    auto t2 = dht::global_partitioner().get_token(s, k2);
+    if (t1 != t2) {
+        return t1 < t2 ? -1 : 1;
+    }
+    return legacy_tri_compare(s, k2);
 }
