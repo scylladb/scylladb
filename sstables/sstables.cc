@@ -43,7 +43,7 @@ class file_random_access_reader : public random_access_reader {
     size_t _buffer_size;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override {
-        return make_file_input_stream(_file, pos, _buffer_size);
+        return make_file_input_stream(*_file, pos, _buffer_size);
     }
     explicit file_random_access_reader(file&& f, size_t buffer_size = 8192)
         : file_random_access_reader(make_lw_shared<file>(std::move(f)), buffer_size) {}
@@ -1356,7 +1356,7 @@ input_stream<char> sstable::data_stream_at(uint64_t pos) {
         return make_compressed_file_input_stream(
                 _data_file, &_compression, pos);
     } else {
-        return make_file_input_stream(_data_file, pos);
+        return make_file_input_stream(*_data_file, pos);
     }
 }
 
