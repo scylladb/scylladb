@@ -128,5 +128,6 @@ public:
 
     void add_default_index_names(database&);
 
-    schema_ptr build();
+    enum class compact_storage { no, yes };
+    schema_ptr build(compact_storage = compact_storage::no);
 };

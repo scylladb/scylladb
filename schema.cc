@@ -342,6 +342,11 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    return make_lw_shared<schema>(schema(_raw));
+schema_ptr schema_builder::build(compact_storage cp) {
+    schema s(_raw);
+
+    // Dense means that no part of the comparator stores a CQL column name. This means
+    // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
+    s._raw._is_dense = (cp == compact_storage::yes) && (s.clustering_key_size() > 0);
+    return make_lw_shared<schema>(std::move(s));
 }
