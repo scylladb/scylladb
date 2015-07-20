@@ -11,12 +11,14 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+#include "api/api-doc/utils.json.hh"
+#include "utils/histogram.hh"
 
 namespace api {
 
 struct http_context {
     sstring api_dir;
-    http_server_control http_server;
+    httpd::http_server_control http_server;
     distributed<database>& db;
     distributed<service::storage_proxy>& sp;
     http_context(distributed<database>& _db, distributed<service::storage_proxy>&
@@ -95,10 +97,56 @@ inline std::vector<sstring> split_cf(const sstring& cf) {
  * has a get_stats method.
  *
  */
-template<class T, class F>
-future<json::json_return_type>  sum_stats(distributed<T>& d, uint64_t F::*f) {
+template<class T, class F, class V>
+future<json::json_return_type>  sum_stats(distributed<T>& d, V F::*f) {
     return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, 0,
-            std::plus<uint64_t>()).then([](uint64_t val) {
+            std::plus<V>()).then([](V val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
+}
+
+inline double pow2(double a) {
+    return a * a;
+}
+
+inline httpd::utils_json::histogram add_histogram(httpd::utils_json::histogram res,
+        const utils::ihistogram& val) {
+    if (val.count == 0) {
+        return res;
+    }
+    if (!res.count._set) {
+        res = val;
+        return res;
+    }
+    if (res.min() > val.min) {
+        res.min = val.min;
+    }
+    if (res.max() < val.max) {
+        res.max = val.max;
+    }
+    double ncount = res.count() + val.count;
+    res.sum = res.sum() + val.sum;
+    double a = res.count()/ncount;
+    double b = val.count/ncount;
+
+    double mean =  a * res.mean() + b * val.mean;
+
+    res.variance = (res.variance() + pow2(res.mean() - mean) )* a +
+            (val.variance + pow2(val.mean -mean))* b;
+
+    res.mean = mean;
+    res.count = res.count() + val.count;
+    for (auto i : val.sample) {
+        res.sample.push(i);
+    }
+    return res;
+}
+
+template<class T, class F>
+future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::ihistogram F::*f) {
+
+    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, httpd::utils_json::histogram(),
+            add_histogram).then([](const httpd::utils_json::histogram& val) {
         return make_ready_future<json::json_return_type>(val);
     });
 }
