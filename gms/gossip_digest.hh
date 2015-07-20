@@ -23,7 +23,7 @@
 
 #include "types.hh"
 #include "core/sstring.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 
 namespace gms {

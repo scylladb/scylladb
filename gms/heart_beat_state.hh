@@ -23,7 +23,7 @@
 
 #include "gms/version_generator.hh"
 #include "types.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include <ostream>
 
 namespace gms {

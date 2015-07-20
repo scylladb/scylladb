@@ -3,7 +3,7 @@
 #include <sstream>
 #include <initializer_list>
 
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 
 #define BOOST_TEST_MODULE test-serialization
 #define BOOST_TEST_DYN_LINK

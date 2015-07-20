@@ -21,7 +21,7 @@
 
 #include "streaming/messages/retry_message.hh"
 #include "types.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 
 namespace streaming {
 namespace messages {

@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <vector>
 #include <boost/range/iterator_range.hpp>
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "unimplemented.hh"
 
 // value_traits is meant to abstract away whether we are working on 'bytes'

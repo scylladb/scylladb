@@ -6,7 +6,7 @@
 
 #include "types.hh"
 #include "net/ip.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include <sstream>
 
 namespace gms {

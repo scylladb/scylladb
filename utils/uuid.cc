@@ -10,7 +10,7 @@
 #include <boost/algorithm/string.hpp>
 #include <string>
 #include "core/sstring.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "types.hh"
 
 namespace utils {

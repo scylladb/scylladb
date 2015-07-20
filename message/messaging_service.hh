@@ -10,7 +10,7 @@
 #include "core/print.hh"
 #include "core/sstring.hh"
 #include "net/api.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
