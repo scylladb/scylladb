@@ -634,5 +634,9 @@ with open(buildfile, 'w') as f:
            command = {ninja} -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
            description = GEN seastar/http/request_parser.hh
         build seastar/build/release/http/request_parser.hh seastar/build/debug/http/request_parser.hh: request_parser_hh
+        rule clean
+            command = rm -rf build
+            description = CLEAN
+        build clean: clean
         default {modes_list}
         ''').format(modes_list = ' '.join(build_modes), **globals()))
