@@ -540,7 +540,7 @@ with open(buildfile, 'w') as f:
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} -s $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
@@ -587,8 +587,21 @@ with open(buildfile, 'w') as f:
             elif binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
-                f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
-                                                    'seastar/build/{}/libseastar.a'.format(mode)))
+                if binary.startswith('tests/'):
+                    # Our code's debugging information is huge, and multiplied
+                    # by many tests yields ridiculous amounts of disk space.
+                    # So we strip the tests by default; The user can very
+                    # quickly re-link the test unstripped by adding a "_g"
+                    # to the test name, e.g., "ninja build/release/testname_g"
+                    f.write('build $builddir/{}/{}: link_stripped.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
+                                                                                     'seastar/build/{}/libseastar.a'.format(mode)))
+                    if has_thrift:
+                        f.write('   libs =  -lthrift -lboost_system $libs\n')
+                    f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
+                                                                              'seastar/build/{}/libseastar.a'.format(mode)))
+                else:
+                    f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
+                                                                            'seastar/build/{}/libseastar.a'.format(mode)))
                 if has_thrift:
                     f.write('   libs =  -lthrift -lboost_system $libs\n')
             for src in srcs:
