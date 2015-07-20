@@ -105,14 +105,6 @@ private:
         return future;
     }
 
-#if 0
-    private void attachSocket(InetAddress from, int sessionIndex, Socket socket, boolean isForOutgoing, int version) throws IOException
-    {
-        StreamSession session = coordinator.getOrCreateSessionById(from, sessionIndex, socket.getInetAddress());
-        session.init(this);
-        session.handler.initiateOnReceivingSide(socket, isForOutgoing, version);
-    }
-#endif
 public:
     void add_event_listener(stream_event_handler* listener) {
         // FIXME: Futures.addCallback(this, listener);

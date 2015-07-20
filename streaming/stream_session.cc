@@ -66,6 +66,7 @@ void stream_session::init_messaging_service_handler() {
                 assert(coordinator);
                 auto session = coordinator->get_or_create_next_session(from, from);
                 assert(session);
+                session->init(f);
                 sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={}", session->peer, session->connecting);
                 auto msg_ret = session->prepare(std::move(msg.requests), std::move(msg.summaries));
                 return make_ready_future<messages::prepare_message>(std::move(msg_ret));
