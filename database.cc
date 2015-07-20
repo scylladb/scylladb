@@ -30,6 +30,7 @@
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
+#include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
 
@@ -1207,4 +1208,18 @@ database::stop() {
 
 const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
+}
+
+future<> update_schema_version_and_announce(service::storage_proxy& proxy)
+{
+    return db::legacy_schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
+        return proxy.get_db().invoke_on_all([uuid] (database& db) {
+            db.update_version(uuid);
+            return make_ready_future<>();
+        }).then([uuid] {
+            return db::system_keyspace::update_schema_version(uuid).then([uuid] {
+                return service::migration_manager::passive_announce(uuid);
+            });
+        });
+    });
 }

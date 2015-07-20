@@ -491,16 +491,7 @@ future<> save_system_keyspace_schema() {
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
     {
         return merge_schema(proxy, std::move(mutations), true).then([&proxy] {
-            return calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
-                return proxy.get_db().invoke_on_all([uuid] (database& db) {
-                    db.update_version(uuid);
-                    return make_ready_future<>();
-                }).then([uuid] {
-                    return db::system_keyspace::update_schema_version(uuid).then([uuid] {
-                        return service::migration_manager::passive_announce(uuid);
-                    });
-                });
-            });
+            return update_schema_version_and_announce(proxy);
         });
     }
 
