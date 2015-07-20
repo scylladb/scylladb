@@ -171,6 +171,8 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     }
 public:
     virtual future<> compact(column_family& cfs) override;
+
+    friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
@@ -210,7 +212,7 @@ size_tiered_compaction_strategy::get_buckets(const sstable_list& sstables) {
         // group in the same bucket if it's w/in 50% of the average for this bucket,
         // or this file and the bucket are all considered "small" (less than `minSSTableSize`)
         for (auto& entry : buckets) {
-            auto& bucket = entry.second;
+            std::vector<sstables::shared_sstable> bucket = entry.second;
             size_t old_average_size = entry.first;
 
             if ((size > (old_average_size * bucket_low) && size < (old_average_size * bucket_high))
@@ -220,11 +222,8 @@ size_tiered_compaction_strategy::get_buckets(const sstable_list& sstables) {
                 size_t new_average_size = (total_size + size) / (bucket.size() + 1);
 
                 bucket.push_back(pair.first);
-                buckets.insert({ new_average_size, std::move(bucket) });
-
-                // remove and re-add under new new average size
-                // NOTE: we must remove bucket just here because we move its vector right above.
                 buckets.erase(old_average_size);
+                buckets.insert({ new_average_size, std::move(bucket) });
 
                 found = true;
                 break;
@@ -305,6 +304,17 @@ future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
     }
 
     return cfs.compact_sstables(std::move(most_interesting));
+}
+
+std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
+    size_tiered_compaction_strategy cs;
+
+    auto buckets = cs.get_buckets(*candidates);
+
+    std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
+        DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
+
+    return most_interesting;
 }
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
