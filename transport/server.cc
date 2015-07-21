@@ -1089,7 +1089,7 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::TIMESTAMP , timestamp_type)
     (type_id::UUID      , uuid_type)
     (type_id::VARCHAR   , utf8_type)
-    //(type_id::VARINT    , integer_type)
+    (type_id::VARINT    , varint_type)
     (type_id::TIMEUUID  , timeuuid_type)
     (type_id::INET      , inet_addr_type);
 
