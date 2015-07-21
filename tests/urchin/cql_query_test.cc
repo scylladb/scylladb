@@ -8,6 +8,7 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/test/unit_test.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 
 #include "tests/test-utils.hh"
 #include "tests/urchin/cql_test_env.hh"
@@ -1175,11 +1176,12 @@ SEASTAR_TEST_CASE(test_types) {
                     "    k timeuuid,"
                     "    l uuid,"
                     "    m varchar,"
+                    "    n varint,"
                     ");").discard_result();
         }).then([&e] {
             e.require_table_exists("ks", "all_types");
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n) VALUES ("
                     "    'ascii',"
                     "    123456789,"
                     "    0xdeadbeef,"
@@ -1192,7 +1194,8 @@ SEASTAR_TEST_CASE(test_types) {
                     "    '2001-10-18 14:15:55.134+0000',"
                     "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
                     "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
-                    "    'varchar'"
+                    "    'varchar',"
+                    "    123"
                     ");").discard_result();
         }).then([&e] {
             return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'");
@@ -1215,11 +1218,11 @@ SEASTAR_TEST_CASE(test_types) {
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                     uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
-                    utf8_type->decompose(sstring("varchar"))
+                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123))
                 }
             });
             return e.execute_cql(
-                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m) VALUES ("
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m, n) VALUES ("
                     "    blobAsAscii(asciiAsBlob('ascii2')),"
                     "    blobAsBigint(bigintAsBlob(123456789)),"
                     "    bigintAsBlob(12),"
@@ -1232,12 +1235,12 @@ SEASTAR_TEST_CASE(test_types) {
                     "    blobAsTimestamp(timestampAsBlob('2001-10-18 14:15:55.134+0000')),"
                     "    blobAsTimeuuid(timeuuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),"
                     "    blobAsUuid(uuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),"
-                    "    blobAsVarchar(varcharAsBlob('varchar'))"
+                    "    blobAsVarchar(varcharAsBlob('varchar')), blobAsVarint(varintAsBlob(123))"
                     ");").discard_result();
         }).then([&e] {
              return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii2'");
         }).then([&e] (auto msg) {
-            struct tm t = { 0 };
+            struct tm t = {0};
             t.tm_year = 2001 - 1900;
             t.tm_mon = 10 - 1;
             t.tm_mday = 18;
@@ -1255,7 +1258,7 @@ SEASTAR_TEST_CASE(test_types) {
                     timestamp_type->decompose(tp),
                     timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
                     uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
-                    utf8_type->decompose(sstring("varchar"))
+                    utf8_type->decompose(sstring("varchar")), varint_type->decompose(boost::multiprecision::cpp_int(123))
                 }
             });
         });

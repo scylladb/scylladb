@@ -1360,9 +1360,7 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_TIMESTAMP { $t = cql3_type::timestamp; }
     | K_UUID      { $t = cql3_type::uuid; }
     | K_VARCHAR   { $t = cql3_type::varchar; }
-#if 0
-    | K_VARINT    { $t = CQL3Type.Native.VARINT; }
-#endif
+    | K_VARINT    { $t = cql3_type::varint; }
     | K_TIMEUUID  { $t = cql3_type::timeuuid; }
     ;
 

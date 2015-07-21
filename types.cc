@@ -20,6 +20,7 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/locale/encoding_utf.hpp>
+#include <boost/multiprecision/cpp_int.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -890,6 +891,107 @@ struct float_type_impl : floating_type_impl<float> {
     float_type_impl() : floating_type_impl{"org.apache.cassandra.db.marshal.FloatType"} { }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::float_;
+    }
+};
+
+
+class varint_type_impl : public abstract_type {
+public:
+    varint_type_impl() : abstract_type{"org.apache.cassandra.db.marshal.IntegerType"} { }
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
+        auto num = boost::any_cast<boost::multiprecision::cpp_int>(value);
+        boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
+
+        std::vector<uint8_t> b;
+        auto size = serialized_size(value);
+        b.reserve(size);
+        if (num.sign() < 0) {
+            pnum -= 1;
+        }
+        for (unsigned i = 0; i < size; i++) {
+            auto v = boost::multiprecision::integer_modulus(pnum, 256);
+            pnum >>= 8;
+            if (num.sign() < 0) {
+                v = ~v;
+            }
+            b.push_back(v);
+        }
+        std::copy(b.crbegin(), b.crend(), out);
+    }
+    virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
+        auto num = boost::any_cast<boost::multiprecision::cpp_int>(value);
+        if (!num) {
+            return 1;
+        }
+        auto pnum = abs(num);
+        return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+    }
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        auto a = boost::any_cast<boost::multiprecision::cpp_int>(deserialize(v1));
+        auto b = boost::any_cast<boost::multiprecision::cpp_int>(deserialize(v2));
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
+        return compare(v1, v2) < 0;
+    }
+    virtual size_t hash(bytes_view v) const override {
+        bytes b(v.begin(), v.end());
+        return std::hash<sstring>()(to_string(b));
+    }
+    virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
+        auto negative = v.front() < 0;
+        boost::multiprecision::cpp_int num;
+        for (uint8_t b : v) {
+            if (negative) {
+                b = ~b;
+            }
+            num <<= 8;
+            num += b;
+        }
+        if (negative) {
+            num += 1;
+        }
+        return negative ? -num : num;
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return boost::any_cast<boost::multiprecision::cpp_int>(v).str();
+    }
+    virtual bytes from_string(sstring_view text) const override {
+        if (text.empty()) {
+            return bytes();
+        }
+        try {
+            std::string str(text.begin(), text.end());
+            boost::multiprecision::cpp_int num(str);
+            bytes b(bytes::initialized_later(), serialized_size(num));
+            auto out = b.begin();
+            serialize(boost::any(num), out);
+            return b;
+        } catch (...) {
+            throw marshal_exception(sprint("unable to make int from '%s'", text));
+        }
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::varint;
     }
 };
 
@@ -1991,6 +2093,7 @@ thread_local const shared_ptr<const abstract_type> uuid_type(make_shared<uuid_ty
 thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
+thread_local const shared_ptr<const abstract_type> varint_type(make_shared<varint_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
 
 data_type abstract_type::parse_type(const sstring& name)
@@ -2008,6 +2111,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { "org.apache.cassandra.db.marshal.InetAddressType", inet_addr_type },
         { "org.apache.cassandra.db.marshal.FloatType",       float_type     },
         { "org.apache.cassandra.db.marshal.DoubleType",      double_type    },
+        { "org.apache.cassandra.db.marshal.IntegerType",     varint_type    },
         { "org.apache.cassandra.db.marshal.EmptyType",       empty_type     },
     };
     auto it = types.find(name);
