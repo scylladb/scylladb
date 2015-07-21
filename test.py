@@ -100,10 +100,7 @@ if __name__ == "__main__":
            xmlout = args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml"
            path = path + " --output_format=XML --log_level=all --report_level=no --log_sink=" + xmlout
            print(path)
-        if os.path.isfile('tmp.out'):
-           os.remove('tmp.out')
-        outf=open('tmp.out','w')
-        proc = subprocess.Popen(path.split(' '), stdout=outf, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
+        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
         err = None
         out = None
@@ -115,7 +112,6 @@ if __name__ == "__main__":
             proc.kill()
             proc.returncode = -1
         finally:
-            outf.close();
             if proc.returncode:
                 print_status('FAILED: %s\n' % (path))
                 if proc.returncode == -1:
@@ -123,14 +119,8 @@ if __name__ == "__main__":
                 else:
                     print_status('  with error code {code}\n'.format(code=proc.returncode))
                 print('=== stdout START ===')
-                with open('tmp.out') as outf:
-                   for line in outf:
-                       print(line)
+                print(str(out, encoding='UTF-8'))
                 print('=== stdout END ===')
-                if err:
-                    print('=== stderr START ===')
-                    print(err.decode())
-                    print('=== stderr END ===')
                 all_ok = False
             else:
                 print_status('%s PASSED %s' % (prefix, path))
