@@ -102,8 +102,11 @@ stream_coordinator::host_streaming_data& stream_coordinator::get_host_data(inet_
 }
 
 stream_coordinator::host_streaming_data& stream_coordinator::get_or_create_host_data(inet_address peer) {
-    _peer_sessions[peer] = host_streaming_data(_connections_per_host, _keep_ss_table_level);
-    return _peer_sessions[peer];
+    auto it = _peer_sessions.find(peer);
+    if (it == _peer_sessions.end()) {
+        it = _peer_sessions.emplace(peer, host_streaming_data(_connections_per_host, _keep_ss_table_level)).first;
+    }
+    return it->second;
 }
 
 bool stream_coordinator::host_streaming_data::has_active_sessions() {
