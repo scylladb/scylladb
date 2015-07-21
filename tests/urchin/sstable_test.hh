@@ -2,6 +2,7 @@
 
 #include "sstables/sstables.hh"
 #include "schema.hh"
+#include "schema_builder.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -74,7 +75,8 @@ inline future<> working_sst(sstring dir, unsigned long generation) {
 }
 
 inline schema_ptr composite_schema() {
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "composite",
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "composite",
         // partition key
         {{"name", bytes_type}, {"col1", bytes_type}},
         // clustering key
@@ -87,13 +89,16 @@ inline schema_ptr composite_schema() {
         utf8_type,
         // comment
         "Table with a composite key as pkey"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr set_schema() {
-    auto my_set_type = set_type_impl::get_instance(bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "set_pk",
+    static thread_local auto s = [] {
+        auto my_set_type = set_type_impl::get_instance(bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "set_pk",
         // partition key
         {{"ss", my_set_type}},
         // clustering key
@@ -108,13 +113,16 @@ inline schema_ptr set_schema() {
         utf8_type,
         // comment
         "Table with a set as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr map_schema() {
-    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "map_pk",
+    static thread_local auto s = [] {
+        auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "map_pk",
         // partition key
         {{"ss", my_map_type}},
         // clustering key
@@ -129,13 +137,16 @@ inline schema_ptr map_schema() {
         utf8_type,
         // comment
         "Table with a map as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr list_schema() {
-    auto my_list_type = list_type_impl::get_instance(bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "list_pk",
+    static thread_local auto s = [] {
+        auto my_list_type = list_type_impl::get_instance(bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "list_pk",
         // partition key
         {{"ss", my_list_type}},
         // clustering key
@@ -150,12 +161,15 @@ inline schema_ptr list_schema() {
         utf8_type,
         // comment
         "Table with a list as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr uncompressed_schema() {
-    static thread_local auto uncompressed = make_lw_shared(schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
+    static thread_local auto uncompressed = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
         // partition key
         {{"name", utf8_type}},
         // clustering key
@@ -168,18 +182,21 @@ inline schema_ptr uncompressed_schema() {
         utf8_type,
         // comment
         "Uncompressed data"
-        ));
+       )));
+       return builder.build();
+    }();
     return uncompressed;
 }
 
 inline schema_ptr complex_schema() {
-    auto my_list_type = list_type_impl::get_instance(bytes_type, true);
-    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
-    auto my_set_type = set_type_impl::get_instance(bytes_type, true);
-    auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
-    auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
+    static thread_local auto s = [] {
+        auto my_list_type = list_type_impl::get_instance(bytes_type, true);
+        auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
+        auto my_set_type = set_type_impl::get_instance(bytes_type, true);
+        auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
+        auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
 
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "complex_schema",
+        schema_builder builder(make_lw_shared(schema({}, "tests", "complex_schema",
         // partition key
         {{"key", bytes_type}},
         // clustering key
@@ -198,12 +215,15 @@ inline schema_ptr complex_schema() {
         bytes_type,
         // comment
         "Table with a complex schema, including collections and static keys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr columns_schema() {
-    static thread_local auto columns = make_lw_shared(schema(generate_legacy_id("name", "columns"), "name", "columns",
+    static thread_local auto columns = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("name", "columns"), "name", "columns",
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -223,7 +243,9 @@ inline schema_ptr columns_schema() {
         utf8_type,
         // comment
         "column definitions"
-        ));
+       )));
+       return builder.build();
+    }();
     return columns;
 }
 }
