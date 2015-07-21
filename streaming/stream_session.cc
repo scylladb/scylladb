@@ -56,11 +56,10 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id) {
-        sslog.debug("GOT PREPARE_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, connecting, src_cpu_id] () mutable {
             auto& sm = get_local_stream_manager();
             auto f = sm.get_receiving_stream(plan_id);
-            sslog.debug("PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
+            sslog.debug("GOT PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
@@ -80,10 +79,9 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_stream_mutation([] (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
-        sslog.debug("GOT STREAM_MUTATION");
         return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
             auto cf_id = fm.column_family_id();
-            sslog.debug("STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
+            sslog.debug("GOT STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
             try {
                 auto& db = stream_session::get_local_db();
                 auto& cf = db.find_column_family(cf_id);
@@ -96,9 +94,8 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
-        sslog.debug("GOT STREAM_MUTATION_DONE");
         return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
-            sslog.debug("STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
+            sslog.debug("GOT STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
             auto& sm = get_local_stream_manager();
             auto f = sm.get_receiving_stream(plan_id);
             if (f) {
