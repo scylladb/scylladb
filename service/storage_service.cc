@@ -706,17 +706,17 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
     if (state == application_state::RELEASE_VERSION) {
         auto col = sstring("release_version");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::DC) {
         auto col = sstring("data_center");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::RACK) {
         auto col = sstring("rack");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
@@ -724,21 +724,21 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         try {
             ep = gms::inet_address(value.value);
         } catch (...) {
-            print("storage_service: fail to update %s for %s: invalid rcpaddr %s\n", col, endpoint, value.value);
+            logger.error("storage_service: fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
         db::system_keyspace::update_peer_info(endpoint, col, ep.addr()).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+            try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::SCHEMA) {
         auto col = sstring("schema_version");
         db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::HOST_ID) {
         auto col = sstring("host_id");
         db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     }
 }
@@ -946,7 +946,7 @@ void storage_service::replicate_to_all_cores() {
             _replicate_task.signal();
             f.get();
         } catch (...) {
-            print("storage_service: Fail to replicate _token_metadata\n");
+            logger.error("storage_service: Fail to replicate _token_metadata");
         }
     });
 }
