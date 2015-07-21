@@ -1371,9 +1371,19 @@ class abstract_read_resolver {
 protected:
     size_t _targets_count;
     promise<> _done_promise; // all target responded
+    bool _timedout = false; // will be true if request timeouts
+    timer<> _timeout;
 
+    virtual void on_timeout() {}
 public:
-    abstract_read_resolver(size_t target_count) : _targets_count(target_count) {}
+    abstract_read_resolver(size_t target_count, std::chrono::high_resolution_clock::time_point timeout) : _targets_count(target_count) {
+        _timeout.set_callback([this] {
+            _timedout = true;
+            _done_promise.set_exception(read_timeout_exception());
+            on_timeout();
+        });
+        _timeout.arm(timeout);
+    }
     virtual ~abstract_read_resolver() {};
     future<> done() {
         return _done_promise.get_future();
@@ -1388,21 +1398,31 @@ class digest_read_resolver : public abstract_read_resolver {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _data_results;
     std::vector<query::result_digest> _digest_results;
 
+    virtual void on_timeout() override {
+        _cl_promise.set_exception(read_timeout_exception());
+        // we will not need them any more
+        _data_results.clear();
+        _digest_results.clear();
+    }
     bool digests_match() const {
         assert(_digest_results.size());
         auto& first = *_digest_results.begin();
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
 public:
-    digest_read_resolver(db::consistency_level cl, size_t block_for, size_t targets_count) : abstract_read_resolver(targets_count), _cl(cl), _block_for(block_for) {}
+    digest_read_resolver(db::consistency_level cl, size_t block_for, size_t targets_count, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(targets_count, timeout), _cl(cl), _block_for(block_for) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
-        _digest_results.emplace_back(result->digest());
-        _data_results.emplace_back(std::move(result));
-        got_response(from);
+        if (!_timedout) {
+            _digest_results.emplace_back(result->digest());
+            _data_results.emplace_back(std::move(result));
+            got_response(from);
+        }
     }
     void add_digest(gms::inet_address from, query::result_digest digest) {
-        _digest_results.emplace_back(std::move(digest));
-        got_response(from);
+        if (!_timedout) {
+            _digest_results.emplace_back(std::move(digest));
+            got_response(from);
+        }
     }
     foreign_ptr<lw_shared_ptr<query::result>> resolve() {
         assert(_data_results.size());
@@ -1445,15 +1465,22 @@ class data_read_resolver : public abstract_read_resolver {
     };
 
     std::vector<reply> _data_results;
+private:
+    virtual void on_timeout() override {
+        // we will not need them any more
+        _data_results.clear();
+    }
 
 public:
-    data_read_resolver(size_t targets_count) : abstract_read_resolver(targets_count) {
+    data_read_resolver(size_t targets_count, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(targets_count, timeout) {
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-        _data_results.emplace_back(std::move(from), std::move(result));
-        if (_data_results.size() == _targets_count) {
-            _done_promise.set_value();
+        if (!_timedout) {
+            _data_results.emplace_back(std::move(from), std::move(result));
+            if (_data_results.size() == _targets_count) {
+                _done_promise.set_value();
+            }
         }
     }
     reconcilable_result resolve(schema_ptr schema) {
@@ -1592,13 +1619,13 @@ protected:
         return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
                         _targets.size() > 1 ? make_digest_requests(resolver, _targets.begin() + 1, _targets.end()) : make_ready_future()).discard_result();
     }
-    void reconciliate() {
-        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_targets.size());
+    void reconciliate(std::chrono::high_resolution_clock::time_point timeout) {
+        data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_mutation_data_requests(data_resolver, _targets.begin(), _targets.end()).finally([exec]{});
 
-        data_resolver->done().then_wrapped([exec, data_resolver] (future<>&& f){
+        data_resolver->done().then_wrapped([exec, data_resolver] (future<> f) {
             try {
                 f.get();
                 schema_ptr s = exec->_proxy._db.local().find_schema(exec->_cmd->cf_id);
@@ -1606,23 +1633,23 @@ protected:
                 auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), exec->_cmd->slice)));
                 exec->_result_promise.set_value(std::move(result));
             } catch(read_timeout_exception& ex) {
-                exec->_result_promise.set_exception(std::current_exception());
+                exec->_result_promise.set_exception(ex);
             }
         });
     }
 public:
-    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute() {
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, _targets.size());
+    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) {
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver).finally([exec]() {
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([exec, digest_resolver] (future<>&& f) {
+        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<> f) {
             try {
                 f.get();
-                exec->_result_promise.set_value(digest_resolver->resolve());
+                exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
                 if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                     done.then_wrapped([exec, digest_resolver] (future<>&& f){
@@ -1639,9 +1666,9 @@ public:
                     done.discard_result(); // no need for background check, discard done future explicitly
                 }
             } catch (digest_mismatch_exception& ex) {
-                exec->reconciliate();
-            } catch(read_timeout_exception& ex) {
-                exec->_result_promise.set_exception(std::current_exception());
+                exec->reconciliate(timeout);
+            } catch (read_timeout_exception& ex) {
+                exec->_result_promise.set_exception(ex);
             }
         });
 
@@ -1671,8 +1698,8 @@ class range_slice_read_executor : public abstract_read_executor {
 public:
     range_slice_read_executor(storage_proxy& proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
                                     abstract_read_executor(proxy, std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets)) {}
-    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute() override {
-        reconciliate();
+    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) override {
+        reconciliate(timeout);
         return _result_promise.get_future();
     }
 };
@@ -1756,6 +1783,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     exec.reserve(partition_ranges.size());
+    auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
 
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
@@ -1767,8 +1795,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
     query::result_merger merger;
     merger.reserve(exec.size());
 
-    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd] (::shared_ptr<abstract_read_executor>& rex) {
-        return rex->execute();
+    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd, timeout] (::shared_ptr<abstract_read_executor>& rex) {
+        return rex->execute(timeout);
     }, std::move(merger));
 
     return f.finally([exec = std::move(exec)] {
@@ -1777,7 +1805,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
 }
 
 future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>
-storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
+storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution_clock::time_point timeout, std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i,
         std::vector<query::partition_range>&& ranges, int concurrency_factor) {
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
@@ -1838,17 +1866,17 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
     query::result_merger merger;
     merger.reserve(exec.size());
 
-    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd] (::shared_ptr<abstract_read_executor>& rex) {
-        return rex->execute();
+    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd, timeout] (::shared_ptr<abstract_read_executor>& rex) {
+        return rex->execute(timeout);
     }, std::move(merger));
 
-    return f.then([this, exec = std::move(exec), results = std::move(results), i = std::move(i), ranges = std::move(ranges), cl, cmd, concurrency_factor]
+    return f.then([this, exec = std::move(exec), results = std::move(results), i = std::move(i), ranges = std::move(ranges), cl, cmd, concurrency_factor, timeout]
                    (foreign_ptr<lw_shared_ptr<query::result>>&& result) mutable {
         results.emplace_back(std::move(result));
         if (i == ranges.end()) {
             return make_ready_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(results));
         } else {
-            return query_partition_key_range_concurrent(std::move(results), cmd, cl, std::move(i), std::move(ranges), concurrency_factor);
+            return query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges), concurrency_factor);
         }
     });
 }
@@ -1858,6 +1886,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<query::partition_range> ranges;
+    auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)
@@ -1877,7 +1906,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     results.reserve(ranges.size()/concurrency_factor + 1);
 
-    return query_partition_key_range_concurrent(std::move(results), cmd, cl, ranges.begin(), std::move(ranges), concurrency_factor)
+    return query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, ranges.begin(), std::move(ranges), concurrency_factor)
             .then([](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
         query::result_merger merger;
         merger.reserve(results.size());

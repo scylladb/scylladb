@@ -444,7 +444,7 @@ public:
     val(range_request_timeout_in_ms, uint32_t, 10000, Unused,     \
             "The time in milliseconds that the coordinator waits for sequential or index scans to complete."  \
     )   \
-    val(read_request_timeout_in_ms, uint32_t, 5000, Unused,     \
+    val(read_request_timeout_in_ms, uint32_t, 5000, Used,     \
             "The time that the coordinator waits for read operations to complete"  \
     )   \
     val(counter_write_request_timeout_in_ms, uint32_t, 5000, Unused,     \
