@@ -33,43 +33,6 @@ def pkg_config(option, package):
     output = subprocess.check_output(['pkg-config', option, package])
     return output.decode('utf-8').strip()
 
-#
-# dpdk_cflags - fetch the DPDK specific CFLAGS
-#
-# Run a simple makefile that "includes" the DPDK main makefile and prints the
-# MACHINE_CFLAGS value
-#
-def dpdk_cflags (dpdk_target):
-    with tempfile.NamedTemporaryFile() as sfile:
-        dpdk_target = os.path.abspath(dpdk_target)
-        dpdk_target = re.sub(r'\/+$', '', dpdk_target)
-        dpdk_sdk_path = os.path.dirname(dpdk_target)
-        dpdk_target_name = os.path.basename(dpdk_target)
-        dpdk_arch = dpdk_target_name.split('-')[0]
-        if args.dpdk:
-            dpdk_sdk_path = 'dpdk'
-            dpdk_target = 'build/dpdk'
-            dpdk_target_name = 'x86_64-native-linuxapp-gcc'
-            dpdk_arch = 'x86_64'
-
-        sfile.file.write(bytes('include ' + dpdk_sdk_path + '/mk/rte.vars.mk' + "\n", 'utf-8'))
-        sfile.file.write(bytes('all:' + "\n\t", 'utf-8'))
-        sfile.file.write(bytes('@echo $(MACHINE_CFLAGS)' + "\n", 'utf-8'))
-        sfile.file.flush()
-
-        dpdk_cflags = subprocess.check_output(['make', '--no-print-directory',
-                                             '-f', sfile.name,
-                                             'RTE_SDK=' + dpdk_sdk_path,
-                                             'RTE_OUTPUT=' + dpdk_target,
-                                             'RTE_TARGET=' + dpdk_target_name,
-                                             'RTE_SDK_BIN=' + dpdk_target,
-                                             'RTE_ARCH=' + dpdk_arch])
-        dpdk_cflags_str = dpdk_cflags.decode('utf-8')
-        dpdk_cflags_str = re.sub(r'\n+$', '', dpdk_cflags_str)
-        dpdk_cflags_final = ''
-
-        return dpdk_cflags_str
-
 def try_compile(compiler, source = '', flags = []):
     with tempfile.NamedTemporaryFile() as sfile:
         sfile.file.write(bytes(source, 'utf-8'))
@@ -211,7 +174,7 @@ arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 
 arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
                         help = 'Shortcut for compile for OSv')
 arg_parser.add_argument('--enable-dpdk', action = 'store_true', dest = 'dpdk', default = False,
-                        help = 'Enable dpdk (from included dpdk sources)')
+                        help = 'Enable dpdk (from seastar dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target', default = '',
                         help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
@@ -449,7 +412,14 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
-status = subprocess.call('./configure.py', cwd = 'seastar')
+seastar_flags = []
+if args.dpdk:
+    # fake dependencies on dpdk, so that it is built before anything else
+    seastar_flags += ['--enable-dpdk']
+elif args.dpdk_target:
+    seastar_flags += ['--dpdk-target', args.dpdk_target]
+
+status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
 
 if status != 0:
     print('Seastar configuration failed')
@@ -492,10 +462,6 @@ do_sanitize = True
 if args.static:
     do_sanitize = False
 with open(buildfile, 'w') as f:
-    dpdk_deps = ''
-    if args.dpdk:
-        # fake dependencies on dpdk, so that it is built before anything else
-        dpdk_deps = ' build/dpdk/include/rte_eal.h build/dpdk/lib/librte_eal.a'
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -518,12 +484,6 @@ with open(buildfile, 'w') as f:
             command = {ninja} -C $subdir $target
             description = NINJA $out
         ''').format(**globals()))
-    if args.dpdk:
-        f.write(textwrap.dedent('''\
-            rule dpdkmake
-                command = make -C build/dpdk
-            build {dpdk_deps} : dpdkmake {dpdk_sources}
-            ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
@@ -626,7 +586,7 @@ with open(buildfile, 'w') as f:
             for g in antlr3_grammars:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
-            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers) + dpdk_deps))
+            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
