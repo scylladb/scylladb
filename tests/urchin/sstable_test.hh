@@ -248,4 +248,28 @@ inline schema_ptr columns_schema() {
     }();
     return columns;
 }
+
+inline schema_ptr compact_sparse_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "compact_sparse",
+        // partition key
+        {{"ks", bytes_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"cl1", bytes_type},
+            {"cl2", bytes_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a compact storage, but no clustering keys"
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
+    return s;
+}
 }
