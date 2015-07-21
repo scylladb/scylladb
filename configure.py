@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
+from distutils.spawn import find_executable
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
@@ -458,15 +459,13 @@ if status != 0:
 
 
 pc = { mode : 'build/{}/seastar.pc'.format(mode) for mode in build_modes }
-for ninja in ['ninja', 'ninja-build', 'true']:
-    try:
-        status = subprocess.call([ninja] + list(pc.values()), cwd = 'seastar')
-        if status == 0:
-            break
-    except OSError as e:
-        pass
-if ninja == 'true':
-    print('Unable to create {}'.format(pc))
+ninja = find_executable('ninja') or find_executable('ninja-build')
+if not ninja:
+    print('Ninja executable (ninja or ninja-build) not found on PATH\n')
+    sys.exit(1)
+status = subprocess.call([ninja] + list(pc.values()), cwd = 'seastar')
+if status:
+    print('Failed to generate {}\n'.format(pc))
     sys.exit(1)
 
 for mode in build_modes:
