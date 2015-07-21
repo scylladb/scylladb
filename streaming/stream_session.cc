@@ -57,7 +57,7 @@ void stream_session::init_messaging_service_handler() {
     });
     ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id) {
         sslog.debug("GOT PREPARE_MESSAGE");
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id = std::move(plan_id), from, connecting] () mutable {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, connecting, src_cpu_id] () mutable {
             auto& sm = get_local_stream_manager();
             auto f = sm.get_receiving_stream(plan_id);
             sslog.debug("PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
@@ -67,7 +67,9 @@ void stream_session::init_messaging_service_handler() {
                 auto session = coordinator->get_or_create_next_session(from, from);
                 assert(session);
                 session->init(f);
-                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={}", session->peer, session->connecting);
+                session->dst_cpu_id = src_cpu_id;
+                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={} plan_id={} src_cpu_id={}, dst_cpu_id={}",
+                    session->peer, session->connecting, session->plan_id(), session->src_cpu_id, session->dst_cpu_id);
                 auto msg_ret = session->prepare(std::move(msg.requests), std::move(msg.summaries));
                 return make_ready_future<messages::prepare_message>(std::move(msg_ret));
             }
@@ -403,6 +405,7 @@ void stream_session::task_completed(stream_transfer_task& completed_task) {
 future<> stream_session::send_complete_message() {
     auto from = utils::fb_utilities::get_broadcast_address();
     auto id = shard_id{this->peer, this->dst_cpu_id};
+    sslog.debug("SEND COMPLETE_MESSAGE to {}, plan_id={}", id, this->plan_id());
     return this->ms().send_complete_message(id, this->plan_id(), from, this->connecting, this->dst_cpu_id).then_wrapped([] (auto&& f) {
         try {
             f.get();
