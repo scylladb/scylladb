@@ -73,6 +73,18 @@ static inline bool is_me(gms::inet_address from) {
     return from == utils::fb_utilities::get_broadcast_address();
 }
 
+static inline
+const dht::token& start_token(const query::partition_range& r) {
+    static const dht::token min_token = dht::minimum_token();
+    return r.start() ? r.start()->value().token() : min_token;
+}
+
+static inline
+const dht::token& end_token(const query::partition_range& r) {
+    static const dht::token max_token = dht::maximum_token();
+    return r.end() ? r.end()->value().token() : max_token;
+}
+
 class abstract_write_response_handler {
 protected:
     semaphore _ready; // available when cl is achieved
@@ -1785,7 +1797,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
 
     while (i != ranges.end() && std::distance(i, concurrent_fetch_starting_index) < concurrency_factor) {
         query::partition_range& range = *i;
-        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, range.end()->value().token());
+        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
         ++i;
 
@@ -1794,8 +1806,8 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
         // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
         while (i != ranges.end())
         {
-            auto next_range = i;
-            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, next_range->end()->value().token());
+            query::partition_range& next_range = *i;
+            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
             std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints);
 
             // Origin has this to say here:
@@ -1805,7 +1817,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (range.end()->value().token() == dht::minimum_token()) {
+            if (end_token(range) == dht::minimum_token()) {
                 break;
             }
 
@@ -1824,7 +1836,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
             }
 
             // If we get there, merge this range and the next one
-            range = query::partition_range(range.start(), next_range->end());
+            range = query::partition_range(range.start(), next_range.end());
             live_endpoints = std::move(merged);
             filtered_endpoints = std::move(filtered_merged);
             ++i;
@@ -2445,9 +2457,9 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
     std::vector<query::partition_range> ranges;
 
     // divide the queryRange into pieces delimited by the ring and minimum tokens
-    auto ring_iter = tm.ring_range(range.start()->value().token(), true);
+    auto ring_iter = tm.ring_range(start_token(range), true);
     query::partition_range remainder = range;
-    for(const dht::token& upper_bound_token: ring_iter)
+    for (const dht::token& upper_bound_token : ring_iter)
     {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
