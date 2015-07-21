@@ -120,6 +120,7 @@ public:
     static thread_local shared_ptr<cql3_type> varchar;
     static thread_local shared_ptr<cql3_type> timeuuid;
     static thread_local shared_ptr<cql3_type> inet;
+    static thread_local shared_ptr<cql3_type> varint;
 
 #if 0
         COUNTER  (CounterColumnType.instance),
