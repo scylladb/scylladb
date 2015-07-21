@@ -365,7 +365,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
+    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
@@ -397,7 +397,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
+    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
@@ -612,10 +612,10 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    ss_debug("SS::on_join endpoint=%s\n", endpoint);
+    logger.debug("SS::on_join endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     for (auto t : tokens) {
-        ss_debug("t=%s\n", t);
+        logger.debug("t={}", t);
     }
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
@@ -624,7 +624,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    ss_debug("SS::on_alive endpoint=%s\n", endpoint);
+    logger.debug("SS::on_alive endpoint={}", endpoint);
 #if 0
     MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
@@ -642,7 +642,7 @@ void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_st
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
-    ss_debug("SS::on_change endpoint=%s\n", endpoint);
+    logger.debug("SS::on_change endpoint={}", endpoint);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
@@ -702,7 +702,7 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
 }
 
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    ss_debug("storage_service:: Update ep=%s, state=%d, value=%s\n", endpoint, int(state), value.value);
+    logger.debug("storage_service:: Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
         auto col = sstring("release_version");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
@@ -772,12 +772,12 @@ sstring storage_service::get_application_state_value(inet_address endpoint, appl
 
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
     auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
-    ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
+    logger.debug("endpoint={}, tokens_string={}", endpoint, tokens_string);
     std::vector<sstring> tokens;
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
-        ss_debug("token=%s\n", str);
+        logger.debug("token={}", str);
         sstring_view sv(str);
         bytes b = from_hex(sv);
         ret.emplace(token::kind::key, b);
