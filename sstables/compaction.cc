@@ -36,6 +36,15 @@
 
 namespace sstables {
 
+logging::logger logger("compaction");
+
+struct compaction_stats {
+    size_t sstables = 0;
+    uint64_t start_size = 0;
+    uint64_t total_partitions = 0;
+    uint64_t total_keys_written = 0;
+};
+
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
@@ -44,6 +53,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
     auto newtab = creator();
+    auto stats = make_lw_shared<compaction_stats>();
+    sstring sstable_logger_msg = "[";
 
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
@@ -52,9 +63,17 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // for a better estimate for the number of partitions in the merged
         // sstable than just adding up the lengths of individual sstables.
         estimated_partitions += sst->get_estimated_key_count();
+        stats->total_partitions += sst->get_estimated_key_count();
         // Compacted sstable keeps track of its ancestors.
         newtab->add_ancestor(sst->generation());
+        // FIXME: get sstable level
+        sstable_logger_msg += sprint("%s:level=%d, ", sst->get_filename(), 0);
+        stats->start_size += sst->data_size();
     }
+    sstable_logger_msg += "]";
+    stats->sstables = sstables.size();
+    logger.info("Compacting {}", sstable_logger_msg);
+
     auto combined_reader = make_combined_reader(std::move(readers));
 
     // We use a fixed-sized pipe between the producer fiber (which reads the
@@ -71,9 +90,10 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto output_writer = make_lw_shared<seastar::pipe_writer<mutation>>(std::move(output.writer));
 
     auto done = make_lw_shared<bool>(false);
-    future<> read_done = do_until([done] { return *done; }, [done, output_writer, combined_reader = std::move(combined_reader)] {
-        return combined_reader().then([done = std::move(done), output_writer = std::move(output_writer)] (auto mopt) {
+    future<> read_done = do_until([done] { return *done; }, [done, output_writer, combined_reader = std::move(combined_reader), stats] {
+        return combined_reader().then([done = std::move(done), output_writer = std::move(output_writer), stats] (auto mopt) {
             if (mopt) {
+                stats->total_keys_written++;
                 return output_writer->write(std::move(*mopt));
             } else {
                 *done = true;
@@ -87,8 +107,22 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     };
 
     future<> write_done = newtab->write_components(
-            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab] {
-        return newtab->load().then([newtab] {});
+            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats] {
+        return newtab->load().then([newtab, stats] {
+            uint64_t endsize = newtab->data_size();
+            double ratio = (double) endsize / (double) stats->start_size;
+
+            // FIXME: there is some missing information in the log message below.
+            // look at CompactionTask::runMayThrow() in origin for reference.
+            // 1) calculate data rate during compaction.
+            // 2) add support to merge summary (message: Partition merge counts were {%s}.).
+            // 3) there is no easy way, currently, to know the exact number of total partitions.
+            // By the time being, using estimated key count.
+            logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}%% of original) in {}ms = {}MB/s. " \
+                "~{} total partitions merged to {}.",
+                stats->sstables, newtab->get_filename(), stats->start_size, endsize, (int) (ratio * 100),
+                0, 0, stats->total_partitions, stats->total_keys_written);
+        });
     });
 
     // Wait for both read_done and write_done fibers to finish.
