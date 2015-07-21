@@ -198,7 +198,7 @@ schema_ptr built_indexes() {
         // regular columns
         {
                 {"data_center", utf8_type},
-                {"host_id", utf8_type},
+                {"host_id", uuid_type},
                 {"preferred_ip", inet_addr_type},
                 {"rack", utf8_type},
                 {"release_version", utf8_type},
