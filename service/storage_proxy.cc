@@ -1388,6 +1388,9 @@ public:
     future<> done() {
         return _done_promise.get_future();
     }
+    virtual void error(gms::inet_address ep) {
+        // do nothing for now, request will timeout eventually
+    }
 };
 
 class digest_read_resolver : public abstract_read_resolver {
@@ -1596,22 +1599,34 @@ protected:
     }
     future<> make_mutation_data_requests(data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_mutation_data_request(ep).then([resolver, ep] (foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-                resolver->add_mutate_data(ep, std::move(result));
+            return make_mutation_data_request(ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+                try {
+                    resolver->add_mutate_data(ep, f.get0());
+                } catch(...) {
+                    resolver->error(ep);
+                }
             });
         });
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_data_request(ep).then([resolver, ep] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-                resolver->add_data(ep, std::move(result));
+            return make_data_request(ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+                try {
+                    resolver->add_data(ep, f.get0());
+                } catch(...) {
+                    resolver->error(ep);
+                }
             });
         });
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_digest_request(ep).then([resolver, ep] (query::result_digest&& digest) {
-                resolver->add_digest(ep, std::move(digest));
+            return make_digest_request(ep).then_wrapped([resolver, ep] (future<query::result_digest> f) {
+                try {
+                    resolver->add_digest(ep, f.get0());
+                } catch(...) {
+                    resolver->error(ep);
+                }
             });
         });
     }
