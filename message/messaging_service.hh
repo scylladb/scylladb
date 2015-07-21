@@ -431,9 +431,9 @@ public:
 
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id)>&& func);
     future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned dst_cpu_id);
+        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id);
 
     // Wrapper for STREAM_MUTATION verb
     void register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
