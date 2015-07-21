@@ -93,6 +93,26 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
+    ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        sslog.debug("GOT STREAM_MUTATION_DONE");
+        return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
+            sslog.debug("STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                session->receive_task_completed(cf_id);
+                return make_ready_future<>();
+            } else {
+                auto err = sprint("STREAM_MUTATION_DONE: Can not find stream_manager for plan_id=%s", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
+        });
+    });
 #if 0
     ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
@@ -349,6 +369,12 @@ session_info stream_session::get_session_info() {
     return session_info(peer, _index, connecting, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
+void stream_session::receive_task_completed(UUID cf_id) {
+    _receivers.erase(cf_id);
+    sslog.debug("receive_task_completed: cf_id={} done, {} {}", cf_id, _receivers.size(), _transfers.size());
+    maybe_completed();
+}
+
 void stream_session::task_completed(stream_receive_task& completed_task) {
     _receivers.erase(completed_task.cf_id);
     maybe_completed();
@@ -368,11 +394,13 @@ bool stream_session::maybe_completed() {
                 _complete_sent = true;
             }
             close_session(stream_session_state::COMPLETE);
+            sslog.debug("session complete");
         } else {
             // notify peer that this session is completed
             //handler.sendMessage(new CompleteMessage());
             _complete_sent = true;
             set_state(stream_session_state::WAIT_COMPLETE);
+            sslog.debug("session wait complete");
         }
     }
     return completed;
