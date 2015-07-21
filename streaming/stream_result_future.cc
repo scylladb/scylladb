@@ -51,7 +51,7 @@ void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
         // TODO: stream_result_future needs a ref to stream_coordinator.
         sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level));
     }
-    sslog.info("[Stream #{}, ID#{}] Received streaming plan for {}", plan_id, session_index, description);
+    sslog.info("[Stream #{} ID#{}] Received streaming plan for {}", plan_id, session_index, description);
 }
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
