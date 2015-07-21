@@ -93,6 +93,7 @@ enum class messaging_verb : int32_t {
     STREAM_INIT_MESSAGE,
     PREPARE_MESSAGE,
     STREAM_MUTATION,
+    STREAM_MUTATION_DONE,
     INCOMING_FILE_MESSAGE,
     OUTGOING_FILE_MESSAGE,
     RECEIVED_MESSAGE,
@@ -437,6 +438,9 @@ public:
     // Wrapper for STREAM_MUTATION verb
     void register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
     future<> send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
+
+    void register_stream_mutation_done(std::function<future<> (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(shard_id id, UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
