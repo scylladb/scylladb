@@ -444,6 +444,8 @@ for mode in build_modes:
     modes[mode]['seastar_libs'] = cfg['Libs']
 
 def gen_seastar_deps():
+    yield 'seastar/configure.py'
+    yield 'seastar/build.ninja'
     for root, dir, files in os.walk('seastar'):
         for f in files:
             if f.endswith('.cc') or f.endswith('.hh'):
