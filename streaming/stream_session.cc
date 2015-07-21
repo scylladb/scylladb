@@ -120,13 +120,27 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg, unsigned dst_cpu_id) {
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::complete_message msg_ret;
-            return make_ready_future<messages::complete_message>(std::move(msg_ret));
+#endif
+    ms().register_complete_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
+            sslog.debug("GOT COMPLETE_MESSAGE, plan_id={}, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                session->complete();
+            } else {
+                auto err = sprint("COMPLETE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
         });
+        return messaging_service::no_wait();
     });
+#if 0
     ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
         smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
@@ -344,10 +358,11 @@ void stream_session::retry(UUID cf_id, int sequence_number) {
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
         if (!_complete_sent) {
-            //handler.sendMessage(new CompleteMessage());
-            _complete_sent = true;
+            send_complete_message().then([this] {
+                _complete_sent = true;
+            });
         }
-       close_session(stream_session_state::COMPLETE);
+        close_session(stream_session_state::COMPLETE);
     } else {
         set_state(stream_session_state::WAIT_COMPLETE);
     }
@@ -385,22 +400,39 @@ void stream_session::task_completed(stream_transfer_task& completed_task) {
     maybe_completed();
 }
 
+future<> stream_session::send_complete_message() {
+    auto from = utils::fb_utilities::get_broadcast_address();
+    auto id = shard_id{this->peer, this->dst_cpu_id};
+    return this->ms().send_complete_message(id, this->plan_id(), from, this->connecting, this->dst_cpu_id).then_wrapped([] (auto&& f) {
+        try {
+            f.get();
+            sslog.debug("GOT COMPLETE_MESSAGE Reply");
+            return make_ready_future<>();
+        } catch (...) {
+            sslog.warn("ERROR COMPLETE_MESSAGE Reply");
+            return make_ready_future<>();
+        }
+    });
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
         if (_state == stream_session_state::WAIT_COMPLETE) {
             if (!_complete_sent) {
-                //handler.sendMessage(new CompleteMessage());
-                _complete_sent = true;
+                send_complete_message().then([this] {
+                    _complete_sent = true;
+                });
             }
             close_session(stream_session_state::COMPLETE);
             sslog.debug("session complete");
         } else {
             // notify peer that this session is completed
-            //handler.sendMessage(new CompleteMessage());
-            _complete_sent = true;
-            set_state(stream_session_state::WAIT_COMPLETE);
-            sslog.debug("session wait complete");
+            send_complete_message().then([this] {
+                _complete_sent = true;
+                set_state(stream_session_state::WAIT_COMPLETE);
+                sslog.debug("session wait complete");
+            });
         }
     }
     return completed;
