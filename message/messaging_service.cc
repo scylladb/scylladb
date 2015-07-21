@@ -352,6 +352,13 @@ future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id,
     return send_message<void>(this, messaging_verb::STREAM_MUTATION_DONE, std::move(id), std::move(plan_id), std::move(cf_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
 }
 
+void messaging_service::register_complete_message(std::function<rpc::no_wait_type (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
+    register_handler(this, messaging_verb::COMPLETE_MESSAGE, std::move(func));
+}
+future<> messaging_service::send_complete_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+    return send_message_oneway(this, messaging_verb::COMPLETE_MESSAGE, std::move(id), std::move(plan_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
+}
+
 void messaging_service::register_echo(std::function<future<> ()>&& func) {
     register_handler(this, messaging_verb::ECHO, std::move(func));
 }
