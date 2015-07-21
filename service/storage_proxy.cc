@@ -1817,7 +1817,7 @@ storage_proxy::query_partition_key_range_concurrent(std::vector<foreign_ptr<lw_s
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (end_token(range) == dht::minimum_token()) {
+            if (end_token(range) == dht::maximum_token()) {
                 break;
             }
 
@@ -2471,14 +2471,28 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
          *     keys having 15 as token and B include none of those (since that is what our node owns).
          * asSplitValue() abstracts that choice.
          */
+
         dht::ring_position split_point(upper_bound_token);
         if (!remainder.contains(split_point, dht::ring_position_comparator(s))) {
             break; // no more splits
         }
-        std::pair<query::partition_range, query::partition_range> splits = remainder.split(split_point, dht::ring_position_comparator(s));
 
-        ranges.emplace_back(std::move(splits.first));
-        remainder = std::move(splits.second);
+        if (upper_bound_token.is_minimum()) {
+            ranges.emplace_back(query::partition_range(remainder.start(), {}));
+            remainder = query::partition_range({}, remainder.end());
+        } else {
+            // We shouldn't attempt to split on upper bound, because it may result in
+            // an ambiguous range of the form (x; x]
+            if (end_token(remainder) == upper_bound_token) {
+                break;
+            }
+
+            std::pair<query::partition_range, query::partition_range> splits =
+                remainder.split(split_point, dht::ring_position_comparator(s));
+
+            ranges.emplace_back(std::move(splits.first));
+            remainder = std::move(splits.second);
+        }
     }
     ranges.emplace_back(std::move(remainder));
 
