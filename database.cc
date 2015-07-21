@@ -1012,7 +1012,7 @@ struct query_state {
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
-    bool range_empty;
+    bool range_empty = false;   // Avoid ubsan false-positive when moving after construction
     std::vector<query::partition_range>::const_iterator current_partition_range;
     std::vector<query::partition_range>::const_iterator range_end;
     mutation_reader reader;
