@@ -87,11 +87,7 @@ public:
         sstring description, inet_address from, bool keep_ss_table_level);
 
 private:
-    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
-        auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
-        // FIXME: StreamManager.instance.register(future);
-        return future;
-    }
+    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_);
 
 public:
     void add_event_listener(stream_event_handler* listener) {
