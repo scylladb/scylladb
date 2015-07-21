@@ -23,7 +23,7 @@
 
 #include "utils/UUID.hh"
 #include "streaming/session_info.hh"
-#include <set>
+#include <vector>
 
 namespace streaming {
 
@@ -35,9 +35,9 @@ public:
     using UUID = utils::UUID;
     UUID plan_id;
     sstring description;
-    std::set<session_info> sessions;
+    std::vector<session_info> sessions;
 
-    stream_state(UUID plan_id_, sstring description_, std::set<session_info> sessions_)
+    stream_state(UUID plan_id_, sstring description_, std::vector<session_info> sessions_)
         : plan_id(std::move(plan_id_))
         , description(std::move(description_))
         , sessions(std::move(sessions_)) {

@@ -23,7 +23,7 @@
 
 #include "types.hh"
 #include "core/sstring.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "utils/UUID.hh"
 #include "version_generator.hh"
 #include "gms/inet_address.hh"

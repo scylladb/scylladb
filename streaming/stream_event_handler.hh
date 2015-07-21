@@ -26,13 +26,16 @@
 namespace streaming {
 
 class stream_event_handler /* extends FutureCallback<StreamState> */ {
+public:
     /**
      * Callback for various streaming events.
      *
      * @see StreamEvent.Type
      * @param event Stream event.
      */
-    virtual void handle_stream_event(stream_event event) = 0;
+    virtual void handle_stream_event(session_complete_event event) {}
+    virtual void handle_stream_event(progress_event event) {}
+    virtual void handle_stream_event(session_prepared_event event) {}
 };
 
 } // namespace streaming

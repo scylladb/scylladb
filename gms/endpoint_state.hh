@@ -22,7 +22,7 @@
 #pragma once
 
 #include "types.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"

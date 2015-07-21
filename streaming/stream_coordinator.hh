@@ -67,12 +67,7 @@ public:
 
     bool is_receiving();
 
-    void connect_all_stream_sessions() {
-        for (auto& data : _peer_sessions) {
-            data.second.connect_all_stream_sessions();
-        }
-    }
-
+    void connect_all_stream_sessions();
     std::set<inet_address> get_peers();
 
 public:
@@ -150,13 +145,7 @@ private:
 
         shared_ptr<stream_session> get_or_create_next_session(inet_address peer, inet_address connecting);
 
-        void connect_all_stream_sessions() {
-            for (auto& x : _stream_sessions) {
-                auto& session = x.second;
-                session->start();
-                // logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.plan_id(), session.session_index(), session.peer);
-            }
-        }
+        void connect_all_stream_sessions();
 
         std::vector<shared_ptr<stream_session>> get_all_stream_sessions();
 

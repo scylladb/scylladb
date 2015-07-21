@@ -5,7 +5,7 @@
 #include "serializer.hh"
 #include "database.hh"
 #include "types.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 
 typedef uint32_t count_type; // Me thinks 32-bits are enough for "normal" count purposes.
 

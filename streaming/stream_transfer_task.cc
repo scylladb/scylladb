@@ -31,7 +31,7 @@
 
 namespace streaming {
 
-extern thread_local logging::logger sslog;
+extern logging::logger sslog;
 
 stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id)
     : stream_task(session, cf_id) {
@@ -61,13 +61,40 @@ void stream_transfer_task::start() {
             return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
                 auto fm = make_lw_shared<const frozen_mutation>(m);
                 sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-                return session->ms().send_stream_mutation(id, *fm, session->dst_cpu_id).then([this, fm] {
+                return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
                     sslog.debug("GOT STREAM_MUTATION Reply");
                     return stop_iteration::no;
                 });
             });
         }).then([this, seq] {
            this->complete(seq);
+        });
+    }
+}
+
+void stream_transfer_task::complete(int sequence_number) {
+    // ScheduledFuture timeout = timeoutTasks.remove(sequenceNumber);
+    // if (timeout != null)
+    //     timeout.cancel(false);
+
+    files.erase(sequence_number);
+
+    sslog.debug("stream_transfer_task: complete cf_id = {}, seq = {}", this->cf_id, sequence_number);
+
+    auto signal_complete = files.empty();
+    // all file sent, notify session this task is complete.
+    if (signal_complete) {
+        using shard_id = net::messaging_service::shard_id;
+        auto from = utils::fb_utilities::get_broadcast_address();
+        auto id = shard_id{session->peer, session->dst_cpu_id};
+        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this] (auto&& f) {
+            try {
+                f.get();
+                sslog.debug("GOT STREAM_MUTATION_DONE Reply");
+                session->task_completed(*this);
+            } catch (...) {
+                sslog.warn("ERROR STREAM_MUTATION_DONE Reply ");
+            }
         });
     }
 }

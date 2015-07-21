@@ -56,27 +56,7 @@ public:
      *
      * @param sequenceNumber sequence number of file
      */
-    void complete(int sequence_number) {
-#if 0
-        boolean signalComplete;
-        synchronized (this)
-        {
-            ScheduledFuture timeout = timeoutTasks.remove(sequenceNumber);
-            if (timeout != null)
-                timeout.cancel(false);
-
-            OutgoingFileMessage file = files.remove(sequenceNumber);
-            if (file != null)
-                file.sstable.releaseReference();
-
-            signalComplete = files.isEmpty();
-        }
-
-        // all file sent, notify session this task is complete.
-        if (signalComplete)
-            session.taskCompleted(this);
-#endif
-    }
+    void complete(int sequence_number);
 
 public:
     virtual void abort() override {

@@ -26,6 +26,8 @@
 #include "gms/inet_address.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
+#include "streaming/stream_state.hh"
+#include "streaming/progress_info.hh"
 #include <vector>
 
 namespace streaming {
@@ -80,53 +82,24 @@ public:
     shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
-    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
-        auto future = create_and_register(plan_id_, description_, coordinator_);
-        for (auto& listener : listeners_) {
-            future->add_event_listener(listener);
-        }
-
-        //logger.info("[Stream #{}] Executing streaming plan for {}", plan_id,  description);
-
-        // Initialize and start all sessions
-        for (auto& session : coordinator_->get_all_stream_sessions()) {
-            session->init(future);
-        }
-        coordinator_->connect_all_stream_sessions();
-    }
-
+    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
     static void init_receiving_side(int session_index, UUID plan_id,
         sstring description, inet_address from, bool keep_ss_table_level);
 
 private:
-    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
-        auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
-        // FIXME: StreamManager.instance.register(future);
-        return future;
-    }
+    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_);
 
-#if 0
-    private void attachSocket(InetAddress from, int sessionIndex, Socket socket, boolean isForOutgoing, int version) throws IOException
-    {
-        StreamSession session = coordinator.getOrCreateSessionById(from, sessionIndex, socket.getInetAddress());
-        session.init(this);
-        session.handler.initiateOnReceivingSide(socket, isForOutgoing, version);
-    }
-#endif
 public:
     void add_event_listener(stream_event_handler* listener) {
         // FIXME: Futures.addCallback(this, listener);
         _event_listeners.push_back(listener);
     }
 
-#if 0
     /**
      * @return Current snapshot of streaming progress.
      */
-    public StreamState getCurrentState()
-    {
-        return new StreamState(planId, description, coordinator.getAllSessionInfo());
-    }
+    stream_state get_current_state();
+#if 0
 
     @Override
     public boolean equals(Object o)
@@ -142,62 +115,20 @@ public:
     {
         return planId.hashCode();
     }
-
-    void handleSessionPrepared(StreamSession session)
-    {
-        SessionInfo sessionInfo = session.getSessionInfo();
-        logger.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({} bytes), sending {} files({} bytes)",
-                              session.planId(),
-                              session.sessionIndex(),
-                              sessionInfo.getTotalFilesToReceive(),
-                              sessionInfo.getTotalSizeToReceive(),
-                              sessionInfo.getTotalFilesToSend(),
-                              sessionInfo.getTotalSizeToSend());
-        StreamEvent.SessionPreparedEvent event = new StreamEvent.SessionPreparedEvent(planId, sessionInfo);
-        coordinator.addSessionInfo(sessionInfo);
-        fireStreamEvent(event);
-    }
-
-    void handleSessionComplete(StreamSession session)
-    {
-        logger.info("[Stream #{}] Session with {} is complete", session.planId(), session.peer);
-        fireStreamEvent(new StreamEvent.SessionCompleteEvent(session));
-        SessionInfo sessionInfo = session.getSessionInfo();
-        coordinator.addSessionInfo(sessionInfo);
-        maybeComplete();
-    }
-
-    public void handleProgress(ProgressInfo progress)
-    {
-        coordinator.updateProgress(progress);
-        fireStreamEvent(new StreamEvent.ProgressEvent(planId, progress));
-    }
-
-    synchronized void fireStreamEvent(StreamEvent event)
-    {
-        // delegate to listener
-        for (StreamEventHandler listener : eventListeners)
-            listener.handleStreamEvent(event);
-    }
-
-    private synchronized void maybeComplete()
-    {
-        if (!coordinator.hasActiveSessions())
-        {
-            StreamState finalState = getCurrentState();
-            if (finalState.hasFailedSession())
-            {
-                logger.warn("[Stream #{}] Stream failed", planId);
-                setException(new StreamException(finalState, "Stream failed"));
-            }
-            else
-            {
-                logger.info("[Stream #{}] All sessions completed", planId);
-                set(finalState);
-            }
-        }
-    }
 #endif
+
+    void handle_session_prepared(shared_ptr<stream_session> session);
+
+
+    void handle_session_complete(shared_ptr<stream_session> session);
+
+    void handle_progress(progress_info progress);
+
+    template <typename Event>
+    void fire_stream_event(Event event);
+
+private:
+    void maybe_complete();
 };
 
 } // namespace streaming

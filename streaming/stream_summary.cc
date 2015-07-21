@@ -21,7 +21,7 @@
 
 #include "streaming/stream_summary.hh"
 #include "types.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 
 namespace streaming {
 

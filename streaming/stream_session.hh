@@ -23,6 +23,7 @@
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "core/distributed.hh"
+#include "cql3/query_processor.hh"
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
@@ -135,7 +136,7 @@ public:
     }
     static database& get_local_db() { return _db->local(); }
     static future<> init_streaming_service(distributed<database>& db);
-    static future<> test();
+    static future<> test(distributed<cql3::query_processor>& qp);
 public:
     /**
      * Streaming endpoint.
@@ -373,6 +374,8 @@ public:
      */
     session_info get_session_info();
 
+    void receive_task_completed(UUID cf_id);
+
     void task_completed(stream_receive_task& completed_task);
 
     void task_completed(stream_transfer_task& completed_task);
@@ -387,6 +390,7 @@ public:
     virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
 
 private:
+    future<> send_complete_message();
     bool maybe_completed();
 #if 0
 

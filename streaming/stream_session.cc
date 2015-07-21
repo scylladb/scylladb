@@ -37,10 +37,13 @@
 #include "utils/fb_utilities.hh"
 #include "streaming/stream_plan.hh"
 #include "core/sleep.hh"
+#include "service/storage_service.hh"
+#include "core/thread.hh"
+#include "cql3/query_processor.hh"
 
 namespace streaming {
 
-thread_local logging::logger sslog("stream_session");
+logging::logger sslog("stream_session");
 
 void stream_session::init_messaging_service_handler() {
     ms().register_stream_init_message([] (messages::stream_init_message msg, unsigned src_cpu_id) {
@@ -52,18 +55,20 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
-    ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting,  unsigned dst_cpu_id) {
-        sslog.debug("GOT PREPARE_MESSAGE");
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id = std::move(plan_id), from, connecting] () mutable {
+    ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, connecting, src_cpu_id] () mutable {
             auto& sm = get_local_stream_manager();
             auto f = sm.get_receiving_stream(plan_id);
-            sslog.debug("PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
+            sslog.debug("GOT PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
                 auto session = coordinator->get_or_create_next_session(from, from);
                 assert(session);
-                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={}", session->peer, session->connecting);
+                session->init(f);
+                session->dst_cpu_id = src_cpu_id;
+                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={} plan_id={} src_cpu_id={}, dst_cpu_id={}",
+                    session->peer, session->connecting, session->plan_id(), session->src_cpu_id, session->dst_cpu_id);
                 auto msg_ret = session->prepare(std::move(msg.requests), std::move(msg.summaries));
                 return make_ready_future<messages::prepare_message>(std::move(msg_ret));
             }
@@ -73,14 +78,38 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
-    ms().register_stream_mutation([] (frozen_mutation fm, unsigned dst_cpu_id) {
-        sslog.debug("GOT STREAM_MUTATION");
-        return smp::submit_to(dst_cpu_id, [fm = std::move(fm)] () mutable {
+    ms().register_stream_mutation([] (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
             auto cf_id = fm.column_family_id();
-            auto& db = stream_session::get_local_db();
-            auto& cf = db.find_column_family(cf_id);
-            cf.apply(fm, db::replay_position());
+            sslog.debug("GOT STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
+            try {
+                auto& db = stream_session::get_local_db();
+                auto& cf = db.find_column_family(cf_id);
+                cf.apply(fm, db::replay_position());
+            } catch (no_such_column_family) {
+                // TODO: Send error msg back
+                sslog.warn("stream_session: {} does not exist\n", cf_id);
+            }
             return make_ready_future<>();
+        });
+    });
+    ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
+            sslog.debug("GOT STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                session->receive_task_completed(cf_id);
+                return make_ready_future<>();
+            } else {
+                auto err = sprint("STREAM_MUTATION_DONE: Can not find stream_manager for plan_id=%s", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
         });
     });
 #if 0
@@ -90,13 +119,27 @@ void stream_session::init_messaging_service_handler() {
             return make_ready_future<>();
         });
     });
-    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg, unsigned dst_cpu_id) {
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::complete_message msg_ret;
-            return make_ready_future<messages::complete_message>(std::move(msg_ret));
+#endif
+    ms().register_complete_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
+            sslog.debug("GOT COMPLETE_MESSAGE, plan_id={}, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                session->complete();
+            } else {
+                auto err = sprint("COMPLETE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
         });
+        return messaging_service::no_wait();
     });
+#if 0
     ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
         smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
             // TODO
@@ -143,32 +186,49 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
     });
 }
 
-future<> stream_session::test() {
+future<> stream_session::test(distributed<cql3::query_processor>& qp) {
     if (utils::fb_utilities::get_broadcast_address() == inet_address("127.0.0.1")) {
-        return sleep(std::chrono::seconds(5)).then([] {
-            sslog.debug("================ STREAM_PLAN TEST ==============\n");
-            auto sp = stream_plan("MYPLAN");
-            auto to = inet_address("127.0.0.2");
-            std::vector<query::range<token>> ranges;
-            std::vector<sstring> cfs{"local"};
-            sp.transfer_ranges(to, to, "system", std::move(ranges), std::move(cfs)).execute();
+        auto tester = make_shared<timer<lowres_clock>>();
+        tester->set_callback ([tester, &qp] {
+            seastar::async([&qp] {
+                sslog.debug("================ STREAM_PLAN TEST ==============");
+                auto cs = service::client_state::for_external_calls();
+                service::query_state qs(cs);
+                auto opts = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
+                qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, *opts).get();
+                sslog.debug("CREATE KEYSPACE = KS DONE");
+                qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, *opts).get();
+                sslog.debug("CREATE TABLE = TB DONE");
+                qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 1");
+                qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 2");
+                qp.local().process("insert into ks.tb (key,c0) values ('3','3');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 3");
+                qp.local().process("insert into ks.tb (key,c0) values ('4','4');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 4");
+                qp.local().process("insert into ks.tb (key,c0) values ('5','5');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 5");
+                qp.local().process("insert into ks.tb (key,c0) values ('6','6');", qs, *opts).get();
+                sslog.debug("INSERT VALUE DONE: 6");
+            }).then([] {
+                sleep(std::chrono::seconds(10)).then([] {
+                    sslog.debug("================ START STREAM  ==============");
+                    auto sp = stream_plan("MYPLAN");
+                    auto to = inet_address("127.0.0.2");
+                    std::vector<query::range<token>> ranges = {query::range<token>::make_open_ended_both_sides()};
+                    std::vector<sstring> cfs{"tb"};
+                    sp.transfer_ranges(to, to, "ks", std::move(ranges), std::move(cfs)).execute();
+                });
+            });
         });
+        tester->arm(std::chrono::seconds(10));
     }
     return make_ready_future<>();
 }
 
 future<> stream_session::initiate() {
-#if 0
-    logger.debug("[Stream #{}] Sending stream init for incoming stream", session.planId());
-    Socket incomingSocket = session.createConnection();
-    incoming.start(incomingSocket, StreamMessage.CURRENT_VERSION);
-    incoming.sendInitMessage(incomingSocket, true);
-
-    logger.debug("[Stream #{}] Sending stream init for outgoing stream", session.planId());
-    Socket outgoingSocket = session.createConnection();
-    outgoing.start(outgoingSocket, StreamMessage.CURRENT_VERSION);
-    outgoing.sendInitMessage(outgoingSocket, false);
-#endif
+    sslog.debug("[Stream #{}] Sending stream init for incoming stream", plan_id());
     auto from = utils::fb_utilities::get_broadcast_address();
     bool is_for_outgoing = true;
     messages::stream_init_message msg(from, session_index(), plan_id(), description(),
@@ -194,12 +254,8 @@ future<> stream_session::on_initialization_complete() {
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
     sslog.debug("SEND PREPARE_MESSAGE to {}", id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->src_cpu_id, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
         sslog.debug("GOT PREPARE_MESSAGE Reply");
-        for (auto& request : msg.requests) {
-            // always flush on stream request
-            add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
-        }
         for (auto& summary : msg.summaries) {
             prepare_receiving(summary);
         }
@@ -211,8 +267,8 @@ future<> stream_session::on_initialization_complete() {
 }
 
 void stream_session::on_error() {
+    sslog.error("[Stream #{}] Streaming error occurred", plan_id());
 #if 0
-    //logger.error("[Stream #{}] Streaming error occurred", planId(), e);
     // send session failure message
     if (handler.is_outgoing_connected()) {
        handler.sendMessage(session_failed_message());
@@ -222,6 +278,7 @@ void stream_session::on_error() {
     close_session(stream_session_state::FAILED);
 }
 
+// Only follower calls this function upon receiving of prepare_message from initiator
 messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
@@ -233,14 +290,13 @@ messages::prepare_message stream_session::prepare(std::vector<stream_request> re
         prepare_receiving(summary);
     }
 
-    // send back prepare message if prepare message contains stream request
+    // Always send a prepare_message back to follower
     messages::prepare_message prepare;
     if (!requests.empty()) {
         for (auto& x: _transfers) {
             auto& task = x.second;
             prepare.summaries.emplace_back(task.get_summary());
         }
-        //handler.send_message(std::move(prepare));
     }
 
     // if there are files to stream
@@ -279,8 +335,8 @@ void stream_session::receive(messages::incoming_file_message message) {
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    // auto progress = progress_info(peer, _index, /* desc.filenameFor(Component.DATA),*/ dir, bytes, total);
-    // streamResult.handleProgress(progress);
+    auto progress = progress_info(peer, _index, "", dir, bytes, total);
+    _stream_result->handle_progress(std::move(progress));
 }
 
 void stream_session::received(UUID cf_id, int sequence_number) {
@@ -301,10 +357,11 @@ void stream_session::retry(UUID cf_id, int sequence_number) {
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
         if (!_complete_sent) {
-            //handler.sendMessage(new CompleteMessage());
-            _complete_sent = true;
+            send_complete_message().then([this] {
+                _complete_sent = true;
+            });
         }
-       close_session(stream_session_state::COMPLETE);
+        close_session(stream_session_state::COMPLETE);
     } else {
         set_state(stream_session_state::WAIT_COMPLETE);
     }
@@ -326,6 +383,12 @@ session_info stream_session::get_session_info() {
     return session_info(peer, _index, connecting, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
+void stream_session::receive_task_completed(UUID cf_id) {
+    _receivers.erase(cf_id);
+    sslog.debug("receive_task_completed: cf_id={} done, {} {}", cf_id, _receivers.size(), _transfers.size());
+    maybe_completed();
+}
+
 void stream_session::task_completed(stream_receive_task& completed_task) {
     _receivers.erase(completed_task.cf_id);
     maybe_completed();
@@ -336,20 +399,40 @@ void stream_session::task_completed(stream_transfer_task& completed_task) {
     maybe_completed();
 }
 
+future<> stream_session::send_complete_message() {
+    auto from = utils::fb_utilities::get_broadcast_address();
+    auto id = shard_id{this->peer, this->dst_cpu_id};
+    sslog.debug("SEND COMPLETE_MESSAGE to {}, plan_id={}", id, this->plan_id());
+    return this->ms().send_complete_message(id, this->plan_id(), from, this->connecting, this->dst_cpu_id).then_wrapped([] (auto&& f) {
+        try {
+            f.get();
+            sslog.debug("GOT COMPLETE_MESSAGE Reply");
+            return make_ready_future<>();
+        } catch (...) {
+            sslog.warn("ERROR COMPLETE_MESSAGE Reply");
+            return make_ready_future<>();
+        }
+    });
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
         if (_state == stream_session_state::WAIT_COMPLETE) {
             if (!_complete_sent) {
-                //handler.sendMessage(new CompleteMessage());
-                _complete_sent = true;
+                send_complete_message().then([this] {
+                    _complete_sent = true;
+                });
             }
             close_session(stream_session_state::COMPLETE);
+            sslog.debug("session complete");
         } else {
             // notify peer that this session is completed
-            //handler.sendMessage(new CompleteMessage());
-            _complete_sent = true;
-            set_state(stream_session_state::WAIT_COMPLETE);
+            send_complete_message().then([this] {
+                _complete_sent = true;
+                set_state(stream_session_state::WAIT_COMPLETE);
+                sslog.debug("session wait complete");
+            });
         }
     }
     return completed;
@@ -363,9 +446,8 @@ void stream_session::prepare_receiving(stream_summary& summary) {
 }
 
 void stream_session::start_streaming_files() {
+    _stream_result->handle_session_prepared(shared_from_this());
 #if 0
-    streamResult.handleSessionPrepared(this);
-
     state(State.STREAMING);
     for (StreamTransferTask task : transfers.values())
     {
@@ -407,7 +489,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
 }
 
 void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
-    std::vector<stream_detail> sstable_details;
+    std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
     if (flush_tables) {
         // FIXME: flushSSTables(stores);
@@ -429,15 +511,15 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        sstable_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
     }
-    if (!sstable_details.empty()) {
-        add_transfer_files(std::move(sstable_details));
+    if (!stream_details.empty()) {
+        add_transfer_files(std::move(stream_details));
     }
 }
 
-void stream_session::add_transfer_files(std::vector<stream_detail> sstable_details) {
-    for (auto& detail : sstable_details) {
+void stream_session::add_transfer_files(std::vector<stream_detail> stream_details) {
+    for (auto& detail : stream_details) {
 #if 0
         if (details.sections.empty()) {
             // A reference was acquired on the sstable and we won't stream it
@@ -472,20 +554,21 @@ void stream_session::close_session(stream_session_state final_state) {
         // Note that we shouldn't block on this close because this method is called on the handler
         // incoming thread (so we would deadlock).
         //handler.close();
-
-        //streamResult.handleSessionComplete(this);
+        _stream_result->handle_session_complete(shared_from_this());
     }
 }
 
 void stream_session::start() {
     if (_requests.empty() && _transfers.empty()) {
-        //logger.info("[Stream #{}] Session does not have any tasks.", planId());
+        sslog.info("[Stream #{}] Session does not have any tasks.", plan_id());
         close_session(stream_session_state::COMPLETE);
         return;
     }
-
-    // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
-    //                                                        peer, peer == connecting ? "" : " through " + connecting);
+    if (peer == connecting) {
+        sslog.info("[Stream #{}] Starting streaming to {}", plan_id(), peer);
+    } else {
+        sslog.info("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
+    }
     initiate().then([this] {
         return on_initialization_complete();
     }).then_wrapped([this] (auto&& f) {

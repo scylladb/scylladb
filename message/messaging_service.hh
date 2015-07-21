@@ -10,7 +10,7 @@
 #include "core/print.hh"
 #include "core/sstring.hh"
 #include "net/api.hh"
-#include "util/serialization.hh"
+#include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
@@ -93,6 +93,7 @@ enum class messaging_verb : int32_t {
     STREAM_INIT_MESSAGE,
     PREPARE_MESSAGE,
     STREAM_MUTATION,
+    STREAM_MUTATION_DONE,
     INCOMING_FILE_MESSAGE,
     OUTGOING_FILE_MESSAGE,
     RECEIVED_MESSAGE,
@@ -430,13 +431,19 @@ public:
 
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id)>&& func);
     future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned dst_cpu_id);
+        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id);
 
     // Wrapper for STREAM_MUTATION verb
-    void register_stream_mutation(std::function<future<> (frozen_mutation fm, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation(shard_id id, frozen_mutation fm, unsigned dst_cpu_id);
+    void register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
+
+    void register_stream_mutation_done(std::function<future<> (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(shard_id id, UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
+
+    void register_complete_message(std::function<rpc::no_wait_type (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<> send_complete_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
