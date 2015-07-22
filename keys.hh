@@ -410,6 +410,9 @@ public:
         return legacy_tri_compare(s, o) == 0;
     }
 
+    // A trichotomic comparator which orders keys according to their ordering on the ring.
+    int ring_order_tri_compare(const schema& s, partition_key_view o) const;
+
     friend std::ostream& operator<<(std::ostream& out, const partition_key_view& pk);
 };
 

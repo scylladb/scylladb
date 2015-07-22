@@ -37,6 +37,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::CONSISTENCY: return out << "CONSISTENCY";
         case cause::HINT: return out << "HINT";
         case cause::SUPER: return out << "SUPER";
+        case cause::WRAP_AROUND: return out << "WRAP_AROUND";
     }
     assert(0);
 }

@@ -128,6 +128,7 @@ urchin_tests = [
     'tests/test-serialization',
     'tests/urchin/sstable_test',
     'tests/urchin/sstable_mutation_test',
+    'tests/urchin/memtable_test',
     'tests/urchin/commitlog_test',
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
@@ -359,6 +360,7 @@ urchin_tests_dependencies = urchin_core + [
     'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
     'tests/urchin/result_set_assertions.cc',
+    'tests/urchin/mutation_source_test.cc',
 ]
 
 urchin_tests_seastar_deps = [

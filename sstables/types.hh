@@ -12,6 +12,7 @@
 #include "streaming_histogram.hh"
 #include "estimated_histogram.hh"
 #include "column_name_helper.hh"
+#include "sstables/key.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -43,8 +44,8 @@ struct index_entry {
     uint64_t position;
     disk_string<uint32_t> promoted_index;
 
-    explicit operator bytes_view() const {
-        return bytes_view(key);
+    key_view get_key() const {
+        return { bytes_view(key) };
     }
 };
 
@@ -52,8 +53,8 @@ struct summary_entry {
     bytes key;
     uint64_t position;
 
-    explicit operator bytes_view() const {
-        return key;
+    key_view get_key() const {
+        return { key };
     }
 
     bool operator==(const summary_entry& x) const {

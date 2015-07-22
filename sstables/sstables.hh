@@ -140,8 +140,8 @@ public:
     future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
 
 
-    // data_consume_rows() iterates over all rows in the data file (or rows in
-    // a particular range), feeding them into the consumer. The iteration is
+    // data_consume_rows() iterates over rows in the data file from
+    // a particular range, feeding them into the consumer. The iteration is
     // done as efficiently as possible - reading only the data file (not the
     // summary or index files) and reading data in batches.
     //
@@ -156,8 +156,10 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    data_consume_context data_consume_rows(row_consumer& consumer,
-            uint64_t start = 0, uint64_t end = 0);
+    data_consume_context data_consume_rows(row_consumer& consumer, uint64_t start, uint64_t end);
+
+    // Like data_consume_rows() with bounds, but iterates over whole range
+    data_consume_context data_consume_rows(row_consumer& consumer);
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
@@ -186,6 +188,9 @@ public:
      */
     mutation_reader read_range_rows(schema_ptr schema,
             const dht::token& min, const dht::token& max);
+
+    // Returns a mutation_reader for given range of partitions
+    mutation_reader read_range_rows(schema_ptr schema, const query::partition_range& range);
 
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
@@ -311,7 +316,10 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
-    future<uint64_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
+    future<uint64_t> data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il);
+
+    // Returns data file position for an entry right after all entries mapped by given summary page.
+    future<uint64_t> data_end_position(uint64_t summary_idx);
 
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);
@@ -320,6 +328,20 @@ private:
     int binary_search(const T& entries, const key& sk) {
         return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
     }
+
+    // Returns position in the data file of the first entry which is not
+    // smaller than the supplied ring_position. If no such entry exists, a
+    // position right after all entries is returned.
+    //
+    // The ring_position doesn't have to survive deferring.
+    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&);
+
+    // Returns position in the data file of the first partition which is
+    // greater than the supplied ring_position. If no such entry exists, a
+    // position right after all entries is returned.
+    //
+    // The ring_position doesn't have to survive deferring.
+    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&);
 
     future<summary_entry&> read_summary_entry(size_t i);
 

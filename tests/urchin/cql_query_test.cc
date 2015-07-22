@@ -524,6 +524,78 @@ SEASTAR_TEST_CASE(test_partitions_have_consistent_ordering_in_range_query) {
     });
 }
 
+SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (k blob, v int, primary key (k));").discard_result().then([&e] {
+            return e.execute_cql(
+                "begin unlogged batch \n"
+                    "  insert into cf (k, v) values (0x01, 0); \n"
+                    "  insert into cf (k, v) values (0x02, 0); \n"
+                    "  insert into cf (k, v) values (0x03, 0); \n"
+                    "  insert into cf (k, v) values (0x04, 0); \n"
+                    "  insert into cf (k, v) values (0x05, 0); \n"
+                    "apply batch;"
+            ).discard_result();
+        }).then([&e] {
+            // Determine partition order
+            return e.execute_cql("select k, token(k) from cf;");
+        }).then([&e](auto msg) {
+            auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            std::vector<bytes> keys;
+            std::vector<bytes> tokens;
+            for (auto&& row : rows->rs().rows()) {
+                BOOST_REQUIRE(row[0]);
+                BOOST_REQUIRE(row[1]);
+                keys.push_back(*row[0]);
+                tokens.push_back(*row[1]);
+            }
+            BOOST_REQUIRE(keys.size() == 5);
+
+            return now().then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) > 0x%s;", to_hex(tokens[1]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[2]},
+                        {keys[3]},
+                        {keys[4]}
+                    });
+                });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) >= 0x%s;", to_hex(tokens[1]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[1]},
+                        {keys[2]},
+                        {keys[3]},
+                        {keys[4]}
+                    });
+                });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) > 0x%s and token(k) < 0x%s;",
+                        to_hex(tokens[1]), to_hex(tokens[4]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[2]},
+                        {keys[3]},
+                    });
+                });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) < 0x%s;", to_hex(tokens[3]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[0]},
+                        {keys[1]},
+                        {keys[2]}
+                    });
+                });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) = 0x%s;", to_hex(tokens[3]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().with_rows({
+                        {keys[3]}
+                    });
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {

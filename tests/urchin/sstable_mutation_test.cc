@@ -14,6 +14,7 @@
 #include "timestamp.hh"
 #include "schema_builder.hh"
 #include "mutation_reader_assertions.hh"
+#include "mutation_source_test.hh"
 #include "tmpdir.hh"
 
 using namespace sstables;
@@ -253,7 +254,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_absent(row2.cells(), *s, "reg_set");
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_list");
- 
+
         return make_ready_future<>();
     });
 }
@@ -414,107 +415,35 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     return [rd = make_lw_shared(std::move(rd))] () mutable { return rd->read(); };
 }
 
-static
-std::vector<mutation> get_partitions_in_order_with_distinct_tokens(schema_ptr s, const memtable& mt) {
-    std::vector<mutation> result;
-    size_t token_duplicates = 0;
-    std::experimental::optional<dht::token> last_token;
-
-    for (auto&& p : mt.all_partitions()) {
-        const dht::decorated_key& key = p.first;
-        const mutation_partition& partition = p.second;
-        // Filter token duplicates. Should be rare, but we rely on not having them
-        if (!last_token || key.token() != *last_token) {
-            result.emplace_back(s, key, partition);
-        } else {
-            ++token_duplicates;
-        }
-        last_token = key.token();
-    }
-
-    if (token_duplicates) {
-        BOOST_MESSAGE(sprint("token duplicates: %d", token_duplicates));
-    }
-
-    return result;
+::mutation_source as_mutation_source(schema_ptr s, lw_shared_ptr<sstables::sstable> sst) {
+    return [s, sst] (const query::partition_range& range) mutable {
+        return as_mutation_reader(sst->read_range_rows(s, range));
+    };
 }
 
-SEASTAR_TEST_CASE(test_range_reads_on_large_sstable) {
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
     return seastar::async([] {
-        auto s = schema_builder("ks", "cf")
-            .with_column("key", bytes_type, column_kind::partition_key)
-            .with_column("v", bytes_type)
-            .build();
+        std::vector<tmpdir> dirs;
 
-        auto make_partition_mutation = [s] (bytes key) -> mutation {
-            mutation m(partition_key::from_single_value(*s, key), s);
-            m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
-            return m;
-        };
+        run_mutation_source_tests([&dirs] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+            tmpdir sstable_dir;
+            auto sst = make_lw_shared<sstables::sstable>(
+                sstable_dir.path,
+                1 /* generation */,
+                sstables::sstable::version_types::la,
+                sstables::sstable::format_types::big);
+            dirs.emplace_back(std::move(sstable_dir));
 
-        tmpdir sstable_dir;
-        auto sst = make_lw_shared<sstables::sstable>(
-            sstable_dir.path,
-            1 /* generation */,
-            sstables::sstable::version_types::la,
-            sstables::sstable::format_types::big);
+            auto mt = make_lw_shared<memtable>(s);
 
-        int partition_count = 300;
+            for (auto&& m : partitions) {
+                mt->apply(m);
+            }
 
-        std::vector<mutation> partitions;
-        for (int i = 0; i < partition_count; ++i) {
-            partitions.emplace_back(
-                make_partition_mutation(to_bytes(sprint("key_%d", i))));
-        }
+            sst->write_components(*mt).get();
+            sst->load().get();
 
-        auto mt = make_lw_shared<memtable>(s);
-
-        for (auto&& m : partitions) {
-            mt->apply(m);
-        }
-
-        std::vector<mutation> ordered_partitions =
-            get_partitions_in_order_with_distinct_tokens(s, *mt);
-
-        sst->write_components(*mt).get();
-        sst->load().get();
-
-        auto query_range = query::partition_range::make_ending_with({
-            ordered_partitions[ordered_partitions.size() - 1].decorated_key()});
-
-        auto test_slice = [&] (size_t min_index, size_t max_index) {
-            BOOST_MESSAGE(sprint("Testing range [%d, %d]", min_index, max_index));
-
-            auto reader = as_mutation_reader(sst->read_range_rows(s,
-                ordered_partitions[min_index].token(),
-                ordered_partitions[max_index].token()));
-
-            assert_that(reader)
-                .produces(std::vector<mutation>(
-                    ordered_partitions.begin() + min_index,
-                    ordered_partitions.begin() + max_index + 1))
-                .produces_end_of_stream();
-        };
-
-        test_slice(0, 0);
-        test_slice(1, 1);
-        test_slice(2, 4);
-        test_slice(4, 8);
-        test_slice(8, 16);
-        test_slice(127, 128);
-        test_slice(128, 128);
-        test_slice(128, 129);
-        test_slice(127, 129);
-        test_slice(ordered_partitions.size() - 1, ordered_partitions.size() - 1);
-
-        test_slice(0, ordered_partitions.size() - 1);
-        test_slice(0, ordered_partitions.size() - 2);
-        test_slice(0, ordered_partitions.size() - 3);
-        test_slice(0, ordered_partitions.size() - 128);
-
-        test_slice(1, ordered_partitions.size() - 1);
-        test_slice(2, ordered_partitions.size() - 1);
-        test_slice(3, ordered_partitions.size() - 1);
-        test_slice(128, ordered_partitions.size() - 1);
+            return as_mutation_source(s, sst);
+        });
     });
 }

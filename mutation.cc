@@ -111,3 +111,32 @@ size_t
 mutation::live_row_count(gc_clock::time_point query_time) const {
     return _p.live_row_count(*_schema, query_time);
 }
+
+bool
+mutation_decorated_key_less_comparator::operator()(const mutation& m1, const mutation& m2) const {
+    return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
+}
+
+boost::iterator_range<std::vector<mutation>::const_iterator>
+slice(const std::vector<mutation>& partitions, const query::partition_range& r) {
+    struct cmp {
+        bool operator()(const dht::ring_position& pos, const mutation& m) const {
+            return m.decorated_key().tri_compare(*m.schema(), pos) > 0;
+        };
+        bool operator()(const mutation& m, const dht::ring_position& pos) const {
+            return m.decorated_key().tri_compare(*m.schema(), pos) < 0;
+        };
+    };
+
+    return boost::make_iterator_range(
+        r.start()
+            ? (r.start()->is_inclusive()
+                ? std::lower_bound(partitions.begin(), partitions.end(), r.start()->value(), cmp())
+                : std::upper_bound(partitions.begin(), partitions.end(), r.start()->value(), cmp()))
+            : partitions.cbegin(),
+        r.end()
+            ? (r.end()->is_inclusive()
+              ? std::upper_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp())
+              : std::lower_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp()))
+            : partitions.cend());
+}

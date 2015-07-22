@@ -74,7 +74,7 @@ public:
     std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
         auto get_token_bound = [this, &options](statements::bound b) {
             if (!has_bound(b)) {
-                return dht::minimum_token();
+                return is_start(b) ? dht::minimum_token() : dht::maximum_token();
             }
             auto buf= bounds(b, options).front();
             if (!buf) {
@@ -98,8 +98,8 @@ public:
          * Note though that in the case where startToken or endToken is the minimum token, then this special case
          * rule should not apply.
          */
-        if (start_token != dht::minimum_token()
-                && end_token != dht::minimum_token()
+        if (start_token.is_minimum()
+                && end_token.is_maximum()
                 && (start_token > end_token
                         || (start_token == end_token
                                 && (!include_start || !include_end)))) {

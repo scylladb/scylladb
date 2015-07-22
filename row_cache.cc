@@ -64,7 +64,7 @@ public:
 mutation_reader
 row_cache::make_reader(const query::partition_range& range) {
     if (range.is_singular()) {
-        const query::ring_position& pos = range.start_value();
+        const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
             warn(unimplemented::cause::RANGE_QUERIES);

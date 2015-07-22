@@ -533,7 +533,11 @@ future<> data_consume_context::read() {
 data_consume_context sstable::data_consume_rows(
         row_consumer& consumer, uint64_t start, uint64_t end) {
     return std::make_unique<data_consume_context::impl>(
-            consumer, data_stream_at(start), end ? (end - start) : -1);
+            consumer, data_stream_at(start), end - start);
+}
+
+data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
+    return data_consume_rows(consumer, 0, data_size());
 }
 
 future<> sstable::data_consume_rows_at_once(row_consumer& consumer,

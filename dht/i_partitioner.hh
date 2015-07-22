@@ -71,6 +71,14 @@ public:
     bytes _data;
     token(kind k, bytes d) : _kind(std::move(k)), _data(std::move(d)) {
     }
+
+    bool is_minimum() const {
+        return _kind == kind::before_all_keys;
+    }
+
+    bool is_maximum() const {
+        return _kind == kind::after_all_keys;
+    }
 };
 
 token midpoint_unsigned(const token& t1, const token& t2);

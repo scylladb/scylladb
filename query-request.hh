@@ -48,7 +48,7 @@ private:
         if (!start()) {
             return false; //open start, no points before
         }
-        auto r = cmp(point, start_value());
+        auto r = cmp(point, start()->value());
         if (r < 0) {
             return true;
         }
@@ -63,7 +63,7 @@ private:
         if (!end()) {
             return false; //open end, no points after
         }
-        auto r = cmp(end_value(), point);
+        auto r = cmp(end()->value(), point);
         if (r < 0) {
             return true;
         }
@@ -99,12 +99,6 @@ public:
             std::swap(_start, _end);
         }
     }
-    const T& start_value() const {
-        return start()->value();
-    }
-    const T& end_value() const {
-        return end()->value();
-    }
     const optional<bound>& start() const {
         return _start;
     }
@@ -115,7 +109,7 @@ public:
     template<typename Comparator>
     bool is_wrap_around(Comparator&& cmp) const {
         if (_end && _start) {
-            return cmp(end_value(), start_value()) < 0;
+            return cmp(end()->value(), start()->value()) < 0;
         } else {
             return false; // open ended range never wraps around
         }
@@ -125,7 +119,7 @@ public:
     bool contains(const T& point, Comparator&& cmp) const {
         if (is_wrap_around(cmp)) {
             // wrapped range contains point if reverse does not contain it
-            return !range::make({end_value(), !_end->is_inclusive()}, {start_value(), !_start->is_inclusive()}).contains(point, cmp);
+            return !range::make({end()->value(), !_end->is_inclusive()}, {start()->value(), !_start->is_inclusive()}).contains(point, cmp);
         } else {
             return !before(point, cmp) && !after(point, cmp);
         }
@@ -238,7 +232,7 @@ public:
 template<typename U>
 std::ostream& operator<<(std::ostream& out, const range<U>& r) {
     if (r.is_singular()) {
-        return out << "==" << r.start_value();
+        return out << "==" << r.start()->value();
     }
 
     if (!r.start()) {
@@ -271,6 +265,11 @@ using partition_range = range<ring_position>;
 using clustering_range = range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
+
+inline
+bool is_wrap_around(const query::partition_range& range, const schema& s) {
+    return range.is_wrap_around(dht::ring_position_comparator(s));
+}
 
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.

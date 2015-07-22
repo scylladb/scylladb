@@ -75,6 +75,18 @@ static inline bool is_me(gms::inet_address from) {
     return from == utils::fb_utilities::get_broadcast_address();
 }
 
+static inline
+const dht::token& start_token(const query::partition_range& r) {
+    static const dht::token min_token = dht::minimum_token();
+    return r.start() ? r.start()->value().token() : min_token;
+}
+
+static inline
+const dht::token& end_token(const query::partition_range& r) {
+    static const dht::token max_token = dht::maximum_token();
+    return r.end() ? r.end()->value().token() : max_token;
+}
+
 class abstract_write_response_handler {
 protected:
     semaphore _ready; // available when cl is achieved
@@ -165,7 +177,7 @@ public:
     }
 };
 
-storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
+storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
     auto id = _next_response_id++;
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
@@ -192,11 +204,11 @@ storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_
     return id;
 }
 
-void storage_proxy::remove_response_handler(storage_proxy::storage_proxy::response_id_type id) {
+void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) {
     _response_handlers.erase(id);
 }
 
-void storage_proxy::got_response(storage_proxy::storage_proxy::response_id_type id, gms::inet_address from) {
+void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_address from) {
     auto it = _response_handlers.find(id);
     if (it != _response_handlers.end()) {
         if (it->second.handler->response(from)) {
@@ -1499,7 +1511,7 @@ public:
             } else {
                 auto lhk = lh.result->partitions().back().mut().key(s);
                 auto rhk = rh.result->partitions().back().mut().key(s);
-                return lhk.legacy_tri_compare(s, rhk) > 0;
+                return lhk.ring_order_tri_compare(s, rhk) > 0;
             }
         };
 
@@ -1724,7 +1736,7 @@ enum class speculative_retry_type {
 };
 
 ::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl) {
-    const dht::token& token = pr.start_value().token();
+    const dht::token& token = pr.start()->value().token();
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
@@ -1786,7 +1798,7 @@ storage_proxy::query_singular_local_digest(lw_shared_ptr<query::read_command> cm
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
-    unsigned shard = _db.local().shard_of(pr.start_value().token());
+    unsigned shard = _db.local().shard_of(pr.start()->value().token());
     return _db.invoke_on(shard, [prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd] (database& db) {
         return db.query(*cmd, prv).then([](auto&& f) {
             return make_foreign(std::move(f));
@@ -1830,7 +1842,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution
 
     while (i != ranges.end() && std::distance(i, concurrent_fetch_starting_index) < concurrency_factor) {
         query::partition_range& range = *i;
-        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, range.end_value().token());
+        std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
         ++i;
 
@@ -1839,8 +1851,8 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution
         // still meets the CL requirements, then we can merge both ranges into the same RangeSliceCommand.
         while (i != ranges.end())
         {
-            auto next_range = i;
-            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, next_range->end_value().token());
+            query::partition_range& next_range = *i;
+            std::vector<gms::inet_address> next_endpoints = get_live_sorted_endpoints(ks, end_token(next_range));
             std::vector<gms::inet_address> next_filtered_endpoints = filter_for_query(cl, ks, next_endpoints);
 
             // Origin has this to say here:
@@ -1850,7 +1862,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution
             // *  the range if necessary and deal with it. However, we can't start sending wrapped range without breaking
             // *  wire compatibility, so It's likely easier not to bother;
             // It obviously not apply for us(?), but lets follow origin for now
-            if (range.end_value().token() == dht::minimum_token()) {
+            if (end_token(range) == dht::maximum_token()) {
                 break;
             }
 
@@ -1869,7 +1881,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution
             }
 
             // If we get there, merge this range and the next one
-            range = query::partition_range(range.start(), next_range->end());
+            range = query::partition_range(range.start(), next_range.end());
             live_endpoints = std::move(merged);
             filtered_endpoints = std::move(filtered_merged);
             ++i;
@@ -1944,7 +1956,7 @@ storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::
         return make_empty();
     }
 
-    if (partition_ranges[0].is_singular() && partition_ranges[0].start_value().has_key()) { // do not support mixed partitions (yet?)
+    if (partition_ranges[0].is_singular() && partition_ranges[0].start()->value().has_key()) { // do not support mixed partitions (yet?)
         try {
             return query_singular(cmd, std::move(partition_ranges), cl);
         } catch (const no_such_column_family&) {
@@ -2492,9 +2504,9 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
     std::vector<query::partition_range> ranges;
 
     // divide the queryRange into pieces delimited by the ring and minimum tokens
-    auto ring_iter = tm.ring_range(range.start_value().token(), true);
-    query::partition_range remainder = range;
-    for(const dht::token& upper_bound_token: ring_iter)
+    auto ring_iter = tm.ring_range(range.start(), true);
+    query::partition_range remainder = std::move(range);
+    for (const dht::token& upper_bound_token : ring_iter)
     {
         /*
          * remainder can be a range/bounds of token _or_ keys and we want to split it with a token:
@@ -2506,14 +2518,28 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
          *     keys having 15 as token and B include none of those (since that is what our node owns).
          * asSplitValue() abstracts that choice.
          */
+
         dht::ring_position split_point(upper_bound_token);
         if (!remainder.contains(split_point, dht::ring_position_comparator(s))) {
             break; // no more splits
         }
-        std::pair<query::partition_range, query::partition_range> splits = remainder.split(split_point, dht::ring_position_comparator(s));
 
-        ranges.emplace_back(std::move(splits.first));
-        remainder = std::move(splits.second);
+        if (upper_bound_token.is_minimum()) {
+            ranges.emplace_back(query::partition_range(remainder.start(), {}));
+            remainder = query::partition_range({}, remainder.end());
+        } else {
+            // We shouldn't attempt to split on upper bound, because it may result in
+            // an ambiguous range of the form (x; x]
+            if (end_token(remainder) == upper_bound_token) {
+                break;
+            }
+
+            std::pair<query::partition_range, query::partition_range> splits =
+                remainder.split(split_point, dht::ring_position_comparator(s));
+
+            ranges.emplace_back(std::move(splits.first));
+            remainder = std::move(splits.second);
+        }
     }
     ranges.emplace_back(std::move(remainder));
 
@@ -3002,7 +3028,7 @@ public:
         auto cmp = [this] (const partition_run& r1, const partition_run& r2) {
             const partition& p1 = r1.current();
             const partition& p2 = r2.current();
-            return p1._m.key(*_schema).legacy_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
+            return p1._m.key(*_schema).ring_order_tri_compare(*_schema, p2._m.key(*_schema)) > 0;
         };
 
         boost::range::make_heap(_runs, cmp);
@@ -3031,7 +3057,7 @@ public:
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
     if (pr.is_singular()) {
-        unsigned shard = _db.local().shard_of(pr.start_value().token());
+        unsigned shard = _db.local().shard_of(pr.start()->value().token());
         return _db.invoke_on(shard, [cmd, &pr] (database& db) {
             return db.query_mutations(*cmd, pr).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));

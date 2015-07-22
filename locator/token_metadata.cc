@@ -198,6 +198,27 @@ void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
     add_bootstrap_tokens(tokens, endpoint);
 }
 
+boost::iterator_range<token_metadata::tokens_iterator>
+token_metadata::ring_range(
+    const std::experimental::optional<query::partition_range::bound>& start,
+    bool include_min)
+{
+    auto r = ring_range(start ? start->value().token() : dht::minimum_token(), include_min);
+
+    if (!r.empty()) {
+        // We should skip the first token if it's excluded by the range.
+        if (start
+            && !start->is_inclusive()
+            && !start->value().has_key()
+            && start->value().token() == *r.begin())
+        {
+            r.pop_front();
+        }
+    }
+
+    return r;
+}
+
 void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
     for (auto t : tokens) {
         auto old_endpoint = _bootstrap_tokens.find(t);

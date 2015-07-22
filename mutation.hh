@@ -50,6 +50,10 @@ private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
+struct mutation_decorated_key_less_comparator {
+    bool operator()(const mutation& m1, const mutation& m2) const;
+};
+
 using mutation_opt = std::experimental::optional<mutation>;
 
 inline
@@ -67,3 +71,10 @@ void apply(mutation_opt& dst, mutation_opt&& src) {
         apply(dst, std::move(*src));
     }
 }
+
+// Returns a range into partitions containing mutations covered by the range.
+// partitions must be sorted according to decorated key.
+// range must not wrap around.
+boost::iterator_range<std::vector<mutation>::const_iterator> slice(
+    const std::vector<mutation>& partitions,
+    const query::partition_range&);
