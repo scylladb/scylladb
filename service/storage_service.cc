@@ -701,23 +701,25 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
 #endif
 }
 
+template <typename T>
+static void update_table(gms::inet_address endpoint, sstring col, T value) {
+    db::system_keyspace::update_peer_info(endpoint, col, value).then_wrapped([col, endpoint] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            logger.error("storage_service: fail to update {} for {}: {}", col, endpoint, std::current_exception());
+        }
+    });
+}
+
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
     logger.debug("storage_service:: Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
-        auto col = sstring("release_version");
-        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {
-        auto col = sstring("data_center");
-        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, "data_center", value.value);
     } else if (state == application_state::RACK) {
-        auto col = sstring("rack");
-        db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, "rack", value.value);
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
         inet_address ep;
@@ -727,19 +729,11 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
             logger.error("storage_service: fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
-        db::system_keyspace::update_peer_info(endpoint, col, ep.addr()).then_wrapped([col, endpoint] (auto&& f) {
-            try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, col, ep.addr());
     } else if (state == application_state::SCHEMA) {
-        auto col = sstring("schema_version");
-        db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, "schema_version", utils::UUID(value.value));
     } else if (state == application_state::HOST_ID) {
-        auto col = sstring("host_id");
-        db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
-        });
+        update_table(endpoint, "host_id", utils::UUID(value.value));
     }
 }
 
