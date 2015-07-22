@@ -41,14 +41,14 @@ void prepare_message::serialize(bytes::iterator& out) const {
 
 prepare_message prepare_message::deserialize(bytes_view& v) {
     auto num = read_simple<int32_t>(v);
-    std::vector<stream_request> requests_(num);
+    std::vector<stream_request> requests_;
     for (int32_t i = 0; i < num; i++) {
         auto r = stream_request::deserialize(v);
         requests_.push_back(std::move(r));
     }
 
     num = read_simple<int32_t>(v);
-    std::vector<stream_summary> summaries_(num);
+    std::vector<stream_summary> summaries_;
     for (int32_t i = 0; i < num; i++) {
         auto s = stream_summary::deserialize(v);
         summaries_.push_back(std::move(s));
