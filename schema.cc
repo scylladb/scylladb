@@ -248,9 +248,7 @@ generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
 }
 
 bool thrift_schema::has_compound_comparator() const {
-    // until we "map" compact storage, at which point it might not be "true".
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return true;
+    return _compound;
 }
 
 schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -362,5 +360,6 @@ schema_ptr schema_builder::build(compact_storage cp) {
             s._raw._is_compound = true;
         }
     }
+    s._thrift._compound = s._raw._is_compound;
     return make_lw_shared<schema>(std::move(s));
 }

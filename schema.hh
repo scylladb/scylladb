@@ -135,18 +135,20 @@ public:
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
+class schema_builder;
+
 /*
  * Sub-schema for thrift aspects, i.e. not currently supported stuff.
  * But might be, and should be kept isolated (and starved)
  */
 class thrift_schema {
+    bool _compound = true;
 public:
     bool has_compound_comparator() const;
+    friend class schema_builder;
 };
 
 bool operator==(const column_definition&, const column_definition&);
-
-class schema_builder;
 
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
