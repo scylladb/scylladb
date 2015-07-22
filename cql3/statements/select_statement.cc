@@ -112,6 +112,9 @@ select_statement::make_partition_slice(const query_options& options) {
         return query::partition_slice({}, std::move(static_columns), {}, _opts);
     }
 
+    if (_is_reversed) {
+        _opts.set(query::partition_slice::option::reversed);
+    }
     return query::partition_slice(_restrictions->get_clustering_bounds(options),
         std::move(static_columns), std::move(regular_columns), _opts);
 }
@@ -325,9 +328,9 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     auto rs = builder.build();
     if (needs_post_query_ordering()) {
         rs->sort(_ordering_comparator);
-    }
-    if (_is_reversed) {
-        rs->reverse();
+        if (_is_reversed) {
+            rs->reverse();
+        }
     }
     rs->trim(cmd->row_limit);
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
@@ -355,10 +358,6 @@ select_statement::raw_statement::prepare(database& db) {
         verify_ordering_is_allowed(restrictions);
         ordering_comparator = get_ordering_comparator(schema, selection, restrictions);
         is_reversed_ = is_reversed(schema);
-    }
-
-    if (is_reversed_) {
-        restrictions->reverse();
     }
 
     check_needs_filtering(restrictions);
