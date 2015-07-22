@@ -445,15 +445,7 @@ for mode in build_modes:
     modes[mode]['seastar_cflags'] = cfg['Cflags']
     modes[mode]['seastar_libs'] = cfg['Libs']
 
-def gen_seastar_deps():
-    yield 'seastar/configure.py'
-    yield 'seastar/build.ninja'
-    for root, dir, files in os.walk('seastar'):
-        for f in files:
-            if f.endswith('.cc') or f.endswith('.hh'):
-                yield root + '/' + f
-
-seastar_deps = ' '.join(gen_seastar_deps())
+seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
 libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
@@ -486,6 +478,7 @@ with open(buildfile, 'w') as f:
             description = SWAGGER $out
         rule ninja
             command = {ninja} -C $subdir $target
+            restat = 1
             description = NINJA $out
         ''').format(**globals()))
     for mode in build_modes:
@@ -613,6 +606,7 @@ with open(buildfile, 'w') as f:
         f.write('build seastar/build/{}/libseastar.a: ninja {}\n'.format(mode, seastar_deps))
         f.write('  subdir = seastar\n')
         f.write('  target = build/{}/libseastar.a\n'.format(mode))
+    f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
