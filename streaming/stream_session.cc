@@ -277,10 +277,12 @@ void stream_session::on_error() {
 
 // Only follower calls this function upon receiving of prepare_message from initiator
 messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+    sslog.debug("stream_session::prepare requests nr={}, summaries nr={}", requests.size(), summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     for (auto& request : requests) {
         // always flush on stream request
+        sslog.debug("stream_session::prepare stream_request={}", request);
         add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
     }
     for (auto& summary : summaries) {
