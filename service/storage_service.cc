@@ -9,6 +9,7 @@
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
+#include "service/migration_manager.hh"
 
 namespace service {
 
@@ -621,13 +622,13 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+    migration_manager::schedule_schema_pull(endpoint, ep_state);
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("SS::on_alive endpoint={}", endpoint);
+    migration_manager::schedule_schema_pull(endpoint, state);
 #if 0
-    MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
     if (_token_metadata.isMember(endpoint))
     {
@@ -672,7 +673,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
         do_update_system_peers_table(endpoint, state, value);
         if (state == application_state::SCHEMA) {
-            // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+            migration_manager::schedule_schema_pull(endpoint, *ep_state);
         }
     }
     replicate_to_all_cores();
