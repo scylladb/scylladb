@@ -308,10 +308,12 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
                 assert(false); // never reached
             }
             return std::move(f);
-        } catch(...) {
-            // FIXME: we need to distinguish between a transport error and
-            // a server error.
-            // remove_rpc_client(id);
+        } catch (rpc::closed_error) {
+            // This is a transport error
+            ms->remove_rpc_client(id);
+            throw;
+        } catch (...) {
+            // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             throw;
         }
     });
