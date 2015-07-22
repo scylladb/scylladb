@@ -1171,7 +1171,7 @@ static future<> check_compacted_sstables(unsigned long generation, std::vector<u
         auto keys = make_lw_shared<std::vector<bytes>>();
 
         return do_for_each(*generations, [reader, s, keys] (unsigned long generation) {
-            return reader().then([generation, keys] (mutation_opt m) {
+            return reader().then([generation, keys, reader] (mutation_opt m) {
                 BOOST_REQUIRE(m);
                 bytes key = to_bytes(m->key().representation());
                 keys->push_back(key);
