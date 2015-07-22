@@ -52,13 +52,17 @@
 
 namespace service {
 
+static logging::logger logger("storage_proxy");
+
 distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
 
 struct mutation_write_timeout_error : public cassandra_exception {
+    size_t to_block_for;
+    size_t received;
     mutation_write_timeout_error(size_t tbf, size_t acks) :
-        cassandra_exception(exception_code::WRITE_TIMEOUT, sprint("Mutation write timeout: waited for %lu got %lu acks", tbf, acks)) {}
+        cassandra_exception(exception_code::WRITE_TIMEOUT, sprint("Mutation write timeout: waited for %lu got %lu acks", tbf, acks)) , to_block_for(tbf), received(acks) {}
 };
 
 struct overloaded_exception : public cassandra_exception {
@@ -183,7 +187,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
             e.handler->signal(hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets()));
-//            Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+            logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
             // check cl status after hints are written (can change for cl == any)
             left_for_cl = block_for - e.handler->_cl_acks;
         }
@@ -781,7 +785,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
                     // timeout
 //                    writeMetrics.timeouts.mark();
 //                    ClientRequestMetrics.writeTimeouts.inc();
-//                    Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
+                    logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.to_block_for);
                     have_cl->broken(ex);
                 } catch(...) {
                     have_cl->broken(std::current_exception());
@@ -793,11 +797,11 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
         } catch(db::unavailable_exception& ex) {
 //            writeMetrics.unavailables.mark();
 //            ClientRequestMetrics.writeUnavailables.inc();
-//            Tracing.trace("Unavailable");
+            logger.trace("Unavailable");
             return make_exception_future<>(std::current_exception());
         }  catch(overloaded_exception& ex) {
 //            ClientRequestMetrics.writeUnavailables.inc();
-//            Tracing.trace("Overloaded");
+            logger.trace("Overloaded");
             return make_exception_future<>(std::current_exception());
         }
     }

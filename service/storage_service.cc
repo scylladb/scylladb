@@ -13,7 +13,7 @@
 
 namespace service {
 
-logging::logger logger("storage_service");
+static logging::logger logger("storage_service");
 
 int storage_service::RING_DELAY = storage_service::get_ring_delay();
 
