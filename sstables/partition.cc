@@ -449,6 +449,10 @@ public:
                     })) { }
     impl() : _consumer({}) { }
 
+    // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
+    impl(impl&&) = delete;
+    impl(const impl&) = delete;
+
     future<mutation_opt> read() {
         if (_context) {
             return _context->read().then([this] {
