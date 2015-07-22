@@ -46,6 +46,7 @@ stream_request stream_request::deserialize(bytes_view& v) {
     std::vector<query::range<token>> ranges_;
     for (int32_t i = 0; i < num; i++) {
         // FIXME: query::range<token>
+        ranges_.push_back(query::range<token>::make_open_ended_both_sides());
     }
 
     num = read_simple<int32_t>(v);
