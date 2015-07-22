@@ -462,3 +462,39 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
+    return reusable_sst("tests/urchin/sstables/compact_simple_dense", 1).then([] (auto sstp) {
+        return do_with(sstables::key("first_row"), [sstp] (auto& key) {
+            auto s = compact_simple_dense_schema();
+            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+                auto& mp = mutation->partition();
+
+                auto exploded = exploded_clustering_prefix({"cl1"});
+                auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+
+                auto row = mp.clustered_row(clustering);
+                match_live_cell(row.cells(), *s, "cl2", boost::any(to_bytes("cl2")));
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compact_storage_dense_read) {
+    return reusable_sst("tests/urchin/sstables/compact_dense", 1).then([] (auto sstp) {
+        return do_with(sstables::key("first_row"), [sstp] (auto& key) {
+            auto s = compact_dense_schema();
+            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
+                auto& mp = mutation->partition();
+
+                auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
+                auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+
+                auto row = mp.clustered_row(clustering);
+                match_live_cell(row.cells(), *s, "cl3", boost::any(to_bytes("cl3")));
+                return make_ready_future<>();
+            });
+        });
+    });
+}
