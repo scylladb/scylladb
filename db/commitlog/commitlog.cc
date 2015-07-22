@@ -718,7 +718,7 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
         size_t next = 0;
         bool eof = false;
         bool header = true;
-        work(file f) : f(std::move(f)), fin(make_file_input_stream(f)) {}
+        work(file f) : f(f), fin(make_file_input_stream(f)) {}
     };
 
     auto w = make_lw_shared<work>(std::move(f));
