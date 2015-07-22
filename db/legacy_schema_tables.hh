@@ -65,6 +65,8 @@ future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutat
 
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
 
+future<> do_merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
+
 future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
