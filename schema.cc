@@ -54,17 +54,17 @@ schema::schema(const raw_schema& raw)
     : _raw(raw)
     , _offsets([this] {
         auto& cols = _raw._columns;
-        std::array<size_t, 4> count = { 0, 0, 0, 0 };
+        std::array<size_t, 5> count = { 0, 0, 0, 0, 0 };
         auto i = cols.begin();
         auto e = cols.end();
-        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
+        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column, column_kind::compact_column }) {
             auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
             count[size_t(k)] = std::distance(i, j);
             i = j;
         }
-        return std::array<size_t, 3> { count[0], count[0] + count[1], count[0] + count[1] + count[2] };
+        return std::array<size_t, 4> { count[0], count[0] + count[1], count[0] + count[1] + count[2], count[0] + count[1] + count[2] + count[3] };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
@@ -223,12 +223,6 @@ column_definition::name() const {
     return _name;
 }
 
-bool
-column_definition::is_compact_value() const {
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return false;
-}
-
 bool column_definition::is_on_all_components() const {
     return _thrift_bits.is_on_all_components;
 }
@@ -366,6 +360,12 @@ schema_ptr schema_builder::build(compact_storage cp) {
         if (s.regular_columns_count() == 0) {
             s._raw._columns.emplace_back(bytes(""), s.regular_column_name_type(), column_kind::regular_column, 0, index_info());
         }
+
+        if (s.regular_columns_count() != 1) {
+            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", s.regular_columns_count()));
+        }
+        s._raw._columns.at(s.column_offset(column_kind::regular_column)).kind = column_kind::compact_column;
+
         // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
         // from the constructor
         return make_lw_shared<schema>(schema(s._raw));

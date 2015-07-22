@@ -21,7 +21,7 @@
 using column_id = uint32_t;
 
 // make sure these match the order we like columns back from schema
-enum class column_kind { partition_key, clustering_key, static_column, regular_column,  };
+enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
 // CMH this is also manually defined in thrift gen file.
 enum class index_type {
@@ -104,12 +104,12 @@ public:
     index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
-    bool is_regular() const { return kind == column_kind::regular_column; }
+    bool is_regular() const { return kind == column_kind::regular_column || kind == column_kind::compact_column; }
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return !type->is_multi_cell(); }
-    bool is_compact_value() const;
+    bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -189,7 +189,7 @@ private:
     raw_schema _raw;
     thrift_schema _thrift;
 
-    const std::array<size_t, 3> _offsets;
+    const std::array<size_t, 4> _offsets;
 
     inline size_t column_offset(column_kind k) const {
         return k == column_kind::partition_key ? 0 : _offsets[size_t(k) - 1];
