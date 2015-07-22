@@ -294,8 +294,7 @@ lists::do_append(shared_ptr<term> t,
         mutation& m,
         const exploded_clustering_prefix& prefix,
         const column_definition& column,
-        const update_parameters& params,
-        tombstone ts) {
+        const update_parameters& params) {
     auto&& value = t->bind(params._options);
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
     auto&& ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
@@ -308,7 +307,6 @@ lists::do_append(shared_ptr<term> t,
 
         auto&& to_add = list_value->_elements;
         collection_type_impl::mutation appended;
-        appended.tomb = ts;
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
             auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();

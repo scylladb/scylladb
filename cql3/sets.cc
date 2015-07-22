@@ -223,14 +223,13 @@ sets::adder::execute(mutation& m, const exploded_clustering_prefix& row_key, con
 
 void
 sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-        shared_ptr<term> t, const column_definition& column, tombstone ts) {
+        shared_ptr<term> t, const column_definition& column) {
     auto&& value = t->bind(params._options);
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
     auto set_type = dynamic_pointer_cast<const set_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // FIXME: mutation_view? not compatible with params.make_cell().
         collection_type_impl::mutation mut;
-        mut.tomb = ts;
 
         if (!set_value || set_value->_elements.empty()) {
             return;

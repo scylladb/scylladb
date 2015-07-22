@@ -105,7 +105,7 @@ public:
         }
         virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-                shared_ptr<term> t, const column_definition& column, tombstone ts = {});
+                shared_ptr<term> t, const column_definition& column);
     };
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)

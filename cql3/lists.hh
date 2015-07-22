@@ -152,8 +152,7 @@ public:
             mutation& m,
             const exploded_clustering_prefix& prefix,
             const column_definition& column,
-            const update_parameters& params,
-            tombstone ts = {});
+            const update_parameters& params);
 
     class prepender : public operation {
     public:
