@@ -2,6 +2,7 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
 
@@ -208,6 +209,25 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
     return boost::make_iterator_range(i1, i2);
 }
 
+
+template<typename Func>
+void mutation_partition::for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const
+{
+    auto r = range(schema, row_range);
+    if (!reversed) {
+        for (const auto& e : r) {
+            if (func(e) == stop_iteration::yes) {
+                break;
+            }
+        }
+    } else {
+        for (const auto& e : r | boost::adaptors::reversed) {
+            if (func(e) == stop_iteration::yes) {
+                break;
+            }
+        }
+    }
+}
 
 template <typename ColumnDefResolver>
 static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
