@@ -216,9 +216,11 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                     sslog.debug("================ START STREAM  ==============");
                     auto sp = stream_plan("MYPLAN");
                     auto to = inet_address("127.0.0.2");
+                    auto tb = sstring("tb");
+                    auto ks = sstring("ks");
                     std::vector<query::range<token>> ranges = {query::range<token>::make_open_ended_both_sides()};
-                    std::vector<sstring> cfs{"tb"};
-                    sp.transfer_ranges(to, to, "ks", std::move(ranges), std::move(cfs)).execute();
+                    std::vector<sstring> cfs{tb};
+                    sp.transfer_ranges(to, to, ks, ranges, cfs).request_ranges(to, to, ks, ranges, cfs).execute();
                 });
             });
         });
