@@ -10,7 +10,7 @@ namespace runtime {
 
 void init_uptime();
 
-/// Returns the uptime of the system in milliseconds.
-uint64_t get_uptime();
+/// Returns the uptime of the system.
+std::chrono::steady_clock::duration get_uptime();
 
 }

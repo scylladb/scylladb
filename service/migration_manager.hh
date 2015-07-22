@@ -43,7 +43,7 @@ class migration_manager {
     private static final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
 #endif
 
-    static const int32_t MIGRATION_DELAY_IN_MS;
+    static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
 
 #if 0
     private final List<IMigrationListener> listeners = new CopyOnWriteArrayList<>();

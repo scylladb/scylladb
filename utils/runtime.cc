@@ -15,10 +15,9 @@ void init_uptime()
     boot_time = std::chrono::steady_clock::now();
 }
 
-uint64_t get_uptime()
+std::chrono::steady_clock::duration get_uptime()
 {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now - boot_time).count();
+    return std::chrono::steady_clock::now() - boot_time;
 }
 
 }
