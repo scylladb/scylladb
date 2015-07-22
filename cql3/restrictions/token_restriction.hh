@@ -99,7 +99,7 @@ public:
         if (start_token > end_token
                 || (start_token == end_token
                     && (!include_start || !include_end))) {
-            return {query::partition_range::make_open_ended_both_sides()};
+            return {};
         }
 
         typedef typename bounds_range_type::bound bound;
