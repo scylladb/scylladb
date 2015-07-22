@@ -1469,7 +1469,8 @@ future<> save_system_keyspace_schema() {
                                    ? getComponentComparator(rawComparator, componentIndex)
                                    : UTF8Type.instance;
 #endif
-        auto name = row.get_nonnull<sstring>("column_name");
+        auto name_opt = row.get<sstring>("column_name");
+        sstring name = name_opt ? *name_opt : sstring();
 
         auto validator = parse_type(row.get_nonnull<sstring>("validator"));
 

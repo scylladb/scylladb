@@ -361,5 +361,15 @@ schema_ptr schema_builder::build(compact_storage cp) {
         }
     }
     s._thrift._compound = s._raw._is_compound;
-    return make_lw_shared<schema>(std::move(s));
+    if (s._raw._is_dense) {
+        // In Origin, dense CFs always have at least one regular column
+        if (s.regular_columns_count() == 0) {
+            s._raw._columns.emplace_back(bytes(""), s.regular_column_name_type(), column_kind::regular_column, 0, index_info());
+        }
+        // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
+        // from the constructor
+        return make_lw_shared<schema>(schema(s._raw));
+    } else {
+        return make_lw_shared<schema>(s);
+    }
 }
