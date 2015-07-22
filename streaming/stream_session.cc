@@ -259,10 +259,7 @@ future<> stream_session::on_initialization_complete() {
         for (auto& summary : msg.summaries) {
             prepare_receiving(summary);
         }
-        // if we don't need to prepare for receiving stream, start sending files immediately
-        if (_requests.empty()) {
-            start_streaming_files();
-        }
+        start_streaming_files();
     });
 }
 
