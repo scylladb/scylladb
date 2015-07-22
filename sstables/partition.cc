@@ -127,11 +127,18 @@ class mp_row_consumer : public row_consumer {
             return col;
         }
 
+        std::vector<bytes> extract_clustering_key(const schema& schema) {
+            if (!schema.is_compound()) {
+                return { to_bytes(col_name) };
+            } else {
+                return composite_view(col_name).explode();
+            }
+        }
         column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
             , col_name(fix_static_name(col))
-            , clustering(composite_view(col_name).explode())
-            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes())
+            , clustering(extract_clustering_key(schema))
+            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
             , cell(pop_back(clustering))
             , cdef(schema.get_column_definition(cell))
         {
