@@ -310,6 +310,7 @@ mutation_partition::query(query::result::partition_writer& pw,
         row_builder.finish();
     }
 
+    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     for (auto&& row_range : slice.row_ranges) {
         if (limit == 0) {
             break;
@@ -318,7 +319,7 @@ mutation_partition::query(query::result::partition_writer& pw,
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
-        for (const rows_entry& e : range(s, row_range)) {
+        for_each_row(s, row_range, is_reversed, [&] (const rows_entry& e) {
             auto& row = e.row();
             auto row_tombstone = tombstone_for_row(s, e);
 
@@ -328,10 +329,11 @@ mutation_partition::query(query::result::partition_writer& pw,
                 get_row_slice(row.cells(), slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
-                    break;
+                    return stop_iteration::yes;
                 }
             }
-        }
+            return stop_iteration::no;
+        });
     }
 
     if (!any_live) {
