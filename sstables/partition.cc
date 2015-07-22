@@ -236,12 +236,6 @@ public:
             , _mutation_to_subscription(sub_fn)
     { }
 
-    void validate_row_marker() {
-        if (_schema->is_dense()) {
-            throw malformed_sstable_exception("row marker found in dense table");
-        }
-    }
-
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty()) {
             mut = mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema);
