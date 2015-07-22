@@ -148,6 +148,9 @@ bool operator==(const column_definition&, const column_definition&);
 
 class schema_builder;
 
+static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
+static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -175,8 +178,8 @@ private:
         int32_t _gc_grace_seconds = 864000;
         double _dc_local_read_repair_chance = 0.1;
         double _read_repair_chance = 0.0;
-        int32_t _min_compaction_threshold = 4;
-        int32_t _max_compaction_threshold = 32;
+        int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
+        int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
         int32_t _min_index_interval = 128;
         int32_t _max_index_interval = 2048;
     };

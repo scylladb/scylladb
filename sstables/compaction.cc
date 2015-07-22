@@ -33,6 +33,7 @@
 #include "compaction.hh"
 #include "compaction_strategy.hh"
 #include "mutation_reader.hh"
+#include "schema.hh"
 
 namespace sstables {
 
@@ -131,9 +132,6 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     // exception, causing a warning message of "ignored exceptional future".
     return read_done.then([write_done = std::move(write_done)] () mutable { return std::move(write_done); });
 }
-
-static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
-static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 
 class compaction_strategy_impl {
 public:
@@ -319,8 +317,8 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
     // make local copies so they can't be changed out from under us mid-method
     // FIXME: instead, we should get these values from column family.
-    int min_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
-    int max_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
+    int min_threshold = cfs.schema()->min_compaction_threshold();
+    int max_threshold = cfs.schema()->max_compaction_threshold();
 
     auto candidates = cfs.get_sstables();
 
