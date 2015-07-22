@@ -332,8 +332,6 @@ public:
     bool has_clustering_columns_restriction() {
         return !_clustering_columns_restrictions->empty();
     }
-
-    void reverse();
 };
 
 }

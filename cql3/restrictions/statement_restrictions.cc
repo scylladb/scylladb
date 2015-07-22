@@ -3,7 +3,6 @@
 #include <boost/range/adaptors.hpp>
 
 #include "statement_restrictions.hh"
-#include "reverse_primary_key_restrictions.hh"
 #include "single_column_primary_key_restrictions.hh"
 #include "token_restriction.hh"
 
@@ -330,13 +329,6 @@ void statement_restrictions::validate_secondary_index_selections(bool selects_on
     if (selects_only_static_columns) {
         throw exceptions::invalid_request_exception(
             "Queries using 2ndary indexes don't support selecting only static columns");
-    }
-}
-
-void statement_restrictions::reverse() {
-    if (!_clustering_columns_restrictions->empty()) {
-        _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions<clustering_key_prefix>>(
-            _clustering_columns_restrictions);
     }
 }
 
