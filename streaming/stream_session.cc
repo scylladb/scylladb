@@ -216,9 +216,11 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                     sslog.debug("================ START STREAM  ==============");
                     auto sp = stream_plan("MYPLAN");
                     auto to = inet_address("127.0.0.2");
+                    auto tb = sstring("tb");
+                    auto ks = sstring("ks");
                     std::vector<query::range<token>> ranges = {query::range<token>::make_open_ended_both_sides()};
-                    std::vector<sstring> cfs{"tb"};
-                    sp.transfer_ranges(to, to, "ks", std::move(ranges), std::move(cfs)).execute();
+                    std::vector<sstring> cfs{tb};
+                    sp.transfer_ranges(to, to, ks, ranges, cfs).request_ranges(to, to, ks, ranges, cfs).execute();
                 });
             });
         });
@@ -259,10 +261,7 @@ future<> stream_session::on_initialization_complete() {
         for (auto& summary : msg.summaries) {
             prepare_receiving(summary);
         }
-        // if we don't need to prepare for receiving stream, start sending files immediately
-        if (_requests.empty()) {
-            start_streaming_files();
-        }
+        start_streaming_files();
     });
 }
 
@@ -280,10 +279,12 @@ void stream_session::on_error() {
 
 // Only follower calls this function upon receiving of prepare_message from initiator
 messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+    sslog.debug("stream_session::prepare requests nr={}, summaries nr={}", requests.size(), summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     for (auto& request : requests) {
         // always flush on stream request
+        sslog.debug("stream_session::prepare stream_request={}", request);
         add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
     }
     for (auto& summary : summaries) {

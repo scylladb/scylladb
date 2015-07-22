@@ -181,7 +181,7 @@ void stream_coordinator::host_streaming_data::connect_all_stream_sessions() {
     for (auto& x : _stream_sessions) {
         auto& session = x.second;
         session->start();
-        sslog.info("[Stream #{}, ID#{}] Beginning stream session with {}", session->plan_id(), session->session_index(), session->peer);
+        sslog.info("[Stream #{} ID#{}] Beginning stream session with {}", session->plan_id(), session->session_index(), session->peer);
     }
 }
 } // namespace streaming

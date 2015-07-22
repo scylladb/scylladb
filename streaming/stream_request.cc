@@ -43,13 +43,14 @@ stream_request stream_request::deserialize(bytes_view& v) {
     auto keyspace_ = read_simple_short_string(v);
 
     auto num = read_simple<int32_t>(v);
-    std::vector<query::range<token>> ranges_(num);
+    std::vector<query::range<token>> ranges_;
     for (int32_t i = 0; i < num; i++) {
         // FIXME: query::range<token>
+        ranges_.push_back(query::range<token>::make_open_ended_both_sides());
     }
 
     num = read_simple<int32_t>(v);
-    std::vector<sstring> column_families_(num);
+    std::vector<sstring> column_families_;
     for (int32_t i = 0; i < num; i++) {
         auto s = read_simple_short_string(v);
         column_families_.push_back(std::move(s));
@@ -76,6 +77,14 @@ size_t stream_request::serialized_size() const {
     size += serialize_int64_size;
 
     return size;
+}
+
+std::ostream& operator<<(std::ostream& os, const stream_request& sr) {
+    os << "[ ks = " << sr.keyspace << " cf =  ";
+    for (auto& cf : sr.column_families) {
+        os << cf << " ";
+    }
+    return os << "]";
 }
 
 } // namespace streaming;
