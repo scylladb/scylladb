@@ -246,8 +246,8 @@ private:
     statistics _statistics;
     metadata_collector _collector;
     column_stats _c_stats;
-    lw_shared_ptr<file> _index_file;
-    lw_shared_ptr<file> _data_file;
+    file _index_file;
+    file _data_file;
     uint64_t _data_file_size;
     uint64_t _bytes_on_disk = 0;
 

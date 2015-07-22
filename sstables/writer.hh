@@ -15,8 +15,8 @@ class file_writer {
     output_stream<char> _out;
     size_t _offset = 0;
 public:
-    file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192)
-        : _out(make_file_output_stream(*std::move(f), buffer_size)) {}
+    file_writer(file f, size_t buffer_size = 8192)
+        : _out(make_file_output_stream(std::move(f), buffer_size)) {}
 
     file_writer(output_stream<char>&& out)
         : _out(std::move(out)) {}
@@ -90,7 +90,7 @@ private:
         }
     }
 public:
-    checksummed_file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192, bool checksum_file = false)
+    checksummed_file_writer(file f, size_t buffer_size = 8192, bool checksum_file = false)
             : file_writer(std::move(f), buffer_size) {
         _checksum_file = checksum_file;
         _c.chunk_size = DEFAULT_CHUNK_SIZE;
@@ -126,8 +126,8 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     sstables::compression* _compression_metadata;
     size_t _pos = 0;
 public:
-    compressed_file_data_sink_impl(lw_shared_ptr<file> f, sstables::compression* cm, file_output_stream_options options)
-            : _out(make_file_output_stream(*std::move(f), options))
+    compressed_file_data_sink_impl(file f, sstables::compression* cm, file_output_stream_options options)
+            : _out(make_file_output_stream(std::move(f), options))
             , _compression_metadata(cm) {}
 
     future<> put(net::packet data) { abort(); }
@@ -168,12 +168,12 @@ public:
 
 class compressed_file_data_sink : public data_sink {
 public:
-    compressed_file_data_sink(lw_shared_ptr<file> f, sstables::compression* cm, file_output_stream_options options)
+    compressed_file_data_sink(file f, sstables::compression* cm, file_output_stream_options options)
         : data_sink(std::make_unique<compressed_file_data_sink_impl>(
                 std::move(f), cm, options)) {}
 };
 
-static inline output_stream<char> make_compressed_file_output_stream(lw_shared_ptr<file> f, sstables::compression* cm) {
+static inline output_stream<char> make_compressed_file_output_stream(file f, sstables::compression* cm) {
     file_output_stream_options options;
     // buffer of output stream is set to chunk length, because flush must
     // happen every time a chunk was filled up.

@@ -709,20 +709,19 @@ future<subscription<temporary_buffer<char>>> db::commitlog::read_log_file(const 
 
 subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit_load_reader_func next) {
     struct work {
+        file f;
         stream<temporary_buffer<char>> s;
         input_stream<char> fin;
         input_stream<char> r;
-        lw_shared_ptr<file> f;
         uint64_t id = 0;
         size_t pos = 0;
         size_t next = 0;
         bool eof = false;
         bool header = true;
+        work(file f) : f(std::move(f)), fin(make_file_input_stream(f)) {}
     };
 
-    auto w = make_lw_shared<work>();
-    w->f = make_lw_shared<file>(std::move(f));
-    w->fin = make_file_input_stream(*w->f);
+    auto w = make_lw_shared<work>(std::move(f));
 
     auto ret = w->s.listen(std::move(next));
 

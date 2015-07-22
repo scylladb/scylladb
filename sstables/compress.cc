@@ -200,11 +200,11 @@ size_t compress_max_size_snappy(size_t input_len) {
 }
 
 class compressed_file_data_source_impl : public data_source_impl {
-    lw_shared_ptr<file> _file;
+    file _file;
     sstables::compression* _compression_metadata;
     uint64_t _pos = 0;
 public:
-    compressed_file_data_source_impl(lw_shared_ptr<file> f,
+    compressed_file_data_source_impl(file f,
             sstables::compression* cm, uint64_t pos)
             : _file(std::move(f)), _compression_metadata(cm),
               _pos(pos)
@@ -214,7 +214,7 @@ public:
             return make_ready_future<temporary_buffer<char>>();
         }
         auto addr = _compression_metadata->locate(_pos);
-        return _file->dma_read_exactly<char>(addr.chunk_start, addr.chunk_len).
+        return _file.dma_read_exactly<char>(addr.chunk_start, addr.chunk_len).
             then([this, addr](temporary_buffer<char> buf) {
                 // The last 4 bytes of the chunk are the adler32 checksum
                 // of the rest of the (compressed) chunk.
@@ -246,7 +246,7 @@ public:
 
 class compressed_file_data_source : public data_source {
 public:
-    compressed_file_data_source(lw_shared_ptr<file> f,
+    compressed_file_data_source(file f,
             sstables::compression* cm, uint64_t offset)
         : data_source(std::make_unique<compressed_file_data_source_impl>(
                 std::move(f), cm, offset))
@@ -254,7 +254,7 @@ public:
 };
 
 input_stream<char> make_compressed_file_input_stream(
-        lw_shared_ptr<file> f, sstables::compression* cm, uint64_t offset)
+        file f, sstables::compression* cm, uint64_t offset)
 {
     return input_stream<char>(compressed_file_data_source(
             std::move(f), cm, offset));

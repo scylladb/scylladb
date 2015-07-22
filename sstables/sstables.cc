@@ -39,17 +39,14 @@ public:
 };
 
 class file_random_access_reader : public random_access_reader {
-    lw_shared_ptr<file> _file;
+    file _file;
     size_t _buffer_size;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override {
-        return make_file_input_stream(*_file, pos, _buffer_size);
+        return make_file_input_stream(_file, pos, _buffer_size);
     }
-    explicit file_random_access_reader(file&& f, size_t buffer_size = 8192)
-        : file_random_access_reader(make_lw_shared<file>(std::move(f)), buffer_size) {}
-
-    explicit file_random_access_reader(lw_shared_ptr<file> f, size_t buffer_size = 8192)
-        : _file(f), _buffer_size(buffer_size)
+    explicit file_random_access_reader(file f, size_t buffer_size = 8192)
+        : _file(std::move(f)), _buffer_size(buffer_size)
     {
         seek(0);
     }
@@ -618,7 +615,7 @@ future<> sstable::read_toc() {
         auto buf = bufptr.get();
 
         auto fut = f.dma_read(0, buf, 4096);
-        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
@@ -665,7 +662,7 @@ future<> sstable::write_toc() {
     sstlog.debug("Writing TOC file {} ", file_path);
 
     return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this] (file f) {
-        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto out = file_writer(std::move(f), 4096);
         auto w = make_shared<file_writer>(std::move(out));
 
         return do_for_each(_components, [this, w] (auto key) {
@@ -686,7 +683,7 @@ future<> write_crc(const sstring file_path, checksum& c) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return engine().open_file_dma(file_path, oflags).then([&c] (file f) {
-        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto out = file_writer(std::move(f), 4096);
         auto w = make_shared<file_writer>(std::move(out));
 
         return seastar::async([w, &c] () { write(*w, c); }).then([w] {
@@ -701,7 +698,7 @@ future<> write_digest(const sstring file_path, uint32_t full_checksum) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return engine().open_file_dma(file_path, oflags).then([full_checksum] (file f) {
-        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto out = file_writer(std::move(f), 4096);
         auto w = make_shared<file_writer>(std::move(out));
 
         return do_with(to_sstring<bytes>(full_checksum), [w] (bytes& digest) {
@@ -717,7 +714,7 @@ future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
         uint64_t count = 0;
         std::vector<index_entry> indexes;
         file_random_access_reader stream;
-        reader(lw_shared_ptr<file> f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
+        reader(file f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
     };
 
     auto r = make_lw_shared<reader>(_index_file, quantity);
@@ -792,8 +789,7 @@ future<> sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this, &component] (file f) {
-
-        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto out = file_writer(std::move(f), 4096);
         auto w = make_shared<file_writer>(std::move(out));
         auto fut = seastar::async([w, &component] () mutable { write(*w, component); });
         return fut.then([w] {
@@ -834,9 +830,9 @@ future<> sstable::write_statistics() {
 future<> sstable::open_data() {
     return when_all(engine().open_file_dma(filename(component_type::Index), open_flags::ro),
                     engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
-        _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
-        _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
-        return _data_file->size().then([this] (auto size) {
+        _index_file = std::get<file>(std::get<0>(files).get());
+        _data_file  = std::get<file>(std::get<1>(files).get());
+        return _data_file.size().then([this] (auto size) {
           _data_file_size = size;
         });
     });
@@ -846,8 +842,12 @@ future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return when_all(engine().open_file_dma(filename(component_type::Index), oflags),
                     engine().open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
-        _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
-        _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
+        // FIXME: If both files could not be created, the first get below will
+        // throw an exception, and second get() will not be attempted, and
+        // we'll get a warning about the second future being destructed
+        // without its exception being examined.
+        _index_file = std::get<file>(std::get<0>(files).get());
+        _data_file  = std::get<file>(std::get<1>(files).get());
     });
 }
 
@@ -1369,7 +1369,7 @@ input_stream<char> sstable::data_stream_at(uint64_t pos) {
         return make_compressed_file_input_stream(
                 _data_file, &_compression, pos);
     } else {
-        return make_file_input_stream(*_data_file, pos);
+        return make_file_input_stream(_data_file, pos);
     }
 }
 

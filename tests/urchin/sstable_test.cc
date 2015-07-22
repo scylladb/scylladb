@@ -202,12 +202,11 @@ static future<> write_sst_info(sstring dir, unsigned long generation) {
 static future<std::pair<char*, size_t>> read_file(sstring file_path)
 {
     return engine().open_file_dma(file_path, open_flags::rw).then([] (file f) {
-        auto fp = make_shared<file>(std::move(f));
-        return fp->size().then([fp] (auto size) {
+        return f.size().then([f] (auto size) mutable {
             auto aligned_size = align_up(size, 512UL);
             auto rbuf = reinterpret_cast<char*>(::memalign(4096, aligned_size));
             ::memset(rbuf, 0, aligned_size);
-            return fp->dma_read(0, rbuf, aligned_size).then([size, rbuf, fp] (auto ret) {
+            return f.dma_read(0, rbuf, aligned_size).then([size, rbuf, f] (auto ret) {
                 BOOST_REQUIRE(ret == size);
                 std::pair<char*, size_t> p = { rbuf, size };
                 return make_ready_future<std::pair<char*, size_t>>(p);
