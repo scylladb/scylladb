@@ -911,7 +911,6 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
     column_name_helper::min_components(_c_stats.min_column_names, column_names);
     column_name_helper::max_components(_c_stats.max_column_names, column_names);
 
-    // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
     auto c= composite::from_exploded(column_names, m);
     auto ck_bview = bytes_view(clustering_key);
@@ -927,6 +926,15 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
     uint16_t sz = ck_bview.size() + c.size();
     write(out, sz, ck_bview, c);
 }
+
+void sstable::write_column_name(file_writer& out, bytes_view column_names) {
+    column_name_helper::min_components(_c_stats.min_column_names, { column_names });
+    column_name_helper::max_components(_c_stats.max_column_names, { column_names });
+
+    uint16_t sz = column_names.size();
+    write(out, sz, column_names);
+}
+
 
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
     c_stats.update_min_timestamp(timestamp);
