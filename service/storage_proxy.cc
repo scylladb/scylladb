@@ -54,21 +54,16 @@ namespace service {
 
 distributed<service::storage_proxy> _the_storage_proxy;
 
-struct mutation_write_timeout_error : public std::exception {
-    size_t total_block_for;
-    size_t acks;
-    mutation_write_timeout_error(size_t tbf, size_t acks_) : total_block_for(tbf), acks(acks_) {}
-    virtual const char* what() const noexcept {
-        return "Mutation write timeout";
-    }
+using namespace exceptions;
+
+struct mutation_write_timeout_error : public cassandra_exception {
+    mutation_write_timeout_error(size_t tbf, size_t acks) :
+        cassandra_exception(exception_code::WRITE_TIMEOUT, sprint("Mutation write timeout: waited for %lu got %lu acks", tbf, acks)) {}
 };
 
-struct overloaded_exception : public std::exception {
-    size_t hints_in_progress;
-    overloaded_exception(size_t c) : hints_in_progress(c) {}
-    virtual const char* what() const noexcept {
-        return "Too many in flight hints";
-    }
+struct overloaded_exception : public cassandra_exception {
+    overloaded_exception(size_t c) :
+        cassandra_exception(exception_code::OVERLOADED, sprint("Too many in flight hints: %lu", c)) {}
 };
 
 static inline bool is_me(gms::inet_address from) {
@@ -1374,9 +1369,10 @@ public:
     digest_mismatch_exception() : std::runtime_error("Digest mismatch") {}
 };
 
-class read_timeout_exception : public std::runtime_error {
+class read_timeout_exception : public cassandra_exception  {
 public:
-    read_timeout_exception() : std::runtime_error("Read operation timed out") {}
+    read_timeout_exception(size_t block_for, size_t got) :
+        cassandra_exception(exception_code::READ_TIMEOUT, sprint("Read operation timed out: waited for %lu got %lu", block_for, got)) {}
 };
 
 class abstract_read_resolver {
@@ -1385,13 +1381,15 @@ protected:
     promise<> _done_promise; // all target responded
     bool _timedout = false; // will be true if request timeouts
     timer<> _timeout;
+    size_t _responses = 0;
 
     virtual void on_timeout() {}
+    virtual size_t response_count() const = 0;
 public:
     abstract_read_resolver(size_t target_count, std::chrono::high_resolution_clock::time_point timeout) : _targets_count(target_count) {
         _timeout.set_callback([this] {
             _timedout = true;
-            _done_promise.set_exception(read_timeout_exception());
+            _done_promise.set_exception(read_timeout_exception(_targets_count, response_count()));
             on_timeout();
         });
         _timeout.arm(timeout);
@@ -1414,10 +1412,13 @@ class digest_read_resolver : public abstract_read_resolver {
     std::vector<query::result_digest> _digest_results;
 
     virtual void on_timeout() override {
-        _cl_promise.set_exception(read_timeout_exception());
+        _cl_promise.set_exception(read_timeout_exception(_block_for, _cl_responses));
         // we will not need them any more
         _data_results.clear();
         _digest_results.clear();
+    }
+    virtual size_t response_count() const override {
+        return _digest_results.size();
     }
     bool digests_match() const {
         assert(_digest_results.size());
@@ -1484,6 +1485,9 @@ private:
     virtual void on_timeout() override {
         // we will not need them any more
         _data_results.clear();
+    }
+    virtual size_t response_count() const override {
+        return _data_results.size();
     }
 
 public:
