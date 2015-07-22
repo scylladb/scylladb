@@ -2457,7 +2457,7 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
     std::vector<query::partition_range> ranges;
 
     // divide the queryRange into pieces delimited by the ring and minimum tokens
-    auto ring_iter = tm.ring_range(start_token(range), true);
+    auto ring_iter = tm.ring_range(range.start(), true);
     query::partition_range remainder = std::move(range);
     for (const dht::token& upper_bound_token : ring_iter)
     {

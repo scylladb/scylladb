@@ -29,6 +29,7 @@
 #include "utils/UUID.hh"
 #include <experimental/optional>
 #include <boost/range/iterator_range.hpp>
+#include "query-request.hh"
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -227,6 +228,9 @@ public:
         auto end = tokens_end();
         return boost::make_iterator_range(begin, end);
     }
+
+    boost::iterator_range<tokens_iterator> ring_range(
+        const std::experimental::optional<query::partition_range::bound>& start, bool include_min = false);
 
     topology& get_topology() {
         return _topology;
