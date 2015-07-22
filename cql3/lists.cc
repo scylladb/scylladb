@@ -215,12 +215,15 @@ lists::precision_time::get_next(db_clock::time_point millis) {
 
 void
 lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
-    tombstone ts;
     if (column.type->is_multi_cell()) {
         // delete + append
-        ts = params.make_tombstone_just_before();
+        collection_type_impl::mutation mut;
+        mut.tomb = params.make_tombstone_just_before();
+        auto ctype = static_pointer_cast<const list_type_impl>(column.type);
+        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
+        m.set_cell(prefix, column, std::move(col_mut));
     }
-    do_append(_t, m, prefix, column, params, ts);
+    do_append(_t, m, prefix, column, params);
 }
 
 bool

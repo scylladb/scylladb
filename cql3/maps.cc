@@ -243,13 +243,15 @@ maps::marker::bind(const query_options& options) {
 
 void
 maps::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
-    tombstone ts;
     if (column.type->is_multi_cell()) {
         // delete + put
-        // delete + append
-        ts = params.make_tombstone_just_before();
+        collection_type_impl::mutation mut;
+        mut.tomb = params.make_tombstone_just_before();
+        auto ctype = static_pointer_cast<const map_type_impl>(column.type);
+        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
+        m.set_cell(row_key, column, std::move(col_mut));
     }
-    do_put(m, row_key, params, _t, column, ts);
+    do_put(m, row_key, params, _t, column);
 }
 
 void
