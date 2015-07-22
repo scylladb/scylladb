@@ -294,7 +294,7 @@ void schema_builder::add_default_index_names(database& db) {
             }
             if (sc.idx_info.index_name
                     && sc.idx_info.index_name != c->idx_info.index_name) {
-                throw new exceptions::configuration_exception(
+                throw exceptions::configuration_exception(
                         sprint(
                                 "Can't modify index name: was '%s' changed to '%s'",
                                 *c->idx_info.index_name,
