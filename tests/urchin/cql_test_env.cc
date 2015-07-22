@@ -20,7 +20,6 @@ public:
 private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<distributed<cql3::query_processor>> _qp;
-    ::shared_ptr<distributed<service::storage_proxy>> _proxy;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -42,11 +41,9 @@ private:
 public:
     in_memory_cql_env(
         ::shared_ptr<distributed<database>> db,
-        ::shared_ptr<distributed<cql3::query_processor>> qp,
-        ::shared_ptr<distributed<service::storage_proxy>> proxy)
+        ::shared_ptr<distributed<cql3::query_processor>> qp)
             : _db(db)
             , _qp(qp)
-            , _proxy(proxy)
     { }
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -180,7 +177,7 @@ public:
     virtual future<> stop() override {
         return _core_local.stop().then([this] {
             return _qp->stop().then([this] {
-                return _proxy->stop().then([this] {
+                return service::get_storage_proxy().stop().then([this] {
                     return _db->stop().then([] {
                         return locator::i_endpoint_snitch::stop_snitch();
                     });
@@ -210,13 +207,13 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
             auto cfg = make_lw_shared<db::config>();
             cfg->data_file_directories() = {};
             return db->start(std::move(*cfg)).then([db] {
-                auto proxy = ::make_shared<distributed<service::storage_proxy>>();
+                distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
-                return proxy->start(std::ref(*db)).then([qp, db, proxy] {
-                    return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
+                return proxy.start(std::ref(*db)).then([qp, db, &proxy] {
+                    return qp->start(std::ref(proxy), std::ref(*db)).then([db, &proxy, qp] {
                         auto& ss = service::get_local_storage_service();
-                        return ss.init_server().then([db, proxy, qp] {
-                            auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
+                        return ss.init_server().then([db, qp] {
+                            auto env = ::make_shared<in_memory_cql_env>(db, qp);
                             return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
                                 return env;
                             });

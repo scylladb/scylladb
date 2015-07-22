@@ -9,6 +9,7 @@
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "log.hh"
+#include "service/migration_manager.hh"
 
 namespace service {
 
@@ -81,10 +82,11 @@ future<> storage_service::prepare_to_join() {
         }).then([this] {
             // gossip snitch infos (local DC and rack)
             gossip_snitch_info();
-#if 0
+            auto& proxy = service::get_local_storage_proxy();
             // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-            Schema.instance.updateVersionAndAnnounce(); // Ensure we know our own actual Schema UUID in preparation for updates
+            return update_schema_version_and_announce(proxy); // Ensure we know our own actual Schema UUID in preparation for updates
 
+#if 0
             if (!MessagingService.instance().isListening())
                 MessagingService.instance().listen(FBUtilities.getLocalAddress());
             LoadBroadcaster.instance.startBroadcasting();
@@ -620,13 +622,13 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+    migration_manager::schedule_schema_pull(endpoint, ep_state);
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("SS::on_alive endpoint={}", endpoint);
+    migration_manager::schedule_schema_pull(endpoint, state);
 #if 0
-    MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
     if (_token_metadata.isMember(endpoint))
     {
@@ -671,7 +673,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
         do_update_system_peers_table(endpoint, state, value);
         if (state == application_state::SCHEMA) {
-            // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+            migration_manager::schedule_schema_pull(endpoint, *ep_state);
         }
     }
     replicate_to_all_cores();

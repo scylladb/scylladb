@@ -15,6 +15,7 @@
 #include "service/storage_service.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "utils/runtime.hh"
 #include "dns.hh"
 #include "log.hh"
 #include <cstdio>
@@ -49,6 +50,7 @@ void apply_logger_settings(sstring default_level, db::config::string_map levels,
 }
 
 int main(int ac, char** av) {
+    runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template app;
     auto opt_add = app.add_options();
@@ -66,7 +68,7 @@ int main(int ac, char** av) {
 
     distributed<database> db;
     distributed<cql3::query_processor> qp;
-    distributed<service::storage_proxy> proxy;
+    auto& proxy = service::get_storage_proxy();
     api::http_context ctx(db, proxy);
 
     return app.run(ac, av, [&] {

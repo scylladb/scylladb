@@ -295,6 +295,8 @@ public:
     bool is_known_endpoint(inet_address endpoint);
 
     int get_current_generation_number(inet_address endpoint);
+
+    bool is_gossip_only_member(inet_address endpoint);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise
@@ -313,8 +315,6 @@ private:
 
     /* Gossip to a seed for facilitating partition healing */
     void do_gossip_to_seed(gossip_digest_syn prod);
-
-    bool is_gossip_only_member(inet_address endpoint);
 
     void do_status_check();
 

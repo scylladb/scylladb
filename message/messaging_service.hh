@@ -9,6 +9,7 @@
 #include "core/distributed.hh"
 #include "core/print.hh"
 #include "core/sstring.hh"
+#include "core/do_with.hh"
 #include "net/api.hh"
 #include "utils/serialization.hh"
 #include "gms/inet_address.hh"
@@ -464,6 +465,10 @@ public:
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
     future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
+
+    // Wrapper for MIGRATION_REQUEST
+    void register_migration_request(std::function<future<std::vector<frozen_mutation>> (gms::inet_address reply_to, unsigned shard)>&& func);
+    future<std::vector<frozen_mutation>> send_migration_request(shard_id id, gms::inet_address reply_to, unsigned shard);
 
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;

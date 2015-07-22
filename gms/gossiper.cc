@@ -32,8 +32,8 @@
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/i_failure_detector.hh"
-#include "log.hh"
 #include "service/storage_service.hh"
+#include "log.hh"
 
 namespace gms {
 
@@ -780,8 +780,8 @@ bool gossiper::is_gossip_only_member(inet_address endpoint) {
         return false;
     }
     auto& eps = it->second;
-    // FIXME: StorageService.instance.getTokenMetadata
-    return !is_dead_state(eps) /* && !StorageService.instance.getTokenMetadata().isMember(endpoint); */;
+    auto& ss = service::get_local_storage_service();
+    return !is_dead_state(eps) && !ss.get_token_metadata().is_member(endpoint);
 }
 
 int64_t gossiper::get_expire_time_for_endpoint(inet_address endpoint) {

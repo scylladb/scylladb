@@ -26,7 +26,9 @@
 
 #include "db/legacy_schema_tables.hh"
 
+#include "gms/endpoint_state.hh"
 #include "gms/inet_address.hh"
+#include "utils/UUID.hh"
 
 #include <vector>
 
@@ -39,14 +41,24 @@ class migration_manager {
     public static final MigrationManager instance = new MigrationManager();
 
     private static final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
+#endif
 
-    public static final int MIGRATION_DELAY_IN_MS = 60000;
+    static const int32_t MIGRATION_DELAY_IN_MS;
 
+#if 0
     private final List<IMigrationListener> listeners = new CopyOnWriteArrayList<>();
 
     private MigrationManager() {}
 #endif
 public:
+    static future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+
+    static future<> maybe_schedule_schema_pull(service::storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint);
+
+    static future<> submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint);
+
+    static bool should_pull_schema_from(const gms::inet_address& endpoint);
+
     static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
     static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);

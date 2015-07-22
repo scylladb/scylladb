@@ -56,6 +56,8 @@ future<> save_system_keyspace_schema();
 
 future<utils::UUID> calculate_schema_digest(service::storage_proxy& proxy);
 
+future<std::vector<frozen_mutation>> convert_schema_to_mutations(service::storage_proxy& proxy);
+
 future<schema_result::value_type>
 read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 

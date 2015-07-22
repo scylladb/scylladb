@@ -461,4 +461,6 @@ column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
     seal_on_overflow();
 }
 
+future<> update_schema_version_and_announce(service::storage_proxy& proxy);
+
 #endif /* DATABASE_HH_ */
