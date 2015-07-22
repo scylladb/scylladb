@@ -139,7 +139,7 @@ class mp_row_consumer : public row_consumer {
             , col_name(fix_static_name(col))
             , clustering(extract_clustering_key(schema))
             , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
-            , cell(pop_back(clustering))
+            , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
             , cdef(schema.get_column_definition(cell))
         {
 
