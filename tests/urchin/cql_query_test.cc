@@ -591,6 +591,14 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
                         {keys[3]}
                     });
                 });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) < 0x%s and token(k) > 0x%s;", to_hex(tokens[3]), to_hex(tokens[3]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().is_empty();
+                });
+            }).then([keys, tokens, &e] {
+                return e.execute_cql(sprint("select k from cf where token(k) >= 0x%s and token(k) <= 0x%s;", to_hex(tokens[4]), to_hex(tokens[2]))).then([keys](auto msg) {
+                    assert_that(msg).is_rows().is_empty();
+                });
             });
         });
     });

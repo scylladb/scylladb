@@ -95,15 +95,11 @@ public:
          *
          * In practice, we want to return an empty result set if either startToken > endToken, or both are equal but
          * one of the bound is excluded (since [a, a] can contains something, but not (a, a], [a, a) or (a, a)).
-         * Note though that in the case where startToken or endToken is the minimum token, then this special case
-         * rule should not apply.
          */
-        if (start_token.is_minimum()
-                && end_token.is_maximum()
-                && (start_token > end_token
-                        || (start_token == end_token
-                                && (!include_start || !include_end)))) {
-            return {query::partition_range::make_open_ended_both_sides()};
+        if (start_token > end_token
+                || (start_token == end_token
+                    && (!include_start || !include_end))) {
+            return {};
         }
 
         typedef typename bounds_range_type::bound bound;
