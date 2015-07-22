@@ -78,4 +78,12 @@ size_t stream_request::serialized_size() const {
     return size;
 }
 
+std::ostream& operator<<(std::ostream& os, const stream_request& sr) {
+    os << "[ ks = " << sr.keyspace << " cf =  ";
+    for (auto& cf : sr.column_families) {
+        os << cf << " ";
+    }
+    return os << "]";
+}
+
 } // namespace streaming;

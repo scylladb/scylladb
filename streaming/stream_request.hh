@@ -42,6 +42,7 @@ public:
         , column_families(std::move(_column_families))
         , repaired_at(_repaired_at) {
     }
+    friend std::ostream& operator<<(std::ostream& os, const stream_request& r);
 public:
     void serialize(bytes::iterator& out) const;
     static stream_request deserialize(bytes_view& v);
