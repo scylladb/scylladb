@@ -8,8 +8,11 @@
 #include "db/system_keyspace.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
+#include "log.hh"
 
 namespace service {
+
+logging::logger logger("storage_service");
 
 int storage_service::RING_DELAY = storage_service::get_ring_delay();
 
@@ -60,7 +63,7 @@ future<> storage_service::prepare_to_join() {
             app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
             app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
             app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
-            //logger.info("Starting up server gossip");
+            logger.info("Starting up server gossip");
 
             auto& gossiper = gms::get_local_gossiper();
             gossiper.register_(this);
@@ -362,12 +365,11 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
+    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
-    // if (logger.isDebugEnabled())
-    //     logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+    // logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
@@ -379,7 +381,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
         // common (not enough time for gossip to spread). Therefore we report only the
         // former in the log.
         if (!_token_metadata.is_leaving(endpoint)) {
-            // logger.info("Node {} state jump to bootstrap", endpoint);
+            logger.info("Node {} state jump to bootstrap", endpoint);
         }
         // _token_metadata.removeEndpoint(endpoint);
     }
@@ -395,7 +397,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
+    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
@@ -408,7 +410,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     //     logger.debug("Node {} state normal, token {}", endpoint, tokens);
 
     if (_token_metadata.is_member(endpoint)) {
-        // logger.info("Node {} state jump to normal", endpoint);
+        logger.info("Node {} state jump to normal", endpoint);
     }
     update_peer_info(endpoint);
 #if 1
@@ -420,7 +422,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         //     Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null &&
         //     (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress())))) {
         if (false) {
-            // logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+            logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
             if (false /*existing != null && !existing.equals(endpoint)*/) {
 #if 0
@@ -450,7 +452,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
         auto current_owner = _token_metadata.get_endpoint(t);
         if (!current_owner) {
-            // logger.debug("New node {} at token {}", endpoint, t);
+            logger.debug("New node {} at token {}", endpoint, t);
             tokensToUpdateInMetadata.insert(t);
             tokensToUpdateInSystemKeyspace.insert(t);
         } else if (endpoint == *current_owner) {
@@ -469,20 +471,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             if (epToTokenCopy.get(currentOwner).size() < 1)
                 endpointsToRemove.add(currentOwner);
 
-            logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
-                                      endpoint,
-                                      currentOwner,
-                                      token,
-                                      endpoint));
 #endif
+            logger.info("Nodes {} and {} have the same token {}. {} is the new owner", endpoint, *current_owner, t, endpoint);
         } else {
-#if 0
-            logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
-                                       endpoint,
-                                       currentOwner,
-                                       token,
-                                       endpoint));
-#endif
+            logger.info("Nodes {} and {} have the same token {}. Ignoring {}", endpoint, *current_owner, t, endpoint);
         }
     }
 
@@ -620,10 +612,10 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    ss_debug("SS::on_join endpoint=%s\n", endpoint);
+    logger.debug("SS::on_join endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     for (auto t : tokens) {
-        ss_debug("t=%s\n", t);
+        logger.debug("t={}", t);
     }
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
@@ -632,7 +624,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    ss_debug("SS::on_alive endpoint=%s\n", endpoint);
+    logger.debug("SS::on_alive endpoint={}", endpoint);
 #if 0
     MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
@@ -650,7 +642,7 @@ void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_st
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
-    ss_debug("SS::on_change endpoint=%s\n", endpoint);
+    logger.debug("SS::on_change endpoint={}", endpoint);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
@@ -674,7 +666,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         auto& gossiper = gms::get_local_gossiper();
         auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
         if (!ep_state || gossiper.is_dead_state(*ep_state)) {
-            // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+            logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return;
         }
         do_update_system_peers_table(endpoint, state, value);
@@ -710,21 +702,21 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
 }
 
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    ss_debug("storage_service:: Update ep=%s, state=%d, value=%s\n", endpoint, int(state), value.value);
+    logger.debug("storage_service:: Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
         auto col = sstring("release_version");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::DC) {
         auto col = sstring("data_center");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::RACK) {
         auto col = sstring("rack");
         db::system_keyspace::update_peer_info(endpoint, col, value.value).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::RPC_ADDRESS) {
         auto col = sstring("rpc_address");
@@ -732,21 +724,21 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         try {
             ep = gms::inet_address(value.value);
         } catch (...) {
-            print("storage_service: fail to update %s for %s: invalid rcpaddr %s\n", col, endpoint, value.value);
+            logger.error("storage_service: fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
         db::system_keyspace::update_peer_info(endpoint, col, ep.addr()).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+            try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::SCHEMA) {
         auto col = sstring("schema_version");
         db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     } else if (state == application_state::HOST_ID) {
         auto col = sstring("host_id");
         db::system_keyspace::update_peer_info(endpoint, col, utils::UUID(value.value)).then_wrapped([col, endpoint] (auto&& f) {
-             try { f.get(); } catch (...) { print("storage_service: fail to update %s for %s\n", col, endpoint); }
+             try { f.get(); } catch (...) { logger.error("storage_service: fail to update {} for {}", col, endpoint); }
         });
     }
 }
@@ -780,12 +772,12 @@ sstring storage_service::get_application_state_value(inet_address endpoint, appl
 
 std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
     auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
-    ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
+    logger.debug("endpoint={}, tokens_string={}", endpoint, tokens_string);
     std::vector<sstring> tokens;
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
-        ss_debug("token=%s\n", str);
+        logger.debug("token={}", str);
         sstring_view sv(str);
         bytes b = from_hex(sv);
         ret.emplace(token::kind::key, b);
@@ -794,8 +786,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 }
 
 future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
-    // if (logger.isDebugEnabled())
-    //     logger.debug("Setting tokens to {}", tokens);
+    // logger.debug("Setting tokens to {}", tokens);
     auto f = db::system_keyspace::update_tokens(tokens);
     return f.then([this, tokens = std::move(tokens)] {
         for (auto t : tokens) {
@@ -955,7 +946,7 @@ void storage_service::replicate_to_all_cores() {
             _replicate_task.signal();
             f.get();
         } catch (...) {
-            print("storage_service: Fail to replicate _token_metadata\n");
+            logger.error("storage_service: Fail to replicate _token_metadata");
         }
     });
 }

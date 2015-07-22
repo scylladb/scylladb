@@ -37,12 +37,6 @@
 
 namespace service {
 
-template <typename... Args>
-void ss_debug(const char* fmt, Args&&... args) {
-#if SS_DEBUG
-    print(fmt, std::forward<Args>(args)...);
-#endif
-}
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
