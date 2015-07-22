@@ -124,6 +124,7 @@ struct replay_position {
 };
 
 struct metadata {
+    virtual ~metadata() {}
 };
 
 struct validation_metadata : public metadata {
