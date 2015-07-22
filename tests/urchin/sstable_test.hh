@@ -314,4 +314,88 @@ inline schema_ptr compact_sparse_schema() {
     }();
     return s;
 }
+
+enum class status {
+    dead,
+    live,
+    ttl,
+};
+
+inline bool check_status_and_done(const atomic_cell &c, status expected) {
+    if (expected == status::dead) {
+        BOOST_REQUIRE(c.is_live() == false);
+        return true;
+    }
+    BOOST_REQUIRE(c.is_live() == true);
+    BOOST_REQUIRE(c.is_live_and_has_ttl() == (expected == status::ttl));
+    return false;
+}
+
+template <status Status>
+inline void match(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp = 0, int32_t expiration = 0) {
+    auto cdef = s.get_column_definition(col);
+
+    BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
+    auto c = row.cell_at(cdef->id).as_atomic_cell();
+    if (check_status_and_done(c, Status)) {
+        return;
+    }
+
+    auto expected = cdef->type->decompose(value);
+    BOOST_REQUIRE(c.value() == expected);
+    if (timestamp) {
+        BOOST_REQUIRE(c.timestamp() == timestamp);
+    }
+    if (expiration) {
+        BOOST_REQUIRE(c.expiry() == gc_clock::time_point(gc_clock::duration(expiration)));
+    }
+}
+
+inline void match_live_cell(const row& row, const schema& s, bytes col, const boost::any& value) {
+    match<status::live>(row, s, col, value);
+}
+
+inline void match_expiring_cell(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp, int32_t expiration) {
+    match<status::ttl>(row, s, col, value);
+}
+
+inline void match_dead_cell(const row& row, const schema& s, bytes col) {
+    match<status::dead>(row, s, col, boost::any({}));
+}
+
+inline void match_absent(const row& row, const schema& s, bytes col) {
+    auto cdef = s.get_column_definition(col);
+    BOOST_REQUIRE_THROW(row.cell_at(cdef->id), std::out_of_range);
+}
+
+inline collection_type_impl::mutation
+match_collection(const row& row, const schema& s, bytes col, const tombstone& t) {
+    auto cdef = s.get_column_definition(col);
+
+    BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
+    auto c = row.cell_at(cdef->id).as_collection_mutation();
+    auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
+    auto&& mut = ctype->deserialize_mutation_form(c);
+    BOOST_REQUIRE(mut.tomb == t);
+    return mut.materialize();
+}
+
+template <status Status>
+inline void match_collection_element(const std::pair<bytes, atomic_cell>& element, const bytes_opt& col, const bytes_opt& expected_serialized_value) {
+    if (col) {
+        BOOST_REQUIRE(element.first == *col);
+    }
+
+    if (check_status_and_done(element.second, Status)) {
+        return;
+    }
+
+    // For simplicity, we will have all set elements in our schema presented as
+    // bytes - which serializes to itself.  Then we don't need to meddle with
+    // the schema for the set type, and is enough for the purposes of this
+    // test.
+    if (expected_serialized_value) {
+        BOOST_REQUIRE(element.second.value() == *expected_serialized_value);
+    }
+}
 }
