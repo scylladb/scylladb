@@ -1031,7 +1031,7 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
 void sstable::write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row) {
     auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
-    if (schema.is_compound()) {
+    if (schema.is_compound() && !schema.is_dense()) {
         write_row_marker(out, clustered_row, clustering_key);
     }
     // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
@@ -1052,9 +1052,17 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         const bytes& column_name = column_definition.name();
 
         if (schema.is_compound()) {
-            write_column_name(out, clustering_key, { bytes_view(column_name) });
+            if (schema.is_dense()) {
+                write_column_name(out, bytes_view(clustering_key));
+            } else {
+                write_column_name(out, clustering_key, { bytes_view(column_name) });
+            }
         } else {
-            write_column_name(out, bytes_view(column_name));
+            if (schema.is_dense()) {
+                write_column_name(out, bytes_view(clustered_row.key()));
+            } else {
+                write_column_name(out, bytes_view(column_name));
+            }
         }
         write_cell(out, cell);
     }
