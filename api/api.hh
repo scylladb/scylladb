@@ -2,8 +2,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#ifndef API_API_HH_
-#define API_API_HH_
+#pragma once
 
 #include "http/httpd.hh"
 #include "json/json_elements.hh"
@@ -105,4 +104,3 @@ future<json::json_return_type>  sum_stats(distributed<T>& d, uint64_t F::*f) {
 }
 
 }
-#endif /* API_API_HH_ */
