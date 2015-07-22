@@ -201,4 +201,29 @@ inline schema_ptr complex_schema() {
        ));
     return s;
 }
+
+inline schema_ptr columns_schema() {
+    static thread_local auto columns = make_lw_shared(schema(generate_legacy_id("name", "columns"), "name", "columns",
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
+        // regular columns
+        {
+            {"component_index", int32_type},
+            {"index_name", utf8_type},
+            {"index_options", utf8_type},
+            {"index_type", utf8_type},
+            {"type", utf8_type},
+            {"validator", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "column definitions"
+        ));
+    return columns;
+}
 }
