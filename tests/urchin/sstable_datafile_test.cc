@@ -33,6 +33,9 @@ public:
             : _f(std::move(f))
             , _listing(_f.list_directory([this] (directory_entry de) { return _remove(de); })) {
     }
+    ~test_setup() {
+        _f.close().finally([save = _f] {});
+    }
 protected:
     future<> _create_directory(sstring name) {
         return engine().make_directory(name);
@@ -126,7 +129,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key = { 0, 4, 'k', 'e', 'y', '1' };
@@ -150,12 +153,12 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f] {});
                 });
             });
         });
     });
 }
-
 SEASTAR_TEST_CASE(datafile_generation_02) {
     return test_setup::do_with_test_directory([] {
         // Data file with compound partition key and clustering key
@@ -192,7 +195,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     // compound partition key
@@ -218,6 +221,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f] {});
                 });
             });
         });
@@ -259,7 +263,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key = { 0, 4, 'k', 'e', 'y', '1' };
@@ -285,6 +289,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -329,7 +334,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key = { 0, 4, 'k', 'e', 'y', '1' };
@@ -358,6 +363,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -399,7 +405,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key = { 0, 4, 'k', 'e', 'y', '1' };
@@ -424,6 +430,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -470,7 +477,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key = { 0, 4, 'k', 'e', 'y', '1' };
@@ -496,6 +503,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
                     BOOST_REQUIRE(::memcmp(end_of_row.data(), &buf[offset], end_of_row.size()) == 0);
                     offset += end_of_row.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -545,7 +553,7 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
                     std::vector<uint8_t> key1 = { 0, 4, 'k', 'e', 'y', '1',
@@ -557,6 +565,7 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
                     BOOST_REQUIRE(::memcmp(key2.data(), &buf[offset], key2.size()) == 0);
                     offset += key2.size();
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -601,7 +610,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     auto buf = bufptr.get();
                     size_t offset = 0;
 
@@ -632,6 +641,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
                     offset += last_key.size();
 
                     BOOST_REQUIRE(size == offset);
+                    return f.close().finally([f]{});
                 });
             });
         });
@@ -709,17 +719,18 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
-                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
                     assert(size > 0 && size < 4096);
                     const char* buf = bufptr.get();
                     uint32_t adler = checksum_adler32(buf, size);
+                    f.close().finally([f]{});
 
                     auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::CRC);
                     return engine().open_file_dma(fname, open_flags::ro).then([adler] (file f) {
                         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                         auto fut = f.dma_read(0, bufptr.get(), 4096);
-                        return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr), adler] (size_t size) {
+                        return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr), adler] (size_t size) mutable {
                             size_t offset = 0;
                             auto buf = bufptr.get();
 
@@ -733,6 +744,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                             BOOST_REQUIRE(adler == stored_adler);
 
                             BOOST_REQUIRE(size == offset);
+                            return f.close().finally([f]{});
                         });
                     }).then([adler] {
                         auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::Digest);
@@ -740,7 +752,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                             auto fut = f.dma_read(0, bufptr.get(), 4096);
-                            return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr), adler] (size_t size) {
+                            return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr), adler] (size_t size) mutable {
                                 auto buf = bufptr.get();
 
                                 bytes stored_digest(reinterpret_cast<const signed char*>(buf), size);
@@ -748,6 +760,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
 
                                 BOOST_REQUIRE(size == expected_digest.size());
                                 BOOST_REQUIRE(stored_digest == to_sstring<bytes>(adler));
+                                return f.close().finally([f]{});
                             });
                         });
                     });

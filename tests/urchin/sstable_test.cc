@@ -210,7 +210,7 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
                 BOOST_REQUIRE(ret == size);
                 std::pair<char*, size_t> p = { rbuf, size };
                 return make_ready_future<std::pair<char*, size_t>>(p);
-            });
+            }).finally([f] () mutable { return f.close().finally([f] {}); });
         });
     });
 }

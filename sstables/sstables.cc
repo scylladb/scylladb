@@ -23,6 +23,8 @@
 
 namespace sstables {
 
+logging::logger sstlog("sstable");
+
 class random_access_reader {
     input_stream<char> _in;
 protected:
@@ -50,9 +52,26 @@ public:
     {
         seek(0);
     }
+    ~file_random_access_reader() {
+        _file.close().handle_exception([save = _file] (auto ep) {
+            sstlog.warn("sstable close failed: {}", ep);
+        });
+    }
 };
 
-logging::logger sstlog("sstable");
+class shared_file_random_access_reader : public random_access_reader {
+    file _file;
+    size_t _buffer_size;
+public:
+    virtual input_stream<char> open_at(uint64_t pos) override {
+        return make_file_input_stream(_file, pos, _buffer_size);
+    }
+    explicit shared_file_random_access_reader(file f, size_t buffer_size = 8192)
+        : _file(std::move(f)), _buffer_size(buffer_size)
+    {
+        seek(0);
+    }
+};
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::la , "la" }
@@ -642,7 +661,7 @@ future<> sstable::read_toc() {
             if (!_components.size()) {
                 throw malformed_sstable_exception("Empty TOC");
             }
-            return make_ready_future<>();
+            return f.close().finally([f] {});
         });
     }).then_wrapped([file_path] (future<> f) {
         try {
@@ -713,7 +732,7 @@ future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     struct reader {
         uint64_t count = 0;
         std::vector<index_entry> indexes;
-        file_random_access_reader stream;
+        shared_file_random_access_reader stream;
         reader(file f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
     };
 
@@ -769,7 +788,6 @@ future<> sstable::read_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
-
         auto r = std::make_unique<file_random_access_reader>(std::move(f), 4096);
         auto fut = parse(*r, component);
         return fut.then([r = std::move(r)] {});
@@ -1244,6 +1262,7 @@ void sstable::do_write_components(::mutation_reader mr,
     seal_summary(_summary, std::move(first_key), std::move(last_key), *schema);
 
     index->close().get();
+    _index_file = file(); // index->close() closed _index_file
 
     _components.insert(component_type::TOC);
     _components.insert(component_type::Statistics);
@@ -1270,6 +1289,7 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
         _components.insert(component_type::CRC);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
+        _data_file = file(); // w->close() closed _data_file
 
         write_digest(filename(sstable::component_type::Digest), w->full_checksum()).get();
         write_crc(filename(sstable::component_type::CRC), w->finalize_checksum()).get();
@@ -1279,6 +1299,7 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
         _components.insert(component_type::CompressionInfo);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
+        _data_file = file(); // w->close() closed _data_file
 
         write_digest(filename(sstable::component_type::Digest), _compression.full_checksum()).get();
     }
@@ -1384,6 +1405,17 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
 }
 
 sstable::~sstable() {
+    if (_index_file) {
+        _index_file.close().handle_exception([save = _index_file] (auto ep) {
+            sstlog.warn("sstable close index_file failed: {}", ep);
+        });
+    }
+    if (_data_file) {
+        _data_file.close().handle_exception([save = _data_file] (auto ep) {
+            sstlog.warn("sstable close data_file failed: {}", ep);
+        });
+    }
+
     if (_marked_for_deletion) {
         // We need to delete the on-disk files for this table. Since this is a
         // destructor, we can't wait for this to finish, or return any errors,
