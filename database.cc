@@ -548,7 +548,7 @@ void column_family::trigger_compaction() {
 }
 
 void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
-    _compaction_strategy = make_compaction_strategy(strategy);
+    _compaction_strategy = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 }
 
 size_t column_family::sstables_count() {
