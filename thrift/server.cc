@@ -46,6 +46,12 @@ thrift_server::thrift_server(distributed<database>& db)
 thrift_server::~thrift_server() {
 }
 
+// FIXME: this is here because we must have a stop function. But we should actually
+// do something useful - or be sure it is not needed
+future<> thrift_server::stop() {
+    return make_ready_future<>();
+}
+
 struct handler_deleter {
     CassandraCobSvIfFactory* hf;
     void operator()(CassandraCobSvIf* h) const {
