@@ -22,7 +22,6 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::COUNTERS: return out << "COUNTERS";
         case cause::METRICS: return out << "METRICS";
         case cause::MIGRATIONS: return out << "MIGRATIONS";
-        case cause::COMPACT_TABLES: return out << "COMPACT_TABLES";
         case cause::GOSSIP: return out << "GOSSIP";
         case cause::TOKEN_RESTRICTION: return out << "TOKEN_RESTRICTION";
         case cause::LEGACY_COMPOSITE_KEYS: return out << "LEGACY_COMPOSITE_KEYS";
