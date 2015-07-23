@@ -113,6 +113,7 @@ modes = {
 
 urchin_tests = [
     'tests/urchin/mutation_test',
+    'tests/urchin/range_test',
     'tests/urchin/types_test',
     'tests/urchin/keys_test',
     'tests/urchin/partitioner_test',
@@ -376,7 +377,7 @@ deps = {
 
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
-    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/urchin/gossip' and 'compound_test' not in t:
+    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/urchin/gossip' and 'compound_test' not in t and 'range_test' not in t:
         deps[t] += urchin_tests_seastar_deps
 
 deps['tests/urchin/sstable_test'] += ['tests/urchin/sstable_datafile_test.cc']
