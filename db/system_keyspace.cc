@@ -77,11 +77,9 @@ schema_ptr hints() {
         utf8_type,
         // comment
         "hints awaiting delivery"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
        )));
        builder.set_gc_grace_seconds(0);
+       builder.set_compaction_strategy_options({{ "enabled", "false" }});
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
