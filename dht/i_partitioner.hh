@@ -282,25 +282,8 @@ public:
         return { _token, *_key };
     }
 
-    bool equal(const schema& s, const ring_position& lhr) const {
-        if (_token != lhr._token) {
-            return false;
-        } else if (!_key || !lhr._key){
-            return true; // empty key "matches" any other key
-        } else {
-            return _key->legacy_equal(s, *lhr._key);
-        };
-    }
-
-    bool less_compare(const schema& s, const ring_position& lhr) const {
-        if (_token != lhr._token) {
-            return _token < lhr._token;
-        } else if (!_key || !lhr._key) {
-            return false;
-        } else {
-            return _key->legacy_tri_compare(s, *lhr._key) < 0;
-        }
-    }
+    bool equal(const schema&, const ring_position&) const;
+    bool less_compare(const schema&, const ring_position&) const;
 
     void serialize(bytes::iterator& out) const;
     static ring_position deserialize(bytes_view& in);

@@ -314,4 +314,24 @@ size_t token::serialized_size() const {
          + _data.size();
 }
 
+bool ring_position::equal(const schema& s, const ring_position& lhr) const {
+    if (_token != lhr._token) {
+        return false;
+    } else if (!_key || !lhr._key){
+        return true; // empty key "matches" any other key
+    } else {
+        return _key->legacy_equal(s, *lhr._key);
+    };
+}
+
+bool ring_position::less_compare(const schema& s, const ring_position& lhr) const {
+    if (_token != lhr._token) {
+        return _token < lhr._token;
+    } else if (!_key || !lhr._key) {
+        return false;
+    } else {
+        return _key->legacy_tri_compare(s, *lhr._key) < 0;
+    }
+}
+
 }
