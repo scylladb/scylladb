@@ -175,41 +175,56 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     std::uniform_int_distribution<int> dist(0, size - 1);
     int index = dist(_random);
     inet_address to = __live_endpoints[index];
-    logger.trace("Sending a GossipDigestSyn to {} ...", to);
     auto id = get_shard_id(to);
-    ms().send_gossip_digest_syn(id, std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
-        this->set_last_processed_message_at(now_millis());
-        if (!this->is_enabled() && !this->is_in_shadow_round()) {
-            return make_ready_future<>();
-        }
-
-        auto g_digest_list = ack_msg.get_gossip_digest_list();
-        auto ep_state_map = ack_msg.get_endpoint_state_map();
-
-        if (ep_state_map.size() > 0) {
-            /* Notify the Failure Detector */
-            this->notify_failure_detector(ep_state_map);
-            this->apply_state_locally(ep_state_map);
-        }
-
-        if (this->is_in_shadow_round()) {
-            this->finish_shadow_round();
-            return make_ready_future<>(); // don't bother doing anything else, we have what we came for
-        }
-
-        /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
-        std::map<inet_address, endpoint_state> delta_ep_state_map;
-        for (auto g_digest : g_digest_list) {
-            inet_address addr = g_digest.get_endpoint();
-            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-            if (local_ep_state_ptr) {
-                delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+    logger.trace("Sending a GossipDigestSyn to {} ...", id);
+    ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+        try {
+            auto ack_msg = f.get0();
+            logger.trace("Got GossipDigestSyn Reply");
+            this->set_last_processed_message_at(now_millis());
+            if (!this->is_enabled() && !this->is_in_shadow_round()) {
+                return;
             }
+
+            auto g_digest_list = ack_msg.get_gossip_digest_list();
+            auto ep_state_map = ack_msg.get_endpoint_state_map();
+
+            if (ep_state_map.size() > 0) {
+                /* Notify the Failure Detector */
+                this->notify_failure_detector(ep_state_map);
+                this->apply_state_locally(ep_state_map);
+            }
+
+            if (this->is_in_shadow_round()) {
+                this->finish_shadow_round();
+                return; // don't bother doing anything else, we have what we came for
+            }
+
+            /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+            std::map<inet_address, endpoint_state> delta_ep_state_map;
+            for (auto g_digest : g_digest_list) {
+                inet_address addr = g_digest.get_endpoint();
+                auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+                if (local_ep_state_ptr) {
+                    delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+                }
+            }
+            gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+            logger.trace("Sending a GossipDigestACK2 to {}", id);
+            this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
+                try {
+                    f.get();
+                    logger.trace("Got GossipDigestACK2 Reply");
+                } catch (...) {
+                    logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+                }
+            });
+        } catch (...) {
+            // It is normal to reach here because it is normal that a node
+            // tries to send a SYN message to a peer node which is down before
+            // failure_detector thinks that peer node is down.
+            logger.trace("Fail to send GossipDigestSyn to {}: {}", id, std::current_exception());
         }
-        gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-        return ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then([] () {
-            return make_ready_future<>();
-        });
     });
 
     return _seeds.count(to);
@@ -891,11 +906,17 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     // }
 
     local_state.mark_dead();
-    logger.trace("Sending a EchoMessage to {}", addr);
     shard_id id = get_shard_id(addr);
-    ms().send_echo(id).then([this, addr, local_state = std::move(local_state)] () mutable {
-        this->set_last_processed_message_at(now_millis());
-        this->real_mark_alive(addr, local_state);
+    logger.trace("Sending a EchoMessage to {}", id);
+    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state)] (auto&& f) mutable {
+        try {
+            f.get();
+            logger.trace("Got EchoMessage Reply");
+            this->set_last_processed_message_at(now_millis());
+            this->real_mark_alive(id.addr, local_state);
+        } catch (...) {
+            logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
+        }
     });
 }
 
@@ -1125,10 +1146,17 @@ void gossiper::do_shadow_round() {
     _in_shadow_round = true;
     for (inet_address seed : _seeds) {
         auto id = get_shard_id(seed);
-        ms().send_gossip_digest_syn(id, std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
-            this->set_last_processed_message_at(now_millis());
-            if (this->is_in_shadow_round()) {
-                this->finish_shadow_round();
+        logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
+        ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+            try {
+                auto ack_msg = f.get0();
+                logger.trace("Got GossipDigestSyn Reply");
+                this->set_last_processed_message_at(now_millis());
+                if (this->is_in_shadow_round()) {
+                    this->finish_shadow_round();
+                }
+            } catch (...) {
+                logger.error("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
             }
         });
     }
@@ -1220,8 +1248,17 @@ void gossiper::shutdown() {
     // 	scheduledGossipTask.cancel(false);
     logger.info("Announcing shutdown");
     // Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
-    for (inet_address ep : _live_endpoints) {
-        ms().send_gossip_shutdown(get_shard_id(ep), ep).then([]{ });
+    for (inet_address addr : _live_endpoints) {
+        shard_id id = get_shard_id(addr);
+        logger.trace("Sending a GossipShutdown to {}", id);
+        ms().send_gossip_shutdown(id, addr).then_wrapped([id] (auto&&f) {
+            try {
+                f.get();
+                logger.trace("Got GossipShutdown Reply");
+            } catch (...) {
+                logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+            }
+        });
     }
 }
 
