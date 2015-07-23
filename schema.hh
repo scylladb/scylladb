@@ -193,6 +193,7 @@ private:
         int32_t _min_index_interval = 128;
         int32_t _max_index_interval = 2048;
         sstables::compaction_strategy_type _compaction_strategy;
+        std::map<sstring, sstring> _compaction_strategy_options;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -310,6 +311,10 @@ public:
 
     sstables::compaction_strategy_type compaction_strategy() const {
         return _raw._compaction_strategy;
+    }
+
+    const std::map<sstring, sstring>& compaction_strategy_options() const {
+        return _raw._compaction_strategy_options;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;
