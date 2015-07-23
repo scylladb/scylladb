@@ -29,6 +29,30 @@ public:
     compaction_strategy& operator=(compaction_strategy&&);
 
     future<> compact(column_family& cfs);
+    static sstring name(compaction_strategy_type type) {
+        switch (type) {
+        case compaction_strategy_type::null:
+            return "NullCompactionStrategy";
+        case compaction_strategy_type::major:
+            return "MajorCompactionStrategy";
+        case compaction_strategy_type::size_tiered:
+            return "SizeTieredCompactionStrategy";
+        default:
+            throw std::runtime_error("Invalid Compaction Strategy");
+        }
+    }
+
+    static compaction_strategy_type type(sstring& name) {
+        if (name == "NullCompactionStrategy") {
+            return compaction_strategy_type::null;
+        } else if (name == "MajorCompactionStrategy") {
+            return compaction_strategy_type::major;
+        } else if (name == "SizeTieredCompactionStrategy") {
+            return compaction_strategy_type::size_tiered;
+        } else {
+            throw std::runtime_error("Invalid Compaction Strategy");
+        }
+    }
 };
 
 // Creates a compaction_strategy object from one of the strategies available.

@@ -117,6 +117,15 @@ public:
     void set_compressor_params(const compression_parameters& cp) {
         _raw._compressor_params = cp;
     }
+
+    void set_compaction_strategy(sstables::compaction_strategy_type type) {
+        _raw._compaction_strategy = type;
+    }
+
+    void set_compaction_strategy_options(std::map<sstring, sstring> options) {
+        _raw._compaction_strategy_options = std::move(options);
+    }
+
     void set_is_dense(bool is_dense) {
         _raw._is_dense = is_dense;
     }
