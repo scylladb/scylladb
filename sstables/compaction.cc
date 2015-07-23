@@ -119,7 +119,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             // 2) add support to merge summary (message: Partition merge counts were {%s}.).
             // 3) there is no easy way, currently, to know the exact number of total partitions.
             // By the time being, using estimated key count.
-            logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}%% of original) in {}ms = {}MB/s. " \
+            logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
                 "~{} total partitions merged to {}.",
                 stats->sstables, newtab->get_filename(), stats->start_size, endsize, (int) (ratio * 100),
                 0, 0, stats->total_partitions, stats->total_keys_written);
