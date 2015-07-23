@@ -512,7 +512,7 @@ future<> save_system_keyspace_schema() {
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     { 
         return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] {
-            return merge_schema(proxy, std::move(mutations), do_flush);
+            return do_merge_schema(proxy, std::move(mutations), do_flush);
         }).finally([] {
             return merge_unlock();
         });
