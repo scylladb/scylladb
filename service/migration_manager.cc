@@ -32,7 +32,7 @@
 
 namespace service {
 
-static thread_local logging::logger logger("Migration Manager");
+static logging::logger logger("Migration Manager");
 
 using namespace std::chrono_literals;
 

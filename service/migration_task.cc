@@ -31,7 +31,7 @@
 
 namespace service {
 
-static thread_local logging::logger logger("Migration Task");
+static logging::logger logger("Migration Task");
 
 future<> migration_task::run_may_throw(service::storage_proxy& proxy, const gms::inet_address& endpoint)
 {
