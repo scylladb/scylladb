@@ -2,6 +2,7 @@
 
 #include "sstables/sstables.hh"
 #include "schema.hh"
+#include "schema_builder.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -74,7 +75,8 @@ inline future<> working_sst(sstring dir, unsigned long generation) {
 }
 
 inline schema_ptr composite_schema() {
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "composite",
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "composite",
         // partition key
         {{"name", bytes_type}, {"col1", bytes_type}},
         // clustering key
@@ -87,13 +89,16 @@ inline schema_ptr composite_schema() {
         utf8_type,
         // comment
         "Table with a composite key as pkey"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr set_schema() {
-    auto my_set_type = set_type_impl::get_instance(bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "set_pk",
+    static thread_local auto s = [] {
+        auto my_set_type = set_type_impl::get_instance(bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "set_pk",
         // partition key
         {{"ss", my_set_type}},
         // clustering key
@@ -108,13 +113,16 @@ inline schema_ptr set_schema() {
         utf8_type,
         // comment
         "Table with a set as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr map_schema() {
-    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "map_pk",
+    static thread_local auto s = [] {
+        auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "map_pk",
         // partition key
         {{"ss", my_map_type}},
         // clustering key
@@ -129,13 +137,16 @@ inline schema_ptr map_schema() {
         utf8_type,
         // comment
         "Table with a map as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr list_schema() {
-    auto my_list_type = list_type_impl::get_instance(bytes_type, false);
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "list_pk",
+    static thread_local auto s = [] {
+        auto my_list_type = list_type_impl::get_instance(bytes_type, false);
+        schema_builder builder(make_lw_shared(schema({}, "tests", "list_pk",
         // partition key
         {{"ss", my_list_type}},
         // clustering key
@@ -150,12 +161,15 @@ inline schema_ptr list_schema() {
         utf8_type,
         // comment
         "Table with a list as pkeys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
 }
 
 inline schema_ptr uncompressed_schema() {
-    static thread_local auto uncompressed = make_lw_shared(schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
+    static thread_local auto uncompressed = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
         // partition key
         {{"name", utf8_type}},
         // clustering key
@@ -168,18 +182,21 @@ inline schema_ptr uncompressed_schema() {
         utf8_type,
         // comment
         "Uncompressed data"
-        ));
+       )));
+       return builder.build();
+    }();
     return uncompressed;
 }
 
 inline schema_ptr complex_schema() {
-    auto my_list_type = list_type_impl::get_instance(bytes_type, true);
-    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
-    auto my_set_type = set_type_impl::get_instance(bytes_type, true);
-    auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
-    auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
+    static thread_local auto s = [] {
+        auto my_list_type = list_type_impl::get_instance(bytes_type, true);
+        auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
+        auto my_set_type = set_type_impl::get_instance(bytes_type, true);
+        auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
+        auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
 
-    static thread_local auto s = make_lw_shared(schema({}, "tests", "complex_schema",
+        schema_builder builder(make_lw_shared(schema({}, "tests", "complex_schema",
         // partition key
         {{"key", bytes_type}},
         // clustering key
@@ -198,7 +215,187 @@ inline schema_ptr complex_schema() {
         bytes_type,
         // comment
         "Table with a complex schema, including collections and static keys"
-       ));
+       )));
+       return builder.build();
+    }();
     return s;
+}
+
+inline schema_ptr columns_schema() {
+    static thread_local auto columns = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("name", "columns"), "name", "columns",
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
+        // regular columns
+        {
+            {"component_index", int32_type},
+            {"index_name", utf8_type},
+            {"index_options", utf8_type},
+            {"index_type", utf8_type},
+            {"type", utf8_type},
+            {"validator", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "column definitions"
+       )));
+       return builder.build();
+    }();
+    return columns;
+}
+
+inline schema_ptr compact_simple_dense_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "compact_simple_dense",
+        // partition key
+        {{"ks", bytes_type}},
+        // clustering key
+        {{"cl1", bytes_type}},
+        // regular columns
+        {{"cl2", bytes_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a compact storage, and a single clustering key"
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
+    return s;
+}
+
+inline schema_ptr compact_dense_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "compact_simple_dense",
+        // partition key
+        {{"ks", bytes_type}},
+        // clustering key
+        {{"cl1", bytes_type}, {"cl2", bytes_type}},
+        // regular columns
+        {{"cl3", bytes_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a compact storage, and a compound clustering key"
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
+    return s;
+}
+
+inline schema_ptr compact_sparse_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema({}, "tests", "compact_sparse",
+        // partition key
+        {{"ks", bytes_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"cl1", bytes_type},
+            {"cl2", bytes_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a compact storage, but no clustering keys"
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
+    return s;
+}
+
+enum class status {
+    dead,
+    live,
+    ttl,
+};
+
+inline bool check_status_and_done(const atomic_cell &c, status expected) {
+    if (expected == status::dead) {
+        BOOST_REQUIRE(c.is_live() == false);
+        return true;
+    }
+    BOOST_REQUIRE(c.is_live() == true);
+    BOOST_REQUIRE(c.is_live_and_has_ttl() == (expected == status::ttl));
+    return false;
+}
+
+template <status Status>
+inline void match(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp = 0, int32_t expiration = 0) {
+    auto cdef = s.get_column_definition(col);
+
+    BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
+    auto c = row.cell_at(cdef->id).as_atomic_cell();
+    if (check_status_and_done(c, Status)) {
+        return;
+    }
+
+    auto expected = cdef->type->decompose(value);
+    BOOST_REQUIRE(c.value() == expected);
+    if (timestamp) {
+        BOOST_REQUIRE(c.timestamp() == timestamp);
+    }
+    if (expiration) {
+        BOOST_REQUIRE(c.expiry() == gc_clock::time_point(gc_clock::duration(expiration)));
+    }
+}
+
+inline void match_live_cell(const row& row, const schema& s, bytes col, const boost::any& value) {
+    match<status::live>(row, s, col, value);
+}
+
+inline void match_expiring_cell(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp, int32_t expiration) {
+    match<status::ttl>(row, s, col, value);
+}
+
+inline void match_dead_cell(const row& row, const schema& s, bytes col) {
+    match<status::dead>(row, s, col, boost::any({}));
+}
+
+inline void match_absent(const row& row, const schema& s, bytes col) {
+    auto cdef = s.get_column_definition(col);
+    BOOST_REQUIRE_THROW(row.cell_at(cdef->id), std::out_of_range);
+}
+
+inline collection_type_impl::mutation
+match_collection(const row& row, const schema& s, bytes col, const tombstone& t) {
+    auto cdef = s.get_column_definition(col);
+
+    BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
+    auto c = row.cell_at(cdef->id).as_collection_mutation();
+    auto ctype = static_pointer_cast<const collection_type_impl>(cdef->type);
+    auto&& mut = ctype->deserialize_mutation_form(c);
+    BOOST_REQUIRE(mut.tomb == t);
+    return mut.materialize();
+}
+
+template <status Status>
+inline void match_collection_element(const std::pair<bytes, atomic_cell>& element, const bytes_opt& col, const bytes_opt& expected_serialized_value) {
+    if (col) {
+        BOOST_REQUIRE(element.first == *col);
+    }
+
+    if (check_status_and_done(element.second, Status)) {
+        return;
+    }
+
+    // For simplicity, we will have all set elements in our schema presented as
+    // bytes - which serializes to itself.  Then we don't need to meddle with
+    // the schema for the set type, and is enough for the purposes of this
+    // test.
+    if (expected_serialized_value) {
+        BOOST_REQUIRE(element.second.value() == *expected_serialized_value);
+    }
 }
 }

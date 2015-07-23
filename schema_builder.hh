@@ -120,6 +120,11 @@ public:
     void set_is_dense(bool is_dense) {
         _raw._is_dense = is_dense;
     }
+
+    void set_is_compound(bool is_compound) {
+        _raw._is_compound = is_compound;
+    }
+
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
@@ -128,5 +133,6 @@ public:
 
     void add_default_index_names(database&);
 
-    schema_ptr build();
+    enum class compact_storage { no, yes };
+    schema_ptr build(compact_storage = compact_storage::no);
 };

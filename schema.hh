@@ -20,8 +20,16 @@
 
 using column_id = uint32_t;
 
+class schema;
+
+// Useful functions to manipulate the schema's comparator field
+namespace cell_comparator {
+sstring to_sstring(const schema& s);
+bool check_compound(sstring comparator);
+}
+
 // make sure these match the order we like columns back from schema
-enum class column_kind { partition_key, clustering_key, static_column, regular_column,  };
+enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
 // CMH this is also manually defined in thrift gen file.
 enum class index_type {
@@ -55,8 +63,6 @@ inline cf_type sstring_to_cf_type(sstring name) {
 }
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
-
-class schema;
 
 struct index_info {
     index_info(::index_type = ::index_type::none
@@ -104,12 +110,12 @@ public:
     index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
-    bool is_regular() const { return kind == column_kind::regular_column; }
+    bool is_regular() const { return kind == column_kind::regular_column || kind == column_kind::compact_column; }
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return !type->is_multi_cell(); }
-    bool is_compact_value() const;
+    bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -135,18 +141,20 @@ public:
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
+class schema_builder;
+
 /*
  * Sub-schema for thrift aspects, i.e. not currently supported stuff.
  * But might be, and should be kept isolated (and starved)
  */
 class thrift_schema {
+    bool _compound = true;
 public:
     bool has_compound_comparator() const;
+    friend class schema_builder;
 };
 
 bool operator==(const column_definition&, const column_definition&);
-
-class schema_builder;
 
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
@@ -174,6 +182,7 @@ private:
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
         bool _is_dense = false;
+        bool _is_compound = true;
         cf_type _type = cf_type::standard;
         int32_t _gc_grace_seconds = 864000;
         double _dc_local_read_repair_chance = 0.1;
@@ -186,7 +195,7 @@ private:
     raw_schema _raw;
     thrift_schema _thrift;
 
-    const std::array<size_t, 3> _offsets;
+    const std::array<size_t, 4> _offsets;
 
     inline size_t column_offset(column_kind k) const {
         return k == column_kind::partition_key ? 0 : _offsets[size_t(k) - 1];
@@ -240,6 +249,11 @@ public:
     bool is_dense() const {
         return _raw._is_dense;
     }
+
+    bool is_compound() const {
+        return _raw._is_compound;
+    }
+
     thrift_schema& thrift() {
         return _thrift;
     }

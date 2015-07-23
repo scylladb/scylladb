@@ -1245,3 +1245,107 @@ SEASTAR_TEST_CASE(compact_02) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_37) {
+    return test_setup::do_with_test_directory([] {
+        auto s = compact_simple_dense_schema();
+
+        auto mtp = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        mutation m(key, s);
+
+        auto c_key = exploded_clustering_prefix({to_bytes("cl1") });
+        const column_definition& cl2 = *s->get_column_definition("cl2");
+
+        m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(to_bytes("cl2"))));
+        mtp->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 37, la, big);
+        return sst->write_components(*mtp).then([s] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 37).then([s] (auto sstp) {
+                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                        auto& mp = mutation->partition();
+
+                        auto exploded = exploded_clustering_prefix({"cl1"});
+                        auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+
+                        auto row = mp.clustered_row(clustering);
+                        match_live_cell(row.cells(), *s, "cl2", boost::any(to_bytes("cl2")));
+                        return make_ready_future<>();
+                    });
+                });
+            });
+        }).then([sst, mtp, s] {});
+    });
+}
+
+SEASTAR_TEST_CASE(datafile_generation_38) {
+    return test_setup::do_with_test_directory([] {
+        auto s = compact_dense_schema();
+
+        auto mtp = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        mutation m(key, s);
+
+        auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
+        auto c_key = clustering_key::from_clustering_prefix(*s, exploded);
+
+        const column_definition& cl3 = *s->get_column_definition("cl3");
+        m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type->decompose(to_bytes("cl3"))));
+        mtp->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 38, la, big);
+        return sst->write_components(*mtp).then([s] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 38).then([s] (auto sstp) {
+                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                        auto& mp = mutation->partition();
+                        auto exploded = exploded_clustering_prefix({"cl1", "cl2"});
+                        auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
+
+                        auto row = mp.clustered_row(clustering);
+                        match_live_cell(row.cells(), *s, "cl3", boost::any(to_bytes("cl3")));
+                        return make_ready_future<>();
+                    });
+                });
+            });
+        }).then([sst, mtp, s] {});
+    });
+}
+
+SEASTAR_TEST_CASE(datafile_generation_39) {
+    return test_setup::do_with_test_directory([] {
+        auto s = compact_sparse_schema();
+
+        auto mtp = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        mutation m(key, s);
+
+        auto c_key = clustering_key::make_empty(*s);
+
+        const column_definition& cl1 = *s->get_column_definition("cl1");
+        m.set_clustered_cell(c_key, cl1, make_atomic_cell(bytes_type->decompose(to_bytes("cl1"))));
+        const column_definition& cl2 = *s->get_column_definition("cl2");
+        m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(to_bytes("cl2"))));
+        mtp->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 39, la, big);
+        return sst->write_components(*mtp).then([s] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 39).then([s] (auto sstp) {
+                return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
+                        auto& mp = mutation->partition();
+                        auto row = mp.clustered_row(clustering_key::make_empty(*s));
+                        match_live_cell(row.cells(), *s, "cl1", boost::any(to_bytes("cl1")));
+                        match_live_cell(row.cells(), *s, "cl2", boost::any(to_bytes("cl2")));
+                        return make_ready_future<>();
+                    });
+                });
+            });
+        }).then([sst, mtp, s] {});
+    });
+}

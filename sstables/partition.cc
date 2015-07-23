@@ -127,12 +127,19 @@ class mp_row_consumer : public row_consumer {
             return col;
         }
 
+        std::vector<bytes> extract_clustering_key(const schema& schema) {
+            if (!schema.is_compound()) {
+                return { to_bytes(col_name) };
+            } else {
+                return composite_view(col_name).explode();
+            }
+        }
         column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
             , col_name(fix_static_name(col))
-            , clustering(composite_view(col_name).explode())
-            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes())
-            , cell(pop_back(clustering))
+            , clustering(extract_clustering_key(schema))
+            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes()) // collections are not supported with COMPACT STORAGE, so this is fine
+            , cell(!schema.is_dense() ? pop_back(clustering) : (*(schema.regular_begin())).name()) // dense: cell name is not provided. It is the only regular column
             , cdef(schema.get_column_definition(cell))
         {
 
@@ -235,12 +242,6 @@ public:
             : _schema(_schema)
             , _mutation_to_subscription(sub_fn)
     { }
-
-    void validate_row_marker() {
-        if (_schema->is_dense()) {
-            throw malformed_sstable_exception("row marker found in dense table");
-        }
-    }
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty()) {

@@ -54,17 +54,17 @@ schema::schema(const raw_schema& raw)
     : _raw(raw)
     , _offsets([this] {
         auto& cols = _raw._columns;
-        std::array<size_t, 4> count = { 0, 0, 0, 0 };
+        std::array<size_t, 5> count = { 0, 0, 0, 0, 0 };
         auto i = cols.begin();
         auto e = cols.end();
-        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
+        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column, column_kind::compact_column }) {
             auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
             count[size_t(k)] = std::distance(i, j);
             i = j;
         }
-        return std::array<size_t, 3> { count[0], count[0] + count[1], count[0] + count[1] + count[2] };
+        return std::array<size_t, 4> { count[0], count[0] + count[1], count[0] + count[1] + count[2], count[0] + count[1] + count[2] + count[3] };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
@@ -223,12 +223,6 @@ column_definition::name() const {
     return _name;
 }
 
-bool
-column_definition::is_compact_value() const {
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return false;
-}
-
 bool column_definition::is_on_all_components() const {
     return _thrift_bits.is_on_all_components;
 }
@@ -248,9 +242,7 @@ generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
 }
 
 bool thrift_schema::has_compound_comparator() const {
-    // until we "map" compact storage, at which point it might not be "true".
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return true;
+    return _compound;
 }
 
 schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -342,6 +334,93 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    return make_lw_shared<schema>(schema(_raw));
+schema_ptr schema_builder::build(compact_storage cp) {
+    schema s(_raw);
+
+    // Dense means that no part of the comparator stores a CQL column name. This means
+    // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
+    s._raw._is_dense = (cp == compact_storage::yes) && (s.clustering_key_size() > 0);
+
+    if (s.clustering_key_size() == 0) {
+        if (cp == compact_storage::yes) {
+            s._raw._is_compound = false;
+        } else {
+            s._raw._is_compound = true;
+        }
+    } else {
+        if ((cp == compact_storage::yes) && s.clustering_key_size() == 1) {
+            s._raw._is_compound = false;
+        } else {
+            s._raw._is_compound = true;
+        }
+    }
+    s._thrift._compound = s._raw._is_compound;
+    if (s._raw._is_dense) {
+        // In Origin, dense CFs always have at least one regular column
+        if (s.regular_columns_count() == 0) {
+            s._raw._columns.emplace_back(bytes(""), s.regular_column_name_type(), column_kind::regular_column, 0, index_info());
+        }
+
+        if (s.regular_columns_count() != 1) {
+            throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", s.regular_columns_count()));
+        }
+        s._raw._columns.at(s.column_offset(column_kind::regular_column)).kind = column_kind::compact_column;
+
+        // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
+        // from the constructor
+        return make_lw_shared<schema>(schema(s._raw));
+    } else {
+        return make_lw_shared<schema>(s);
+    }
+}
+
+// Useful functions to manipulate the schema's comparator field
+namespace cell_comparator {
+
+static constexpr auto _composite_str = "org.apache.cassandra.db.marshal.CompositeType";
+static constexpr auto _collection_str = "org.apache.cassandra.db.marshal.ColumnToCollectionType";
+
+static sstring collection_name(const collection_type& t) {
+    sstring collection_str(_collection_str);
+    collection_str += "(00000000:" + t->name() + ")";
+    return collection_str;
+}
+
+static sstring compound_name(const schema& s) {
+    sstring compound(_composite_str);
+
+    compound += "(";
+    if (s.clustering_key_size()) {
+        for (auto &t : s.clustering_key_columns()) {
+            compound += t.type->name() + ",";
+        }
+    } else {
+        compound += s.regular_column_name_type()->name() + ",";
+    }
+
+    if (s.has_collections()) {
+        for (auto& t: s.regular_columns()) {
+            if (t.type->is_collection()) {
+                auto ct = static_pointer_cast<const collection_type_impl>(t.type);
+                compound += collection_name(ct) + ",";
+            }
+        }
+    }
+    // last one will be a ',', just replace it.
+    compound.back() = ')';
+    return compound;
+}
+
+sstring to_sstring(const schema& s) {
+    if (!s.is_compound()) {
+        return s.regular_column_name_type()->name();
+    } else {
+        return compound_name(s);
+    }
+}
+
+bool check_compound(sstring comparator) {
+    static sstring compound(_composite_str);
+    return comparator.compare(0, compound.size(), compound) == 0;
+}
 }

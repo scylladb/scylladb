@@ -76,12 +76,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         utf8_type,
         // comment
         "keyspace definitions"
-        // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::yes);
     }();
     return keyspaces;
 }
@@ -1044,7 +1041,7 @@ future<> save_system_keyspace_schema() {
             adder.add("subcomparator", table.comparator.subtype(1).toString());
 #endif
         } else {
-            m.set_clustered_cell(ckey, "comparator", table->regular_column_name_type()->name(), timestamp);
+            m.set_clustered_cell(ckey, "comparator", cell_comparator::to_sstring(*table), timestamp);
         }
 
         m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
@@ -1279,6 +1276,8 @@ future<> save_system_keyspace_schema() {
             throw std::runtime_error("not implemented");
         }
 
+        bool is_compound = cell_comparator::check_compound(table_row.get_nonnull<sstring>("comparator"));
+        builder.set_is_compound(is_compound);
 #if 0
         CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
 
@@ -1400,6 +1399,7 @@ future<> save_system_keyspace_schema() {
         case column_kind::clustering_key: return "clustering_key";
         case column_kind::static_column:  return "static";
         case column_kind::regular_column: return "regular";
+        case column_kind::compact_column: return "compact_value";
         default:                          throw std::invalid_argument("unknown column kind");
         }
     }
@@ -1413,6 +1413,8 @@ future<> save_system_keyspace_schema() {
             return column_kind::static_column;
         } else if (kind == "regular") {
             return column_kind::regular_column;
+        } else if (kind == "compact_value") {
+            return column_kind::compact_column;
         } else {
             throw std::invalid_argument("unknown column kind: " + kind);
         }
@@ -1469,7 +1471,8 @@ future<> save_system_keyspace_schema() {
                                    ? getComponentComparator(rawComparator, componentIndex)
                                    : UTF8Type.instance;
 #endif
-        auto name = row.get_nonnull<sstring>("column_name");
+        auto name_opt = row.get<sstring>("column_name");
+        sstring name = name_opt ? *name_opt : sstring();
 
         auto validator = parse_type(row.get_nonnull<sstring>("validator"));
 

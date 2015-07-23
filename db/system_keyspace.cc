@@ -78,13 +78,11 @@ schema_ptr hints() {
         // comment
         "hints awaiting delivery"
         // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
        )));
        builder.set_gc_grace_seconds(0);
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
 }
@@ -115,7 +113,8 @@ schema_ptr batchlog() {
 }
 
 /*static*/ schema_ptr paxos() {
-    static thread_local auto paxos = make_lw_shared(schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
+    static thread_local auto paxos = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
         // partition key
         {{"row_key", bytes_type}},
         // clustering key
@@ -131,12 +130,15 @@ schema_ptr batchlog() {
         // FIXME: the original Java code also had:
         // operations on resulting CFMetaData:
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
-       ));
+       )));
+       return builder.build();
+    }();
     return paxos;
 }
 
 schema_ptr built_indexes() {
-    static thread_local auto built_indexes = make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
+    static thread_local auto built_indexes = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
         {{"table_name", utf8_type}},
         // clustering key
@@ -149,15 +151,15 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "built column indexes"
-        // FIXME: the original Java code also had:
-        // in CQL statement creating the table:
-        //    "WITH COMPACT STORAGE"
-       ));
+       )));
+       return builder.build(schema_builder::compact_storage::yes);
+    }();
     return built_indexes;
 }
 
 /*static*/ schema_ptr local() {
-    static thread_local auto local = make_lw_shared(schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
+    static thread_local auto local = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -185,12 +187,15 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "information about the local node"
-       ));
+       )));
+       return builder.build();
+    }();
     return local;
 }
 
 /*static*/ schema_ptr peers() {
-    static thread_local auto peers = make_lw_shared(schema(generate_legacy_id(NAME, PEERS), NAME, PEERS,
+    static thread_local auto peers = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -212,12 +217,15 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "information about known peers in the cluster"
-       ));
+       )));
+       return builder.build();
+    }();
     return peers;
 }
 
 /*static*/ schema_ptr peer_events() {
-    static thread_local auto peer_events = make_lw_shared(schema(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
+    static thread_local auto peer_events = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -232,12 +240,15 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "events related to peers"
-        ));
+       )));
+       return builder.build();
+    }();
     return peer_events;
 }
 
 /*static*/ schema_ptr range_xfers() {
-    static thread_local auto range_xfers = make_lw_shared(schema(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
+    static thread_local auto range_xfers = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
         // partition key
         {{"token_bytes", bytes_type}},
         // clustering key
@@ -250,12 +261,15 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "ranges requested for transfer"
-        ));
+       )));
+       return builder.build();
+    }();
     return range_xfers;
 }
 
 /*static*/ schema_ptr compactions_in_progress() {
-    static thread_local auto compactions_in_progress = make_lw_shared(schema(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
+    static thread_local auto compactions_in_progress = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -272,7 +286,9 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "unfinished compactions"
-        ));
+        )));
+       return builder.build();
+    }();
     return compactions_in_progress;
 }
 
@@ -306,7 +322,8 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr sstable_activity() {
-    static thread_local auto sstable_activity = make_lw_shared(schema(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
+    static thread_local auto sstable_activity = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
         // partition key
         {
             {"keyspace_name", utf8_type},
@@ -326,7 +343,9 @@ schema_ptr built_indexes() {
         utf8_type,
         // comment
         "historic sstable read rates"
-        ));
+       )));
+       return builder.build();
+    }();
     return sstable_activity;
 }
 

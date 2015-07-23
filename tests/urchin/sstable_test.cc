@@ -788,39 +788,11 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
     });
 }
 
-schema_ptr cs() {
-    static thread_local auto columns = make_lw_shared(schema(generate_legacy_id("name", "columns"), "name", "columns",
-        // partition key
-        {{"keyspace_name", utf8_type}},
-        // clustering key
-        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
-        // regular columns
-        {
-            {"component_index", int32_type},
-            {"index_name", utf8_type},
-            {"index_options", utf8_type},
-            {"index_type", utf8_type},
-            {"type", utf8_type},
-            {"validator", utf8_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        "column definitions"
-        // FIXME: the original Java code also had:
-        // operations on resulting CFMetaData:
-        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
-        ));
-    return columns;
-}
-
 // See CASSANDRA-7593. This sstable writes 0 in the range_start. We need to handle that case as well
 SEASTAR_TEST_CASE(wrong_range) {
     return reusable_sst("tests/urchin/sstables/wrongrange", 114).then([] (auto sstp) {
         return do_with(sstables::key("todata"), [sstp] (auto& key) {
-            auto s = cs();
+            auto s = columns_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 return make_ready_future<>();
             });
