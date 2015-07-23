@@ -171,6 +171,19 @@ public:
             return default_value;
         }
     }
+
+    static long to_long(sstring key, std::experimental::optional<sstring> value, long default_value) {
+        if (value) {
+            auto val = value.value();
+            try {
+                return std::stol(val);
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sprint("Invalid long value %s for '%s'", val, key));
+            }
+        } else {
+            return default_value;
+        }
+    }
 };
 
 }
