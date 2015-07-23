@@ -284,6 +284,7 @@ public:
 
     bool equal(const schema&, const ring_position&) const;
     bool less_compare(const schema&, const ring_position&) const;
+    int tri_compare(const schema&, const ring_position&) const;
 
     void serialize(bytes::iterator& out) const;
     static ring_position deserialize(bytes_view& in);
