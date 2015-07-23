@@ -2,6 +2,7 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
 
@@ -209,6 +210,25 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
 }
 
 
+template<typename Func>
+void mutation_partition::for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const
+{
+    auto r = range(schema, row_range);
+    if (!reversed) {
+        for (const auto& e : r) {
+            if (func(e) == stop_iteration::yes) {
+                break;
+            }
+        }
+    } else {
+        for (const auto& e : r | boost::adaptors::reversed) {
+            if (func(e) == stop_iteration::yes) {
+                break;
+            }
+        }
+    }
+}
+
 template <typename ColumnDefResolver>
 static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
         ColumnDefResolver&& id_to_def, gc_clock::time_point now, query::result::row_writer& writer) {
@@ -290,6 +310,7 @@ mutation_partition::query(query::result::partition_writer& pw,
         row_builder.finish();
     }
 
+    auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     for (auto&& row_range : slice.row_ranges) {
         if (limit == 0) {
             break;
@@ -298,7 +319,7 @@ mutation_partition::query(query::result::partition_writer& pw,
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
-        for (const rows_entry& e : range(s, row_range)) {
+        for_each_row(s, row_range, is_reversed, [&] (const rows_entry& e) {
             auto& row = e.row();
             auto row_tombstone = tombstone_for_row(s, e);
 
@@ -308,10 +329,11 @@ mutation_partition::query(query::result::partition_writer& pw,
                 get_row_slice(row.cells(), slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
-                    break;
+                    return stop_iteration::yes;
                 }
             }
-        }
+            return stop_iteration::no;
+        });
     }
 
     if (!any_live) {

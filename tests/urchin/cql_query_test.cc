@@ -1392,6 +1392,95 @@ SEASTAR_TEST_CASE(test_order_by) {
                 {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
                 {int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(4)},
             });
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (1, 1, 0, 6);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into torder (p1, c1, c2, r1) values (1, 2, 3, 7);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) order by c1 desc, c2 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(7)},
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+                {int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(4)},
+                {int32_type->decompose(1), int32_type->decompose(0), int32_type->decompose(6)},
+            });
+        }).then([&e] {
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) order by c1 asc, c2 asc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1), int32_type->decompose(0), int32_type->decompose(6)},
+                {int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(4)},
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+                {int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(7)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) and c1 < 2 order by c1 desc, c2 desc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) and c1 >= 2 order by c1 asc, c2 asc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) order by c1 desc, c2 desc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(7)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 in (0, 1) order by c1 asc, c2 asc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1), int32_type->decompose(0), int32_type->decompose(6)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 > 1 order by c1 desc, c2 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 >= 2 order by c1 desc, c2 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 >= 2 order by c1 desc, c2 desc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 order by c1 desc, c2 desc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 > 1 order by c1 asc, c2 asc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 >= 2 order by c1 asc, c2 asc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+                {int32_type->decompose(2), int32_type->decompose(2), int32_type->decompose(5)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 and c1 >= 2 order by c1 asc, c2 asc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(2), int32_type->decompose(1), int32_type->decompose(0)},
+            });
+            return e.execute_cql("select c1, c2, r1 from torder where p1 = 0 order by c1 asc, c2 asc limit 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(4)},
+            });
         });
     });
 }
