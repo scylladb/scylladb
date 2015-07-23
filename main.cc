@@ -140,12 +140,18 @@ int main(int ac, char** av) {
                 auto rpc_address = e.addresses[0].in.s_addr;
                 auto cserver = new distributed<cql_server>;
                 cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address] () mutable {
+                    engine().at_exit([server] {
+                        return server->stop();
+                    });
                     server->invoke_on_all(&cql_server::listen, ipv4_addr{rpc_address, cql_port});
                 }).then([cql_port] {
                     std::cout << "CQL server listening on port " << cql_port << " ...\n";
                 });
                 auto tserver = new distributed<thrift_server>;
                 tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address] () mutable {
+                    engine().at_exit([server] {
+                        return server->stop();
+                    });
                     server->invoke_on_all(&thrift_server::listen, ipv4_addr{rpc_address, thrift_port});
                 }).then([thrift_port] {
                     std::cout << "Thrift server listening on port " << thrift_port << " ...\n";

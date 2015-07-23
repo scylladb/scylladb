@@ -20,6 +20,7 @@ public:
     cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
+    future<> stop();
 private:
     class fmt_visitor;
     class connection;

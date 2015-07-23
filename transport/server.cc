@@ -241,6 +241,12 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
 {
 }
 
+// FIXME: this is here because we must have a stop function. But we should actually
+// do something useful - or be sure it is not needed
+future<> cql_server::stop() {
+    return make_ready_future<>();
+}
+
 future<>
 cql_server::listen(ipv4_addr addr) {
     listen_options lo;

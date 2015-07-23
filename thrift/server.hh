@@ -46,7 +46,9 @@ class thrift_server {
     uint64_t _requests_served = 0;
 public:
     thrift_server(distributed<database>& db);
+    ~thrift_server();
     future<> listen(ipv4_addr addr);
+    future<> stop();
     void do_accepts(int which);
     class connection;
     uint64_t total_connections() const;
