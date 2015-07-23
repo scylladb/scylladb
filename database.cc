@@ -504,7 +504,7 @@ column_family::compact_all_sstables() {
 }
 
 void column_family::start_compaction() {
-    set_compaction_strategy(sstables::compaction_strategy_type::null);
+    set_compaction_strategy(_schema->compaction_strategy());
 
     // NOTE: Compaction code runs in parallel to the rest of the system, so
     // when it's time to stop a column family, we need to prevent any new

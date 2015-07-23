@@ -43,6 +43,8 @@
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
 
+#include "compaction_strategy.hh"
+
 using namespace db::system_keyspace;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
@@ -1049,8 +1051,9 @@ future<> save_system_keyspace_schema() {
         adder.add("caching", table.getCaching().toString());
 #endif
         m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
+
+        m.set_clustered_cell(ckey, "compaction_strategy_class", sstables::compaction_strategy::name(table->compaction_strategy()), timestamp);
 #if 0
-        adder.add("compaction_strategy_class", table.compactionStrategyClass.getName());
         adder.add("compaction_strategy_options", json(table.compactionStrategyOptions));
 #endif
         const auto& compression_options = table->get_compressor_params();
@@ -1324,8 +1327,12 @@ future<> save_system_keyspace_schema() {
             cfm.defaultTimeToLive(result.getInt("default_time_to_live"));
         if (result.has("speculative_retry"))
             cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(result.getString("speculative_retry")));
-        cfm.compactionStrategyClass(CFMetaData.createCompactionStrategy(result.getString("compaction_strategy_class")));
 #endif
+        if (table_row.has("compaction_strategy")) {
+            auto strategy = table_row.get_nonnull<sstring>("compression_strategy_class");
+            builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+        }
+
         auto comp_param = table_row.get_nonnull<sstring>("compression_parameters");
         compression_parameters cp(json::to_map(comp_param));
         builder.set_compressor_params(cp);

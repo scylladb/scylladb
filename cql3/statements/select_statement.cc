@@ -280,6 +280,9 @@ public:
                 case column_kind::regular_column:
                     add_value(*def, row_iterator);
                     break;
+                case column_kind::compact_column:
+                    add_value(*def, row_iterator);
+                    break;
                 case column_kind::static_column:
                     add_value(*def, static_row_iterator);
                     break;
