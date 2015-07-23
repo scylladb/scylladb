@@ -929,8 +929,7 @@ public:
         if (!num) {
             return 1;
         }
-        auto pnum = abs(num);
-        return align_up(boost::multiprecision::msb(pnum) + 2, 8u) / 8;
+        return boost::multiprecision::cpp_int::canonical_value(num).size() * sizeof(boost::multiprecision::limb_type) + 1;
     }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
