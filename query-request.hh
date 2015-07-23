@@ -43,6 +43,7 @@ public:
     range() : range({}, {}) {}
 private:
     // the point is before the range (works only for non wrapped ranges)
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool before(const T& point, Comparator&& cmp) const {
         if (!start()) {
@@ -58,6 +59,7 @@ private:
         return false;
     }
     // the point is after the range (works only for non wrapped ranges)
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool after(const T& point, Comparator&& cmp) const {
         if (!end()) {
@@ -106,6 +108,7 @@ public:
         return _singular ? _start : _end;
     }
     // end is smaller than start
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool is_wrap_around(Comparator&& cmp) const {
         if (_end && _start) {
@@ -115,6 +118,7 @@ public:
         }
     }
     // the point is inside the range
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool contains(const T& point, Comparator&& cmp) const {
         if (is_wrap_around(cmp)) {
@@ -126,6 +130,7 @@ public:
     }
     // split range in two around a split_point. split_point has to be inside the range
     // split_point will belong to first range
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     std::pair<range<T>, range<T>> split(const T& split_point, Comparator&& cmp) const {
         assert(contains(split_point, std::forward<Comparator>(cmp)));

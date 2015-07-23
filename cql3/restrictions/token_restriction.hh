@@ -104,10 +104,14 @@ public:
 
         typedef typename bounds_range_type::bound bound;
 
-        auto start = bound(start_token, include_start);
-        auto end = bound(end_token, include_end);
+        auto start = bound(include_start
+                           ? dht::ring_position::starting_at(start_token)
+                           : dht::ring_position::ending_at(start_token));
+        auto end = bound(include_end
+                           ? dht::ring_position::ending_at(end_token)
+                           : dht::ring_position::starting_at(end_token));
 
-        return { bounds_range_type(start, end) };
+        return { bounds_range_type(std::move(start), std::move(end)) };
     }
 
     class EQ;

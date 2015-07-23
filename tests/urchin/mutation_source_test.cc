@@ -60,8 +60,8 @@ static void test_range_queries(populate_fn populate) {
 
     auto inclusive_token_range = [&] (size_t start, size_t end) {
         return query::partition_range::make(
-            {partitions[start].token(), true},
-            {partitions[end].token(), true});
+            {dht::ring_position::starting_at(partitions[start].token())},
+            {dht::ring_position::ending_at(partitions[end].token())});
     };
 
     test_slice(query::partition_range::make(
@@ -74,13 +74,16 @@ static void test_range_queries(populate_fn populate) {
         {key_before_all, false}, {partitions.front().decorated_key(), false}));
 
     test_slice(query::partition_range::make(
-        {key_before_all.token(), true}, {partitions.front().token(), true}));
+        {dht::ring_position::starting_at(key_before_all.token())},
+        {dht::ring_position::ending_at(partitions.front().token())}));
 
     test_slice(query::partition_range::make(
-        {key_before_all.token(), false}, {partitions.front().token(), true}));
+        {dht::ring_position::ending_at(key_before_all.token())},
+        {dht::ring_position::ending_at(partitions.front().token())}));
 
     test_slice(query::partition_range::make(
-        {key_before_all.token(), false}, {partitions.front().token(), false}));
+        {dht::ring_position::ending_at(key_before_all.token())},
+        {dht::ring_position::starting_at(partitions.front().token())}));
 
     test_slice(query::partition_range::make(
         {partitions.back().decorated_key(), true}, {key_after_all, true}));
@@ -92,13 +95,16 @@ static void test_range_queries(populate_fn populate) {
         {partitions.back().decorated_key(), false}, {key_after_all, false}));
 
     test_slice(query::partition_range::make(
-        {partitions.back().token(), true}, {key_after_all.token(), true}));
+        {dht::ring_position::starting_at(partitions.back().token())},
+        {dht::ring_position::ending_at(key_after_all.token())}));
 
     test_slice(query::partition_range::make(
-        {partitions.back().token(), true}, {key_after_all.token(), false}));
+        {dht::ring_position::starting_at(partitions.back().token())},
+        {dht::ring_position::starting_at(key_after_all.token())}));
 
     test_slice(query::partition_range::make(
-        {partitions.back().token(), false}, {key_after_all.token(), false}));
+        {dht::ring_position::ending_at(partitions.back().token())},
+        {dht::ring_position::starting_at(key_after_all.token())}));
 
     test_slice(query::partition_range::make(
         {partitions[0].decorated_key(), false},

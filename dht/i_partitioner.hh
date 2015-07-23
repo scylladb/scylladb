@@ -126,6 +126,8 @@ public:
     bool less_compare(const schema& s, const decorated_key& other) const;
     bool less_compare(const schema& s, const ring_position& other) const;
 
+    // Trichotomic comparators defining total ordering on the union of
+    // decorated_key and ring_position objects.
     int tri_compare(const schema& s, const decorated_key& other) const;
     int tri_compare(const schema& s, const ring_position& other) const;
 
@@ -237,23 +239,52 @@ protected:
 };
 
 //
-// Represents position in the ring of partitons, where partitions are ordered
+// Represents position in the ring of partitions, where partitions are ordered
 // according to decorated_key ordering (first by token, then by key value).
+// Intended to be used for defining partition ranges.
 //
-// The 'key' part is optional. When it's absent, this object selects all
-// partitions which share given token. When 'key' is present, position is
-// further narrowed down to a partition with given key value among all
-// partitions which share given token.
+// The 'key' part is optional. When it's absent, this object represents a position
+// which is either before or after all keys sharing given token. That's determined
+// by relation_to_keys().
+//
+// For example for the following data:
+//
+//   tokens: |    t1   | t2 |
+//           +----+----+----+
+//   keys:   | k1 | k2 | k3 |
+//
+// The ordering is:
+//
+//   ring_position(t1, token_bound::start) < ring_position(k1)
+//   ring_position(k1)                     < ring_position(k2)
+//   ring_position(k1)                     == decorated_key(k1)
+//   ring_position(k2)                     == decorated_key(k2)
+//   ring_position(k2)                     < ring_position(t1, token_bound::end)
+//   ring_position(k2)                     < ring_position(k3)
+//   ring_position(t1, token_bound::end)   < ring_position(t2, token_bound::start)
 //
 // Maps to org.apache.cassandra.db.RowPosition and its derivatives in Origin.
-// Range bound intricacies are handled separately, by wrapping range<>. This
-// allows us to devirtualize this.
 //
 class ring_position {
+public:
+    enum class token_bound : int8_t { start = -1, end = 1 };
+private:
     dht::token _token;
+    token_bound _token_bound; // valid when !_key
     std::experimental::optional<partition_key> _key;
 public:
-    ring_position(dht::token token) : _token(std::move(token)) {}
+    static ring_position starting_at(dht::token token) {
+        return { std::move(token), token_bound::start };
+    }
+
+    static ring_position ending_at(dht::token token) {
+        return { std::move(token), token_bound::end };
+    }
+
+    ring_position(dht::token token, token_bound bound)
+        : _token(std::move(token))
+        , _token_bound(bound)
+    { }
 
     ring_position(dht::token token, partition_key key)
         : _token(std::move(token))
@@ -267,6 +298,17 @@ public:
 
     const dht::token& token() const {
         return _token;
+    }
+
+    // Valid when !has_key()
+    token_bound bound() const {
+        return _token_bound;
+    }
+
+    // Returns -1 if smaller than keys with the same token, +1 if greater.
+    // Valid when !has_key().
+    int relation_to_keys() const {
+        return static_cast<int>(_token_bound);
     }
 
     const std::experimental::optional<partition_key>& key() const {
@@ -283,12 +325,16 @@ public:
     }
 
     bool equal(const schema&, const ring_position&) const;
-    bool less_compare(const schema&, const ring_position&) const;
+
+    // Trichotomic comparator defining a total ordering on ring_position objects
     int tri_compare(const schema&, const ring_position&) const;
 
+    // "less" comparator corresponding to tri_compare()
+    bool less_compare(const schema&, const ring_position&) const;
+
+    size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
     static ring_position deserialize(bytes_view& in);
-    size_t serialized_size() const;
 
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };

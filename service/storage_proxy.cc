@@ -2501,8 +2501,11 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
  */
 std::vector<query::partition_range>
 storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range) {
-    // special case for bounds containing exactly 1 (non-minimum) token
-    if (range.is_singular()) {
+    // special case for bounds containing exactly 1 token
+    if (start_token(range) == end_token(range) && !range.is_wrap_around(dht::ring_position_comparator(s))) {
+        if (start_token(range).is_minimum()) {
+            return {};
+        }
         return std::vector<query::partition_range>({std::move(range)});
     }
 
@@ -2526,7 +2529,7 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
          * asSplitValue() abstracts that choice.
          */
 
-        dht::ring_position split_point(upper_bound_token);
+        dht::ring_position split_point(upper_bound_token, dht::ring_position::token_bound::end);
         if (!remainder.contains(split_point, dht::ring_position_comparator(s))) {
             break; // no more splits
         }

@@ -489,6 +489,26 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     return stores;
 }
 
+static
+query::partition_range to_partition_range(query::range<dht::token> r) {
+    using bound_opt = std::experimental::optional<query::partition_range::bound>;
+    auto start = r.start()
+            ? bound_opt(dht::ring_position(r.start()->value(),
+                r.start()->is_inclusive()
+                    ? dht::ring_position::token_bound::start
+                    : dht::ring_position::token_bound::end))
+            : bound_opt();
+
+    auto end = r.end()
+            ? bound_opt(dht::ring_position(r.end()->value(),
+                r.start()->is_inclusive()
+                    ? dht::ring_position::token_bound::end
+                    : dht::ring_position::token_bound::start))
+            : bound_opt();
+
+    return { std::move(start), std::move(end) };
+}
+
 void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
     std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
@@ -500,10 +520,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         std::vector<shared_ptr<query::range<ring_position>>> prs;
         auto cf_id = cf->schema()->id();
         for (auto& range : ranges) {
-            auto pr = make_shared<query::range<ring_position>>(std::move(range).transform<ring_position>(
-                [this] (token&& t) -> ring_position {
-                    return { std::move(t) };
-                }));
+            auto pr = make_shared<query::range<ring_position>>(to_partition_range(range));
             prs.push_back(pr);
             auto mr = cf->make_reader(*pr);
             readers.push_back(std::move(mr));
