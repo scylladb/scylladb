@@ -109,51 +109,53 @@ public:
     virtual ::shared_ptr<selection::selector::factory> new_selector_factory(database& db, schema_ptr schema,
         std::vector<const column_definition*>& defs) override;
 
-    /**
-     * Because Thrift-created tables may have a non-text comparator, we cannot determine the proper 'key' until
-     * we know the comparator. ColumnIdentifier.Raw is a placeholder that can be converted to a real ColumnIdentifier
-     * once the comparator is known with prepare(). This should only be used with identifiers that are actual
-     * column names. See CASSANDRA-8178 for more background.
-     */
-    class raw final : public selectable::raw {
-    private:
-        const sstring _raw_text;
-        sstring _text;
-    public:
-        raw(sstring raw_text, bool keep_case)
-            : _raw_text{raw_text}
-            , _text{raw_text}
-        {
-            if (!keep_case) {
-                std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
-            }
+    class raw;
+};
+
+/**
+ * Because Thrift-created tables may have a non-text comparator, we cannot determine the proper 'key' until
+ * we know the comparator. ColumnIdentifier.Raw is a placeholder that can be converted to a real ColumnIdentifier
+ * once the comparator is known with prepare(). This should only be used with identifiers that are actual
+ * column names. See CASSANDRA-8178 for more background.
+ */
+class column_identifier::raw final : public selectable::raw {
+private:
+    const sstring _raw_text;
+    sstring _text;
+public:
+    raw(sstring raw_text, bool keep_case)
+        : _raw_text{raw_text}
+        , _text{raw_text}
+    {
+        if (!keep_case) {
+            std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
         }
+    }
 
-        virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
-            return prepare_column_identifier(s);
-        }
+    virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
+        return prepare_column_identifier(s);
+    }
 
-        ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s);
+    ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s);
 
-        virtual bool processes_selection() const override {
-            return false;
-        }
+    virtual bool processes_selection() const override {
+        return false;
+    }
 
-        bool operator==(const raw& other) const {
-            return _text == other._text;
-        }
+    bool operator==(const raw& other) const {
+        return _text == other._text;
+    }
 
-        bool operator!=(const raw& other) const {
-            return !operator==(other);
-        }
+    bool operator!=(const raw& other) const {
+        return !operator==(other);
+    }
 
-        virtual sstring to_string() const {
-            return _text;
-        }
+    virtual sstring to_string() const {
+        return _text;
+    }
 
-        friend std::hash<column_identifier::raw>;
-        friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);
-    };
+    friend std::hash<column_identifier::raw>;
+    friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);
 };
 
 static inline
