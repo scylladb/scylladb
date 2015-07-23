@@ -936,7 +936,7 @@ column_family& database::find_column_family(const sstring& ks_name, const sstrin
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+        std::throw_with_nested(no_such_column_family("Can't find a  column family " + cf_name + " in a keyspace " + ks_name));
     }
 }
 
@@ -944,7 +944,7 @@ const column_family& database::find_column_family(const sstring& ks_name, const 
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+        std::throw_with_nested(no_such_column_family("Can't find a  column family " + cf_name + " in a keyspace " + ks_name));
     }
 }
 
@@ -952,7 +952,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) throw (no_s
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
+        std::throw_with_nested(no_such_column_family("Can't find a column family with UUID: " + uuid.to_sstring()));
     }
 }
 
@@ -960,7 +960,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
+        std::throw_with_nested(no_such_column_family("Can't find a column family with UUID: " + uuid.to_sstring()));
     }
 }
 
