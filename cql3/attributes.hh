@@ -37,107 +37,33 @@ class attributes final {
 private:
     const ::shared_ptr<term> _timestamp;
     const ::shared_ptr<term> _time_to_live;
-
 public:
-    static std::unique_ptr<attributes> none() {
-        return std::unique_ptr<attributes>{new attributes{{}, {}}};
-    }
-
+    static std::unique_ptr<attributes> none();
 private:
-    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live)
-        : _timestamp{std::move(timestamp)}
-        , _time_to_live{std::move(time_to_live)}
-    { }
-
+    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live);
 public:
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const {
-        return (_timestamp && _timestamp->uses_function(ks_name, function_name))
-            || (_time_to_live && _time_to_live->uses_function(ks_name, function_name));
-    }
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 
-    bool is_timestamp_set() const {
-        return bool(_timestamp);
-    }
+    bool is_timestamp_set() const;
 
-    bool is_time_to_live_set() const {
-        return bool(_time_to_live);
-    }
+    bool is_time_to_live_set() const;
 
-    int64_t get_timestamp(int64_t now, const query_options& options) {
-        if (!_timestamp) {
-            return now;
-        }
+    int64_t get_timestamp(int64_t now, const query_options& options);
 
-        bytes_opt tval = _timestamp->bind_and_get(options);
-        if (!tval) {
-            throw exceptions::invalid_request_exception("Invalid null value of timestamp");
-        }
+    int32_t get_time_to_live(const query_options& options);
 
-        try {
-            data_type_for<int64_t>()->validate(*tval);
-        } catch (marshal_exception e) {
-            throw exceptions::invalid_request_exception("Invalid timestamp value");
-        }
-        return boost::any_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
-    }
-
-    int32_t get_time_to_live(const query_options& options) {
-        if (!_time_to_live)
-            return 0;
-
-        bytes_opt tval = _time_to_live->bind_and_get(options);
-        if (!tval) {
-            throw exceptions::invalid_request_exception("Invalid null value of TTL");
-        }
-
-        try {
-            data_type_for<int32_t>()->validate(*tval);
-        }
-        catch (marshal_exception e) {
-            throw exceptions::invalid_request_exception("Invalid TTL value");
-        }
-
-        auto ttl = boost::any_cast<int32_t>(data_type_for<int32_t>()->deserialize(*tval));
-        if (ttl < 0) {
-            throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
-        }
-
-        if (ttl > max_ttl.count()) {
-            throw exceptions::invalid_request_exception("ttl is too large. requested (" + std::to_string(ttl) +
-                ") maximum (" + std::to_string(max_ttl.count()) + ")");
-        }
-
-        return ttl;
-    }
-
-    void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
-        if (_timestamp) {
-            _timestamp->collect_marker_specification(bound_names);
-        }
-        if (_time_to_live) {
-            _time_to_live->collect_marker_specification(bound_names);
-        }
-    }
+    void collect_marker_specification(::shared_ptr<variable_specifications> bound_names);
 
     class raw {
     public:
         ::shared_ptr<term::raw> timestamp;
         ::shared_ptr<term::raw> time_to_live;
 
-        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) {
-            auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(db, ks_name, timestamp_receiver(ks_name, cf_name));
-            auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(db, ks_name, time_to_live_receiver(ks_name, cf_name));
-            return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl)}};
-        }
-
+        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name);
     private:
-        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) {
-            return ::make_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[timestamp]", true), data_type_for<int64_t>());
-        }
+        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name);
 
-        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) {
-            return ::make_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[ttl]", true), data_type_for<int32_t>());
-        }
+        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name);
     };
 };
 
