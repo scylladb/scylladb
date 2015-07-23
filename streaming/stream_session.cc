@@ -199,8 +199,10 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                 auto opts = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
                 qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, *opts).get();
                 sslog.debug("CREATE KEYSPACE = KS DONE");
+                sleep(std::chrono::seconds(3)).get();
                 qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, *opts).get();
                 sslog.debug("CREATE TABLE = TB DONE");
+                sleep(std::chrono::seconds(3)).get();
                 qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, *opts).get();
                 sslog.debug("INSERT VALUE DONE: 1");
                 qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, *opts).get();
