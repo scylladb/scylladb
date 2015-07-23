@@ -16,6 +16,8 @@ namespace sstables {
 future<> sstable::read_filter() {
     auto ft = _filter_tracker;
     return _filter_tracker->start(std::move(ft)).then([this] {
+        // FIXME: should stop this service. This one is definitely wrong to stop at_exit.
+        // We should use a Deleter class in lw_shared_ptr
         if (!has_component(sstable::component_type::Filter)) {
             _filter = std::make_unique<utils::filter::always_present_filter>();
             return make_ready_future<>();
