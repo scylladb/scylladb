@@ -203,7 +203,7 @@ schema_ptr built_indexes() {
                 {"rack", utf8_type},
                 {"release_version", utf8_type},
                 {"rpc_address", inet_addr_type},
-                {"schema_version", utf8_type},
+                {"schema_version", uuid_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, false)},
         },
         // static columns
