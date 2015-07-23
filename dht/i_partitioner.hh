@@ -302,9 +302,9 @@ public:
         }
     }
 
-    size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
     static ring_position deserialize(bytes_view& in);
+    size_t serialized_size() const;
 
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };

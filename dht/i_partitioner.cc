@@ -248,18 +248,11 @@ size_t ring_position::serialized_size() const {
     if (_key) {
         key_size += _key.value().representation().size();
     }
-    return serialize_int8_size // token::kind;
-         + serialize_int16_size // token size
-         + _token._data.size()
-         + key_size;
+    return _token.serialized_size() + key_size;
 }
 
 void ring_position::serialize(bytes::iterator& out) const {
-    uint8_t kind = _token._kind == dht::token::kind::before_all_keys ? 0 :
-            _token._kind == dht::token::kind::key ? 1 : 2;
-    serialize_int8(out, kind);
-    serialize_int16(out, _token._data.size());
-    out = std::copy(_token._data.begin(), _token._data.end(), out);
+    _token.serialize(out);
     if (_key) {
         auto v = _key.value().representation();
         serialize_int32(out, v.size());
@@ -270,13 +263,8 @@ void ring_position::serialize(bytes::iterator& out) const {
 }
 
 ring_position ring_position::deserialize(bytes_view& in) {
-    uint8_t kind = read_simple<uint8_t>(in);
-    size_t size = read_simple<uint16_t>(in);
-    dht::token token(kind == 0 ? dht::token::kind::before_all_keys :
-                     kind == 1 ? dht::token::kind::key :
-                                 dht::token::kind::after_all_keys,
-                  to_bytes(read_simple_bytes(in, size)));
-    size = read_simple<uint32_t>(in);
+    auto token = token::deserialize(in);
+    auto size = read_simple<uint32_t>(in);
     if (size == 0) {
         return ring_position(std::move(token));
     } else {
