@@ -5,6 +5,7 @@
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
+#include <chrono>
 
 namespace bpo = boost::program_options;
 
@@ -39,7 +40,10 @@ int main(int ac, char ** av) {
             std::map<gms::application_state, gms::versioned_value> app_states = {
                 { gms::application_state::LOAD, gms::versioned_value::versioned_value_factory::load(0.5) },
             };
-            int generation_number = 1;
+
+            using namespace std::chrono;
+            auto now = high_resolution_clock::now().time_since_epoch();
+            int generation_number = duration_cast<seconds>(now).count();
             return gossiper.start(generation_number, app_states);
         }).then([] () {
             auto reporter = std::make_shared<timer<lowres_clock>>();
