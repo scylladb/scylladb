@@ -47,39 +47,19 @@ private:
     private static final long EMPTY_SIZE = ObjectSizes.measure(new ColumnIdentifier("", true));
 #endif
 public:
-    column_identifier(sstring raw_text, bool keep_case) {
-        _text = std::move(raw_text);
-        if (!keep_case) {
-            std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
-        }
-        bytes_ = to_bytes(_text);
-    }
+    column_identifier(sstring raw_text, bool keep_case);
 
-    column_identifier(bytes bytes_, data_type type)
-        : bytes_(std::move(bytes_))
-        , _text(type->get_string(this->bytes_))
-    { }
+    column_identifier(bytes bytes_, data_type type);
 
-    column_identifier(bytes bytes_, sstring text)
-        : bytes_(std::move(bytes_))
-        , _text(std::move(text))
-    { }
+    column_identifier(bytes bytes_, sstring text);
 
-    bool operator==(const column_identifier& other) const {
-        return bytes_ == other.bytes_;
-    }
+    bool operator==(const column_identifier& other) const;
 
-    const sstring& text() const {
-        return _text;
-    }
+    const sstring& text() const;
 
-    const bytes& name() const {
-        return bytes_;
-    }
+    const bytes& name() const;
 
-    sstring to_string() const {
-        return _text;
-    }
+    sstring to_string() const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
         return out << i._text;
@@ -123,36 +103,19 @@ private:
     const sstring _raw_text;
     sstring _text;
 public:
-    raw(sstring raw_text, bool keep_case)
-        : _raw_text{raw_text}
-        , _text{raw_text}
-    {
-        if (!keep_case) {
-            std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
-        }
-    }
+    raw(sstring raw_text, bool keep_case);
 
-    virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
-        return prepare_column_identifier(s);
-    }
+    virtual ::shared_ptr<selectable> prepare(schema_ptr s) override;
 
     ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s);
 
-    virtual bool processes_selection() const override {
-        return false;
-    }
+    virtual bool processes_selection() const override;
 
-    bool operator==(const raw& other) const {
-        return _text == other._text;
-    }
+    bool operator==(const raw& other) const;
 
-    bool operator!=(const raw& other) const {
-        return !operator==(other);
-    }
+    bool operator!=(const raw& other) const;
 
-    virtual sstring to_string() const {
-        return _text;
-    }
+    virtual sstring to_string() const;
 
     friend std::hash<column_identifier::raw>;
     friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);
