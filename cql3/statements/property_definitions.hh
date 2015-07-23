@@ -137,6 +137,10 @@ public:
     // Return a property value, typed as a double
     double get_double(sstring key, double default_value) const {
         auto value = get_simple(key);
+        return to_double(key, value, default_value);
+    }
+
+    static double to_double(sstring key, std::experimental::optional<sstring> value, double default_value) {
         if (value) {
             auto val = value.value();
             try {
