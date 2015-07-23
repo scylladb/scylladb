@@ -43,6 +43,9 @@ thrift_server::thrift_server(distributed<database>& db)
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory)) {
 }
 
+thrift_server::~thrift_server() {
+}
+
 struct handler_deleter {
     CassandraCobSvIfFactory* hf;
     void operator()(CassandraCobSvIf* h) const {
