@@ -756,6 +756,11 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                                               "map1", map_type_impl::native_type({{{1009, 5009}}}));
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, map1) values ('key1', null);").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "map1", map_type_impl::native_type({}));
         });
     });
 }
@@ -812,6 +817,11 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                                             "set1", set_type_impl::native_type({1009}));
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, set1) values ('key1', null);").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "set1", set_type_impl::native_type({}));
         });
     });
 }
@@ -865,6 +875,11 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                     "list1", list_type_impl::native_type({2001, 2002, 2008, 2010, 2012, 2019}));
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, list1) values ('key1', null);").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "list1", list_type_impl::native_type({}));
         });
     });
 }

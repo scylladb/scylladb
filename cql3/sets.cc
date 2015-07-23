@@ -204,12 +204,15 @@ sets::marker::bind(const query_options& options) {
 
 void
 sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
-    tombstone ts;
     if (column.type->is_multi_cell()) {
         // delete + add
-        ts = params.make_tombstone_just_before();
+        collection_type_impl::mutation mut;
+        mut.tomb = params.make_tombstone_just_before();
+        auto ctype = static_pointer_cast<const set_type_impl>(column.type);
+        auto col_mut = ctype->serialize_mutation_form(std::move(mut));
+        m.set_cell(row_key, column, std::move(col_mut));
     }
-    adder::do_add(m, row_key, params, _t, column, ts);
+    adder::do_add(m, row_key, params, _t, column);
 }
 
 void
@@ -220,14 +223,13 @@ sets::adder::execute(mutation& m, const exploded_clustering_prefix& row_key, con
 
 void
 sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-        shared_ptr<term> t, const column_definition& column, tombstone ts) {
+        shared_ptr<term> t, const column_definition& column) {
     auto&& value = t->bind(params._options);
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
     auto set_type = dynamic_pointer_cast<const set_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // FIXME: mutation_view? not compatible with params.make_cell().
         collection_type_impl::mutation mut;
-        mut.tomb = ts;
 
         if (!set_value || set_value->_elements.empty()) {
             return;
