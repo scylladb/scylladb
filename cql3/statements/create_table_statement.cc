@@ -343,12 +343,13 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
         throw exceptions::invalid_request_exception(sprint("Invalid collection type for PRIMARY KEY component %s", t->text()));
     }
     columns.erase(t);
-#if 0
-    // FIXME: reversed types are not supported
-    Boolean isReversed = definedOrdering.get(t);
-    return isReversed != null && isReversed ? ReversedType.getInstance(type) : type;
-#endif
-    return type;
+
+    auto is_reversed = find_ordering_info(t);
+    if (!is_reversed) {
+        return type;
+    } else {
+        return *is_reversed ? reversed_type_impl::get_instance(type) : type;
+    }
 }
 
 void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {
