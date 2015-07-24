@@ -441,3 +441,67 @@ BOOST_AUTO_TEST_CASE(test_parse_recursive_type) {
     auto type = parser.parse();
     BOOST_REQUIRE(type->as_cql3_type()->to_string() == "map<int, tuple<int, int>>");
 }
+
+BOOST_AUTO_TEST_CASE(test_create_reversed_type) {
+    auto ri = reversed_type_impl::get_instance(bytes_type);
+    BOOST_REQUIRE(ri->is_reversed());
+    BOOST_REQUIRE(ri->is_value_compatible_with(*bytes_type));
+    BOOST_REQUIRE(!ri->is_compatible_with(*bytes_type));
+    auto val_lt = bytes_type->decompose(bytes("a"));
+    auto val_gt = bytes_type->decompose(bytes("b"));
+    auto straight_comp = bytes_type->compare(bytes_view(val_lt), bytes_view(val_gt));
+    auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
+    BOOST_REQUIRE(straight_comp == -reverse_comp);
+}
+
+BOOST_AUTO_TEST_CASE(test_create_reverse_collection_type) {
+    auto my_set_type = set_type_impl::get_instance(bytes_type, true);
+    auto ri = reversed_type_impl::get_instance(my_set_type);
+    BOOST_REQUIRE(ri->is_reversed());
+    BOOST_REQUIRE(ri->is_collection());
+    BOOST_REQUIRE(ri->is_multi_cell());
+
+    std::vector<boost::any> first_set;
+    bytes b1("1");
+    bytes b2("2");
+    first_set.push_back(boost::any(b1));
+    first_set.push_back(boost::any(b2));
+
+    std::vector<boost::any> second_set;
+    bytes b3("2");
+    second_set.push_back(boost::any(b1));
+    second_set.push_back(boost::any(b3));
+
+    auto bv1 = my_set_type->decompose(first_set);
+    auto bv2 = my_set_type->decompose(second_set);
+
+    auto straight_comp = my_set_type->compare(bytes_view(bv1), bytes_view(bv2));
+    auto reverse_comp = ri->compare(bytes_view(bv2), bytes_view(bv2));
+    BOOST_REQUIRE(straight_comp == -reverse_comp);
+}
+
+BOOST_AUTO_TEST_CASE(test_parse_reversed_type) {
+    sstring value("org.apache.cassandra.db.marshal.ReversedType(org.apache.cassandra.db.marshal.Int32Type)");
+    auto parser = db::marshal::type_parser(value);
+    auto ri = parser.parse();
+    BOOST_REQUIRE(ri->as_cql3_type()->to_string() == "int");
+    BOOST_REQUIRE(ri->is_reversed());
+    BOOST_REQUIRE(ri->is_value_compatible_with(*int32_type));
+    BOOST_REQUIRE(!ri->is_compatible_with(*int32_type));
+
+    auto val_lt = int32_type->decompose(1);
+    auto val_gt = int32_type->decompose(2);
+    auto straight_comp = int32_type->compare(bytes_view(val_lt), bytes_view(val_gt));
+    auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
+    BOOST_REQUIRE(straight_comp == -reverse_comp);
+}
+
+BOOST_AUTO_TEST_CASE(test_reversed_type_value_compatibility) {
+    auto rb = reversed_type_impl::get_instance(bytes_type);
+    auto rs = reversed_type_impl::get_instance(utf8_type);
+
+    BOOST_REQUIRE(!rb->is_compatible_with(*bytes_type));
+    BOOST_REQUIRE(!rb->is_compatible_with(*utf8_type));
+    BOOST_REQUIRE(rb->is_value_compatible_with(*rs));
+    BOOST_REQUIRE(rb->is_value_compatible_with(*utf8_type));
+}
