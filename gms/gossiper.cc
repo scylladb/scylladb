@@ -556,6 +556,7 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
+    logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
     if (state.is_alive() && !is_dead_state(state)) {
         mark_dead(endpoint, state);
     } else {
@@ -746,6 +747,7 @@ bool gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
     if (size == 0) {
         return false;
     }
+    logger.trace("do_gossip_to_live_member: live_endpoint nr={}", _live_endpoints.size());
     return send_gossip(message, _live_endpoints);
 }
 
@@ -762,6 +764,8 @@ void gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
             for (auto&& x : _unreachable_endpoints) {
                 addrs.insert(x.first);
             }
+            logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
+                live_endpoint_count, unreachable_endpoint_count);
             send_gossip(message, addrs);
         }
     }
@@ -775,6 +779,7 @@ void gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
         }
 
         if (_live_endpoints.size() == 0) {
+            logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", 0, _seeds.size());
             send_gossip(prod, _seeds);
         } else {
             /* Gossip with the seed with some probability. */
@@ -782,6 +787,7 @@ void gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
             std::uniform_real_distribution<double> dist(0, 1);
             double rand_dbl = dist(_random);
             if (rand_dbl <= probability) {
+                logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", _live_endpoints.size(), _seeds.size());
                 send_gossip(prod, _seeds);
             }
         }
