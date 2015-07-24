@@ -305,29 +305,29 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
             ? CounterColumnType.instance
             : BytesType.instance;
     }
-
+#endif
 
     // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
-    if (!definedOrdering.isEmpty())
-    {
-        if (definedOrdering.size() > columnAliases.size())
-            throw new InvalidRequestException("Only clustering key columns can be defined in CLUSTERING ORDER directive");
+    if (!_defined_ordering.empty()) {
+        if (_defined_ordering.size() > _column_aliases.size()) {
+            throw exceptions::invalid_request_exception("Only clustering key columns can be defined in CLUSTERING ORDER directive");
+        }
 
         int i = 0;
-        for (ColumnIdentifier id : definedOrdering.keySet())
-        {
-            ColumnIdentifier c = columnAliases.get(i);
-            if (!id.equals(c))
-            {
-                if (definedOrdering.containsKey(c))
-                    throw new InvalidRequestException(String.format("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
-                else
-                    throw new InvalidRequestException(String.format("Missing CLUSTERING ORDER for column %s", c));
+        for (auto& pair: _defined_ordering){
+            auto& id = pair.first;
+            auto& c = _column_aliases.at(i);
+
+            if (!(*id == *c)) {
+                if (find_ordering_info(c)) {
+                    throw exceptions::invalid_request_exception(sprint("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
+                } else {
+                    throw exceptions::invalid_request_exception(sprint("Missing CLUSTERING ORDER for column %s", c));
+                }
             }
             ++i;
         }
     }
-#endif
 
     return ::make_shared<parsed_statement::prepared>(stmt);
 }
