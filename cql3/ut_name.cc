@@ -17,46 +17,43 @@
  */
 
 /*
- * Modified by Cloudius Systems
  * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
  */
 
-#pragma once
+#include "cql3/ut_name.hh"
 
 namespace cql3 {
-// FIXME: stub
-class cql3_row {
-public:
-    class builder {
-    };
-    class row_iterator {
-    };
-};
+
+ut_name::ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
+    : _ks_name{!ks_name ? std::experimental::nullopt : std::experimental::optional<sstring>{ks_name->to_string()}}
+    , _ut_name{ut_name}
+{ }
+
+bool ut_name::has_keyspace() const {
+    return bool(_ks_name);
 }
 
-#if 0
-package org.apache.cassandra.cql3;
+void ut_name::set_keyspace(sstring keyspace) {
+    _ks_name = std::experimental::optional<sstring>{keyspace};
+}
 
-import java.nio.ByteBuffer;
-import java.util.Iterator;
-import java.util.List;
+sstring ut_name::get_keyspace() const {
+    return _ks_name.value();
+}
 
-import org.apache.cassandra.db.Cell;
+bytes ut_name::get_user_type_name() const {
+    return _ut_name->bytes_;
+}
 
-public interface CQL3Row
+sstring ut_name::get_string_type_name() const
 {
-    public ByteBuffer getClusteringColumn(int i);
-    public Cell getColumn(ColumnIdentifier name);
-    public List<Cell> getMultiCellColumn(ColumnIdentifier name);
-
-    public interface Builder
-    {
-        public RowIterator group(Iterator<Cell> cells);
-    }
-
-    public interface RowIterator extends Iterator<CQL3Row>
-    {
-        public CQL3Row getStaticRow();
-    }
+    return _ut_name->to_string();
 }
-#endif
+
+sstring ut_name::to_string() const {
+    return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_string();
+}
+
+}

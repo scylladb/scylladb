@@ -35,35 +35,19 @@ class ut_name final {
     std::experimental::optional<sstring> _ks_name;
     ::shared_ptr<column_identifier> _ut_name;
 public:
-    ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
-        : _ks_name{!ks_name ? std::experimental::nullopt : std::experimental::optional<sstring>{ks_name->to_string()}}
-        , _ut_name{ut_name}
-    { }
+    ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name);
 
-    bool has_keyspace() const {
-        return bool(_ks_name);
-    }
+    bool has_keyspace() const;
 
-    void set_keyspace(sstring keyspace) {
-        _ks_name = std::experimental::optional<sstring>{keyspace};
-    }
+    void set_keyspace(sstring keyspace);
 
-    sstring get_keyspace() const {
-        return _ks_name.value();
-    }
+    sstring get_keyspace() const;
 
-    bytes get_user_type_name() const {
-        return _ut_name->bytes_;
-    }
+    bytes get_user_type_name() const;
 
-    sstring get_string_type_name() const
-    {
-        return _ut_name->to_string();
-    }
+    sstring get_string_type_name() const;
 
-    sstring to_string() const {
-        return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_string();
-    }
+    sstring to_string() const;
 
     friend std::ostream& operator<<(std::ostream& os, const ut_name& n) {
         return os << n.to_string();

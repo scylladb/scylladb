@@ -31,6 +31,23 @@
 
 namespace cql3 {
 
+abstract_marker::abstract_marker(int32_t bind_index, ::shared_ptr<column_specification>&& receiver)
+    : _bind_index{bind_index}
+    , _receiver{std::move(receiver)}
+{ }
+
+void abstract_marker::collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
+    bound_names->add(_bind_index, _receiver);
+}
+
+bool abstract_marker::contains_bind_marker() const {
+    return true;
+}
+
+abstract_marker::raw::raw(int32_t bind_index)
+    : _bind_index{bind_index}
+{ }
+
 ::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
     auto receiver_type = ::dynamic_pointer_cast<const collection_type_impl>(receiver->type);
@@ -45,6 +62,23 @@ namespace cql3 {
         return ::make_shared<maps::marker>(_bind_index, receiver);
     }
     assert(0);
+}
+
+assignment_testable::test_result abstract_marker::raw::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
+    return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+}
+
+sstring abstract_marker::raw::to_string() const {
+    return "?";
+}
+
+abstract_marker::in_raw::in_raw(int32_t bind_index)
+    : raw{bind_index}
+{ }
+
+::shared_ptr<column_specification> abstract_marker::in_raw::make_in_receiver(::shared_ptr<column_specification> receiver) {
+    auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver->name->to_string() + sstring(")"), true);
+    return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, list_type_impl::get_instance(receiver->type, false));
 }
 
 ::shared_ptr<term> abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {

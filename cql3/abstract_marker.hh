@@ -37,20 +37,12 @@ class abstract_marker : public non_terminal {
 protected:
     const int32_t _bind_index;
     const ::shared_ptr<column_specification> _receiver;
-
 public:
-    abstract_marker(int32_t bind_index, ::shared_ptr<column_specification>&& receiver)
-        : _bind_index{bind_index}
-        , _receiver{std::move(receiver)}
-    { }
+    abstract_marker(int32_t bind_index, ::shared_ptr<column_specification>&& receiver);
 
-    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) override {
-        bound_names->add(_bind_index, _receiver);
-    }
+    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) override;
 
-    virtual bool contains_bind_marker() const override {
-        return true;
-    }
+    virtual bool contains_bind_marker() const override;
 
     /**
      * A parsed, but non prepared, bind marker.
@@ -58,21 +50,14 @@ public:
     class raw : public term::raw {
     protected:
         const int32_t _bind_index;
-
     public:
-        raw(int32_t bind_index)
-            : _bind_index{bind_index}
-        { }
+        raw(int32_t bind_index);
 
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
 
-        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
-        }
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
 
-        virtual sstring to_string() const override {
-            return "?";
-        }
+        virtual sstring to_string() const override;
     };
 
     /**
@@ -83,16 +68,9 @@ public:
      */
     class in_raw : public raw {
     public:
-        in_raw(int32_t bind_index)
-            : raw{bind_index}
-        { }
-
+        in_raw(int32_t bind_index);
     private:
-        static ::shared_ptr<column_specification> make_in_receiver(::shared_ptr<column_specification> receiver) {
-            auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver->name->to_string() + sstring(")"), true);
-            return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, list_type_impl::get_instance(receiver->type, false));
-        }
-
+        static ::shared_ptr<column_specification> make_in_receiver(::shared_ptr<column_specification> receiver);
     public:
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
     };
