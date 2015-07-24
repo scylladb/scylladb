@@ -41,11 +41,12 @@ public:
         , _singular(true)
     { }
     range() : range({}, {}) {}
-private:
+public:
     // the point is before the range (works only for non wrapped ranges)
     // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool before(const T& point, Comparator&& cmp) const {
+        assert(!is_wrap_around(cmp));
         if (!start()) {
             return false; //open start, no points before
         }
@@ -62,6 +63,7 @@ private:
     // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool after(const T& point, Comparator&& cmp) const {
+        assert(!is_wrap_around(cmp));
         if (!end()) {
             return false; //open end, no points after
         }
@@ -74,7 +76,6 @@ private:
         }
         return false;
     }
-public:
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
     }
