@@ -27,12 +27,15 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include <iostream>
+#include <chrono>
 
 namespace gms {
 
 extern logging::logger logger;
 
-long failure_detector_helper::get_initial_value() {
+using clk = std::chrono::steady_clock;
+
+clk::duration failure_detector_helper::get_initial_value() {
 #if 0
     String newvalue = System.getProperty("cassandra.fd_initial_value_ms");
     if (newvalue == null)
@@ -46,15 +49,14 @@ long failure_detector_helper::get_initial_value() {
     }
 #endif
     warn(unimplemented::cause::GOSSIP);
-    return 1000 * 2;
+    return std::chrono::seconds(2);
 }
 
-long failure_detector_helper::INITIAL_VALUE_NANOS() {
-    // Convert from milliseconds to nanoseconds
-    return get_initial_value() * 1000 * 1000;
+clk::duration failure_detector_helper::INITIAL_VALUE_NANOS() {
+    return get_initial_value();
 }
 
-long arrival_window::get_max_interval() {
+clk::duration arrival_window::get_max_interval() {
 #if 0
     sstring newvalue = System.getProperty("cassandra.fd_max_interval_ms");
     if (newvalue == null)
@@ -71,20 +73,19 @@ long arrival_window::get_max_interval() {
     return failure_detector_helper::INITIAL_VALUE_NANOS();
 }
 
-void arrival_window::add(long value) {
-    assert(_tlast >= 0);
-    if (_tlast > 0L) {
-        long inter_arrival_time = value - _tlast;
+void arrival_window::add(clk::time_point value) {
+    if (_tlast > clk::time_point::min()) {
+        auto inter_arrival_time = value - _tlast;
         if (inter_arrival_time <= MAX_INTERVAL_IN_NANO) {
-            _arrival_intervals.add(inter_arrival_time);
+            _arrival_intervals.add(inter_arrival_time.count());
         } else  {
-            logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time);
+            logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time.count());
         }
     } else {
         // We use a very large initial interval since the "right" average depends on the cluster size
         // and it's better to err high (false negatives, which will be corrected by waiting a bit longer)
         // than low (false positives, which cause "flapping").
-        _arrival_intervals.add(failure_detector_helper::INITIAL_VALUE_NANOS());
+        _arrival_intervals.add(failure_detector_helper::INITIAL_VALUE_NANOS().count());
     }
     _tlast = value;
 }
@@ -93,12 +94,13 @@ double arrival_window::mean() {
     return _arrival_intervals.mean();
 }
 
-double arrival_window::phi(long tnow) {
-    assert(_arrival_intervals.size() > 0 && _tlast > 0); // should not be called before any samples arrive
-    long t = tnow - _tlast;
+double arrival_window::phi(clk::time_point tnow) {
+    assert(_arrival_intervals.size() > 0 && _tlast > clk::time_point::min()); // should not be called before any samples arrive
+    auto t = (tnow - _tlast).count();
     auto m = mean();
     double phi = t / m;
-    logger.debug("failure_detector: now={}, tlast={}, t={}, mean={}, phi={}", tnow, _tlast, t, m, phi);
+    logger.debug("failure_detector: now={}, tlast={}, t={}, mean={}, phi={}",
+        tnow.time_since_epoch().count(), _tlast.time_since_epoch().count(), t, m, phi);
     return phi;
 }
 
@@ -200,8 +202,7 @@ bool failure_detector::is_alive(inet_address ep) {
 
 void failure_detector::report(inet_address ep) {
     logger.trace("failure_detector: reporting {}", ep);
-    // db_clock is 1ms granularity, value in arrival_window is in nanoseconds.
-    long now = db_clock::now().time_since_epoch().count() * 1000 * 1000;
+    auto now = clk::now();
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
         // avoid adding an empty ArrivalWindow to the Map
@@ -219,7 +220,7 @@ void failure_detector::interpret(inet_address ep) {
         return;
     }
     arrival_window& hb_wnd = it->second;
-    long now = db_clock::now().time_since_epoch().count() * 1000 * 1000;
+    auto now = clk::now();
     double phi = hb_wnd.phi(now);
     logger.trace("failure_detector: PHI for {} : {}", ep, phi);
 
