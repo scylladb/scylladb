@@ -5,6 +5,7 @@
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
+#include "log.hh"
 #include <chrono>
 
 namespace bpo = boost::program_options;
@@ -16,6 +17,7 @@ int main(int ac, char ** av) {
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
     return app.run(ac, av, [&app] {
         auto config = app.configuration();
+        logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         service::init_storage_service().then([listen, config] {
             return net::get_messaging_service().start(listen);
