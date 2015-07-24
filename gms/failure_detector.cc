@@ -96,7 +96,10 @@ double arrival_window::mean() {
 double arrival_window::phi(long tnow) {
     assert(_arrival_intervals.size() > 0 && _tlast > 0); // should not be called before any samples arrive
     long t = tnow - _tlast;
-    return t / mean();
+    auto m = mean();
+    double phi = t / m;
+    logger.debug("failure_detector: now={}, tlast={}, t={}, mean={}, phi={}", tnow, _tlast, t, m, phi);
+    return phi;
 }
 
 std::ostream& operator<<(std::ostream& os, const arrival_window& w) {
@@ -223,6 +226,7 @@ void failure_detector::interpret(inet_address ep) {
         logger.trace("failure_detector: notifying listeners that {} is down", ep);
         logger.trace("failure_detector: intervals: {} mean: {}", hb_wnd, hb_wnd.mean());
         for (auto& listener : _fd_evnt_listeners) {
+            logger.debug("failure_detector: convict ep={} phi={}", ep, phi);
             listener->convict(ep, phi);
         }
     }
