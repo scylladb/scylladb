@@ -40,6 +40,7 @@ private:
     const std::vector<data_type> _types;
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
+    const bool _is_reversed;
 public:
     static constexpr bool is_prefixable = AllowPrefixes == allow_prefixes::yes;
     using prefix_type = compound_type<allow_prefixes::yes>;
@@ -51,6 +52,7 @@ public:
                 return t->is_byte_order_equal();
             }))
         , _byte_order_comparable(_types.size() == 1 && _types[0]->is_byte_order_comparable())
+        , _is_reversed(_types.size() == 1 && _types[0]->is_reversed())
     { }
 
     compound_type(compound_type&&) = default;
@@ -246,7 +248,11 @@ public:
     }
     int compare(bytes_view b1, bytes_view b2) {
         if (_byte_order_comparable) {
-            return compare_unsigned(b1, b2);
+            if (_is_reversed) {
+                return compare_unsigned(b2, b1);
+            } else {
+                return compare_unsigned(b1, b2);
+            }
         }
         return lexicographical_tri_compare(_types.begin(), _types.end(),
             begin(b1), end(b1), begin(b2), end(b2), [] (auto&& type, auto&& v1, auto&& v2) {
