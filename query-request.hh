@@ -271,6 +271,9 @@ using clustering_range = range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
 
+// FIXME: Move this to i_partitioner.hh after query::range<> is moved to utils/range.hh
+query::partition_range to_partition_range(query::range<dht::token>);
+
 inline
 bool is_wrap_around(const query::partition_range& range, const schema& s) {
     return range.is_wrap_around(dht::ring_position_comparator(s));

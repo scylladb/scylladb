@@ -97,4 +97,25 @@ read_command read_command::deserialize(bytes_view& v) {
     return read_command(std::move(uuid), partition_slice(std::move(row_ranges), std::move(static_columns), std::move(regular_columns), options), row_limit, timestamp);
 }
 
+
+query::partition_range
+to_partition_range(query::range<dht::token> r) {
+    using bound_opt = std::experimental::optional<query::partition_range::bound>;
+    auto start = r.start()
+                 ? bound_opt(dht::ring_position(r.start()->value(),
+            r.start()->is_inclusive()
+            ? dht::ring_position::token_bound::start
+            : dht::ring_position::token_bound::end))
+                 : bound_opt();
+
+    auto end = r.end()
+               ? bound_opt(dht::ring_position(r.end()->value(),
+            r.start()->is_inclusive()
+            ? dht::ring_position::token_bound::end
+            : dht::ring_position::token_bound::start))
+               : bound_opt();
+
+    return { std::move(start), std::move(end) };
+}
+
 }
