@@ -556,7 +556,7 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
-    if (state.is_alive() && is_dead_state(state)) {
+    if (state.is_alive() && !is_dead_state(state)) {
         mark_dead(endpoint, state);
     } else {
         state.mark_dead();
