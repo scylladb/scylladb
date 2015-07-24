@@ -30,6 +30,8 @@
 
 namespace gms {
 
+extern logging::logger logger;
+
 long failure_detector_helper::get_initial_value() {
 #if 0
     String newvalue = System.getProperty("cassandra.fd_initial_value_ms");
@@ -76,7 +78,7 @@ void arrival_window::add(long value) {
         if (inter_arrival_time <= MAX_INTERVAL_IN_NANO) {
             _arrival_intervals.add(inter_arrival_time);
         } else  {
-            //logger.debug("Ignoring interval time of {}", interArrivalTime);
+            logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time);
         }
     } else {
         // We use a very large initial interval since the "right" average depends on the cluster size
@@ -194,8 +196,7 @@ bool failure_detector::is_alive(inet_address ep) {
 }
 
 void failure_detector::report(inet_address ep) {
-    // if (logger.isTraceEnabled())
-    //     logger.trace("reporting {}", ep);
+    logger.trace("failure_detector: reporting {}", ep);
     long now = db_clock::now().time_since_epoch().count();
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
@@ -216,12 +217,11 @@ void failure_detector::interpret(inet_address ep) {
     arrival_window& hb_wnd = it->second;
     long now = db_clock::now().time_since_epoch().count();
     double phi = hb_wnd.phi(now);
-    // if (logger.isTraceEnabled())
-    //     logger.trace("PHI for {} : {}", ep, phi);
+    logger.trace("failure_detector: PHI for {} : {}", ep, phi);
 
     if (PHI_FACTOR * phi > get_phi_convict_threshold()) {
-        // logger.trace("notifying listeners that {} is down", ep);
-        // logger.trace("intervals: {} mean: {}", hb_wnd, hb_wnd.mean());
+        logger.trace("failure_detector: notifying listeners that {} is down", ep);
+        logger.trace("failure_detector: intervals: {} mean: {}", hb_wnd, hb_wnd.mean());
         for (auto& listener : _fd_evnt_listeners) {
             listener->convict(ep, phi);
         }
@@ -229,7 +229,7 @@ void failure_detector::interpret(inet_address ep) {
 }
 
 void failure_detector::force_conviction(inet_address ep) {
-    //logger.debug("Forcing conviction of {}", ep);
+    logger.debug("failure_detector: Forcing conviction of {}", ep);
     for (auto& listener : _fd_evnt_listeners) {
         listener->convict(ep, get_phi_convict_threshold());
     }
