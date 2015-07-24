@@ -368,7 +368,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 }
 
 void create_table_statement::raw_statement::set_ordering(::shared_ptr<column_identifier> alias, bool reversed) {
-    defined_ordering.emplace_back(alias, reversed);
+    _defined_ordering.emplace_back(alias, reversed);
 }
 
 void create_table_statement::raw_statement::set_compact_storage() {

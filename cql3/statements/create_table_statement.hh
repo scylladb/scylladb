@@ -38,6 +38,7 @@
 #include <utility>
 #include <vector>
 #include <set>
+#include <experimental/optional>
 
 namespace cql3 {
 
@@ -109,7 +110,15 @@ public:
 private:
     std::vector<std::vector<::shared_ptr<column_identifier>>> _key_aliases;
     std::vector<::shared_ptr<column_identifier>> _column_aliases;
-    std::vector<std::pair<::shared_ptr<column_identifier>, bool>> defined_ordering; // Insertion ordering is important
+    std::vector<std::pair<::shared_ptr<column_identifier>, bool>> _defined_ordering; // Insertion ordering is important
+    std::experimental::optional<bool> find_ordering_info(::shared_ptr<column_identifier> type) {
+        for (auto& t: _defined_ordering) {
+            if (*(t.first) == *type) {
+                return t.second;
+            }
+        }
+        return {};
+    }
     create_table_statement::column_set_type _static_columns;
 
     bool _use_compact_storage = false;
