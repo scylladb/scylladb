@@ -118,6 +118,14 @@ public:
             return false; // open ended range never wraps around
         }
     }
+    // Converts a wrap-around range to two non-wrap-around ranges.
+    // Call only when is_wrap_around().
+    std::pair<range, range> unwrap() const {
+        return {
+            { start(), {} },
+            { {}, end() }
+        };
+    }
     // the point is inside the range
     // Comparator must define a total ordering on T.
     template<typename Comparator>
