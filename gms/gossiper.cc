@@ -40,9 +40,10 @@ namespace gms {
 logging::logger logger("gossip");
 
 constexpr int gossiper::INTERVAL_IN_MILLIS;
-constexpr int gossiper::QUARANTINE_DELAY;
 constexpr int64_t gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
+
+const int gossiper::QUARANTINE_DELAY = service::storage_service::RING_DELAY * 2;
 
 // FIXME: StorageService.instance.valueFactory
 auto& storage_service_value_factory() {
