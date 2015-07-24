@@ -1261,9 +1261,9 @@ int64_t gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
-    print("----------- endpoint_state_map:  -----------\n");
+    logger.debug("----------- endpoint_state_map:  -----------");
     for (auto& x : endpoint_state_map) {
-        print("ep=%s, eps=%s\n", x.first, x.second);
+        logger.debug("ep={}, eps={}", x.first, x.second);
     }
 }
 
