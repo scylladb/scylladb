@@ -440,8 +440,22 @@ column_family::stop() {
 
     return _in_flight_seals.close().then([this] {
         _compaction_sem.broken();
-        return _compaction_done.then([this] {
-            return make_ready_future<>();
+        return _compaction_done.then_wrapped([this] (future<> f) {
+            // NOTE: broken_semaphore and seastar::gate_closed_exception exceptions
+            // are used for regular termination of compaction fiber.
+            try {
+                f.get();
+            } catch (broken_semaphore& e) {
+                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+            } catch (seastar::gate_closed_exception& e) {
+                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+            } catch (std::exception& e) {
+                dblog.error("compaction failed: {}", e.what());
+                throw;
+            } catch (...) {
+                dblog.error("compaction failed: unknown error");
+                throw;
+            }
         });
     });
 }
@@ -522,24 +536,6 @@ void column_family::start_compaction() {
                     return cs.compact(*this);
                 });
             });
-        }).then_wrapped([this] (future<> f) {
-            // NOTE: broken_semaphore and seastar::gate_closed_exception
-            // exceptions are used to finish keep_doing().
-            try {
-                f.get();
-            } catch (broken_semaphore& e) {
-                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
-                throw;
-            } catch (seastar::gate_closed_exception& e) {
-                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
-                throw;
-            } catch (std::exception& e) {
-                dblog.error("compaction failed: {}", e.what());
-                throw;
-            } catch (...) {
-                dblog.error("compaction failed: unknown error");
-                throw;
-            }
         });
     });
 }
