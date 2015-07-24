@@ -935,7 +935,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     }
 }
 
-void gossiper::mark_dead(inet_address addr, endpoint_state local_state) {
+void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
     _live_endpoints.erase(addr);

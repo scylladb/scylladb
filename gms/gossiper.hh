@@ -351,7 +351,7 @@ private:
 
     void real_mark_alive(inet_address addr, endpoint_state local_state);
 
-    void mark_dead(inet_address addr, endpoint_state local_state);
+    void mark_dead(inet_address addr, endpoint_state& local_state);
 
     /**
      * This method is called whenever there is a "big" change in ep state (a generation change for a known node).
