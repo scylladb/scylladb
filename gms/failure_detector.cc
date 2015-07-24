@@ -33,9 +33,9 @@ namespace gms {
 
 extern logging::logger logger;
 
-using clk = std::chrono::steady_clock;
+using clk = arrival_window::clk;
 
-clk::duration failure_detector_helper::get_initial_value() {
+static clk::duration get_initial_value() {
 #if 0
     String newvalue = System.getProperty("cassandra.fd_initial_value_ms");
     if (newvalue == null)
@@ -52,10 +52,6 @@ clk::duration failure_detector_helper::get_initial_value() {
     return std::chrono::seconds(2);
 }
 
-clk::duration failure_detector_helper::INITIAL_VALUE_NANOS() {
-    return get_initial_value();
-}
-
 clk::duration arrival_window::get_max_interval() {
 #if 0
     sstring newvalue = System.getProperty("cassandra.fd_max_interval_ms");
@@ -70,13 +66,13 @@ clk::duration arrival_window::get_max_interval() {
     }
 #endif
     warn(unimplemented::cause::GOSSIP);
-    return failure_detector_helper::INITIAL_VALUE_NANOS();
+    return get_initial_value();
 }
 
 void arrival_window::add(clk::time_point value) {
     if (_tlast > clk::time_point::min()) {
         auto inter_arrival_time = value - _tlast;
-        if (inter_arrival_time <= MAX_INTERVAL_IN_NANO) {
+        if (inter_arrival_time <= get_max_interval()) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
             logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time.count());
@@ -85,7 +81,7 @@ void arrival_window::add(clk::time_point value) {
         // We use a very large initial interval since the "right" average depends on the cluster size
         // and it's better to err high (false negatives, which will be corrected by waiting a bit longer)
         // than low (false positives, which cause "flapping").
-        _arrival_intervals.add(failure_detector_helper::INITIAL_VALUE_NANOS().count());
+        _arrival_intervals.add(get_initial_value().count());
     }
     _tlast = value;
 }
