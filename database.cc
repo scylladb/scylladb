@@ -529,8 +529,10 @@ void column_family::start_compaction() {
                 f.get();
             } catch (broken_semaphore& e) {
                 dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+                throw;
             } catch (seastar::gate_closed_exception& e) {
                 dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
+                throw;
             } catch (std::exception& e) {
                 dblog.error("compaction failed: {}", e.what());
                 throw;
