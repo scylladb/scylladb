@@ -40,9 +40,10 @@ namespace gms {
 logging::logger logger("gossip");
 
 constexpr int gossiper::INTERVAL_IN_MILLIS;
-constexpr int gossiper::QUARANTINE_DELAY;
 constexpr int64_t gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
+
+const int gossiper::QUARANTINE_DELAY = service::storage_service::RING_DELAY * 2;
 
 // FIXME: StorageService.instance.valueFactory
 auto& storage_service_value_factory() {
@@ -175,41 +176,56 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     std::uniform_int_distribution<int> dist(0, size - 1);
     int index = dist(_random);
     inet_address to = __live_endpoints[index];
-    logger.trace("Sending a GossipDigestSyn to {} ...", to);
     auto id = get_shard_id(to);
-    ms().send_gossip_digest_syn(id, std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
-        this->set_last_processed_message_at(now_millis());
-        if (!this->is_enabled() && !this->is_in_shadow_round()) {
-            return make_ready_future<>();
-        }
-
-        auto g_digest_list = ack_msg.get_gossip_digest_list();
-        auto ep_state_map = ack_msg.get_endpoint_state_map();
-
-        if (ep_state_map.size() > 0) {
-            /* Notify the Failure Detector */
-            this->notify_failure_detector(ep_state_map);
-            this->apply_state_locally(ep_state_map);
-        }
-
-        if (this->is_in_shadow_round()) {
-            this->finish_shadow_round();
-            return make_ready_future<>(); // don't bother doing anything else, we have what we came for
-        }
-
-        /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
-        std::map<inet_address, endpoint_state> delta_ep_state_map;
-        for (auto g_digest : g_digest_list) {
-            inet_address addr = g_digest.get_endpoint();
-            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-            if (local_ep_state_ptr) {
-                delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+    logger.trace("Sending a GossipDigestSyn to {} ...", id);
+    ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+        try {
+            auto ack_msg = f.get0();
+            logger.trace("Got GossipDigestSyn Reply");
+            this->set_last_processed_message_at(now_millis());
+            if (!this->is_enabled() && !this->is_in_shadow_round()) {
+                return;
             }
+
+            auto g_digest_list = ack_msg.get_gossip_digest_list();
+            auto ep_state_map = ack_msg.get_endpoint_state_map();
+
+            if (ep_state_map.size() > 0) {
+                /* Notify the Failure Detector */
+                this->notify_failure_detector(ep_state_map);
+                this->apply_state_locally(ep_state_map);
+            }
+
+            if (this->is_in_shadow_round()) {
+                this->finish_shadow_round();
+                return; // don't bother doing anything else, we have what we came for
+            }
+
+            /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+            std::map<inet_address, endpoint_state> delta_ep_state_map;
+            for (auto g_digest : g_digest_list) {
+                inet_address addr = g_digest.get_endpoint();
+                auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+                if (local_ep_state_ptr) {
+                    delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+                }
+            }
+            gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+            logger.trace("Sending a GossipDigestACK2 to {}", id);
+            this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
+                try {
+                    f.get();
+                    logger.trace("Got GossipDigestACK2 Reply");
+                } catch (...) {
+                    logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+                }
+            });
+        } catch (...) {
+            // It is normal to reach here because it is normal that a node
+            // tries to send a SYN message to a peer node which is down before
+            // failure_detector thinks that peer node is down.
+            logger.trace("Fail to send GossipDigestSyn to {}: {}", id, std::current_exception());
         }
-        gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-        return ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then([] () {
-            return make_ready_future<>();
-        });
     });
 
     return _seeds.count(to);
@@ -541,7 +557,8 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
-    if (state.is_alive() && is_dead_state(state)) {
+    logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
+    if (state.is_alive() && !is_dead_state(state)) {
         mark_dead(endpoint, state);
     } else {
         state.mark_dead();
@@ -731,6 +748,7 @@ bool gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
     if (size == 0) {
         return false;
     }
+    logger.trace("do_gossip_to_live_member: live_endpoint nr={}", _live_endpoints.size());
     return send_gossip(message, _live_endpoints);
 }
 
@@ -747,6 +765,8 @@ void gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
             for (auto&& x : _unreachable_endpoints) {
                 addrs.insert(x.first);
             }
+            logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
+                live_endpoint_count, unreachable_endpoint_count);
             send_gossip(message, addrs);
         }
     }
@@ -760,6 +780,7 @@ void gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
         }
 
         if (_live_endpoints.size() == 0) {
+            logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", 0, _seeds.size());
             send_gossip(prod, _seeds);
         } else {
             /* Gossip with the seed with some probability. */
@@ -767,6 +788,7 @@ void gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
             std::uniform_real_distribution<double> dist(0, 1);
             double rand_dbl = dist(_random);
             if (rand_dbl <= probability) {
+                logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", _live_endpoints.size(), _seeds.size());
                 send_gossip(prod, _seeds);
             }
         }
@@ -891,11 +913,17 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     // }
 
     local_state.mark_dead();
-    logger.trace("Sending a EchoMessage to {}", addr);
     shard_id id = get_shard_id(addr);
-    ms().send_echo(id).then([this, addr, local_state = std::move(local_state)] () mutable {
-        this->set_last_processed_message_at(now_millis());
-        this->real_mark_alive(addr, local_state);
+    logger.trace("Sending a EchoMessage to {}", id);
+    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state)] (auto&& f) mutable {
+        try {
+            f.get();
+            logger.trace("Got EchoMessage Reply");
+            this->set_last_processed_message_at(now_millis());
+            this->real_mark_alive(id.addr, local_state);
+        } catch (...) {
+            logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
+        }
     });
 }
 
@@ -914,7 +942,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     }
 }
 
-void gossiper::mark_dead(inet_address addr, endpoint_state local_state) {
+void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
     _live_endpoints.erase(addr);
@@ -1125,10 +1153,17 @@ void gossiper::do_shadow_round() {
     _in_shadow_round = true;
     for (inet_address seed : _seeds) {
         auto id = get_shard_id(seed);
-        ms().send_gossip_digest_syn(id, std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
-            this->set_last_processed_message_at(now_millis());
-            if (this->is_in_shadow_round()) {
-                this->finish_shadow_round();
+        logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
+        ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+            try {
+                auto ack_msg = f.get0();
+                logger.trace("Got GossipDigestSyn Reply");
+                this->set_last_processed_message_at(now_millis());
+                if (this->is_in_shadow_round()) {
+                    this->finish_shadow_round();
+                }
+            } catch (...) {
+                logger.error("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
             }
         });
     }
@@ -1220,8 +1255,17 @@ void gossiper::shutdown() {
     // 	scheduledGossipTask.cancel(false);
     logger.info("Announcing shutdown");
     // Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
-    for (inet_address ep : _live_endpoints) {
-        ms().send_gossip_shutdown(get_shard_id(ep), ep).then([]{ });
+    for (inet_address addr : _live_endpoints) {
+        shard_id id = get_shard_id(addr);
+        logger.trace("Sending a GossipShutdown to {}", id);
+        ms().send_gossip_shutdown(id, addr).then_wrapped([id] (auto&&f) {
+            try {
+                f.get();
+                logger.trace("Got GossipShutdown Reply");
+            } catch (...) {
+                logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+            }
+        });
     }
 }
 
@@ -1261,9 +1305,9 @@ int64_t gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
-    print("----------- endpoint_state_map:  -----------\n");
+    logger.debug("----------- endpoint_state_map:  -----------");
     for (auto& x : endpoint_state_map) {
-        print("ep=%s, eps=%s\n", x.first, x.second);
+        logger.debug("ep={}, eps={}", x.first, x.second);
     }
 }
 

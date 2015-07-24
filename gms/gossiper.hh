@@ -115,9 +115,9 @@ public:
     const std::vector<sstring> DEAD_STATES = { versioned_value::REMOVING_TOKEN, versioned_value::REMOVED_TOKEN,
                                                versioned_value::STATUS_LEFT, versioned_value::HIBERNATE };
     static constexpr int INTERVAL_IN_MILLIS = 1000;
-    // FIXME: Define StorageService.RING_DELAY -> cassandra.ring_delay_ms
-    static constexpr int QUARANTINE_DELAY = (30 * 1000) * 2; // StorageService.RING_DELAY * 2;
     static constexpr int64_t A_VERY_LONG_TIME = 259200 * 1000; // 3 days in milliseconds
+
+    static const int QUARANTINE_DELAY; // StorageService.RING_DELAY * 2;
 
     /** Maximimum difference in generation and version values we are willing to accept about a peer */
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
@@ -351,7 +351,7 @@ private:
 
     void real_mark_alive(inet_address addr, endpoint_state local_state);
 
-    void mark_dead(inet_address addr, endpoint_state local_state);
+    void mark_dead(inet_address addr, endpoint_state& local_state);
 
     /**
      * This method is called whenever there is a "big" change in ep state (a generation change for a known node).

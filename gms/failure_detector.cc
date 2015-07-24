@@ -27,10 +27,15 @@
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
 #include <iostream>
+#include <chrono>
 
 namespace gms {
 
-long failure_detector_helper::get_initial_value() {
+extern logging::logger logger;
+
+using clk = arrival_window::clk;
+
+static clk::duration get_initial_value() {
 #if 0
     String newvalue = System.getProperty("cassandra.fd_initial_value_ms");
     if (newvalue == null)
@@ -44,15 +49,10 @@ long failure_detector_helper::get_initial_value() {
     }
 #endif
     warn(unimplemented::cause::GOSSIP);
-    return 1000 * 2;
+    return std::chrono::seconds(2);
 }
 
-long failure_detector_helper::INITIAL_VALUE_NANOS() {
-    // Convert from milliseconds to nanoseconds
-    return get_initial_value() * 1000;
-}
-
-long arrival_window::get_max_interval() {
+clk::duration arrival_window::get_max_interval() {
 #if 0
     sstring newvalue = System.getProperty("cassandra.fd_max_interval_ms");
     if (newvalue == null)
@@ -66,23 +66,22 @@ long arrival_window::get_max_interval() {
     }
 #endif
     warn(unimplemented::cause::GOSSIP);
-    return failure_detector_helper::INITIAL_VALUE_NANOS();
+    return get_initial_value();
 }
 
-void arrival_window::add(long value) {
-    assert(_tlast >= 0);
-    if (_tlast > 0L) {
-        long inter_arrival_time = value - _tlast;
-        if (inter_arrival_time <= MAX_INTERVAL_IN_NANO) {
-            _arrival_intervals.add(inter_arrival_time);
+void arrival_window::add(clk::time_point value) {
+    if (_tlast > clk::time_point::min()) {
+        auto inter_arrival_time = value - _tlast;
+        if (inter_arrival_time <= get_max_interval()) {
+            _arrival_intervals.add(inter_arrival_time.count());
         } else  {
-            //logger.debug("Ignoring interval time of {}", interArrivalTime);
+            logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time.count());
         }
     } else {
         // We use a very large initial interval since the "right" average depends on the cluster size
         // and it's better to err high (false negatives, which will be corrected by waiting a bit longer)
         // than low (false positives, which cause "flapping").
-        _arrival_intervals.add(failure_detector_helper::INITIAL_VALUE_NANOS());
+        _arrival_intervals.add(get_initial_value().count());
     }
     _tlast = value;
 }
@@ -91,10 +90,14 @@ double arrival_window::mean() {
     return _arrival_intervals.mean();
 }
 
-double arrival_window::phi(long tnow) {
-    assert(_arrival_intervals.size() > 0 && _tlast > 0); // should not be called before any samples arrive
-    long t = tnow - _tlast;
-    return t / mean();
+double arrival_window::phi(clk::time_point tnow) {
+    assert(_arrival_intervals.size() > 0 && _tlast > clk::time_point::min()); // should not be called before any samples arrive
+    auto t = (tnow - _tlast).count();
+    auto m = mean();
+    double phi = t / m;
+    logger.debug("failure_detector: now={}, tlast={}, t={}, mean={}, phi={}",
+        tnow.time_since_epoch().count(), _tlast.time_since_epoch().count(), t, m, phi);
+    return phi;
 }
 
 std::ostream& operator<<(std::ostream& os, const arrival_window& w) {
@@ -194,9 +197,8 @@ bool failure_detector::is_alive(inet_address ep) {
 }
 
 void failure_detector::report(inet_address ep) {
-    // if (logger.isTraceEnabled())
-    //     logger.trace("reporting {}", ep);
-    long now = db_clock::now().time_since_epoch().count();
+    logger.trace("failure_detector: reporting {}", ep);
+    auto now = clk::now();
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
         // avoid adding an empty ArrivalWindow to the Map
@@ -214,22 +216,22 @@ void failure_detector::interpret(inet_address ep) {
         return;
     }
     arrival_window& hb_wnd = it->second;
-    long now = db_clock::now().time_since_epoch().count();
+    auto now = clk::now();
     double phi = hb_wnd.phi(now);
-    // if (logger.isTraceEnabled())
-    //     logger.trace("PHI for {} : {}", ep, phi);
+    logger.trace("failure_detector: PHI for {} : {}", ep, phi);
 
     if (PHI_FACTOR * phi > get_phi_convict_threshold()) {
-        // logger.trace("notifying listeners that {} is down", ep);
-        // logger.trace("intervals: {} mean: {}", hb_wnd, hb_wnd.mean());
+        logger.trace("failure_detector: notifying listeners that {} is down", ep);
+        logger.trace("failure_detector: intervals: {} mean: {}", hb_wnd, hb_wnd.mean());
         for (auto& listener : _fd_evnt_listeners) {
+            logger.debug("failure_detector: convict ep={} phi={}", ep, phi);
             listener->convict(ep, phi);
         }
     }
 }
 
 void failure_detector::force_conviction(inet_address ep) {
-    //logger.debug("Forcing conviction of {}", ep);
+    logger.debug("failure_detector: Forcing conviction of {}", ep);
     for (auto& listener : _fd_evnt_listeners) {
         listener->convict(ep, get_phi_convict_threshold());
     }

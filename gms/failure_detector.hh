@@ -22,7 +22,6 @@
 #pragma once
 
 #include "unimplemented.hh"
-#include "db_clock.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"
@@ -38,16 +37,11 @@ class inet_address;
 class i_failure_detection_event_listener;
 class endpoint_state;
 
-class failure_detector_helper {
-public:
-    static long get_initial_value();
-
-    static long INITIAL_VALUE_NANOS();
-};
-
 class arrival_window {
+public:
+    using clk = std::chrono::steady_clock;
 private:
-    long _tlast = 0;
+    clk::time_point _tlast{clk::time_point::min()};
     utils::bounded_stats_deque _arrival_intervals;
 
     // this is useless except to provide backwards compatibility in phi_convict_threshold,
@@ -56,25 +50,23 @@ private:
     // change.
     static constexpr double PHI_FACTOR{1.0 / std::log(10.0)};
 
-    // in the event of a long partition, never record an interval longer than the rpc timeout,
-    // since if a host is regularly experiencing connectivity problems lasting this long we'd
-    // rather mark it down quickly instead of adapting
-    // this value defaults to the same initial value the FD is seeded with
-    long MAX_INTERVAL_IN_NANO = get_max_interval();
-
 public:
     arrival_window(int size)
         : _arrival_intervals(size) {
     }
 
-    static long get_max_interval();
+    // in the event of a long partition, never record an interval longer than the rpc timeout,
+    // since if a host is regularly experiencing connectivity problems lasting this long we'd
+    // rather mark it down quickly instead of adapting
+    // this value defaults to the same initial value the FD is seeded with
+    static clk::duration get_max_interval();
 
-    void add(long value);
+    void add(clk::time_point value);
 
     double mean();
 
     // see CASSANDRA-2597 for an explanation of the math at work here.
-    double phi(long tnow);
+    double phi(clk::time_point tnow);
 
     friend std::ostream& operator<<(std::ostream& os, const arrival_window& w);
 
