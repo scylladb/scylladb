@@ -200,7 +200,8 @@ bool failure_detector::is_alive(inet_address ep) {
 
 void failure_detector::report(inet_address ep) {
     logger.trace("failure_detector: reporting {}", ep);
-    long now = db_clock::now().time_since_epoch().count();
+    // db_clock is 1ms granularity, value in arrival_window is in nanoseconds.
+    long now = db_clock::now().time_since_epoch().count() * 1000 * 1000;
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
         // avoid adding an empty ArrivalWindow to the Map
@@ -218,7 +219,7 @@ void failure_detector::interpret(inet_address ep) {
         return;
     }
     arrival_window& hb_wnd = it->second;
-    long now = db_clock::now().time_since_epoch().count();
+    long now = db_clock::now().time_since_epoch().count() * 1000 * 1000;
     double phi = hb_wnd.phi(now);
     logger.trace("failure_detector: PHI for {} : {}", ep, phi);
 
