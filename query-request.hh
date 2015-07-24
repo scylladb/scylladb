@@ -108,14 +108,17 @@ public:
     const optional<bound>& end() const {
         return _singular ? _start : _end;
     }
-    // end is smaller than start
+    // Range is a wrap around if end value is smaller than the start value
+    // or they're equal and at least one bound is not inclusive.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool is_wrap_around(Comparator&& cmp) const {
         if (_end && _start) {
-            return cmp(end()->value(), start()->value()) < 0;
+            auto r = cmp(end()->value(), start()->value());
+            return r < 0
+                   || (r == 0 && (!start()->is_inclusive() || !end()->is_inclusive()));
         } else {
-            return false; // open ended range never wraps around
+            return false; // open ended range or singular range don't wrap around
         }
     }
     // Converts a wrap-around range to two non-wrap-around ranges.
@@ -131,8 +134,9 @@ public:
     template<typename Comparator>
     bool contains(const T& point, Comparator&& cmp) const {
         if (is_wrap_around(cmp)) {
-            // wrapped range contains point if reverse does not contain it
-            return !range::make({end()->value(), !_end->is_inclusive()}, {start()->value(), !_start->is_inclusive()}).contains(point, cmp);
+            auto unwrapped = unwrap();
+            return unwrapped.first.contains(point, cmp)
+                   || unwrapped.second.contains(point, cmp);
         } else {
             return !before(point, cmp) && !after(point, cmp);
         }
