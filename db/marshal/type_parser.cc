@@ -132,7 +132,13 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
     } else {
         class_name = "org.apache.cassandra.db.marshal." + compare_with;
     }
-    if (class_name == "org.apache.cassandra.db.marshal.FrozenType") {
+    if (class_name == "org.apache.cassandra.db.marshal.ReversedType") {
+        auto l = parser.get_type_parameters(false);
+        if (l.size() != 1) {
+            throw exceptions::configuration_exception("ReversedType takes exactly 1 type parameter");
+        }
+        return reversed_type_impl::get_instance(l[0]);
+    } else if (class_name == "org.apache.cassandra.db.marshal.FrozenType") {
         auto l = parser.get_type_parameters(false);
         if (l.size() != 1) {
             throw exceptions::configuration_exception("FrozenType takes exactly 1 type parameter");
