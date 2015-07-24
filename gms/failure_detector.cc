@@ -51,7 +51,7 @@ long failure_detector_helper::get_initial_value() {
 
 long failure_detector_helper::INITIAL_VALUE_NANOS() {
     // Convert from milliseconds to nanoseconds
-    return get_initial_value() * 1000;
+    return get_initial_value() * 1000 * 1000;
 }
 
 long arrival_window::get_max_interval() {
