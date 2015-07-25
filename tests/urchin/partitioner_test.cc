@@ -72,12 +72,15 @@ BOOST_AUTO_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
 
     BOOST_REQUIRE(k1._token != k2._token); // The rest of the test assumes that.
 
-    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position(k1._token)) == 0);
+    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position::starting_at(k1._token)) > 0);
+    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position::ending_at(k1._token)) < 0);
     BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position(k1)) == 0);
 
-    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position(k2._token)) < 0);
+    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position::starting_at(k2._token)) < 0);
+    BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position::ending_at(k2._token)) < 0);
     BOOST_REQUIRE(k1.tri_compare(*s, dht::ring_position(k2)) < 0);
 
-    BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position(k1._token)) > 0);
+    BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position::starting_at(k1._token)) > 0);
+    BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position::ending_at(k1._token)) > 0);
     BOOST_REQUIRE(k2.tri_compare(*s, dht::ring_position(k1)) > 0);
 }

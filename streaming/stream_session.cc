@@ -500,10 +500,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         std::vector<shared_ptr<query::range<ring_position>>> prs;
         auto cf_id = cf->schema()->id();
         for (auto& range : ranges) {
-            auto pr = make_shared<query::range<ring_position>>(std::move(range).transform<ring_position>(
-                [this] (token&& t) -> ring_position {
-                    return { std::move(t) };
-                }));
+            auto pr = make_shared<query::range<ring_position>>(to_partition_range(range));
             prs.push_back(pr);
             auto mr = cf->make_reader(*pr);
             readers.push_back(std::move(mr));

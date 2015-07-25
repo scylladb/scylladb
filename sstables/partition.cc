@@ -506,7 +506,7 @@ public:
             if (pos.has_key()) {
                 return k2.tri_compare(_s, *pos.key());
             } else {
-                return 0;
+                return -pos.relation_to_keys();
             }
         } else {
             return k2_token < pos.token() ? -1 : 1;
@@ -574,7 +574,9 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
         return std::make_unique<mutation_reader::impl>();
     }
     return read_range_rows(std::move(schema),
-        query::range<dht::ring_position>::make({min_token}, {max_token}));
+        query::range<dht::ring_position>::make(
+            dht::ring_position::starting_at(min_token),
+            dht::ring_position::ending_at(max_token)));
 }
 
 mutation_reader

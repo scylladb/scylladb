@@ -41,10 +41,12 @@ public:
         , _singular(true)
     { }
     range() : range({}, {}) {}
-private:
+public:
     // the point is before the range (works only for non wrapped ranges)
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool before(const T& point, Comparator&& cmp) const {
+        assert(!is_wrap_around(cmp));
         if (!start()) {
             return false; //open start, no points before
         }
@@ -58,8 +60,10 @@ private:
         return false;
     }
     // the point is after the range (works only for non wrapped ranges)
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool after(const T& point, Comparator&& cmp) const {
+        assert(!is_wrap_around(cmp));
         if (!end()) {
             return false; //open end, no points after
         }
@@ -72,7 +76,6 @@ private:
         }
         return false;
     }
-public:
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
     }
@@ -105,27 +108,42 @@ public:
     const optional<bound>& end() const {
         return _singular ? _start : _end;
     }
-    // end is smaller than start
+    // Range is a wrap around if end value is smaller than the start value
+    // or they're equal and at least one bound is not inclusive.
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool is_wrap_around(Comparator&& cmp) const {
         if (_end && _start) {
-            return cmp(end()->value(), start()->value()) < 0;
+            auto r = cmp(end()->value(), start()->value());
+            return r < 0
+                   || (r == 0 && (!start()->is_inclusive() || !end()->is_inclusive()));
         } else {
-            return false; // open ended range never wraps around
+            return false; // open ended range or singular range don't wrap around
         }
     }
+    // Converts a wrap-around range to two non-wrap-around ranges.
+    // Call only when is_wrap_around().
+    std::pair<range, range> unwrap() const {
+        return {
+            { start(), {} },
+            { {}, end() }
+        };
+    }
     // the point is inside the range
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     bool contains(const T& point, Comparator&& cmp) const {
         if (is_wrap_around(cmp)) {
-            // wrapped range contains point if reverse does not contain it
-            return !range::make({end()->value(), !_end->is_inclusive()}, {start()->value(), !_start->is_inclusive()}).contains(point, cmp);
+            auto unwrapped = unwrap();
+            return unwrapped.first.contains(point, cmp)
+                   || unwrapped.second.contains(point, cmp);
         } else {
             return !before(point, cmp) && !after(point, cmp);
         }
     }
     // split range in two around a split_point. split_point has to be inside the range
     // split_point will belong to first range
+    // Comparator must define a total ordering on T.
     template<typename Comparator>
     std::pair<range<T>, range<T>> split(const T& split_point, Comparator&& cmp) const {
         assert(contains(split_point, std::forward<Comparator>(cmp)));
@@ -265,6 +283,9 @@ using partition_range = range<ring_position>;
 using clustering_range = range<clustering_key_prefix>;
 
 extern const partition_range full_partition_range;
+
+// FIXME: Move this to i_partitioner.hh after query::range<> is moved to utils/range.hh
+query::partition_range to_partition_range(query::range<dht::token>);
 
 inline
 bool is_wrap_around(const query::partition_range& range, const schema& s) {

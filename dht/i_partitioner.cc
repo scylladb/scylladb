@@ -203,7 +203,7 @@ decorated_key::tri_compare(const schema& s, const ring_position& other) const {
     if (other.has_key()) {
         return _key.legacy_tri_compare(s, *other.key());
     }
-    return 0;
+    return -other.relation_to_keys();
 }
 
 bool
@@ -239,16 +239,20 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
     out << "{" << pos.token();
     if (pos.has_key()) {
         out << ", " << *pos.key();
+    } else {
+        out << ", " << ((pos.relation_to_keys() < 0) ? "start" : "end");
     }
     return out << "}";
 }
 
 size_t ring_position::serialized_size() const {
-    size_t key_size = serialize_int32_size;
+    size_t size = serialize_int32_size; /* _key length */
     if (_key) {
-        key_size += _key.value().representation().size();
+        size += _key.value().representation().size();
+    } else {
+        size += sizeof(int8_t); /* _token_bund */
     }
-    return _token.serialized_size() + key_size;
+    return size + _token.serialized_size();
 }
 
 void ring_position::serialize(bytes::iterator& out) const {
@@ -259,6 +263,7 @@ void ring_position::serialize(bytes::iterator& out) const {
         out = std::copy(v.begin(), v.end(), out);
     } else {
         serialize_int32(out, 0);
+        serialize_int8(out, static_cast<int8_t>(_token_bound));
     }
 }
 
@@ -266,7 +271,8 @@ ring_position ring_position::deserialize(bytes_view& in) {
     auto token = token::deserialize(in);
     auto size = read_simple<uint32_t>(in);
     if (size == 0) {
-        return ring_position(std::move(token));
+        auto bound = dht::ring_position::token_bound(read_simple<int8_t>(in));
+        return ring_position(std::move(token), bound);
     } else {
         return ring_position(std::move(token), partition_key::from_bytes(to_bytes(read_simple_bytes(in, size))));
     }
@@ -282,13 +288,7 @@ unsigned shard_of(const token& t) {
 }
 
 int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {
-    if (lh.less_compare(s, rh)) {
-        return -1;
-    } else if (lh.equal(s, rh)) {
-        return 0;
-    } else {
-        return 1;
-    }
+    return lh.tri_compare(s, rh);
 }
 
 void token::serialize(bytes::iterator& out) const {
@@ -312,6 +312,32 @@ size_t token::serialized_size() const {
     return serialize_int8_size // token::kind;
          + serialize_int16_size // token size
          + _data.size();
+}
+
+bool ring_position::equal(const schema& s, const ring_position& other) const {
+    return tri_compare(s, other) == 0;
+}
+
+bool ring_position::less_compare(const schema& s, const ring_position& other) const {
+    return tri_compare(s, other) < 0;
+}
+
+int ring_position::tri_compare(const schema& s, const ring_position& o) const {
+    if (_token != o._token) {
+        return _token < o._token ? -1 : 1;
+    }
+
+    if (_key && o._key) {
+        return _key->legacy_tri_compare(s, *o._key);
+    }
+
+    if (!_key && !o._key) {
+        return relation_to_keys() - o.relation_to_keys();
+    } else if (!_key) {
+        return relation_to_keys();
+    } else {
+        return -o.relation_to_keys();
+    }
 }
 
 }
