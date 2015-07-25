@@ -305,29 +305,29 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
             ? CounterColumnType.instance
             : BytesType.instance;
     }
-
+#endif
 
     // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
-    if (!definedOrdering.isEmpty())
-    {
-        if (definedOrdering.size() > columnAliases.size())
-            throw new InvalidRequestException("Only clustering key columns can be defined in CLUSTERING ORDER directive");
+    if (!_defined_ordering.empty()) {
+        if (_defined_ordering.size() > _column_aliases.size()) {
+            throw exceptions::invalid_request_exception("Only clustering key columns can be defined in CLUSTERING ORDER directive");
+        }
 
         int i = 0;
-        for (ColumnIdentifier id : definedOrdering.keySet())
-        {
-            ColumnIdentifier c = columnAliases.get(i);
-            if (!id.equals(c))
-            {
-                if (definedOrdering.containsKey(c))
-                    throw new InvalidRequestException(String.format("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
-                else
-                    throw new InvalidRequestException(String.format("Missing CLUSTERING ORDER for column %s", c));
+        for (auto& pair: _defined_ordering){
+            auto& id = pair.first;
+            auto& c = _column_aliases.at(i);
+
+            if (!(*id == *c)) {
+                if (find_ordering_info(c)) {
+                    throw exceptions::invalid_request_exception(sprint("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
+                } else {
+                    throw exceptions::invalid_request_exception(sprint("Missing CLUSTERING ORDER for column %s", c));
+                }
             }
             ++i;
         }
     }
-#endif
 
     return ::make_shared<parsed_statement::prepared>(stmt);
 }
@@ -343,12 +343,13 @@ data_type create_table_statement::raw_statement::get_type_and_remove(column_map_
         throw exceptions::invalid_request_exception(sprint("Invalid collection type for PRIMARY KEY component %s", t->text()));
     }
     columns.erase(t);
-#if 0
-    // FIXME: reversed types are not supported
-    Boolean isReversed = definedOrdering.get(t);
-    return isReversed != null && isReversed ? ReversedType.getInstance(type) : type;
-#endif
-    return type;
+
+    auto is_reversed = find_ordering_info(t);
+    if (!is_reversed) {
+        return type;
+    } else {
+        return *is_reversed ? reversed_type_impl::get_instance(type) : type;
+    }
 }
 
 void create_table_statement::raw_statement::add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {
@@ -368,7 +369,7 @@ void create_table_statement::raw_statement::add_column_alias(::shared_ptr<column
 }
 
 void create_table_statement::raw_statement::set_ordering(::shared_ptr<column_identifier> alias, bool reversed) {
-    defined_ordering.emplace_back(alias, reversed);
+    _defined_ordering.emplace_back(alias, reversed);
 }
 
 void create_table_statement::raw_statement::set_compact_storage() {

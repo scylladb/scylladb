@@ -482,6 +482,97 @@ template <typename InternedType, typename... BaseTypes>
 thread_local typename type_interning_helper<InternedType, BaseTypes...>::map_type
     type_interning_helper<InternedType, BaseTypes...>::_instances;
 
+class reversed_type_impl : public abstract_type {
+    using intern = type_interning_helper<reversed_type_impl, data_type>;
+    friend struct shared_ptr_make_helper<reversed_type_impl, true>;
+
+    data_type _underlying_type;
+    reversed_type_impl(data_type t) : abstract_type("org.apache.cassandra.db.marshal.ReversedType(" + t->name() + ")"), _underlying_type(t) {}
+protected:
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const {
+        return _underlying_type->is_value_compatible_with(*(other.underlying_type()));
+    }
+public:
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
+        return _underlying_type->compare(v2, v1);
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
+        return _underlying_type->less(v2, v1);
+    }
+
+    virtual bool equal(bytes_view v1, bytes_view v2) const override {
+        return _underlying_type->equal(v1, v2);
+    }
+
+    virtual void validate(bytes_view v) const override {
+        _underlying_type->validate(v);
+    }
+
+    virtual void validate_collection_member(bytes_view v, const bytes& collection_name) const  override {
+        _underlying_type->validate_collection_member(v, collection_name);
+    }
+
+    virtual bool is_compatible_with(const abstract_type& previous) const override {
+        if (previous.is_reversed()) {
+            return _underlying_type->is_compatible_with(*previous.underlying_type());
+        }
+        return false;
+    }
+
+    virtual shared_ptr<const abstract_type> underlying_type() const override {
+        return _underlying_type;
+    }
+
+    virtual bool is_byte_order_comparable() const override {
+        return _underlying_type->is_byte_order_comparable();
+    }
+    virtual bool is_byte_order_equal() const override {
+        return _underlying_type->is_byte_order_equal();
+    }
+    virtual size_t hash(bytes_view v) const override {
+        return _underlying_type->hash(v);
+    }
+    virtual bool is_reversed() const override { return true; }
+    virtual bool is_counter() const override {
+        return _underlying_type->is_counter();
+    }
+    virtual bool is_collection() const override {
+        return _underlying_type->is_collection();
+    }
+    virtual bool is_multi_cell() const override {
+        return _underlying_type->is_multi_cell();
+    }
+
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        _underlying_type->serialize(value, out);
+    }
+    virtual size_t serialized_size(const boost::any& value) const {
+        return _underlying_type->serialized_size(value);
+    }
+    virtual boost::any deserialize(bytes_view v) const override {
+        return _underlying_type->deserialize(v);
+    }
+
+    virtual sstring get_string(const bytes& b) const override {
+        return _underlying_type->get_string(b);
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        return _underlying_type->to_string(b);
+    }
+    virtual bytes from_string(sstring_view s) const override {
+        return _underlying_type->from_string(s);
+    }
+
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return _underlying_type->as_cql3_type();
+    }
+
+    static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
+        return intern::get_instance(std::move(type));
+    }
+};
+using reversed_type = shared_ptr<const reversed_type_impl>;
+
 class map_type_impl final : public collection_type_impl {
     using map_type = shared_ptr<const map_type_impl>;
     using intern = type_interning_helper<map_type_impl, data_type, data_type, bool>;

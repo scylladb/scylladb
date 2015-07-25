@@ -1349,3 +1349,65 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         }).then([sst, mtp, s] {});
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_40) {
+    return test_setup::do_with_test_directory([] {
+        // Data file with clustering key sorted in descending order
+        //
+        // Respective CQL table and CQL insert:
+        // CREATE TABLE table (
+        //    p1 text,
+        //    c1 text,
+        //    r1 int,
+        //    PRIMARY KEY (p1, c1)
+        // ) WITH compact storage and compression = {} and clustering order by (cl1 desc);
+        // INSERT INTO table (p1, c1, r1) VALUES ('key1', 'a', 1);
+        // INSERT INTO table (p1, c1, r1) VALUES ('key1', 'b', 1);
+
+        auto s = [] {
+            schema_builder builder(make_lw_shared(schema({}, some_keyspace, some_column_family,
+                {{"p1", utf8_type}}, {{"c1", reversed_type_impl::get_instance(utf8_type)}}, {{"r1", int32_type}}, {}, utf8_type
+            )));
+            return builder.build(schema_builder::compact_storage::yes);
+        }();
+
+        auto mt = make_lw_shared<memtable>(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        mutation m(key, s);
+
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        auto ca = clustering_key::from_exploded(*s, {to_bytes("a")});
+        m.set_clustered_cell(ca, r1_col, make_atomic_cell(int32_type->decompose(1)));
+        mt->apply(std::move(m));
+
+        auto cb = clustering_key::from_exploded(*s, {to_bytes("b")});
+        m.set_clustered_cell(cb, r1_col, make_atomic_cell(int32_type->decompose(1)));
+        mt->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 40, la, big);
+
+        return sst->write_components(*mt).then([mt, sst, s] {
+            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 40, big, sstable::component_type::Data);
+            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+                auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
+
+                auto fut = f.dma_read(0, bufptr.get(), 4096);
+                return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) mutable {
+                    auto buf = bufptr.get();
+                    size_t offset = 0;
+                    auto check_chunk = [buf, &offset] (std::vector<uint8_t> vec) {
+                        BOOST_REQUIRE(::memcmp(vec.data(), &buf[offset], vec.size()) == 0);
+                        offset += vec.size();
+                    };
+                    check_chunk({ /* first key */ 0, 4, 'k', 'e', 'y', '1' });
+                    check_chunk({ /* deletion time */ 0x7f, 0xff, 0xff, 0xff, 0x80, 0, 0, 0, 0, 0, 0, 0 });
+                    check_chunk({ /* first expected row name */ 0, 1, 'b' });
+                    check_chunk(/* row contents, same for both */ {/* mask */ 0, /* timestamp */ 0, 0, 0, 0, 0, 0, 0, 0, /* value */ 0, 0, 0, 4, 0, 0, 0, 1 });
+                    check_chunk({ /* second expected row name */ 0, 1, 'a' });
+                    check_chunk(/* row contents, same for both */ {/* mask */ 0, /* timestamp */ 0, 0, 0, 0, 0, 0, 0, 0, /* value */ 0, 0, 0, 4, 0, 0, 0, 1 });
+                    return f.close().finally([f] {});
+                });
+            });
+        });
+    });
+}
