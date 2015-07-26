@@ -39,3 +39,65 @@ def build_pretty_printer():
     return pp
 
 gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer())
+
+def cpus():
+    return gdb.parse_and_eval('smp::count')
+
+def find_db(shard):
+    return gdb.parse_and_eval('debug::db')['_instances']['_M_impl']['_M_start'][shard]
+
+def find_dbs():
+    return [find_db(shard) for shard in range(cpus())]
+
+def list_unordered_map(map):
+    kt = map.type.template_argument(0)
+    vt = map.type.template_argument(1)
+    value_type = gdb.lookup_type('std::pair<{} const, {}>'.format(kt.name, vt.name))
+    hashnode_ptr_type = gdb.lookup_type('std::__detail::_Hash_node<' + value_type.name + ', true>').pointer()
+    h = map['_M_h']
+    p = h['_M_before_begin']['_M_nxt']
+    while p:
+        pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
+        yield (pc['first'], pc['second'].address)
+        p = p['_M_nxt'] 
+    raise StopIteration()
+
+class scylla(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND, True)
+
+class scylla_databases(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla databases', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        for shard in range(cpus()): 
+            db = find_db(shard)
+            gdb.write('{:5} (database*){}\n'.format(shard, db))
+
+class scylla_keyspaces(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla keyspaces', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        for shard in range(cpus()):
+            db = find_db(shard)
+            keyspaces = db['_keyspaces']
+            for (key, value) in list_unordered_map(keyspaces):
+                gdb.write('{:5} {:20} (keyspace*){}\n'.format(shard, key, value))
+
+class scylla_column_families(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla column_families', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        for shard in range(cpus()):
+            db = find_db(shard)
+            cfs = db['_column_families']
+            for (key, value) in list_unordered_map(cfs):
+                value = value['_p']['_value']  # it's a lw_shared_ptr
+                schema = value['_schema']['_p']['_value']
+                name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
+                gdb.write('{:5} {} {:45} (column_family*){}\n'.format(shard, key, name, value.address))
+
+scylla()
+scylla_databases()
+scylla_keyspaces()
+scylla_column_families()
