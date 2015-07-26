@@ -208,7 +208,7 @@ thrift_stats::thrift_stats(thrift_server& server)
                         [&server] { return server.current_connections(); })),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("thrift", scollectd::per_cpu_plugin_instance,
-                        "thrift_requests", "served"),
+                        "total_requests", "served"),
                 scollectd::make_typed(scollectd::data_type::DERIVE,
                         [&server] { return server.requests_served(); })),
         } {
