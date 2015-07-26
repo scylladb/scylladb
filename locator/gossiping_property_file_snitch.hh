@@ -83,33 +83,18 @@ public:
     }
 
 private:
-    static logging::logger& logger() {
-        return i_endpoint_snitch::snitch_logger;
-    }
-
-    template <typename... Args>
-    void err(const char* fmt, Args&&... args) const {
-        logger().error(fmt, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args>
-    void warn(const char* fmt, Args&&... args) const {
-        logger().warn(fmt, std::forward<Args>(args)...);
-    }
-
     void throw_double_declaration(const sstring& key) const {
-        err("double \"{}\" declaration in {}", key, _fname);
+        logger().error("double \"{}\" declaration in {}", key, _fname);
         throw bad_property_file_error();
     }
 
     void throw_bad_format(const sstring& line) const {
-        err("Bad format in properties file {}: {}", _fname, line);
+        logger().error("Bad format in properties file {}: {}", _fname, line);
         throw bad_property_file_error();
     }
 
     void throw_incomplete_file() const {
-        err("Property file {} is incomplete. Both \"dc\" and \"rack\" "
-            "labels have to be defined.", _fname);
+        logger().error("Property file {} is incomplete. Both \"dc\" and \"rack\" labels have to be defined.", _fname);
         throw bad_property_file_error();
     }
 

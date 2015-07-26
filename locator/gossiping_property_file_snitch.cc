@@ -57,8 +57,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
                 return false;
             }
         } catch (...) {
-            this->err("Failed to open {} for read or to get stats",
-                      _fname);
+            logger().error("Failed to open {} for read or to get stats", _fname);
             throw;
         }
     });
@@ -111,8 +110,7 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
         try {
             f.get();
         } catch (...) {
-            this->err("Exception has been thrown when parsing the property "
-                      "file.");
+            logger().error("Exception has been thrown when parsing the property file.");
         }
 
         if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
@@ -168,11 +166,10 @@ future<> gossiping_property_file_snitch::read_property_file() {
             //    - Print an error when reloading.
             //
             if (_state == snitch_state::initializing) {
-                this->err("Failed to parse a properties file ({}). "
-                          "Halting...", _fname);
+                logger().error("Failed to parse a properties file ({}). Halting...", _fname);
                 throw;
             } else {
-                this->warn("Failed to reload a properties file ({}). "
+                logger().warn("Failed to reload a properties file ({}). "
                            "Using previous values.", _fname);
                 return make_ready_future<>();
             }
