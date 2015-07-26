@@ -76,6 +76,7 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
 public:
     explicit memtable(schema_ptr schema);
+    ~memtable();
     schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(partition_key_view key);

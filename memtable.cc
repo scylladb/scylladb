@@ -10,6 +10,10 @@ memtable::memtable(schema_ptr schema)
         , partitions(partition_entry::compare(_schema)) {
 }
 
+memtable::~memtable() {
+    partitions.clear_and_dispose(std::default_delete<partition_entry>());
+}
+
 memtable::const_mutation_partition_ptr
 memtable::find_partition(const dht::decorated_key& key) const {
     auto i = partitions.find(key, partition_entry::compare(_schema));
