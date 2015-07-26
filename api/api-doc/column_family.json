@@ -959,6 +959,49 @@
          ]
       },
       {
+         "path":"/column_family/metrics/read_latency/histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency histogram",
+               "$ref": "#/utils/histogram",
+               "nickname":"get_read_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read_latency/histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency histogram from all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_read_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/column_family/metrics/read_latency",
          "operations":[
             {
@@ -1073,6 +1116,49 @@
                   "type":"long"
                },
                "nickname":"get_all_write",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/histogram/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency histogram",
+               "$ref": "#/utils/histogram",
+               "nickname":"get_write_latency_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write_latency/histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency histogram of all column family",
+               "type":"array",
+               "items":{
+                  "$ref": "#/utils/histogram"
+               },
+               "nickname":"get_all_write_latency_histogram",
                "produces":[
                   "application/json"
                ],
