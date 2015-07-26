@@ -88,9 +88,19 @@ public:
         bool enable_commitlog = true;
     };
     struct no_commitlog {};
+    struct stats {
+        /** Number of times flush has resulted in the memtable being switched out. */
+        int64_t memtable_switch_count = 0;
+        /** Estimated number of tasks pending for this column family */
+        int64_t pending_flushes = 0;
+        int64_t reads = 0;
+        int64_t writes = 0;
+    };
+
 private:
     schema_ptr _schema;
     config _config;
+    stats _stats;
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
@@ -107,7 +117,6 @@ private:
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
-    memtable& active_memtable() { return *_memtables->back(); }
     future<> update_cache(memtable&);
     struct merge_comparator;
 private:
@@ -132,6 +141,7 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
+    memtable& active_memtable() { return *_memtables->back(); }
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl);
     column_family(schema_ptr schema, config cfg, no_commitlog);
@@ -156,7 +166,14 @@ public:
     future<> flush() {
         // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
         // anything about previous writes.
-        return seal_active_memtable();
+        _stats.pending_flushes++;
+        return seal_active_memtable().finally([this]() mutable {
+            _stats.pending_flushes--;
+            // In origin memtable_switch_count is incremented inside
+            // ColumnFamilyMeetrics Flush.run
+            _stats.memtable_switch_count++;
+            return make_ready_future<>();
+        });
     }
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
@@ -172,6 +189,10 @@ public:
     void start_compaction();
     void trigger_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
+    const stats& get_stats() const {
+        return _stats;
+    }
+
 private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
@@ -440,6 +461,7 @@ inline
 void
 column_family::apply(const mutation& m, const db::replay_position& rp) {
     active_memtable().apply(m, rp);
+    _stats.writes++;
     seal_on_overflow();
 }
 
@@ -466,6 +488,7 @@ void
 column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
     check_valid_rp(rp);
     active_memtable().apply(m, rp);
+    _stats.writes++;
     seal_on_overflow();
 }
 
