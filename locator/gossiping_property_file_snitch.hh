@@ -73,14 +73,13 @@ public:
     virtual future<> start() override;
     virtual future<> pause_io() override;
     virtual void resume_io() override;
+    virtual sstring get_name() const override {
+        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    }
 
     gossiping_property_file_snitch(
         const sstring& fname = snitch_properties_filename,
         unsigned io_cpu_id = 0);
-
-    virtual sstring get_name() const override {
-        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
-    }
 
 private:
     void throw_double_declaration(const sstring& key) const {
