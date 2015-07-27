@@ -364,7 +364,8 @@ public:
         return _commitlog.get();
     }
 
-    future<> init_from_data_directory(distributed<service::storage_proxy>& p);
+    future<> init_system_keyspace();
+    future<> load_sstables(distributed<service::storage_proxy>& p); // after init_system_keyspace()
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 

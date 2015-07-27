@@ -687,17 +687,20 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 }
 
 future<>
-database::init_from_data_directory(distributed<service::storage_proxy>& proxy) {
+database::init_system_keyspace() {
     // FIXME support multiple directories
-    return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this, &proxy] {
-        return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this, &proxy]() {
-            return parse_system_tables(proxy).then([this] {
-                return populate(_cfg->data_file_directories()[0]);
-            });
-        }).then([this] {
+    return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
+        return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
             return init_commitlog();
         });
     });
+}
+
+future<>
+database::load_sstables(distributed<service::storage_proxy>& proxy) {
+	return parse_system_tables(proxy).then([this] {
+		return populate(_cfg->data_file_directories()[0]);
+	});
 }
 
 future<>

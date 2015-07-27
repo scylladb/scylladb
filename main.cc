@@ -127,9 +127,13 @@ int main(int ac, char** av) {
                         }
                     });
                 });
+            }).then([&db] {
+                return db.invoke_on_all([] (database& db) {
+                    return db.init_system_keyspace();
+                });
             }).then([&db, &proxy] {
                 return db.invoke_on_all([&proxy] (database& db) {
-                    return db.init_from_data_directory(proxy);
+                    return db.load_sstables(proxy);
                 });
             }).then([&db, &qp] {
                 return db::system_keyspace::setup(db, qp);
