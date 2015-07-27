@@ -402,7 +402,6 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 
 future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
     // make local copies so they can't be changed out from under us mid-method
-    // FIXME: instead, we should get these values from column family.
     int min_threshold = cfs.schema()->min_compaction_threshold();
     int max_threshold = cfs.schema()->max_compaction_threshold();
 
