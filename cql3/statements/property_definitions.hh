@@ -137,6 +137,10 @@ public:
     // Return a property value, typed as a double
     double get_double(sstring key, double default_value) const {
         auto value = get_simple(key);
+        return to_double(key, value, default_value);
+    }
+
+    static double to_double(sstring key, std::experimental::optional<sstring> value, double default_value) {
         if (value) {
             auto val = value.value();
             try {
@@ -162,6 +166,19 @@ public:
                 return std::stoi(val);
             } catch (const std::exception& e) {
                 throw exceptions::syntax_exception(sprint("Invalid integer value %s for '%s'", val, key));
+            }
+        } else {
+            return default_value;
+        }
+    }
+
+    static long to_long(sstring key, std::experimental::optional<sstring> value, long default_value) {
+        if (value) {
+            auto val = value.value();
+            try {
+                return std::stol(val);
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sprint("Invalid long value %s for '%s'", val, key));
             }
         } else {
             return default_value;

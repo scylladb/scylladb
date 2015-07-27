@@ -34,6 +34,7 @@
 #include "compaction_strategy.hh"
 #include "mutation_reader.hh"
 #include "schema.hh"
+#include "cql3/statements/property_definitions.hh"
 
 namespace sstables {
 
@@ -167,17 +168,98 @@ public:
     }
 };
 
-class size_tiered_compaction_strategy : public compaction_strategy_impl {
+class size_tiered_compaction_strategy_options {
     static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
     static constexpr double DEFAULT_BUCKET_LOW = 0.5;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
     static constexpr double DEFAULT_COLD_READS_TO_OMIT = 0.05;
+    const sstring MIN_SSTABLE_SIZE_KEY = "min_sstable_size";
+    const sstring BUCKET_LOW_KEY = "bucket_low";
+    const sstring BUCKET_HIGH_KEY = "bucket_high";
+    const sstring COLD_READS_TO_OMIT_KEY = "cold_reads_to_omit";
 
-    // FIXME: user should be able to configure these values.
     uint64_t min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
     double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
+
+    static std::experimental::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
+        auto it = options.find(name);
+        if (it == options.end()) {
+            return std::experimental::nullopt;
+        }
+        return it->second;
+    }
+public:
+    size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
+        using namespace cql3::statements;
+
+        auto tmp_value = get_value(options, MIN_SSTABLE_SIZE_KEY);
+        min_sstable_size = property_definitions::to_long(MIN_SSTABLE_SIZE_KEY, tmp_value, DEFAULT_MIN_SSTABLE_SIZE);
+
+        tmp_value = get_value(options, BUCKET_LOW_KEY);
+        bucket_low = property_definitions::to_double(BUCKET_LOW_KEY, tmp_value, DEFAULT_BUCKET_LOW);
+
+        tmp_value = get_value(options, BUCKET_HIGH_KEY);
+        bucket_high = property_definitions::to_double(BUCKET_HIGH_KEY, tmp_value, DEFAULT_BUCKET_HIGH);
+
+        tmp_value = get_value(options, COLD_READS_TO_OMIT_KEY);
+        cold_reads_to_omit = property_definitions::to_double(COLD_READS_TO_OMIT_KEY, tmp_value, DEFAULT_COLD_READS_TO_OMIT);
+    }
+
+    size_tiered_compaction_strategy_options() {
+        min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
+        bucket_low = DEFAULT_BUCKET_LOW;
+        bucket_high = DEFAULT_BUCKET_HIGH;
+        cold_reads_to_omit = DEFAULT_COLD_READS_TO_OMIT;
+    }
+
+    // FIXME: convert java code below.
+#if 0
+    public static Map<String, String> validateOptions(Map<String, String> options, Map<String, String> uncheckedOptions) throws ConfigurationException
+    {
+        String optionValue = options.get(MIN_SSTABLE_SIZE_KEY);
+        try
+        {
+            long minSSTableSize = optionValue == null ? DEFAULT_MIN_SSTABLE_SIZE : Long.parseLong(optionValue);
+            if (minSSTableSize < 0)
+            {
+                throw new ConfigurationException(String.format("%s must be non negative: %d", MIN_SSTABLE_SIZE_KEY, minSSTableSize));
+            }
+        }
+        catch (NumberFormatException e)
+        {
+            throw new ConfigurationException(String.format("%s is not a parsable int (base10) for %s", optionValue, MIN_SSTABLE_SIZE_KEY), e);
+        }
+
+        double bucketLow = parseDouble(options, BUCKET_LOW_KEY, DEFAULT_BUCKET_LOW);
+        double bucketHigh = parseDouble(options, BUCKET_HIGH_KEY, DEFAULT_BUCKET_HIGH);
+        if (bucketHigh <= bucketLow)
+        {
+            throw new ConfigurationException(String.format("%s value (%s) is less than or equal to the %s value (%s)",
+                                                           BUCKET_HIGH_KEY, bucketHigh, BUCKET_LOW_KEY, bucketLow));
+        }
+
+        double maxColdReadsRatio = parseDouble(options, COLD_READS_TO_OMIT_KEY, DEFAULT_COLD_READS_TO_OMIT);
+        if (maxColdReadsRatio < 0.0 || maxColdReadsRatio > 1.0)
+        {
+            throw new ConfigurationException(String.format("%s value (%s) should be between between 0.0 and 1.0",
+                                                           COLD_READS_TO_OMIT_KEY, optionValue));
+        }
+
+        uncheckedOptions.remove(MIN_SSTABLE_SIZE_KEY);
+        uncheckedOptions.remove(BUCKET_LOW_KEY);
+        uncheckedOptions.remove(BUCKET_HIGH_KEY);
+        uncheckedOptions.remove(COLD_READS_TO_OMIT_KEY);
+
+        return uncheckedOptions;
+    }
+#endif
+    friend class size_tiered_compaction_strategy;
+};
+
+class size_tiered_compaction_strategy : public compaction_strategy_impl {
+    size_tiered_compaction_strategy_options _options;
 
     // Return a list of pair of shared_sstable and its respective size.
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const sstable_list& sstables);
@@ -202,6 +284,10 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
         return n / sstables.size();
     }
 public:
+    size_tiered_compaction_strategy() = default;
+    size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
+        _options(options) {}
+
     virtual future<> compact(column_family& cfs) override;
 
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
@@ -247,8 +333,8 @@ size_tiered_compaction_strategy::get_buckets(const sstable_list& sstables) {
             std::vector<sstables::shared_sstable> bucket = entry.second;
             size_t old_average_size = entry.first;
 
-            if ((size > (old_average_size * bucket_low) && size < (old_average_size * bucket_high))
-                || (size < min_sstable_size && old_average_size < min_sstable_size))
+            if ((size > (old_average_size * _options.bucket_low) && size < (old_average_size * _options.bucket_high))
+                || (size < _options.min_sstable_size && old_average_size < _options.min_sstable_size))
             {
                 size_t total_size = bucket.size() * old_average_size;
                 size_t new_average_size = (total_size + size) / (bucket.size() + 1);
@@ -361,7 +447,7 @@ future<> compaction_strategy::compact(column_family& cfs) {
     return _compaction_strategy_impl->compact(cfs);
 }
 
-compaction_strategy make_compaction_strategy(compaction_strategy_type strategy) {
+compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
     ::shared_ptr<compaction_strategy_impl> impl;
 
     switch(strategy) {
@@ -372,7 +458,7 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy) 
         impl = make_shared<major_compaction_strategy>(major_compaction_strategy());
         break;
     case compaction_strategy_type::size_tiered:
-        impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy());
+        impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy(options));
         break;
     default:
         throw std::runtime_error("strategy not supported");

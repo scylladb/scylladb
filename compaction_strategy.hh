@@ -56,6 +56,6 @@ public:
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
-compaction_strategy make_compaction_strategy(compaction_strategy_type strategy);
+compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options);
 
 }
