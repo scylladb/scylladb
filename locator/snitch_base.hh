@@ -116,7 +116,11 @@ public:
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
-    virtual future<> stop() = 0;
+    // noop by default
+    virtual future<> stop() {
+        _state = snitch_state::stopped;
+        return make_ready_future<>();
+    }
 
     // noop by default
     virtual future<> pause_io() {
