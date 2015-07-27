@@ -24,6 +24,9 @@ public:
         const T& value() const & { return _value; }
         T&& value() && { return std::move(_value); }
         bool is_inclusive() const { return _inclusive; }
+        bool operator==(const bound& other) const {
+            return (_value == other._value) && (_inclusive == other._inclusive);
+        }
     };
 private:
     optional<bound> _start;
@@ -241,6 +244,10 @@ public:
         auto e = deserialize_bound(in);
         bool singular = read_simple<bool>(in);
         return range(std::move(s), std::move(e), singular);
+    }
+
+    bool operator==(const range& other) const {
+        return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
     }
 
     template<typename U>
