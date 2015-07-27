@@ -31,14 +31,14 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
-void do_help_loggers() {
+static void do_help_loggers() {
     print("Available loggers:\n");
     for (auto&& name : logging::logger_registry().get_all_logger_names()) {
         print("    %s\n", name);
     }
 }
 
-void apply_logger_settings(sstring default_level, db::config::string_map levels,
+static void apply_logger_settings(sstring default_level, db::config::string_map levels,
         bool log_to_stdout, bool log_to_syslog) {
     logging::logger_registry().set_all_loggers_level(boost::lexical_cast<logging::log_level>(std::string(default_level)));
     for (auto&& kv: levels) {
