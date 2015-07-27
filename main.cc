@@ -93,16 +93,15 @@ int main(int ac, char** av) {
             sstring rpc_address = cfg->rpc_address();
             auto seed_provider= cfg->seed_provider();
             using namespace locator;
-            return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then(
-                    [&db, cfg] () {
-                return service::init_storage_service().then([&db, cfg] {
-                    return db.start(std::move(*cfg)).then([&db] {
-                        engine().at_exit([&db] {
-                            return db.stop().then([] {
-                                return i_endpoint_snitch::stop_snitch();
-                            });
-                        });
-                    });
+            return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
+                engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            }).then([] {
+                return service::init_storage_service().then([] {
+                    engine().at_exit([] { return service::deinit_storage_service(); });
+                });
+            }).then([&db, cfg] {
+                return db.start(std::move(*cfg)).then([&db] {
+                    engine().at_exit([&db] { return db.stop(); });
                 });
             }).then([listen_address, seed_provider] {
                 return init_ms_fd_gossiper(listen_address, seed_provider);
