@@ -98,7 +98,7 @@ void row_cache::populate(const mutation& m) {
 
 void row_cache::populate(mutation&& m) {
     auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
-    if (i == _partitions.end()) {
+    if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
         cache_entry* entry = new cache_entry(m.decorated_key(), std::move(m.partition()));
         _tracker.insert(*entry);
         _partitions.insert(i, *entry);
