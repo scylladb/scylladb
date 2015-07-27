@@ -6,6 +6,7 @@
 #include "core/memory.hh"
 #include "core/do_with.hh"
 #include "core/future-util.hh"
+#include <seastar/core/scollectd.hh>
 
 static logging::logger logger("cache");
 
@@ -21,23 +22,49 @@ cache_tracker::cache_tracker()
         // compacting memory allocator to avoid problems with memory
         // fragmentation.
         clear();
-    })
-{ }
+    }) {
+    setup_collectd();
+}
 
 cache_tracker::~cache_tracker() {
     clear();
 }
 
+void
+cache_tracker::setup_collectd() {
+    _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "total_rows")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _lru_len)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "hits")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _hits)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "misses")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _misses)
+        ),
+    }));
+}
+
 void cache_tracker::clear() {
+    _lru_len = 0;
     _lru.clear_and_dispose(std::default_delete<cache_entry>());
 }
 
 void cache_tracker::touch(cache_entry& e) {
+    ++_hits;
     _lru.erase(_lru.iterator_to(e));
     _lru.push_front(e);
 }
 
 void cache_tracker::insert(cache_entry& entry) {
+    ++_misses;
+    ++_lru_len;
     _lru.push_front(entry);
 }
 

@@ -12,6 +12,12 @@
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
 
+namespace scollectd {
+
+struct registrations;
+
+}
+
 namespace bi = boost::intrusive;
 
 // Intrusive set entry which holds partition data.
@@ -71,7 +77,13 @@ class cache_tracker final {
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false> // we need this to have bi::auto_unlink on hooks.
     > _lru;
+    size_t _lru_len = 0;
+    uint64_t _hits = 0;
+    uint64_t _misses = 0;
     memory::reclaimer _reclaimer;
+    std::unique_ptr<scollectd::registrations> _collectd_registrations;
+private:
+    void setup_collectd();
 public:
     cache_tracker();
     ~cache_tracker();
