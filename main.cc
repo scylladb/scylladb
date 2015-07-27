@@ -18,6 +18,7 @@
 #include "utils/runtime.hh"
 #include "dns.hh"
 #include "log.hh"
+#include "debug.hh"
 #include <cstdio>
 
 namespace bpo = boost::program_options;
@@ -67,6 +68,7 @@ int main(int ac, char** av) {
         ;
 
     distributed<database> db;
+    debug::db = &db;
     distributed<cql3::query_processor> qp;
     auto& proxy = service::get_storage_proxy();
     api::http_context ctx(db, proxy);
@@ -167,4 +169,10 @@ int main(int ac, char** av) {
             }).or_terminate();
         });
     });
+}
+
+namespace debug {
+
+seastar::sharded<database>* db;
+
 }
