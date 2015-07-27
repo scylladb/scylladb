@@ -352,11 +352,12 @@ namespace std {
 template<typename T>
 struct hash<query::range<T>> {
     using argument_type =  query::range<T>;
-    using result_type = std::result_of<std::hash<T>(T)>;
+    using result_type = decltype(std::hash<T>()(*(T*)nullptr));
     result_type operator()(argument_type const& s) const {
-        auto left = s.start() ? std::hash<T>(s.start()->value()) : 0;
-        auto right = s.end() ? std::hash<T>(s.end()->value()) : 0;
-        return 31 * s.left + right;
+        auto hash = std::hash<T>();
+        auto left = s.start() ? hash(s.start()->value()) : 0;
+        auto right = s.end() ? hash(s.end()->value()) : 0;
+        return 31 * left + right;
     }
 };
 }
