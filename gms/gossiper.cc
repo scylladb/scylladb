@@ -43,7 +43,9 @@ constexpr int gossiper::INTERVAL_IN_MILLIS;
 constexpr int64_t gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
-const int gossiper::QUARANTINE_DELAY = service::storage_service::RING_DELAY * 2;
+int gossiper::quarantine_delay() {
+    return service::storage_service::RING_DELAY * 2;
+}
 
 // FIXME: StorageService.instance.valueFactory
 auto& storage_service_value_factory() {
@@ -59,7 +61,7 @@ gossiper::gossiper() {
 
     _scheduled_gossip_task.set_callback([this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
-    fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
+    fat_client_timeout = (int64_t) (quarantine_delay() / 2);
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this);
     // Register this instance with JMX
@@ -384,8 +386,8 @@ void gossiper::do_status_check() {
 
     for (auto it = _just_removed_endpoints.begin(); it != _just_removed_endpoints.end();) {
         auto& t= it->second;
-        if ((now - t) > QUARANTINE_DELAY) {
-            logger.debug("{} elapsed, {} gossip quarantine over", QUARANTINE_DELAY, it->first);
+        if ((now - t) > quarantine_delay()) {
+            logger.debug("{} elapsed, {} gossip quarantine over", quarantine_delay(), it->first);
             it = _just_removed_endpoints.erase(it);
         } else {
             it++;
@@ -601,7 +603,7 @@ void gossiper::quarantine_endpoint(inet_address endpoint, int64_t quarantine_exp
 void gossiper::replacement_quarantine(inet_address endpoint) {
     // remember, quarantine_endpoint will effectively already add QUARANTINE_DELAY, so this is 2x
     // logger.debug("");
-    quarantine_endpoint(endpoint, now_millis() + QUARANTINE_DELAY);
+    quarantine_endpoint(endpoint, now_millis() + quarantine_delay());
 }
 
 void gossiper::replaced_endpoint(inet_address endpoint) {

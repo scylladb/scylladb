@@ -117,12 +117,13 @@ public:
     static constexpr int INTERVAL_IN_MILLIS = 1000;
     static constexpr int64_t A_VERY_LONG_TIME = 259200 * 1000; // 3 days in milliseconds
 
-    static const int QUARANTINE_DELAY; // StorageService.RING_DELAY * 2;
-
     /** Maximimum difference in generation and version values we are willing to accept about a peer */
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
     int64_t fat_client_timeout;
+
+    static int quarantine_delay();
 private:
+
     std::random_device _random;
     /* subscribers for interest in EndpointState change */
     std::list<i_endpoint_state_change_subscriber*> _subscribers;
