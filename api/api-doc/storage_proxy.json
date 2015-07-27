@@ -666,6 +666,36 @@
       ]
     },
     {
+      "path": "/storage_proxy/metrics/read/latency/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get read metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_read_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/range/latency/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get range metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_range_metrics_latency_histogram",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
       "path": "/storage_service/metrics/range/timeouts",
       "operations": [
         {
@@ -718,6 +748,21 @@
           "summary": "Get write metrics",
           "type": "int",
           "nickname": "get_write_metrics_unavailables",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/storage_proxy/metrics/write/latency/histogram",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get write metrics",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_write_metrics_latency_histogram",
           "produces": [
             "application/json"
           ],

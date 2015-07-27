@@ -1,0 +1,50 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/utils",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+   ],
+   "models":{
+      "histogram":{
+         "id":"histogram",
+         "description":"A histogram values",
+         "properties":{
+            "count":{
+               "type":"long",
+               "description":"Total count so far"
+            },
+            "sum":{
+               "type":"long",
+               "description":"Total sum so far"
+            },
+            "min":{
+               "type":"long",
+               "description":"The min so far"
+            },
+            "max":{
+               "type":"long",
+               "description":"The max so far"
+            },
+            "variance":{
+               "type":"double",
+               "description":"The variance"
+            },
+            "mean":{
+               "type":"double",
+               "description":"The mean"
+            },
+            "sample":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"A sample containing the last n elements"
+            }
+         }
+      }
+   }
+}

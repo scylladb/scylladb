@@ -357,6 +357,7 @@ api = ['api/api.cc',
        'api/compaction_manager.cc',
        'api/api-doc/hinted_handoff.json',
        'api/hinted_handoff.cc',
+       'api/api-doc/utils.json',
        ]
 
 urchin_tests_dependencies = urchin_core + [

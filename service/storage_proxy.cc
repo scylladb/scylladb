@@ -49,6 +49,7 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/numeric.hpp>
 #include <boost/range/algorithm/sort.hpp>
+#include "utils/latency.hh"
 
 namespace service {
 
@@ -732,7 +733,8 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
     auto local_addr = utils::fb_utilities::get_broadcast_address();
     auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
     sstring local_dc = snitch_ptr->get_datacenter(local_addr);
-
+    utils::latency_counter lc;
+    lc.start();
     for (auto& m : mutations) {
         try {
             keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
@@ -783,9 +785,8 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
                     return;
                 } catch(mutation_write_timeout_error& ex) {
                     // timeout
-//                    writeMetrics.timeouts.mark();
-//                    ClientRequestMetrics.writeTimeouts.inc();
                     logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.to_block_for);
+                    _stats.write_timeouts++;
                     have_cl->broken(ex);
                 } catch(...) {
                     have_cl->broken(std::current_exception());
@@ -795,18 +796,19 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
         } catch (no_such_keyspace& ex) {
             return make_exception_future<>(std::current_exception());
         } catch(db::unavailable_exception& ex) {
-//            writeMetrics.unavailables.mark();
-//            ClientRequestMetrics.writeUnavailables.inc();
+            _stats.write_unavailables++;
             logger.trace("Unavailable");
             return make_exception_future<>(std::current_exception());
         }  catch(overloaded_exception& ex) {
-//            ClientRequestMetrics.writeUnavailables.inc();
+            _stats.write_unavailables++;
             logger.trace("Overloaded");
             return make_exception_future<>(std::current_exception());
         }
     }
 
-    return have_cl->wait(mutations.size());
+    return have_cl->wait(mutations.size()).finally([this, lc]() mutable {
+        _stats.write.mark(lc.stop().latency_in_nano());
+    });
 }
 
 future<>

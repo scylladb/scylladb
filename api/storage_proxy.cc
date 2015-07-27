@@ -5,6 +5,7 @@
 #include "storage_proxy.hh"
 #include "service/storage_proxy.hh"
 #include "api/api-doc/storage_proxy.json.hh"
+#include "api/api-doc/utils.json.hh"
 
 namespace api {
 
@@ -227,6 +228,18 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_write_metrics_unavailables.set(r, [&ctx](std::unique_ptr<request> req) {
         return sum_stats(ctx.sp, &proxy::stats::write_unavailables);
+    });
+
+    sp::get_range_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_histogram_stats(ctx.sp, &proxy::stats::range);
+    });
+
+    sp::get_write_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_histogram_stats(ctx.sp, &proxy::stats::write);
+    });
+
+    sp::get_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_histogram_stats(ctx.sp, &proxy::stats::read);
     });
 }
 
