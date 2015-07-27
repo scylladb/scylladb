@@ -22,6 +22,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "transport/protocol_exception.hh"
+#include "exceptions/request_timeout_exception.hh"
 
 #include <cassert>
 #include <string>
@@ -164,6 +165,7 @@ private:
     future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
     future<> process_register(uint16_t stream, temporary_buffer<char> buf);
 
+    future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
     future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
     future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
     future<> write_ready(int16_t stream);
@@ -214,6 +216,7 @@ public:
         , _opcode{opcode}
     { }
     scattered_message<char> make_message(uint8_t version);
+    void write_byte(uint8_t b);
     void write_int(int32_t n);
     void write_long(int64_t n);
     void write_short(int16_t n);
@@ -375,6 +378,8 @@ future<> cql_server::connection::process_request() {
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             try {
                 f.get();
+            } catch (const exceptions::read_timeout_exception& ex) {
+                write_read_timeout_error(stream, ex.code(), ex.consistency, ex.received, ex.block_for, ex.data_present);
             } catch (const exceptions::already_exists_exception& ex) {
                 write_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name);
             } catch (const exceptions::cassandra_exception& ex) {
@@ -487,6 +492,17 @@ future<> cql_server::connection::process_register(uint16_t stream, temporary_buf
 {
     print("warning: ignoring event registration\n");
     return write_ready(stream);
+}
+
+future<> cql_server::connection::write_read_timeout_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_byte(data_present);
+    return write_response(response);
 }
 
 future<> cql_server::connection::write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name)
@@ -878,6 +894,11 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
     default:
         assert(0);
     }
+}
+
+void cql_server::response::write_byte(uint8_t b)
+{
+    _body.insert(_body.end(), b, 1);
 }
 
 void cql_server::response::write_int(int32_t n)
