@@ -328,6 +328,7 @@ urchin_core = (['database.cc',
                  'streaming/messages/incoming_file_message.cc',
                  'gc_clock.cc',
                  'partition_slice_builder.cc',
+                 'init.cc'
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]

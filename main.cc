@@ -11,7 +11,6 @@
 #include "http/httpd.hh"
 #include "api/api.hh"
 #include "db/config.hh"
-#include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
@@ -19,6 +18,7 @@
 #include "dns.hh"
 #include "log.hh"
 #include "debug.hh"
+#include "init.hh"
 #include <cstdio>
 
 namespace bpo = boost::program_options;
@@ -105,7 +105,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([listen_address, seed_provider] {
-                return net::init_messaging_service(listen_address, seed_provider);
+                return init_ms_fd_gossiper(listen_address, seed_provider);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
