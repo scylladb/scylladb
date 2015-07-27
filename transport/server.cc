@@ -17,6 +17,7 @@
 #include "utils/UUID.hh"
 #include "database.hh"
 #include "net/byteorder.hh"
+#include <seastar/core/scollectd.hh>
 
 #include "enum_set.hh"
 #include "service/query_state.hh"
@@ -242,7 +243,30 @@ private:
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp)
     : _proxy(proxy)
     , _query_processor(qp)
+    , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
 {
+}
+
+scollectd::registrations
+cql_server::setup_collectd() {
+    return {
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
+                    "connections", "cql-connections"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, _connects)),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
+                    "current_connections", "current"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, _connects)),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
+                    "total_requests", "requests_served"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, _requests_served)),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
+                    "queue_length", "requests_serving"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, _requests_serving)),
+    };
 }
 
 // FIXME: this is here because we must have a stop function. But we should actually
@@ -264,7 +288,10 @@ void
 cql_server::do_accepts(int which) {
     _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
         auto conn = make_shared<connection>(*this, std::move(fd), addr);
+        ++_connects;
+        ++_connections;
         conn->process().then_wrapped([this, conn] (future<> f) {
+            --_connections;
             try {
                 f.get();
             } catch (std::exception& ex) {
@@ -365,6 +392,8 @@ future<> cql_server::connection::process_request() {
         auto& f = *maybe_frame;
         return _read_buf.read_exactly(f.length).then([this, f] (temporary_buffer<char> buf) {
             assert(!(f.flags & 0x01)); // FIXME: compression
+            ++_server._requests_served;
+            ++_server._requests_serving;
             switch (static_cast<cql_binary_opcode>(f.opcode)) {
             case cql_binary_opcode::STARTUP:       return process_startup(f.stream, std::move(buf));
             case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(f.stream, std::move(buf));
@@ -377,6 +406,7 @@ future<> cql_server::connection::process_request() {
             default: assert(0);
             };
         }).then_wrapped([stream = f.stream, this] (future<> f) {
+            --_server._requests_serving;
             try {
                 f.get();
             } catch (const db::unavailable_exception& ex) {
