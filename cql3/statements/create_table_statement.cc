@@ -212,10 +212,8 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
             if (defined_multi_cell_collections) {
                 throw exceptions::invalid_request_exception("Non-frozen collection types are not supported with COMPACT STORAGE");
             }
-            stmt->_clustering_key_types.emplace_back(utf8_type);
-        } else {
-            stmt->_clustering_key_types = std::vector<data_type>{};
         }
+        stmt->_clustering_key_types = std::vector<data_type>{};
     } else {
         // If we use compact storage and have only one alias, it is a
         // standard "dynamic" CF, otherwise it's a composite
