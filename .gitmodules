@@ -1,6 +1,8 @@
 [submodule "seastar"]
 	path = seastar
 	url = ../seastar
+	ignore = dirty
 [submodule "swagger-ui"]
 	path = swagger-ui
 	url = ../urchin-swagger-ui
+	ignore = dirty
