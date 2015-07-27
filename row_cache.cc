@@ -114,6 +114,10 @@ future<> row_cache::update(mutation_reader reader) {
         return consume(r, [this] (mutation&& m) {
             auto i = _partitions.find(m.decorated_key(), cache_entry::compare(_schema));
             // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
+            // FIXME: if the bloom filters say the data isn't in any sstable yet (other than the
+            //        one we are caching now), we can.
+            //        Alternatively, keep a bitmap indicating which sstables we do cover, so we don't have to
+            //        search it.
             if (i != _partitions.end()) {
                 cache_entry& entry = *i;
                 _tracker.touch(entry);
