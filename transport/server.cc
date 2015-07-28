@@ -22,7 +22,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "transport/protocol_exception.hh"
-#include "exceptions/request_timeout_exception.hh"
+#include "exceptions/exceptions.hh"
 
 #include <cassert>
 #include <string>
