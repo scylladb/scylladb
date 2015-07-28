@@ -25,6 +25,7 @@
 #pragma once
 
 #include "locator/network_topology_strategy.hh"
+#include "db/consistency_level_type.hh"
 #include "db/read_repair_decision.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/fb_utilities.hh"
@@ -35,22 +36,6 @@
 #include <vector>
 
 namespace db {
-
-enum class consistency_level {
-    ANY,
-    ONE,
-    TWO,
-    THREE,
-    QUORUM,
-    ALL,
-    LOCAL_QUORUM,
-    EACH_QUORUM,
-    SERIAL,
-    LOCAL_SERIAL,
-    LOCAL_ONE
-};
-
-std::ostream& operator<<(std::ostream& os, consistency_level cl);
 
 struct unavailable_exception : exceptions::cassandra_exception {
     consistency_level consistency;
