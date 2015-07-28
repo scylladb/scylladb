@@ -9,6 +9,7 @@
 #include <boost/range/adaptor/map.hpp>
 #include <map>
 #include <syslog.h>
+#include <seastar/core/reactor.hh>
 
 namespace logging {
 
@@ -66,6 +67,7 @@ logger::~logger() {
 void
 logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) {
     std::ostringstream out;
+    out << " [shard " << engine().cpu_id() << "] " << _name << " - ";
     const char* p = fmt;
     while (*p != '\0') {
         if (*p == '{' && *(p+1) == '}') {
