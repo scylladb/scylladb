@@ -154,6 +154,14 @@ public:
     }
 #endif
 
+    gc_clock::duration ttl() const {
+        return _ttl.count() > 0 ? _ttl : _schema->default_time_to_live();
+    }
+
+    gc_clock::time_point expiry() const {
+        return ttl() + _local_deletion_time;
+    }
+
     api::timestamp_type timestamp() const {
         return _timestamp;
     }
