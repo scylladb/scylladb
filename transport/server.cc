@@ -403,7 +403,7 @@ future<> cql_server::connection::process_request() {
             case cql_binary_opcode::EXECUTE:       return process_execute(f.stream, std::move(buf));
             case cql_binary_opcode::BATCH:         return process_batch(f.stream, std::move(buf));
             case cql_binary_opcode::REGISTER:      return process_register(f.stream, std::move(buf));
-            default: assert(0);
+            default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", f.opcode));
             };
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             --_server._requests_serving;
