@@ -22,7 +22,6 @@
 #include "enum_set.hh"
 #include "service/query_state.hh"
 #include "service/client_state.hh"
-#include "transport/protocol_exception.hh"
 #include "exceptions/exceptions.hh"
 
 #include <cassert>
@@ -100,7 +99,7 @@ inline db::consistency_level wire_to_consistency(int16_t v)
      case 0x0008: return db::consistency_level::SERIAL;
      case 0x0009: return db::consistency_level::LOCAL_SERIAL;
      case 0x000A: return db::consistency_level::LOCAL_ONE;
-     default: assert(0);
+     default:     throw exceptions::protocol_exception(sprint("Unknown code %d for a consistency level", v));
      }
 }
 
@@ -118,7 +117,7 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     case db::consistency_level::SERIAL:       return 0x0008;
     case db::consistency_level::LOCAL_SERIAL: return 0x0009;
     case db::consistency_level::LOCAL_ONE:    return 0x000A;
-    default: assert(0);
+    default:                                  throw std::runtime_error("Invalid consistency level");
     }
 }
 
@@ -178,7 +177,7 @@ private:
 
     void check_room(temporary_buffer<char>& buf, size_t n) {
         if (buf.size() < n) {
-            throw transport::protocol_exception("truncated frame");
+            throw exceptions::protocol_exception("truncated frame");
         }
     }
 
@@ -186,7 +185,7 @@ private:
         try {
             boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
         } catch (const boost::locale::conv::conversion_error& ex) {
-            throw transport::protocol_exception("Cannot decode string as UTF8");
+            throw exceptions::protocol_exception("Cannot decode string as UTF8");
         }
     }
 
@@ -392,7 +391,10 @@ future<> cql_server::connection::process_request() {
         }
         auto& f = *maybe_frame;
         return _read_buf.read_exactly(f.length).then([this, f] (temporary_buffer<char> buf) {
-            assert(!(f.flags & 0x01)); // FIXME: compression
+            // FIXME: compression
+            if (f.flags & 0x01) {
+                throw std::runtime_error("CQL frame compression is not supported");
+            }
             ++_server._requests_served;
             ++_server._requests_serving;
             switch (static_cast<cql_binary_opcode>(f.opcode)) {
@@ -404,7 +406,7 @@ future<> cql_server::connection::process_request() {
             case cql_binary_opcode::EXECUTE:       return process_execute(f.stream, std::move(buf));
             case cql_binary_opcode::BATCH:         return process_batch(f.stream, std::move(buf));
             case cql_binary_opcode::REGISTER:      return process_register(f.stream, std::move(buf));
-            default: assert(0);
+            default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", f.opcode));
             };
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             --_server._requests_serving;
@@ -667,7 +669,7 @@ private:
         case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
         case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
         }
-        assert(0);
+        throw std::invalid_argument("unknown change type");
     }
     sstring to_string(const transport::event::schema_change::target_type t) const {
         switch (t) {
@@ -675,7 +677,7 @@ private:
         case transport::event::schema_change::target_type::TABLE:    return "TABLE";
         case transport::event::schema_change::target_type::TYPE:     return "TYPE";
         }
-        assert(0);
+        throw std::invalid_argument("unknown target type");
     }
 };
 
@@ -865,7 +867,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
         if (flags.contains<options_flag::TIMESTAMP>()) {
             ts = read_long(buf);
             if (ts < api::min_timestamp || ts > api::max_timestamp) {
-                throw transport::protocol_exception(sprint("Out of bound timestamp, must be in [%d, %d] (got %d)",
+                throw exceptions::protocol_exception(sprint("Out of bound timestamp, must be in [%d, %d] (got %d)",
                     api::min_timestamp, api::max_timestamp, ts));
             }
         }
@@ -949,7 +951,7 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
         return frame_buf;
     }
     default:
-        assert(0);
+        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
     }
 }
 
