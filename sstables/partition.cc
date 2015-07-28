@@ -283,7 +283,8 @@ public:
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
             auto& dr = mut->partition().clustered_row(clustering_key);
-            dr.apply(timestamp);
+            row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
+            dr.apply(rm);
             return;
         }
 
@@ -305,6 +306,11 @@ public:
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        } else if (col.cell.size() == 0) {
+            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
+            auto& dr = mut->partition().clustered_row(clustering_key);
+            row_marker rm(tombstone(timestamp, ttl));
+            dr.apply(rm);
         } else {
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
