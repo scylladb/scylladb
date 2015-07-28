@@ -127,8 +127,11 @@ public:
 
 class prepared_query_not_found_exception : public request_validation_exception {
 public:
+    bytes id;
+
     prepared_query_not_found_exception(bytes id)
         : request_validation_exception{exception_code::UNPREPARED, std::move(make_message(id))}
+        , id{id}
     { }
 private:
     static sstring make_message(bytes id) {

@@ -169,6 +169,7 @@ private:
     future<> write_unavailable_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t required, int32_t alive);
     future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
     future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
+    future<> write_unprepared_error(int16_t stream, exceptions::exception_code err, bytes id);
     future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
     future<> write_ready(int16_t stream);
     future<> write_supported(int16_t stream);
@@ -415,6 +416,8 @@ future<> cql_server::connection::process_request() {
                 write_read_timeout_error(stream, ex.code(), ex.consistency, ex.received, ex.block_for, ex.data_present);
             } catch (const exceptions::already_exists_exception& ex) {
                 write_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name);
+            } catch (const exceptions::prepared_query_not_found_exception& ex) {
+                write_unprepared_error(stream, ex.code(), ex.id);
             } catch (const exceptions::cassandra_exception& ex) {
                 write_error(stream, ex.code(), ex.what());
             } catch (std::exception& ex) {
@@ -555,6 +558,14 @@ future<> cql_server::connection::write_already_exists_error(int16_t stream, exce
     response->write_string(msg);
     response->write_string(ks_name);
     response->write_string(cf_name);
+    return write_response(response);
+}
+
+future<> cql_server::connection::write_unprepared_error(int16_t stream, exceptions::exception_code err, bytes id)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_short_bytes(id);
     return write_response(response);
 }
 
