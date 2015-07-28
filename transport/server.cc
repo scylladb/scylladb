@@ -165,6 +165,7 @@ private:
     future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
     future<> process_register(uint16_t stream, temporary_buffer<char> buf);
 
+    future<> write_unavailable_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t required, int32_t alive);
     future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
     future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
     future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
@@ -378,6 +379,8 @@ future<> cql_server::connection::process_request() {
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             try {
                 f.get();
+            } catch (const db::unavailable_exception& ex) {
+                write_unavailable_error(stream, ex.code(), ex.consistency, ex.required, ex.alive);
             } catch (const exceptions::read_timeout_exception& ex) {
                 write_read_timeout_error(stream, ex.code(), ex.consistency, ex.received, ex.block_for, ex.data_present);
             } catch (const exceptions::already_exists_exception& ex) {
@@ -492,6 +495,16 @@ future<> cql_server::connection::process_register(uint16_t stream, temporary_buf
 {
     print("warning: ignoring event registration\n");
     return write_ready(stream);
+}
+
+future<> cql_server::connection::write_unavailable_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t required, int32_t alive)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_consistency(cl);
+    response->write_int(required);
+    response->write_int(alive);
+    return write_response(response);
 }
 
 future<> cql_server::connection::write_read_timeout_error(int16_t stream, exceptions::exception_code err, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present)

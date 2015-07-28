@@ -77,8 +77,16 @@ enum class consistency_level {
 std::ostream& operator<<(std::ostream& os, consistency_level cl);
 
 struct unavailable_exception : exceptions::cassandra_exception {
-    unavailable_exception(consistency_level cl, size_t required, size_t alive) :
-        exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, sprint("Cannot achieve consistency level for cl %s. Requires %lu, alive %lu", cl, required, alive)) {}
+    consistency_level consistency;
+    int32_t required;
+    int32_t alive;
+
+    unavailable_exception(consistency_level cl, int32_t required, int32_t alive)
+        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, sprint("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive))
+        , consistency(cl)
+        , required(required)
+        , alive(alive)
+    {}
 };
 
 #if 0
