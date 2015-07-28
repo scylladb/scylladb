@@ -1068,9 +1068,9 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
         m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
-#if 0
-        adder.add("speculative_retry", table.getSpeculativeRetry().toString());
+        m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
 
+#if 0
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
             adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
 #endif
@@ -1325,9 +1325,11 @@ future<> save_system_keyspace_schema() {
         cfm.caching(CachingOptions.fromString(result.getString("caching")));
         if (result.has("default_time_to_live"))
             cfm.defaultTimeToLive(result.getInt("default_time_to_live"));
-        if (result.has("speculative_retry"))
-            cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(result.getString("speculative_retry")));
 #endif
+        if (table_row.has("speculative_retry")) {
+            builder.set_speculative_retry(table_row.get_nonnull<sstring>("speculative_retry"));
+        }
+
         if (table_row.has("compaction_strategy")) {
             auto strategy = table_row.get_nonnull<sstring>("compression_strategy_class");
             builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));

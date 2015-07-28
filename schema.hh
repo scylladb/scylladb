@@ -74,7 +74,7 @@ private:
 public:
     speculative_retry(type t, double v) : _t(t), _v(v) {}
 
-    sstring to_sstring() {
+    sstring to_sstring() const {
         if (_t == type::NONE) {
             return "NONE";
         } else if (_t == type::ALWAYS) {
@@ -250,6 +250,7 @@ private:
         int32_t _min_index_interval = 128;
         int32_t _max_index_interval = 2048;
         int32_t _memtable_flush_period = 0;
+        speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
         // FIXME: SizeTiered doesn't really work yet. Being it marked here only means that this is the strategy
         // we will use by default - when we have the choice.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
@@ -379,6 +380,10 @@ public:
 
     const std::map<sstring, sstring>& compaction_strategy_options() const {
         return _raw._compaction_strategy_options;
+    }
+
+    const ::speculative_retry& speculative_retry() const {
+        return _raw._speculative_retry;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;

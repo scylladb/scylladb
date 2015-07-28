@@ -116,6 +116,14 @@ public:
         return _raw._memtable_flush_period;
     }
 
+    void set_speculative_retry(sstring retry_sstring) {
+        _raw._speculative_retry = speculative_retry::from_sstring(retry_sstring);
+    }
+
+    const speculative_retry& get_speculative_retry() {
+        return _raw._speculative_retry;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }
