@@ -22,7 +22,6 @@
 #include "enum_set.hh"
 #include "service/query_state.hh"
 #include "service/client_state.hh"
-#include "transport/protocol_exception.hh"
 #include "exceptions/exceptions.hh"
 
 #include <cassert>
@@ -178,7 +177,7 @@ private:
 
     void check_room(temporary_buffer<char>& buf, size_t n) {
         if (buf.size() < n) {
-            throw transport::protocol_exception("truncated frame");
+            throw exceptions::protocol_exception("truncated frame");
         }
     }
 
@@ -186,7 +185,7 @@ private:
         try {
             boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
         } catch (const boost::locale::conv::conversion_error& ex) {
-            throw transport::protocol_exception("Cannot decode string as UTF8");
+            throw exceptions::protocol_exception("Cannot decode string as UTF8");
         }
     }
 
@@ -865,7 +864,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
         if (flags.contains<options_flag::TIMESTAMP>()) {
             ts = read_long(buf);
             if (ts < api::min_timestamp || ts > api::max_timestamp) {
-                throw transport::protocol_exception(sprint("Out of bound timestamp, must be in [%d, %d] (got %d)",
+                throw exceptions::protocol_exception(sprint("Out of bound timestamp, must be in [%d, %d] (got %d)",
                     api::min_timestamp, api::max_timestamp, ts));
             }
         }
