@@ -148,6 +148,7 @@ public:
 
     future<> populate(sstring datadir);
 
+    void start();
     future<> stop();
 
     future<> flush() {

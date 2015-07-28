@@ -434,6 +434,12 @@ column_family::seal_active_memtable() {
     // FIXME: provide back-pressure to upper layers
 }
 
+void
+column_family::start() {
+    // FIXME: add option to disable automatic compaction.
+    start_compaction();
+}
+
 future<>
 column_family::stop() {
     seal_active_memtable();
@@ -798,6 +804,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     } else {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog());
     }
+    cf->start();
     auto ks = _keyspaces.find(schema->ks_name());
     if (ks == _keyspaces.end()) {
         throw std::invalid_argument("Keyspace " + schema->ks_name() + " not defined");
