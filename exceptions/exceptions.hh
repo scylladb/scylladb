@@ -22,9 +22,9 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef EXCEPTIONS_HH
-#define EXCEPTIONS_HH
+#pragma once
 
+#include "db/consistency_level_type.hh"
 #include <stdexcept>
 #include "core/sstring.hh"
 #include "core/print.hh"
@@ -67,6 +67,43 @@ public:
     virtual const char* what() const noexcept override { return _msg.begin(); }
     exception_code code() const { return _code; }
     sstring get_message() const { return what(); }
+};
+
+struct unavailable_exception : exceptions::cassandra_exception {
+    db::consistency_level consistency;
+    int32_t required;
+    int32_t alive;
+
+    unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive)
+        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, sprint("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive))
+        , consistency(cl)
+        , required(required)
+        , alive(alive)
+    {}
+};
+
+class request_timeout_exception : public cassandra_exception {
+public:
+    db::consistency_level consistency;
+    int32_t received;
+    int32_t block_for;
+
+    request_timeout_exception(exception_code code, db::consistency_level consistency, int32_t received, int32_t block_for)
+        : cassandra_exception{code, sprint("Operation timed out - received only %d responses.", received)}
+        , consistency{consistency}
+        , received{received}
+        , block_for{block_for}
+    { }
+};
+
+class read_timeout_exception : public request_timeout_exception {
+public:
+    bool data_present;
+
+    read_timeout_exception(db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present)
+        : request_timeout_exception{exception_code::READ_TIMEOUT, consistency, received, block_for}
+        , data_present{data_present}
+    { }
 };
 
 class request_validation_exception : public cassandra_exception {
@@ -151,4 +188,3 @@ public:
 };
 
 }
-#endif

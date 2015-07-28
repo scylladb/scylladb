@@ -23,7 +23,7 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "transport/protocol_exception.hh"
-#include "exceptions/request_timeout_exception.hh"
+#include "exceptions/exceptions.hh"
 
 #include <cassert>
 #include <string>
@@ -409,7 +409,7 @@ future<> cql_server::connection::process_request() {
             --_server._requests_serving;
             try {
                 f.get();
-            } catch (const db::unavailable_exception& ex) {
+            } catch (const exceptions::unavailable_exception& ex) {
                 write_unavailable_error(stream, ex.code(), ex.consistency, ex.required, ex.alive);
             } catch (const exceptions::read_timeout_exception& ex) {
                 write_read_timeout_error(stream, ex.code(), ex.consistency, ex.received, ex.block_for, ex.data_present);

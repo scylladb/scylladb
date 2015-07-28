@@ -38,7 +38,7 @@
 #include "core/future-util.hh"
 #include "db/read_repair_decision.hh"
 #include "db/config.hh"
-#include "exceptions/request_timeout_exception.hh"
+#include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/iterator/counting_iterator.hpp>
@@ -796,7 +796,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             });
         } catch (no_such_keyspace& ex) {
             return make_exception_future<>(std::current_exception());
-        } catch(db::unavailable_exception& ex) {
+        } catch (exceptions::unavailable_exception& ex) {
             _stats.write_unavailables++;
             logger.trace("Unavailable");
             return make_exception_future<>(std::current_exception());
