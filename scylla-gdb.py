@@ -13,7 +13,7 @@ class sstring_printer(gdb.printing.PrettyPrinter):
     def to_string(self):
         if self.val['u']['internal']['size'] >= 0:
             array = self.val['u']['internal']['str']
-            len = self.val['u']['internal']['size']
+            len = int(self.val['u']['internal']['size'])
             return ''.join([chr(array[x]) for x in range(len)])
         else:
             return self.val['u']['external']['str']
@@ -30,7 +30,7 @@ class uuid_printer(gdb.printing.PrettyPrinter):
         return str(uuid.UUID(int=(msb << 64) | lsb))
     def display_hint(self):
         return 'string'
-    
+
 
 def build_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter('scylla')
@@ -41,7 +41,7 @@ def build_pretty_printer():
 gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer())
 
 def cpus():
-    return gdb.parse_and_eval('smp::count')
+    return int(gdb.parse_and_eval('smp::count'))
 
 def find_db(shard):
     return gdb.parse_and_eval('debug::db')['_instances']['_M_impl']['_M_start'][shard]
@@ -59,7 +59,7 @@ def list_unordered_map(map):
     while p:
         pc = p.cast(hashnode_ptr_type)['_M_storage']['_M_storage']['__data'].cast(value_type.pointer())
         yield (pc['first'], pc['second'].address)
-        p = p['_M_nxt'] 
+        p = p['_M_nxt']
     raise StopIteration()
 
 class scylla(gdb.Command):
@@ -70,7 +70,7 @@ class scylla_databases(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla databases', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
-        for shard in range(cpus()): 
+        for shard in range(cpus()):
             db = find_db(shard)
             gdb.write('{:5} (database*){}\n'.format(shard, db))
 
