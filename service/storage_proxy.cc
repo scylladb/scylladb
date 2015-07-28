@@ -1954,7 +1954,31 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query(schema_ptr s, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
+storage_proxy::query(schema_ptr s,
+    lw_shared_ptr<query::read_command> cmd,
+    std::vector<query::partition_range>&& partition_ranges,
+    db::consistency_level cl)
+{
+    if (logger.is_enabled(logging::log_level::trace)) {
+        static thread_local int next_id = 0;
+        auto query_id = next_id++;
+
+        logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, ::join(", ", partition_ranges), query_id);
+        return do_query(s, cmd, std::move(partition_ranges), cl).then([query_id, cmd, s] (auto&& res) {
+            logger.trace("query_result id={}, {}", query_id, res->pretty_print(s, cmd->slice));
+            return std::move(res);
+        });
+    }
+
+    return do_query(s, cmd, std::move(partition_ranges), cl);
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::do_query(schema_ptr s,
+    lw_shared_ptr<query::read_command> cmd,
+    std::vector<query::partition_range>&& partition_ranges,
+    db::consistency_level cl)
+{
     static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
     };
