@@ -8,6 +8,7 @@
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/join.hpp>
 #include <boost/range/algorithm/transform.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
@@ -62,6 +63,62 @@ inline cf_type sstring_to_cf_type(sstring name) {
     }
     throw std::invalid_argument(sprint("unknown type: %s\n", name));
 }
+
+struct speculative_retry {
+    enum class type {
+        NONE, CUSTOM, PERCENTILE, ALWAYS
+    };
+private:
+    type _t;
+    double _v;
+public:
+    speculative_retry(type t, double v) : _t(t), _v(v) {}
+
+    sstring to_sstring() {
+        if (_t == type::NONE) {
+            return "NONE";
+        } else if (_t == type::ALWAYS) {
+            return "ALWAYS";
+        } else if (_t == type::CUSTOM) {
+            return sprint("%.2fms", _v);
+        } else if (_t == type::PERCENTILE) {
+            return sprint("%.1fPERCENTILE", 100 * _v);
+        } else {
+            throw std::invalid_argument(sprint("unknown type: %d\n", uint8_t(_t)));
+        }
+    }
+    static speculative_retry from_sstring(sstring str) {
+        std::transform(str.begin(), str.end(), str.begin(), ::toupper);
+
+        sstring ms("MS");
+        sstring percentile("PERCENTILE");
+
+        auto convert = [&str] (sstring& t) {
+            try {
+                return boost::lexical_cast<double>(str.substr(0, str.size() - t.size()));
+            } catch (boost::bad_lexical_cast& e) {
+                throw std::invalid_argument(sprint("cannot convert %s to speculative_retry\n", str));
+            }
+        };
+
+        type t;
+        double v = 0;
+        if (str == "NONE") {
+            t = type::NONE;
+        } else if (str == "ALWAYS") {
+            t = type::ALWAYS;
+        } else if (str.compare(str.size() - ms.size(), ms.size(), ms) == 0) {
+            t = type::CUSTOM;
+            v = convert(ms);
+        } else if (str.compare(str.size() - percentile.size(), percentile.size(), percentile) == 0) {
+            t = type::PERCENTILE;
+            v = convert(percentile) / 100;
+        } else {
+            throw std::invalid_argument(sprint("cannot convert %s to speculative_retry\n", str));
+        }
+        return speculative_retry(t, v);
+    }
+};
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
 

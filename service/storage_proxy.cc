@@ -51,6 +51,7 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include "utils/latency.hh"
+#include "schema.hh"
 
 namespace service {
 
@@ -1738,10 +1739,6 @@ public:
     }
 };
 
-enum class speculative_retry_type {
-    NONE, CUSTOM, PERCENTILE, ALWAYS
-};
-
 ::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl) {
     const dht::token& token = pr.start()->value().token();
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
@@ -1762,11 +1759,11 @@ enum class speculative_retry_type {
 #if 0
     ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
 #endif
-    speculative_retry_type retry_type = speculative_retry_type::NONE;//cfs.metadata.getSpeculativeRetry().type;
+    speculative_retry::type retry_type = speculative_retry::type::NONE;//cfs.metadata.getSpeculativeRetry().type;
 
     size_t block_for = db::block_for(ks, cl);
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
-    if (retry_type == speculative_retry_type::NONE || db::block_for(ks, cl) == all_replicas.size()) {
+    if (retry_type == speculative_retry::type::NONE || db::block_for(ks, cl) == all_replicas.size()) {
         return ::make_shared<never_speculating_read_executor>(cmd, std::move(pr), cl, block_for, std::move(target_replicas));
     }
 
@@ -1789,7 +1786,7 @@ enum class speculative_retry_type {
     }
     target_replicas.push_back(extra_replica);
 
-    if (retry_type == speculative_retry_type::ALWAYS) {
+    if (retry_type == speculative_retry::type::ALWAYS) {
         return ::make_shared<always_speculating_read_executor>(/*cfs,*/cmd, std::move(pr), cl, block_for, std::move(target_replicas));
     } else {// PERCENTILE or CUSTOM.
         return ::make_shared<speculating_read_executor>(/*cfs,*/cmd, std::move(pr), cl, block_for, std::move(target_replicas));
