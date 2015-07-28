@@ -71,9 +71,12 @@ public:
     explicit logger(sstring name);
     logger(logger&& x);
     ~logger();
+    bool is_enabled(log_level level) const {
+        return level <= _level.load(std::memory_order_relaxed);
+    }
     template <typename... Args>
     void log(log_level level, const char* fmt, Args&&... args) {
-        if (level <= _level.load(std::memory_order_relaxed)) {
+        if (is_enabled(level)) {
             do_log(level, fmt, std::forward<Args>(args)...);
         }
     }
