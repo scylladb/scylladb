@@ -62,7 +62,7 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
         bool is_static_prefix = s->has_static_columns() && !prefix;
         if (type == statement_type::INSERT && !is_static_prefix) {
             auto& row = m.partition().clustered_row(clustering_key::from_clustering_prefix(*s, prefix));
-            row.apply(params.timestamp());
+            row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
         }
     }
 
