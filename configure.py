@@ -624,7 +624,7 @@ with open(buildfile, 'w') as f:
             description = CSCOPE
         build cscope: cscope
         rule request_parser_hh
-           command = ninja -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh || ninja-build -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
+           command = {ninja} -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
            description = GEN seastar/http/request_parser.hh
         build seastar/build/release/http/request_parser.hh seastar/build/debug/http/request_parser.hh: request_parser_hh
         default {modes_list}
