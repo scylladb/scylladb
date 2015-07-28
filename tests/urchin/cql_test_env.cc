@@ -13,6 +13,7 @@
 #include "service/storage_service.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
+#include "init.hh"
 
 class in_memory_cql_env : public cql_test_env {
 public:
@@ -192,8 +193,7 @@ future<> init_once() {
     if (!done) {
         done = true;
         return service::init_storage_service().then([] {
-                return net::init_messaging_service("127.0.0.1", db::config::seed_provider_type()).then([] {
-                });
+            return init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
         });
     } else {
         return make_ready_future();

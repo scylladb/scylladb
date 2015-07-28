@@ -11,7 +11,6 @@
 #include "http/httpd.hh"
 #include "api/api.hh"
 #include "db/config.hh"
-#include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
@@ -19,6 +18,7 @@
 #include "dns.hh"
 #include "log.hh"
 #include "debug.hh"
+#include "init.hh"
 #include <cstdio>
 
 namespace bpo = boost::program_options;
@@ -31,14 +31,14 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
-void do_help_loggers() {
+static void do_help_loggers() {
     print("Available loggers:\n");
     for (auto&& name : logging::logger_registry().get_all_logger_names()) {
         print("    %s\n", name);
     }
 }
 
-void apply_logger_settings(sstring default_level, db::config::string_map levels,
+static void apply_logger_settings(sstring default_level, db::config::string_map levels,
         bool log_to_stdout, bool log_to_syslog) {
     logging::logger_registry().set_all_loggers_level(boost::lexical_cast<logging::log_level>(std::string(default_level)));
     for (auto&& kv: levels) {
@@ -59,6 +59,7 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>();
     bool help_loggers = false;
     cfg->add_options(opt_add)
+        ("api-address", bpo::value<sstring>(), "Http Rest API address")
         ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
         ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
                 "The directory location of the API GUI")
@@ -91,21 +92,21 @@ int main(int ac, char** av) {
             ctx.api_dir = opts["api-dir"].as<sstring>();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
+            sstring api_address = opts.count("api-address") ? opts["api-address"].as<sstring>() : rpc_address;
             auto seed_provider= cfg->seed_provider();
             using namespace locator;
-            return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then(
-                    [&db, cfg] () {
-                return service::init_storage_service().then([&db, cfg] {
-                    return db.start(std::move(*cfg)).then([&db] {
-                        engine().at_exit([&db] {
-                            return db.stop().then([] {
-                                return i_endpoint_snitch::stop_snitch();
-                            });
-                        });
-                    });
+            return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
+                engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            }).then([] {
+                return service::init_storage_service().then([] {
+                    engine().at_exit([] { return service::deinit_storage_service(); });
+                });
+            }).then([&db, cfg] {
+                return db.start(std::move(*cfg)).then([&db] {
+                    engine().at_exit([&db] { return db.stop(); });
                 });
             }).then([listen_address, seed_provider] {
-                return net::init_messaging_service(listen_address, seed_provider);
+                return init_ms_fd_gossiper(listen_address, seed_provider);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
@@ -142,33 +143,36 @@ int main(int ac, char** av) {
                 return ss.init_server();
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
-            }).then([&db, &proxy, &qp, cql_port, thrift_port] (dns::hostent e) {
-                auto rpc_address = e.addresses[0].in.s_addr;
+            }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port] (dns::hostent e) {
+                auto ip = e.addresses[0].in.s_addr;
                 auto cserver = new distributed<cql_server>;
-                cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address] () mutable {
+                cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
                     engine().at_exit([server] {
                         return server->stop();
                     });
-                    server->invoke_on_all(&cql_server::listen, ipv4_addr{rpc_address, cql_port});
-                }).then([cql_port] {
-                    std::cout << "CQL server listening on port " << cql_port << " ...\n";
+                    server->invoke_on_all(&cql_server::listen, ipv4_addr{ip, cql_port});
+                }).then([rpc_address, cql_port] {
+                    print("CQL server listening on %s:%s ...\n", rpc_address, cql_port);
                 });
                 auto tserver = new distributed<thrift_server>;
-                tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address] () mutable {
+                tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address, ip] () mutable {
                     engine().at_exit([server] {
                         return server->stop();
                     });
-                    server->invoke_on_all(&thrift_server::listen, ipv4_addr{rpc_address, thrift_port});
-                }).then([thrift_port] {
-                    std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
+                    server->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, thrift_port});
+                }).then([rpc_address, thrift_port] {
+                    print("Thrift server listening on %s:%s ...\n", rpc_address, thrift_port);
                 });
-            }).then([&db, api_port, &ctx]{
-                ctx.http_server.start().then([api_port, &ctx] {
+            }).then([api_address] {
+                return dns::gethostbyname(api_address);
+            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                auto ip = e.addresses[0].in.s_addr;
+                ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
                     return set_server(ctx);
-                }).then([&ctx, api_port] {
-                    ctx.http_server.listen(api_port);
-                }).then([api_port] {
-                    std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
+                }).then([api_address, api_port, ip, &ctx] {
+                    ctx.http_server.listen(ipv4_addr{ip, api_port});
+                }).then([api_address, api_port] {
+                    print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
                 });
             }).or_terminate();
         });

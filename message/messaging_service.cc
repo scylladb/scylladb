@@ -135,52 +135,9 @@ struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc
 struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
-
 constexpr int32_t messaging_service::current_version;
 
 distributed<messaging_service> _the_messaging_service;
-
-future<> deinit_messaging_service() {
-    return gms::get_gossiper().stop().then([] {
-            return gms::get_failure_detector().stop();
-    }).then([] {
-            return net::get_messaging_service().stop();
-    }).then([]{
-            return service::deinit_storage_service();
-    });
-}
-
-future<> init_messaging_service(sstring listen_address, db::seed_provider_type seed_provider) {
-    const gms::inet_address listen(listen_address);
-    std::set<gms::inet_address> seeds;
-    if (seed_provider.parameters.count("seeds") > 0) {
-        size_t begin = 0;
-        size_t next = 0;
-        sstring& seeds_str = seed_provider.parameters.find("seeds")->second;
-        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-            seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-            begin = next+1;
-        }
-    }
-    if (seeds.empty()) {
-        seeds.emplace(gms::inet_address("127.0.0.1"));
-    }
-
-    engine().at_exit([]{
-            return deinit_messaging_service();
-    });
-
-    return net::get_messaging_service().start(listen).then([seeds] {
-        auto& ms = net::get_local_messaging_service();
-        print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
-        return gms::get_failure_detector().start().then([seeds] {
-            return gms::get_gossiper().start().then([seeds] {
-                auto& gossiper = gms::get_local_gossiper();
-                gossiper.set_seeds(seeds);
-            });
-        });
-    });
-}
 
 bool operator==(const shard_id& x, const shard_id& y) {
     return x.addr == y.addr && x.cpu_id == y.cpu_id ;
