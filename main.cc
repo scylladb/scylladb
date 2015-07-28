@@ -59,6 +59,7 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>();
     bool help_loggers = false;
     cfg->add_options(opt_add)
+        ("api-address", bpo::value<sstring>(), "Http Rest API address")
         ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
         ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
                 "The directory location of the API GUI")
@@ -91,6 +92,7 @@ int main(int ac, char** av) {
             ctx.api_dir = opts["api-dir"].as<sstring>();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
+            sstring api_address = opts.count("api-address") ? opts["api-address"].as<sstring>() : rpc_address;
             auto seed_provider= cfg->seed_provider();
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
@@ -161,13 +163,16 @@ int main(int ac, char** av) {
                 }).then([thrift_port] {
                     std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
                 });
-            }).then([&db, api_port, &ctx]{
-                ctx.http_server.start().then([api_port, &ctx] {
+            }).then([api_address] {
+                return dns::gethostbyname(api_address);
+            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                auto ip = e.addresses[0].in.s_addr;
+                ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
                     return set_server(ctx);
-                }).then([&ctx, api_port] {
-                    ctx.http_server.listen(api_port);
-                }).then([api_port] {
-                    std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
+                }).then([api_address, api_port, ip, &ctx] {
+                    ctx.http_server.listen(ipv4_addr{ip, api_port});
+                }).then([api_address, api_port] {
+                    print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
                 });
             }).or_terminate();
         });
