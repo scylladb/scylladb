@@ -98,9 +98,7 @@ int main(int ac, char** av) {
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             }).then([] {
-                return service::init_storage_service().then([] {
-                    engine().at_exit([] { return service::deinit_storage_service(); });
-                });
+                return init_storage_service();
             }).then([&db, cfg] {
                 return db.start(std::move(*cfg)).then([&db] {
                     engine().at_exit([&db] { return db.stop(); });

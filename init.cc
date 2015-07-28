@@ -6,6 +6,13 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
+#include "service/storage_service.hh"
+
+future<> init_storage_service() {
+    return service::init_storage_service().then([] {
+        engine().at_exit([] { return service::deinit_storage_service(); });
+    });
+}
 
 future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider) {
     const gms::inet_address listen(listen_address);
