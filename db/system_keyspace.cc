@@ -420,7 +420,7 @@ static distributed<local_cache> _local_cache;
 static future<> build_dc_rack_info() {
     return _local_cache.start().then([] {
         engine().at_exit([] {
-            _local_cache.stop();
+            return _local_cache.stop();
         });
 
         return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
