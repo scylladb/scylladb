@@ -1249,6 +1249,57 @@ SEASTAR_TEST_CASE(test_ttl) {
                     {my_list_type->decompose(list_type_impl::native_type{{sstring("a"), sstring("c")}})}
                 });
             });
+        }).then([&e] {
+            return e.execute_cql("create table cf2 (p1 text PRIMARY KEY, r1 text, r2 text);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {utf8_type->decompose(sstring("foo")), utf8_type->decompose(sstring("bar"))}
+                });
+            });
+        }).then([&e] {
+            forward_jump_clocks(6s);
+            return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({ });
+            });
+        }).then([&e] {
+            return e.execute_cql("select p1, r1 from cf2;").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({ });
+            });
+        }).then([&e] {
+            return e.execute_cql("select count(*) from cf2;").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {long_type->decompose(int64_t(0))}
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf2 set r1 = null where p1 = 'foo';").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {utf8_type->decompose(sstring("foo")), { }}
+                });
+            });
+        }).then([&e] {
+            forward_jump_clocks(6s);
+            return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({ });
+            });
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r1) values ('foo', 'bar') using ttl 5;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r2) values ('foo', null);").discard_result();
+        }).then([&e] {
+            forward_jump_clocks(6s);
+            return e.execute_cql("select p1, r1 from cf2 where p1 = 'foo';").then([] (auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {utf8_type->decompose(sstring("foo")), { }}
+                });
+            });
         });
     });
 }
