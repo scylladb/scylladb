@@ -1323,9 +1323,11 @@ future<> save_system_keyspace_schema() {
         }
 #if 0
         cfm.caching(CachingOptions.fromString(result.getString("caching")));
-        if (result.has("default_time_to_live"))
-            cfm.defaultTimeToLive(result.getInt("default_time_to_live"));
 #endif
+        if (table_row.has("default_time_to_live")) {
+            builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<gc_clock::rep>("default_time_to_live")));
+        }
+
         if (table_row.has("speculative_retry")) {
             builder.set_speculative_retry(table_row.get_nonnull<sstring>("speculative_retry"));
         }
