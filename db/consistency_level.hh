@@ -37,19 +37,6 @@
 
 namespace db {
 
-struct unavailable_exception : exceptions::cassandra_exception {
-    consistency_level consistency;
-    int32_t required;
-    int32_t alive;
-
-    unavailable_exception(consistency_level cl, int32_t required, int32_t alive)
-        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, sprint("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive))
-        , consistency(cl)
-        , required(required)
-        , alive(alive)
-    {}
-};
-
 size_t quorum_for(keyspace& ks);
 
 size_t local_quorum_for(keyspace& ks, const sstring& dc);
@@ -131,7 +118,7 @@ inline bool assure_sufficient_live_nodes_each_quorum(
             auto dc_live = entry.second;
 
             if (dc_live < dc_block_for) {
-                throw unavailable_exception(cl, dc_block_for, dc_live);
+                throw exceptions::unavailable_exception(cl, dc_block_for, dc_live);
             }
         }
 
@@ -154,7 +141,7 @@ inline void assure_sufficient_live_nodes(
         break;
     case consistency_level::LOCAL_ONE:
         if (count_local_endpoints(live_endpoints) == 0) {
-            throw unavailable_exception(cl, 1, 0);
+            throw exceptions::unavailable_exception(cl, 1, 0);
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
@@ -173,7 +160,7 @@ inline void assure_sufficient_live_nodes(
                 logger.debug(builder.toString());
             }
 #endif
-            throw unavailable_exception(cl, need, local_live);
+            throw exceptions::unavailable_exception(cl, need, local_live);
         }
         break;
     }
@@ -186,7 +173,7 @@ inline void assure_sufficient_live_nodes(
         size_t live = live_endpoints.size();
         if (live < need) {
             //                    logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", Iterables.toString(liveEndpoints), blockFor);
-            throw unavailable_exception(cl, need, live);
+            throw exceptions::unavailable_exception(cl, need, live);
         }
         break;
     }

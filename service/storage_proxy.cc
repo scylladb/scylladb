@@ -796,7 +796,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             });
         } catch (no_such_keyspace& ex) {
             return make_exception_future<>(std::current_exception());
-        } catch(db::unavailable_exception& ex) {
+        } catch (exceptions::unavailable_exception& ex) {
             _stats.write_unavailables++;
             logger.trace("Unavailable");
             return make_exception_future<>(std::current_exception());

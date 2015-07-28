@@ -379,7 +379,7 @@ future<> cql_server::connection::process_request() {
         }).then_wrapped([stream = f.stream, this] (future<> f) {
             try {
                 f.get();
-            } catch (const db::unavailable_exception& ex) {
+            } catch (const exceptions::unavailable_exception& ex) {
                 write_unavailable_error(stream, ex.code(), ex.consistency, ex.required, ex.alive);
             } catch (const exceptions::read_timeout_exception& ex) {
                 write_read_timeout_error(stream, ex.code(), ex.consistency, ex.received, ex.block_for, ex.data_present);

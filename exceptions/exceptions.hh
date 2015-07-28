@@ -25,6 +25,7 @@
 #ifndef EXCEPTIONS_HH
 #define EXCEPTIONS_HH
 
+#include "db/consistency_level_type.hh"
 #include <stdexcept>
 #include "core/sstring.hh"
 #include "core/print.hh"
@@ -67,6 +68,19 @@ public:
     virtual const char* what() const noexcept override { return _msg.begin(); }
     exception_code code() const { return _code; }
     sstring get_message() const { return what(); }
+};
+
+struct unavailable_exception : exceptions::cassandra_exception {
+    db::consistency_level consistency;
+    int32_t required;
+    int32_t alive;
+
+    unavailable_exception(db::consistency_level cl, int32_t required, int32_t alive)
+        : exceptions::cassandra_exception(exceptions::exception_code::UNAVAILABLE, sprint("Cannot achieve consistency level for cl %s. Requires %ld, alive %ld", cl, required, alive))
+        , consistency(cl)
+        , required(required)
+        , alive(alive)
+    {}
 };
 
 class request_validation_exception : public cassandra_exception {
