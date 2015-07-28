@@ -391,7 +391,10 @@ future<> cql_server::connection::process_request() {
         }
         auto& f = *maybe_frame;
         return _read_buf.read_exactly(f.length).then([this, f] (temporary_buffer<char> buf) {
-            assert(!(f.flags & 0x01)); // FIXME: compression
+            // FIXME: compression
+            if (f.flags & 0x01) {
+                throw std::runtime_error("CQL frame compression is not supported");
+            }
             ++_server._requests_served;
             ++_server._requests_serving;
             switch (static_cast<cql_binary_opcode>(f.opcode)) {
