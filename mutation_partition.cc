@@ -55,7 +55,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
             _rows.insert(i, *e);
         } else {
             i->row().apply(entry.row().deleted_at());
-            i->row().apply(entry.row().created_at());
+            i->row().apply(entry.row().marker());
             merge_cells(i->row().cells(), entry.row().cells(), find_regular_column_def);
         }
     }
