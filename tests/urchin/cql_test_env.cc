@@ -193,6 +193,7 @@ future<> init_once() {
     if (!done) {
         done = true;
         return service::init_storage_service().then([] {
+            engine().at_exit([] { return service::deinit_storage_service(); });
             return init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
         });
     } else {
