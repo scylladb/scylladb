@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef EXCEPTIONS_HH
-#define EXCEPTIONS_HH
+#pragma once
 
 #include "db/consistency_level_type.hh"
 #include <stdexcept>
@@ -189,4 +188,3 @@ public:
 };
 
 }
-#endif
