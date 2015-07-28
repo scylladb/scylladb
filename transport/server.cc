@@ -121,6 +121,24 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     }
 }
 
+sstring to_string(const transport::event::schema_change::change_type t) {
+    switch (t) {
+    case transport::event::schema_change::change_type::CREATED: return "CREATED";
+    case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
+    case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
+    }
+    throw std::invalid_argument("unknown change type");
+}
+
+sstring to_string(const transport::event::schema_change::target_type t) {
+    switch (t) {
+    case transport::event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
+    case transport::event::schema_change::target_type::TABLE:    return "TABLE";
+    case transport::event::schema_change::target_type::TYPE:     return "TYPE";
+    }
+    throw std::invalid_argument("unknown target type");
+}
+
 struct cql_query_state {
     service::query_state query_state;
     std::unique_ptr<cql3::query_options> options;
@@ -183,6 +201,7 @@ private:
     future<> write_ready(int16_t stream);
     future<> write_supported(int16_t stream);
     future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
+    future<> write_schema_change_event(const transport::event::schema_change& event);
     future<> write_response(shared_ptr<cql_server::response> response);
 
     void check_room(temporary_buffer<char>& buf, size_t n) {
@@ -696,23 +715,6 @@ public:
             }
         }
     }
-private:
-    sstring to_string(const transport::event::schema_change::change_type t) const {
-        switch (t) {
-        case transport::event::schema_change::change_type::CREATED: return "CREATED";
-        case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
-        case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
-        }
-        throw std::invalid_argument("unknown change type");
-    }
-    sstring to_string(const transport::event::schema_change::target_type t) const {
-        switch (t) {
-        case transport::event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
-        case transport::event::schema_change::target_type::TABLE:    return "TABLE";
-        case transport::event::schema_change::target_type::TYPE:     return "TYPE";
-        }
-        throw std::invalid_argument("unknown target type");
-    }
 };
 
 future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)
@@ -720,6 +722,18 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
     fmt_visitor fmt{_version, response};
     msg->accept(fmt);
+    return write_response(response);
+}
+
+future<> cql_server::connection::write_schema_change_event(const transport::event::schema_change& event)
+{
+    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
+    response->write_string(to_string(event.change));
+    response->write_string(to_string(event.target));
+    response->write_string(event.keyspace);
+    if (event.target != transport::event::schema_change::target_type::KEYSPACE) {
+        response->write_string(*(event.table_or_type_or_function));
+    }
     return write_response(response);
 }
 
