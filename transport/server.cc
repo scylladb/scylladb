@@ -951,7 +951,7 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
         return frame_buf;
     }
     default:
-        assert(0);
+        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", version));
     }
 }
 
