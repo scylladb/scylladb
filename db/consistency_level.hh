@@ -37,29 +37,6 @@
 
 namespace db {
 
-#if 0
-import java.net.InetAddress;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import com.google.common.collect.Iterables;
-import net.nicoulaj.compilecommand.annotations.Inline;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.ReadRepairDecision;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.UnavailableException;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.locator.NetworkTopologyStrategy;
-import org.apache.cassandra.transport.ProtocolException;
-#endif
-
 enum class consistency_level {
     ANY,
     ONE,
@@ -88,47 +65,6 @@ struct unavailable_exception : exceptions::cassandra_exception {
         , alive(alive)
     {}
 };
-
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(ConsistencyLevel.class);
-
-    // Used by the binary protocol
-    public final int code;
-    private final boolean isDCLocal;
-    private static final ConsistencyLevel[] codeIdx;
-    static
-    {
-        int maxCode = -1;
-        for (ConsistencyLevel cl : ConsistencyLevel.values())
-            maxCode = Math.max(maxCode, cl.code);
-        codeIdx = new ConsistencyLevel[maxCode + 1];
-        for (ConsistencyLevel cl : ConsistencyLevel.values())
-        {
-            if (codeIdx[cl.code] != null)
-                throw new IllegalStateException("Duplicate code");
-            codeIdx[cl.code] = cl;
-        }
-    }
-
-    private ConsistencyLevel(int code)
-    {
-        this(code, false);
-    }
-
-    private ConsistencyLevel(int code, boolean isDCLocal)
-    {
-        this.code = code;
-        this.isDCLocal = isDCLocal;
-    }
-
-    public static ConsistencyLevel fromCode(int code)
-    {
-        if (code < 0 || code >= codeIdx.length)
-            throw new ProtocolException(String.format("Unknown code %d for a consistency level", code));
-        return codeIdx[code];
-    }
-
-#endif
 
 inline size_t quorum_for(keyspace& ks) {
     return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
