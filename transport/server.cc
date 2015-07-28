@@ -99,7 +99,7 @@ inline db::consistency_level wire_to_consistency(int16_t v)
      case 0x0008: return db::consistency_level::SERIAL;
      case 0x0009: return db::consistency_level::LOCAL_SERIAL;
      case 0x000A: return db::consistency_level::LOCAL_ONE;
-     default: assert(0);
+     default:     throw exceptions::protocol_exception(sprint("Unknown code %d for a consistency level", v));
      }
 }
 
@@ -117,7 +117,7 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     case db::consistency_level::SERIAL:       return 0x0008;
     case db::consistency_level::LOCAL_SERIAL: return 0x0009;
     case db::consistency_level::LOCAL_ONE:    return 0x000A;
-    default: assert(0);
+    default:                                  throw std::runtime_error("Invalid consistency level");
     }
 }
 
