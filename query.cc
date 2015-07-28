@@ -5,6 +5,7 @@
 #include "db/serializer.hh"
 #include "query-request.hh"
 #include "query-result.hh"
+#include "query-result-set.hh"
 #include "to_string.hh"
 #include "bytes.hh"
 #include "mutation.hh"
@@ -116,6 +117,13 @@ to_partition_range(query::range<dht::token> r) {
                : bound_opt();
 
     return { std::move(start), std::move(end) };
+}
+
+sstring
+result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
+    std::ostringstream out;
+    out << "{" << result_set::from_raw_result(s, slice, *this) << "}";
+    return out.str();
 }
 
 }
