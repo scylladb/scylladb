@@ -35,6 +35,7 @@
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
 #include <algorithm>
+#include <chrono>
 
 namespace gms {
 
@@ -59,6 +60,8 @@ class i_failure_detector;
  * the Failure Detector.
  */
 class gossiper : public i_failure_detection_event_listener, public enable_shared_from_this<gossiper> {
+public:
+    using clk = std::chrono::high_resolution_clock;
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
@@ -80,7 +83,7 @@ private:
         return shard_id{to, _default_cpuid};
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
-    timer<lowres_clock> _scheduled_gossip_task;
+    timer<clk> _scheduled_gossip_task;
     sstring get_cluster_name() {
         // FIXME: DatabaseDescriptor.getClusterName()
         return "my_cluster_name";
@@ -102,26 +105,21 @@ public:
         _seeds_from_config = _seeds;
     }
 public:
-    static int64_t now_millis() {
-        return db_clock::now().time_since_epoch().count();
-    }
-    static int64_t now_nanos() {
-        return now_millis() * 1000;
-    }
+    static clk::time_point inline now() { return clk::now(); }
 public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
 
     const std::vector<sstring> DEAD_STATES = { versioned_value::REMOVING_TOKEN, versioned_value::REMOVED_TOKEN,
                                                versioned_value::STATUS_LEFT, versioned_value::HIBERNATE };
-    static constexpr int INTERVAL_IN_MILLIS = 1000;
-    static constexpr int64_t A_VERY_LONG_TIME = 259200 * 1000; // 3 days in milliseconds
+    static constexpr std::chrono::milliseconds INTERVAL{1000};
+    static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
     /** Maximimum difference in generation and version values we are willing to accept about a peer */
     static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
-    int64_t fat_client_timeout;
+    std::chrono::milliseconds fat_client_timeout;
 
-    static int quarantine_delay();
+    static std::chrono::milliseconds quarantine_delay();
 private:
 
     std::random_device _random;
@@ -132,7 +130,7 @@ private:
     std::set<inet_address> _live_endpoints;
 
     /* unreachable member set */
-    std::map<inet_address, int64_t> _unreachable_endpoints;
+    std::map<inet_address, clk::time_point> _unreachable_endpoints;
 
     /* initial seeds for joining the cluster */
     std::set<inet_address> _seeds;
@@ -141,13 +139,13 @@ private:
      * gossip. We will ignore any gossip regarding these endpoints for QUARANTINE_DELAY time
      * after removal to prevent nodes from falsely reincarnating during the time when removal
      * gossip gets propagated to all nodes */
-    std::map<inet_address, int64_t> _just_removed_endpoints;
+    std::map<inet_address, clk::time_point> _just_removed_endpoints;
 
-    std::map<inet_address, int64_t> _expire_time_endpoint_map;
+    std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
 
-    int64_t _last_processed_message_at = now_millis();
+    clk::time_point _last_processed_message_at = now();
 
     std::unordered_map<inet_address, endpoint_state> _shadow_endpoint_state_map;
     std::set<inet_address> _shadow_live_endpoints;
@@ -155,8 +153,8 @@ private:
     void run();
 public:
     gossiper();
-    void set_last_processed_message_at(int64_t time_in_millis) {
-        _last_processed_message_at = time_in_millis;
+    void set_last_processed_message_at(clk::time_point tp) {
+        _last_processed_message_at = tp;
     }
 
     bool seen_any_seed();
@@ -234,7 +232,7 @@ private:
      * @param endpoint
      * @param quarantine_expiration
      */
-    void quarantine_endpoint(inet_address endpoint, int64_t quarantine_expiration);
+    void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_expiration);
 
 public:
     /**
@@ -320,7 +318,7 @@ private:
     void do_status_check();
 
 public:
-    int64_t get_expire_time_for_endpoint(inet_address endpoint);
+    clk::time_point get_expire_time_for_endpoint(inet_address endpoint);
 
     std::experimental::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep);
 
@@ -468,9 +466,9 @@ public:
 #endif
 
 public:
-    void add_expire_time_for_endpoint(inet_address endpoint, int64_t expire_time);
+    void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
 
-    static int64_t compute_expire_time();
+    static clk::time_point compute_expire_time();
 public:
     void dump_endpoint_state_map();
     void debug_show();

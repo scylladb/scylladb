@@ -26,8 +26,8 @@
 #include "gms/heart_beat_state.hh"
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
-#include "db_clock.hh"
 #include <experimental/optional>
+#include <chrono>
 
 namespace gms {
 
@@ -36,11 +36,13 @@ namespace gms {
  * instance. Any state for a given endpoint can be retrieved from this instance.
  */
 class endpoint_state {
+public:
+    using clk = std::chrono::high_resolution_clock;
 private:
     heart_beat_state _heart_beat_state;
     std::map<application_state, versioned_value> _application_state;
     /* fields below do not get serialized */
-    db_clock::time_point _update_timestamp;
+    clk::time_point _update_timestamp;
     bool _is_alive;
 public:
     bool operator==(const endpoint_state& other) const {
@@ -52,13 +54,13 @@ public:
 
     endpoint_state()
         : _heart_beat_state(0)
-        , _update_timestamp(db_clock::now())
+        , _update_timestamp(clk::now())
         , _is_alive(true) {
     }
 
     endpoint_state(heart_beat_state initial_hb_state)
         : _heart_beat_state(initial_hb_state)
-        , _update_timestamp(db_clock::now())
+        , _update_timestamp(clk::now())
         , _is_alive(true) {
     }
 
@@ -96,12 +98,12 @@ public:
     /**
      * @return System.nanoTime() when state was updated last time.
      */
-    db_clock::time_point get_update_timestamp() {
+    clk::time_point get_update_timestamp() {
         return _update_timestamp;
     }
 
     void update_timestamp() {
-        _update_timestamp = db_clock::now();
+        _update_timestamp = clk::now();
     }
 
     bool is_alive() {
