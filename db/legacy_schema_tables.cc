@@ -1066,9 +1066,7 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "max_compaction_threshold", table->max_compaction_threshold(), timestamp);
         m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
         m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
-#if 0
-        adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-#endif
+        m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
 #if 0
         adder.add("speculative_retry", table.getSpeculativeRetry().toString());
@@ -1319,8 +1317,11 @@ future<> save_system_keyspace_schema() {
 #if 0
         if (result.has("comment"))
             cfm.comment(result.getString("comment"));
-        if (result.has("memtable_flush_period_in_ms"))
-            cfm.memtableFlushPeriod(result.getInt("memtable_flush_period_in_ms"));
+#endif
+        if (table_row.has("memtable_flush_period_in_ms")) {
+            builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
+        }
+#if 0
         cfm.caching(CachingOptions.fromString(result.getString("caching")));
         if (result.has("default_time_to_live"))
             cfm.defaultTimeToLive(result.getInt("default_time_to_live"));

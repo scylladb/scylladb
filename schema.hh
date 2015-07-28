@@ -192,6 +192,7 @@ private:
         int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
         int32_t _min_index_interval = 128;
         int32_t _max_index_interval = 2048;
+        int32_t _memtable_flush_period = 0;
         // FIXME: SizeTiered doesn't really work yet. Being it marked here only means that this is the strategy
         // we will use by default - when we have the choice.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
@@ -309,6 +310,10 @@ public:
 
     int32_t max_index_interval() const {
         return _raw._max_index_interval;
+    }
+
+    int32_t memtable_flush_period() const {
+        return _raw._memtable_flush_period;
     }
 
     sstables::compaction_strategy_type compaction_strategy() const {

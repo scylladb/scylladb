@@ -108,6 +108,14 @@ public:
         return _raw._max_index_interval;
     }
 
+    void set_memtable_flush_period(int32_t t) {
+        _raw._memtable_flush_period = t;
+    }
+
+    int32_t get_memtable_flush_period() const {
+        return _raw._memtable_flush_period;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }
