@@ -121,6 +121,7 @@ public:
         hash.CalculateDigest(reinterpret_cast<unsigned char*>(b.begin()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
         return result_digest(std::move(b));
     }
+    sstring pretty_print(schema_ptr, const query::partition_slice&) const;
     size_t serialized_size() const { return _w.size(); }
     void serialize(bytes::iterator& out) {
         auto v = _w.linearize();

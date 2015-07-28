@@ -94,6 +94,10 @@ private:
             std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results, lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i,
             std::vector<query::partition_range>&& ranges, int concurrency_factor);
 
+    future<foreign_ptr<lw_shared_ptr<query::result>>> do_query(schema_ptr,
+        lw_shared_ptr<query::read_command> cmd,
+        std::vector<query::partition_range>&& partition_ranges,
+        db::consistency_level cl);
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();
