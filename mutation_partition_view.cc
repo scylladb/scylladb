@@ -46,9 +46,17 @@ mutation_partition_view::accept(const schema& schema, mutation_partition_visitor
     // Read clustered rows
     while (in.has_next()) {
         auto&& key = clustering_key_view_serializer::read(in);
-        auto&& created_at = in.read<api::timestamp_type>();
+        auto&& timestamp = in.read<api::timestamp_type>();
+        gc_clock::duration ttl;
+        gc_clock::time_point expiry;
+        if (timestamp != api::missing_timestamp) {
+            ttl = gc_clock::duration(in.read<gc_clock::rep>());
+            if (ttl.count()) {
+                expiry = gc_clock::time_point(gc_clock::duration(in.read<gc_clock::rep>()));
+            }
+        }
         auto&& deleted_at = tombstone_serializer::read(in);
-        visitor.accept_row(key, created_at, deleted_at);
+        visitor.accept_row(key, deleted_at, row_marker(timestamp, ttl, expiry));
 
         auto n_columns = in.read<mutation_partition_serializer::count_type>();
         while (n_columns-- > 0) {

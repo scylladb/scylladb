@@ -198,6 +198,10 @@ public:
     void apply(api::timestamp_type created_at) {
         _marker.apply(row_marker(created_at));
     }
+
+    void apply(const row_marker& rm) {
+        _marker.apply(rm);
+    }
 public:
     tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
