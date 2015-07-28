@@ -97,7 +97,31 @@ class scylla_column_families(gdb.Command):
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
                 gdb.write('{:5} {} {:45} (column_family*){}\n'.format(shard, key, name, value.address))
 
+class scylla_memory(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
+        small_pools = cpu_mem['small_pools']
+        nr = small_pools['nr_small_pools']
+        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
+              .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
+        for i in range(int(nr)):
+            sp = small_pools['_u']['a'][i]
+            object_size = int(sp['_object_size'])
+            span_size = int(sp['_span_size']) * page_size
+            free_count = int(sp['_free_count'])
+            spans_in_use = int(sp['_spans_in_use'])
+            memory = spans_in_use * span_size
+            use_count = spans_in_use * int(span_size / object_size) - free_count
+            wasted = free_count * object_size
+            wasted_percent = wasted * 100.0 / memory if memory else 0
+            gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
+                  .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
 scylla_column_families()
+scylla_memory()
