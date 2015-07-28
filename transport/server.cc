@@ -669,7 +669,7 @@ private:
         case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
         case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
         }
-        assert(0);
+        throw std::invalid_argument("unknown change type");
     }
     sstring to_string(const transport::event::schema_change::target_type t) const {
         switch (t) {
@@ -677,7 +677,7 @@ private:
         case transport::event::schema_change::target_type::TABLE:    return "TABLE";
         case transport::event::schema_change::target_type::TYPE:     return "TYPE";
         }
-        assert(0);
+        throw std::invalid_argument("unknown target type");
     }
 };
 
