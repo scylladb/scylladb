@@ -6,6 +6,8 @@
 #include "api/api-doc/column_family.json.hh"
 #include <vector>
 #include "http/exception.hh"
+#include "sstables/sstables.hh"
+#include <algorithm>
 
 namespace api {
 using namespace httpd;
@@ -92,6 +94,22 @@ static future<json::json_return_type>  map_cf_stats(http_context& ctx,
     }).then([](const std::vector<int64_t>& res) {
         return make_ready_future<json::json_return_type>(res);
     });
+}
+
+static int64_t min_row_size(column_family& cf) {
+    int64_t res = INT64_MAX;
+    for (auto i: *cf.get_sstables() ) {
+        res = std::min(res, i.second->get_stats_metadata().estimated_row_size.min());
+    }
+    return (res == INT64_MAX) ? 0 : res;
+}
+
+static int64_t max_row_size(column_family& cf) {
+    int64_t res = 0;
+    for (auto i: *cf.get_sstables() ) {
+        res = std::max(i.second->get_stats_metadata().estimated_row_size.max(), res);
+    }
+    return res;
 }
 
 void set_column_family(http_context& ctx, routes& r) {
@@ -290,26 +308,20 @@ void set_column_family(http_context& ctx, routes& r) {
         return get_cf_stats(ctx, &column_family::stats::total_disk_space_used);
     });
 
-    cf::get_min_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        ////auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_min_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], INT64_MAX, min_row_size, min_int64);
     });
 
-    cf::get_all_min_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_min_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, INT64_MAX, min_row_size, min_int64);
     });
 
-    cf::get_max_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_max_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, max_row_size, max_int64);
     });
 
-    cf::get_all_max_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_max_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, max_row_size, max_int64);
     });
 
     cf::get_mean_row_size.set(r, [] (std::unique_ptr<request> req) {
