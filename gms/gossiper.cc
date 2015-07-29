@@ -33,6 +33,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/i_failure_detector.hh"
 #include "service/storage_service.hh"
+#include "message/messaging_service.hh"
 #include "dht/i_partitioner.hh"
 #include "log.hh"
 #include <seastar/core/sleep.hh>
@@ -853,9 +854,7 @@ std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_st
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) {
-    // FIXME
-    warn(unimplemented::cause::GOSSIP);
-    if (true /* MessagingService.instance().knowsVersion(endpoint) */) {
+    if (net::get_local_messaging_service().knows_version(endpoint)) {
         return true;
     } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
         return true;
