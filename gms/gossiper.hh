@@ -267,7 +267,7 @@ public:
      * @param host_id      - the ID of the host being removed
      * @param local_host_id - my own host ID for replication coordination
      */
-    void advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
+    future<> advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
 
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
@@ -276,7 +276,7 @@ public:
      * @param endpoint
      * @param host_id
      */
-    void advertise_token_removed(inet_address endpoint, utils::UUID host_id);
+    future<> advertise_token_removed(inet_address endpoint, utils::UUID host_id);
 
     future<> unsafe_assassinate_endpoint(sstring address);
 
@@ -421,7 +421,7 @@ public:
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
 
-    void shutdown();
+    future<> shutdown();
 
     future<> stop();
 
