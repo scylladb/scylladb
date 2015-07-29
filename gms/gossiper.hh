@@ -278,7 +278,7 @@ public:
      */
     void advertise_token_removed(inet_address endpoint, utils::UUID host_id);
 
-    void unsafe_assassinate_endpoint(sstring address);
+    future<> unsafe_assassinate_endpoint(sstring address);
 
     /**
      * Do not call this method unless you know what you are doing.
@@ -288,7 +288,7 @@ public:
      * @param address
      * @throws UnknownHostException
      */
-    void assassinate_endpoint(sstring address);
+    future<> assassinate_endpoint(sstring address);
 
 public:
     bool is_known_endpoint(inet_address endpoint);
