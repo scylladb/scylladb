@@ -153,9 +153,9 @@ private:
     void run();
 public:
     gossiper();
-    void set_last_processed_message_at(clk::time_point tp) {
-        _last_processed_message_at = tp;
-    }
+
+    void set_last_processed_message_at();
+    void set_last_processed_message_at(clk::time_point tp);
 
     bool seen_any_seed();
 
