@@ -403,7 +403,7 @@ public:
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      *  Only used when replacing a node, to get and assume its states
      */
-    void do_shadow_round();
+    future<> do_shadow_round();
 
 private:
     void build_seeds_list();

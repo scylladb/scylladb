@@ -1160,7 +1160,7 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
     });
 }
 
-void gossiper::do_shadow_round() {
+future<> gossiper::do_shadow_round() {
     build_seeds_list();
     // send a completely empty syn
     std::vector<gossip_digest> g_digests;
@@ -1182,22 +1182,19 @@ void gossiper::do_shadow_round() {
             }
         });
     }
-    // FIXME: Implemnt the wait logic below
-#if 0
-    int slept = 0;
-    try {
+    return seastar::async([this] {
+        std::chrono::milliseconds slept(0);
         while (true) {
-            Thread.sleep(1000);
-            if (!_in_shadow_round)
+            sleep(std::chrono::milliseconds(1000)).get();
+            if (!_in_shadow_round) {
                 break;
-            slept += 1000;
-            if (slept > StorageService.RING_DELAY)
-                throw new RuntimeException("Unable to gossip with any _seeds");
+            }
+            slept += std::chrono::milliseconds(1000);
+            if (slept > storage_service_ring_delay()) {
+                throw std::runtime_error(sprint("Unable to gossip with any seeds"));
+            }
         }
-    } catch (InterruptedException wtf) {
-        throw new RuntimeException(wtf);
-    }
-#endif
+    });
 }
 
 void gossiper::build_seeds_list() {
