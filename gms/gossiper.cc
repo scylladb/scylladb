@@ -1250,8 +1250,7 @@ void gossiper::add_local_application_state(application_state state, versioned_va
     // Notifications may have taken some time, so preventively raise the version
     // of the new value, otherwise it could be ignored by the remote node
     // if another value with a newer version was received in the meantime:
-    // FIXME:
-    // value = StorageService.instance.valueFactory.cloneWithHigherVersion(value);
+    value = storage_service_value_factory().clone_with_higher_version(value);
     // Add to local application state and fire "on change" notifications:
     ep_state.add_application_state(state, value);
     do_on_change_notifications(ep_addr, state, value);
