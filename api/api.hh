@@ -151,4 +151,11 @@ future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::ih
     });
 }
 
+inline int64_t min_int64(int64_t a, int64_t b) {
+    return std::min(a,b);
+}
+
+inline int64_t max_int64(int64_t a, int64_t b) {
+    return std::max(a,b);
+}
 }
