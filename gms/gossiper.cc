@@ -33,7 +33,11 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/i_failure_detector.hh"
 #include "service/storage_service.hh"
+#include "message/messaging_service.hh"
+#include "dht/i_partitioner.hh"
 #include "log.hh"
+#include <seastar/core/sleep.hh>
+#include <seastar/core/thread.hh>
 #include <chrono>
 
 namespace gms {
@@ -50,10 +54,12 @@ std::chrono::milliseconds gossiper::quarantine_delay() {
     return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
 }
 
-// FIXME: StorageService.instance.valueFactory
+static auto storage_service_ring_delay() {
+    return std::chrono::milliseconds(service::storage_service::RING_DELAY);
+}
+
 auto& storage_service_value_factory() {
-    static thread_local auto the_value_factory = versioned_value::versioned_value_factory();
-    return the_value_factory;
+    return service::get_local_storage_service().value_factory;
 }
 
 gossiper::gossiper() {
@@ -68,6 +74,14 @@ gossiper::gossiper() {
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this);
     // Register this instance with JMX
+}
+
+void gossiper::set_last_processed_message_at() {
+    set_last_processed_message_at(now());
+}
+
+void gossiper::set_last_processed_message_at(clk::time_point tp) {
+    _last_processed_message_at = tp;
 }
 
 /*
@@ -110,7 +124,7 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
 }
 
 future<gossip_digest_ack> gossiper::handle_syn_msg(gossip_digest_syn syn_msg) {
-    this->set_last_processed_message_at(now());
+    this->set_last_processed_message_at();
     inet_address from;
     if (!this->is_enabled()) {
         return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
@@ -134,19 +148,60 @@ future<gossip_digest_ack> gossiper::handle_syn_msg(gossip_digest_syn syn_msg) {
     return make_ready_future<gossip_digest_ack>(std::move(ack_msg));
 }
 
+void gossiper::handle_ack_msg(shard_id id, gossip_digest_ack& ack_msg) {
+    this->set_last_processed_message_at();
+    if (!this->is_enabled() && !this->is_in_shadow_round()) {
+        return;
+    }
+
+    auto g_digest_list = ack_msg.get_gossip_digest_list();
+    auto ep_state_map = ack_msg.get_endpoint_state_map();
+
+    if (ep_state_map.size() > 0) {
+        /* Notify the Failure Detector */
+        this->notify_failure_detector(ep_state_map);
+        this->apply_state_locally(ep_state_map);
+    }
+
+    if (this->is_in_shadow_round()) {
+        this->finish_shadow_round();
+        return; // don't bother doing anything else, we have what we came for
+    }
+
+    /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+    std::map<inet_address, endpoint_state> delta_ep_state_map;
+    for (auto g_digest : g_digest_list) {
+        inet_address addr = g_digest.get_endpoint();
+        auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+        if (local_ep_state_ptr) {
+            delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+        }
+    }
+    gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+    logger.trace("Sending a GossipDigestACK2 to {}", id);
+    this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
+        try {
+            f.get();
+            logger.trace("Got GossipDigestACK2 Reply");
+        } catch (...) {
+            logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+        }
+    });
+}
+
 void gossiper::init_messaging_service_handler() {
     ms().register_echo([] {
         // TODO: Use time_point instead of long for timing.
         return smp::submit_to(0, [] {
             auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at(now());
+            gossiper.set_last_processed_message_at();
             return make_ready_future<>();
         });
     });
     ms().register_gossip_shutdown([] (inet_address from) {
         smp::submit_to(0, [from] {
             auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at(now());
+            gossiper.set_last_processed_message_at();
             // TODO: Implement processing of incoming SHUTDOWN message
             get_local_failure_detector().force_conviction(from);
         }).discard_result();
@@ -161,7 +216,7 @@ void gossiper::init_messaging_service_handler() {
     ms().register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
         smp::submit_to(0, [msg = std::move(msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at(now());
+            gossiper.set_last_processed_message_at();
             auto& remote_ep_state_map = msg.get_endpoint_state_map();
             /* Notify the Failure Detector */
             gossiper.notify_failure_detector(remote_ep_state_map);
@@ -187,44 +242,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
         try {
             auto ack_msg = f.get0();
             logger.trace("Got GossipDigestSyn Reply");
-            this->set_last_processed_message_at(now());
-            if (!this->is_enabled() && !this->is_in_shadow_round()) {
-                return;
-            }
-
-            auto g_digest_list = ack_msg.get_gossip_digest_list();
-            auto ep_state_map = ack_msg.get_endpoint_state_map();
-
-            if (ep_state_map.size() > 0) {
-                /* Notify the Failure Detector */
-                this->notify_failure_detector(ep_state_map);
-                this->apply_state_locally(ep_state_map);
-            }
-
-            if (this->is_in_shadow_round()) {
-                this->finish_shadow_round();
-                return; // don't bother doing anything else, we have what we came for
-            }
-
-            /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
-            std::map<inet_address, endpoint_state> delta_ep_state_map;
-            for (auto g_digest : g_digest_list) {
-                inet_address addr = g_digest.get_endpoint();
-                auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-                if (local_ep_state_ptr) {
-                    delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
-                }
-            }
-            gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-            logger.trace("Sending a GossipDigestACK2 to {}", id);
-            this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
-                try {
-                    f.get();
-                    logger.trace("Got GossipDigestACK2 Reply");
-                } catch (...) {
-                    logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
-                }
-            });
+            this->handle_ack_msg(id, ack_msg);
         } catch (...) {
             // It is normal to reach here because it is normal that a node
             // tries to send a SYN message to a peer node which is down before
@@ -646,99 +664,97 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
 #endif
 }
 
-void gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
-    auto& state = endpoint_state_map.at(endpoint);
-    // remember this node's generation
-    int generation = state.get_heart_beat_state().get_generation();
-    logger.info("Removing host: {}", host_id);
-    logger.info("Sleeping for {}ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
-    // FIXME: sleep
-    warn(unimplemented::cause::GOSSIP);
-    // Uninterruptibles.sleepUninterruptibly(StorageService.RING_DELAY, TimeUnit.MILLISECONDS);
-    // make sure it did not change
-    auto& eps = endpoint_state_map.at(endpoint);
-    if (eps.get_heart_beat_state().get_generation() != generation) {
-        throw std::runtime_error(sprint("Endpoint %s generation changed while trying to remove it", endpoint));
-    }
-
-    // update the other node's generation to mimic it as if it had changed it itself
-    logger.info("Advertising removal for {}", endpoint);
-    eps.update_timestamp(); // make sure we don't evict it too soon
-    eps.get_heart_beat_state().force_newer_generation_unsafe();
-    eps.add_application_state(application_state::STATUS, storage_service_value_factory().removing_nonlocal(host_id));
-    eps.add_application_state(application_state::REMOVAL_COORDINATOR, storage_service_value_factory().removal_coordinator(local_host_id));
-    endpoint_state_map[endpoint] = eps;
-}
-
-void gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
-    auto& eps = endpoint_state_map.at(endpoint);
-    eps.update_timestamp(); // make sure we don't evict it too soon
-    eps.get_heart_beat_state().force_newer_generation_unsafe();
-    auto expire_time = compute_expire_time();
-    eps.add_application_state(application_state::STATUS, storage_service_value_factory().removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
-    logger.info("Completing removal of {}", endpoint);
-    add_expire_time_for_endpoint(endpoint, expire_time);
-    endpoint_state_map[endpoint] = eps;
-    // ensure at least one gossip round occurs before returning
-    // FIXME: sleep
-    //Uninterruptibles.sleepUninterruptibly(INTERVAL * 2, TimeUnit.MILLISECONDS);
-    warn(unimplemented::cause::GOSSIP);
-}
-
-void gossiper::unsafe_assassinate_endpoint(sstring address) {
-    logger.warn("Gossiper.unsafeAssassinateEndpoint is deprecated and will be removed in the next release; use assassinate_endpoint instead");
-    assassinate_endpoint(address);
-}
-
-void gossiper::assassinate_endpoint(sstring address) {
-    inet_address endpoint(address);
-    auto is_exist = endpoint_state_map.count(endpoint);
-    int gen = std::chrono::duration_cast<std::chrono::seconds>((now() + std::chrono::seconds(60)).time_since_epoch()).count();
-    int ver = 9999;
-    endpoint_state&& ep_state = is_exist ? endpoint_state_map.at(endpoint) :
-                                           endpoint_state(heart_beat_state(gen, ver));
-    //Collection<Token> tokens = null;
-    logger.warn("Assassinating {} via gossip", endpoint);
-    if (is_exist) {
-        // FIXME:
-        warn(unimplemented::cause::GOSSIP);
-#if 0
-        try {
-            tokens = StorageService.instance.getTokenMetadata().getTokens(endpoint);
-        } catch (Throwable th) {
-            JVMStabilityInspector.inspectThrowable(th);
-            // TODO this is broken
-            logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-            tokens = Collections.singletonList(StorageService.getPartitioner().getRandomToken());
-        }
-#endif
-        int generation = ep_state.get_heart_beat_state().get_generation();
-        int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
+    return seastar::async([this, endpoint, host_id, local_host_id] {
+        auto& state = endpoint_state_map.at(endpoint);
+        // remember this node's generation
+        int generation = state.get_heart_beat_state().get_generation();
+        logger.info("Removing host: {}", host_id);
         logger.info("Sleeping for {}ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
-        //Uninterruptibles.sleepUninterruptibly(StorageService.RING_DELAY, TimeUnit.MILLISECONDS);
+        sleep(storage_service_ring_delay()).get();
         // make sure it did not change
-
-        auto it = endpoint_state_map.find(endpoint);
-        if (it == endpoint_state_map.end()) {
-            logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-        } else {
-            auto& new_state = it->second;
-            if (new_state.get_heart_beat_state().get_generation() != generation) {
-                throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
-            } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                throw std::runtime_error(sprint("Endpoint still alive: %s heartbeat changed while trying to assassinate it", endpoint));
-            }
+        auto& eps = endpoint_state_map.at(endpoint);
+        if (eps.get_heart_beat_state().get_generation() != generation) {
+            throw std::runtime_error(sprint("Endpoint %s generation changed while trying to remove it", endpoint));
         }
-        ep_state.update_timestamp(); // make sure we don't evict it too soon
-        ep_state.get_heart_beat_state().force_newer_generation_unsafe();
-    }
 
-    // do not pass go, do not collect 200 dollars, just gtfo
-    // FIXME: StorageService.instance and Sleep
-    // ep_state.add_application_state(application_state::STATUS, StorageService.instance.valueFactory.left(tokens, compute_expire_time()));
-    handle_major_state_change(endpoint, ep_state);
-    // Uninterruptibles.sleepUninterruptibly(INTERVAL * 4, TimeUnit.MILLISECONDS);
-    logger.warn("Finished assassinating {}", endpoint);
+        // update the other node's generation to mimic it as if it had changed it itself
+        logger.info("Advertising removal for {}", endpoint);
+        eps.update_timestamp(); // make sure we don't evict it too soon
+        eps.get_heart_beat_state().force_newer_generation_unsafe();
+        eps.add_application_state(application_state::STATUS, storage_service_value_factory().removing_nonlocal(host_id));
+        eps.add_application_state(application_state::REMOVAL_COORDINATOR, storage_service_value_factory().removal_coordinator(local_host_id));
+        endpoint_state_map[endpoint] = eps;
+    });
+}
+
+future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
+    return seastar::async([this, endpoint, host_id] {
+        auto& eps = endpoint_state_map.at(endpoint);
+        eps.update_timestamp(); // make sure we don't evict it too soon
+        eps.get_heart_beat_state().force_newer_generation_unsafe();
+        auto expire_time = compute_expire_time();
+        eps.add_application_state(application_state::STATUS, storage_service_value_factory().removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
+        logger.info("Completing removal of {}", endpoint);
+        add_expire_time_for_endpoint(endpoint, expire_time);
+        endpoint_state_map[endpoint] = eps;
+        // ensure at least one gossip round occurs before returning
+        sleep(INTERVAL * 2).get();
+    });
+}
+
+future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
+    logger.warn("Gossiper.unsafeAssassinateEndpoint is deprecated and will be removed in the next release; use assassinate_endpoint instead");
+    return assassinate_endpoint(address);
+}
+
+future<> gossiper::assassinate_endpoint(sstring address) {
+    return seastar::async([this, address] {
+        inet_address endpoint(address);
+        auto is_exist = endpoint_state_map.count(endpoint);
+        int gen = std::chrono::duration_cast<std::chrono::seconds>((now() + std::chrono::seconds(60)).time_since_epoch()).count();
+        int ver = 9999;
+        endpoint_state&& ep_state = is_exist ? endpoint_state_map.at(endpoint) :
+                                               endpoint_state(heart_beat_state(gen, ver));
+        std::vector<dht::token> tokens;
+        logger.warn("Assassinating {} via gossip", endpoint);
+        if (is_exist) {
+            auto& ss = service::get_local_storage_service();
+            auto tokens = ss.get_token_metadata().get_tokens(endpoint);
+            if (tokens.empty()) {
+                logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
+                throw std::runtime_error(sprint("Unable to calculate tokens for %s", endpoint));
+            }
+
+            int generation = ep_state.get_heart_beat_state().get_generation();
+            int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+            logger.info("Sleeping for {} ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
+            // make sure it did not change
+            sleep(storage_service_ring_delay()).get();
+
+            auto it = endpoint_state_map.find(endpoint);
+            if (it == endpoint_state_map.end()) {
+                logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
+            } else {
+                auto& new_state = it->second;
+                if (new_state.get_heart_beat_state().get_generation() != generation) {
+                    throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
+                } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
+                    throw std::runtime_error(sprint("Endpoint still alive: %s heartbeat changed while trying to assassinate it", endpoint));
+                }
+            }
+            ep_state.update_timestamp(); // make sure we don't evict it too soon
+            ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+        }
+
+        // do not pass go, do not collect 200 dollars, just gtfo
+        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+        auto expire_time = compute_expire_time();
+        ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().left(tokens_set, expire_time.time_since_epoch().count()));
+        handle_major_state_change(endpoint, ep_state);
+        sleep(INTERVAL * 4).get();
+        logger.warn("Finished assassinating {}", endpoint);
+    });
 }
 
 bool gossiper::is_known_endpoint(inet_address endpoint) {
@@ -842,9 +858,7 @@ std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_st
 }
 
 bool gossiper::uses_host_id(inet_address endpoint) {
-    // FIXME
-    warn(unimplemented::cause::GOSSIP);
-    if (true /* MessagingService.instance().knowsVersion(endpoint) */) {
+    if (net::get_local_messaging_service().knows_version(endpoint)) {
         return true;
     } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
         return true;
@@ -925,7 +939,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");
-            this->set_last_processed_message_at(now());
+            this->set_last_processed_message_at();
             this->real_mark_alive(id.addr, local_state);
         } catch (...) {
             logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
@@ -1150,7 +1164,7 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
     });
 }
 
-void gossiper::do_shadow_round() {
+future<> gossiper::do_shadow_round() {
     build_seeds_list();
     // send a completely empty syn
     std::vector<gossip_digest> g_digests;
@@ -1162,32 +1176,26 @@ void gossiper::do_shadow_round() {
         ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
             try {
                 auto ack_msg = f.get0();
-                logger.trace("Got GossipDigestSyn Reply");
-                this->set_last_processed_message_at(now());
-                if (this->is_in_shadow_round()) {
-                    this->finish_shadow_round();
-                }
+                logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
+                this->handle_ack_msg(id, ack_msg);
             } catch (...) {
                 logger.error("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
             }
         });
     }
-    // FIXME: Implemnt the wait logic below
-#if 0
-    int slept = 0;
-    try {
+    return seastar::async([this] {
+        std::chrono::milliseconds slept(0);
         while (true) {
-            Thread.sleep(1000);
-            if (!_in_shadow_round)
+            sleep(std::chrono::milliseconds(1000)).get();
+            if (!_in_shadow_round) {
                 break;
-            slept += 1000;
-            if (slept > StorageService.RING_DELAY)
-                throw new RuntimeException("Unable to gossip with any _seeds");
+            }
+            slept += std::chrono::milliseconds(1000);
+            if (slept > storage_service_ring_delay()) {
+                throw std::runtime_error(sprint("Unable to gossip with any seeds"));
+            }
         }
-    } catch (InterruptedException wtf) {
-        throw new RuntimeException(wtf);
-    }
-#endif
+    });
 }
 
 void gossiper::build_seeds_list() {
@@ -1239,8 +1247,7 @@ void gossiper::add_local_application_state(application_state state, versioned_va
     // Notifications may have taken some time, so preventively raise the version
     // of the new value, otherwise it could be ignored by the remote node
     // if another value with a newer version was received in the meantime:
-    // FIXME:
-    // value = StorageService.instance.valueFactory.cloneWithHigherVersion(value);
+    value = storage_service_value_factory().clone_with_higher_version(value);
     // Add to local application state and fire "on change" notifications:
     ep_state.add_application_state(state, value);
     do_on_change_notifications(ep_addr, state, value);
@@ -1254,24 +1261,26 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
     }
 }
 
-void gossiper::shutdown() {
-    warn(unimplemented::cause::GOSSIP);
-    // if (scheduledGossipTask != null)
-    // 	scheduledGossipTask.cancel(false);
-    logger.info("Announcing shutdown");
-    // Uninterruptibles.sleepUninterruptibly(INTERVAL * 2, TimeUnit.MILLISECONDS);
-    for (inet_address addr : _live_endpoints) {
-        shard_id id = get_shard_id(addr);
-        logger.trace("Sending a GossipShutdown to {}", id);
-        ms().send_gossip_shutdown(id, addr).then_wrapped([id] (auto&&f) {
-            try {
-                f.get();
-                logger.trace("Got GossipShutdown Reply");
-            } catch (...) {
-                logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
-            }
-        });
-    }
+future<> gossiper::shutdown() {
+    return seastar::async([this] {
+        warn(unimplemented::cause::GOSSIP);
+        // if (scheduledGossipTask != null)
+        // 	scheduledGossipTask.cancel(false);
+        logger.info("Announcing shutdown");
+        sleep(INTERVAL * 2).get();
+        for (inet_address addr : _live_endpoints) {
+            shard_id id = get_shard_id(addr);
+            logger.trace("Sending a GossipShutdown to {}", id);
+            ms().send_gossip_shutdown(id, addr).then_wrapped([id] (auto&&f) {
+                try {
+                    f.get();
+                    logger.trace("Got GossipShutdown Reply");
+                } catch (...) {
+                    logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+                }
+            });
+        }
+    });
 }
 
 future<> gossiper::stop() {
@@ -1339,6 +1348,42 @@ bool gossiper::is_alive(inet_address ep) {
         logger.error("unknown endpoint {}", ep);
         return false;
     }
+}
+
+future<std::set<inet_address>> get_unreachable_members() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_unreachable_members();
+    });
+}
+
+future<std::set<inet_address>> get_live_members() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_live_members();
+    });
+}
+
+future<int64_t> get_endpoint_downtime(inet_address ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().get_endpoint_downtime(ep);
+    });
+}
+
+future<int> get_current_generation_number(inet_address ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().get_current_generation_number(ep);
+    });
+}
+
+future<> unsafe_assassinate_endpoint(sstring ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().unsafe_assassinate_endpoint(ep);
+    });
+}
+
+future<> assassinate_endpoint(sstring ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().assassinate_endpoint(ep);
+    });
 }
 
 } // namespace gms

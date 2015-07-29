@@ -78,6 +78,7 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
+    void handle_ack_msg(shard_id id, gossip_digest_ack& ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
@@ -153,9 +154,9 @@ private:
     void run();
 public:
     gossiper();
-    void set_last_processed_message_at(clk::time_point tp) {
-        _last_processed_message_at = tp;
-    }
+
+    void set_last_processed_message_at();
+    void set_last_processed_message_at(clk::time_point tp);
 
     bool seen_any_seed();
 
@@ -267,7 +268,7 @@ public:
      * @param host_id      - the ID of the host being removed
      * @param local_host_id - my own host ID for replication coordination
      */
-    void advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
+    future<> advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id);
 
     /**
      * Handles switching the endpoint's state from REMOVING_TOKEN to REMOVED_TOKEN
@@ -276,9 +277,9 @@ public:
      * @param endpoint
      * @param host_id
      */
-    void advertise_token_removed(inet_address endpoint, utils::UUID host_id);
+    future<> advertise_token_removed(inet_address endpoint, utils::UUID host_id);
 
-    void unsafe_assassinate_endpoint(sstring address);
+    future<> unsafe_assassinate_endpoint(sstring address);
 
     /**
      * Do not call this method unless you know what you are doing.
@@ -288,7 +289,7 @@ public:
      * @param address
      * @throws UnknownHostException
      */
-    void assassinate_endpoint(sstring address);
+    future<> assassinate_endpoint(sstring address);
 
 public:
     bool is_known_endpoint(inet_address endpoint);
@@ -403,7 +404,7 @@ public:
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      *  Only used when replacing a node, to get and assume its states
      */
-    void do_shadow_round();
+    future<> do_shadow_round();
 
 private:
     void build_seeds_list();
@@ -421,7 +422,7 @@ public:
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
 
-    void shutdown();
+    future<> shutdown();
 
     future<> stop();
 
@@ -431,39 +432,6 @@ public:
     void finish_shadow_round();
 
     bool is_in_shadow_round();
-
-#if 0
-    @VisibleForTesting
-    public void initializeNodeUnsafe(inet_address addr, UUID uuid, int generation_nbr)
-    {
-        HeartBeatState hb_state = new HeartBeatState(generation_nbr);
-        endpoint_state new_state = new endpoint_state(hb_state);
-        new_state.mark_alive();
-        endpoint_state oldState = endpoint_state_map.putIfAbsent(addr, new_state);
-        endpoint_state local_state = oldState == null ? new_state : oldState;
-
-        // always add the version state
-        local_state.add_application_state(application_state::NET_VERSION, StorageService.instance.valueFactory.networkVersion());
-        local_state.add_application_state(application_state::HOST_ID, StorageService.instance.valueFactory.host_id(uuid));
-    }
-
-    @VisibleForTesting
-    public void injectApplicationState(inet_address endpoint, application_state state, versioned_value value)
-    {
-        endpoint_state local_state = endpoint_state_map.get(endpoint);
-        local_state.add_application_state(state, value);
-    }
-
-    public int64_t get_endpoint_downtime(String address) throws UnknownHostException
-    {
-        return get_endpoint_downtime(inet_address.getByName(address));
-    }
-
-    public int getCurrentGenerationNumber(String address) throws UnknownHostException
-    {
-        return getCurrentGenerationNumber(inet_address.getByName(address));
-    }
-#endif
 
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
@@ -482,41 +450,11 @@ inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
 
-inline future<std::set<inet_address>> get_unreachable_members() {
-    return smp::submit_to(0, [] {
-            return get_local_gossiper().get_unreachable_members();
-    });
-}
-
-inline future<std::set<inet_address>> get_live_members() {
-    return smp::submit_to(0, [] {
-            return get_local_gossiper().get_live_members();
-    });
-}
-
-inline future<int64_t> get_endpoint_downtime(inet_address ep) {
-    return smp::submit_to(0, [ep] {
-            return get_local_gossiper().get_endpoint_downtime(ep);
-    });
-}
-
-
-inline future<int> get_current_generation_number(inet_address ep) {
-    return smp::submit_to(0, [ep] {
-            return get_local_gossiper().get_current_generation_number(ep);
-    });
-}
-
-inline future<> unsafe_assassinate_endpoint(sstring ep) {
-    return smp::submit_to(0, [ep] {
-            get_local_gossiper().unsafe_assassinate_endpoint(ep);
-    });
-}
-
-inline future<> assassinate_endpoint(sstring ep) {
-    return smp::submit_to(0, [ep] {
-            get_local_gossiper().assassinate_endpoint(ep);
-    });
-}
+future<std::set<inet_address>> get_unreachable_members();
+future<std::set<inet_address>> get_live_members();
+future<int64_t> get_endpoint_downtime(inet_address ep);
+future<int> get_current_generation_number(inet_address ep);
+future<> unsafe_assassinate_endpoint(sstring ep);
+future<> assassinate_endpoint(sstring ep);
 
 } // namespace gms
