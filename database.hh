@@ -46,6 +46,7 @@
 #include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
+#include "utils/exponential_backoff_retry.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -101,6 +102,7 @@ private:
     sstables::compaction_strategy _compaction_strategy;
     future<> _compaction_done = make_ready_future<>();
     semaphore _compaction_sem;
+    exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
