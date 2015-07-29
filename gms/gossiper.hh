@@ -433,39 +433,6 @@ public:
 
     bool is_in_shadow_round();
 
-#if 0
-    @VisibleForTesting
-    public void initializeNodeUnsafe(inet_address addr, UUID uuid, int generation_nbr)
-    {
-        HeartBeatState hb_state = new HeartBeatState(generation_nbr);
-        endpoint_state new_state = new endpoint_state(hb_state);
-        new_state.mark_alive();
-        endpoint_state oldState = endpoint_state_map.putIfAbsent(addr, new_state);
-        endpoint_state local_state = oldState == null ? new_state : oldState;
-
-        // always add the version state
-        local_state.add_application_state(application_state::NET_VERSION, StorageService.instance.valueFactory.networkVersion());
-        local_state.add_application_state(application_state::HOST_ID, StorageService.instance.valueFactory.host_id(uuid));
-    }
-
-    @VisibleForTesting
-    public void injectApplicationState(inet_address endpoint, application_state state, versioned_value value)
-    {
-        endpoint_state local_state = endpoint_state_map.get(endpoint);
-        local_state.add_application_state(state, value);
-    }
-
-    public int64_t get_endpoint_downtime(String address) throws UnknownHostException
-    {
-        return get_endpoint_downtime(inet_address.getByName(address));
-    }
-
-    public int getCurrentGenerationNumber(String address) throws UnknownHostException
-    {
-        return getCurrentGenerationNumber(inet_address.getByName(address));
-    }
-#endif
-
 public:
     void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
 
