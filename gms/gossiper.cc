@@ -1341,4 +1341,40 @@ bool gossiper::is_alive(inet_address ep) {
     }
 }
 
+future<std::set<inet_address>> get_unreachable_members() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_unreachable_members();
+    });
+}
+
+future<std::set<inet_address>> get_live_members() {
+    return smp::submit_to(0, [] {
+        return get_local_gossiper().get_live_members();
+    });
+}
+
+future<int64_t> get_endpoint_downtime(inet_address ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().get_endpoint_downtime(ep);
+    });
+}
+
+future<int> get_current_generation_number(inet_address ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().get_current_generation_number(ep);
+    });
+}
+
+future<> unsafe_assassinate_endpoint(sstring ep) {
+    return smp::submit_to(0, [ep] {
+        get_local_gossiper().unsafe_assassinate_endpoint(ep);
+    });
+}
+
+future<> assassinate_endpoint(sstring ep) {
+    return smp::submit_to(0, [ep] {
+        get_local_gossiper().assassinate_endpoint(ep);
+    });
+}
+
 } // namespace gms
