@@ -255,6 +255,7 @@ private:
         // we will use by default - when we have the choice.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
+        std::map<sstring, int64_t> _dropped_columns = {};
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -380,6 +381,10 @@ public:
 
     const std::map<sstring, sstring>& compaction_strategy_options() const {
         return _raw._compaction_strategy_options;
+    }
+
+    const std::map<sstring, int64_t>& dropped_columns() const {
+        return _raw._dropped_columns;
     }
 
     const ::speculative_retry& speculative_retry() const {
