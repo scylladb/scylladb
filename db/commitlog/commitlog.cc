@@ -816,8 +816,8 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
            });
         });
     }).then([w] {
-        w->s.close();
-    });
+        return w->s.close();
+    }).finally([w] {}); // keep w alive for last close
     return ret;
 }
 
