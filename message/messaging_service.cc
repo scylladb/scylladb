@@ -132,7 +132,37 @@ query::range<T> net::serializer::read(Input& in, rpc::type<query::range<T>>) con
 }
 
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
-struct messaging_service::rpc_protocol_client_wrapper : public rpc_protocol::client { using rpc_protocol::client::client; };
+
+// This wrapper pretends to be rpc_protocol::client, but also handles
+// stopping it before destruction, in case it wasn't stopped already.
+// This should be integrated into messaging_service proper.
+class messaging_service::rpc_protocol_client_wrapper {
+    std::unique_ptr<rpc_protocol::client> _p;
+    bool _stopped = false;
+public:
+    rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr())
+            : _p(std::make_unique<rpc_protocol::client>(proto, addr, local)) {
+    }
+    ~rpc_protocol_client_wrapper() {
+        if (_stopped) {
+            return;
+        }
+        auto fut = _p->stop();
+        // defer destruction until the "real" client is destroyed
+        fut.then_wrapped([p = std::move(_p)] (future<> f) {});
+    }
+    auto get_stats() const { return _p->get_stats(); }
+    future<> stop() {
+        if (!_stopped) {
+            _stopped = true;
+            return _p->stop();
+        }
+        // FIXME: not really true, a previous stop could be in progress?
+        return make_ready_future<>();
+    }
+    operator rpc_protocol::client&() { return *_p; }
+};
+
 struct messaging_service::rpc_protocol_server_wrapper : public rpc_protocol::server { using rpc_protocol::server::server; };
 
 constexpr int32_t messaging_service::current_version;
