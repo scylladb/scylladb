@@ -50,10 +50,8 @@ std::chrono::milliseconds gossiper::quarantine_delay() {
     return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
 }
 
-// FIXME: StorageService.instance.valueFactory
 auto& storage_service_value_factory() {
-    static thread_local auto the_value_factory = versioned_value::versioned_value_factory();
-    return the_value_factory;
+    return service::get_local_storage_service().value_factory;
 }
 
 gossiper::gossiper() {
