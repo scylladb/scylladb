@@ -78,6 +78,7 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
+    void handle_ack_msg(shard_id id, gossip_digest_ack& ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
