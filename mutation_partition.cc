@@ -507,13 +507,12 @@ mutation_partition::compact_for_query(
             rows_entry& e = *last;
             deletable_row& row = e.row();
 
-            // FIXME: row expiry
             tombstone tomb = tombstone_for_row(s, e);
 
             bool is_live = row.cells().compact_and_expire(
                 tomb, query_time, std::bind1st(std::mem_fn(&schema::regular_column_at), &s));
 
-            is_live |= row.created_at() > tomb.timestamp;
+            is_live |= row.marker().compact_and_expire(tomb, query_time);
 
             ++last;
 
