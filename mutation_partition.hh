@@ -195,10 +195,6 @@ public:
         _deleted_at.apply(deleted_at);
     }
 
-    void apply(api::timestamp_type created_at) {
-        _marker.apply(row_marker(created_at));
-    }
-
     void apply(const row_marker& rm) {
         _marker.apply(rm);
     }
