@@ -36,6 +36,7 @@ boost_tests = [
     'network_topology_strategy_test',
     'query_processor_test',
     'batchlog_manager_test',
+    'logalloc_test',
 ]
 
 other_tests = [
