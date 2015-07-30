@@ -367,7 +367,7 @@ operator<<(std::ostream& os, const row_marker& rm) {
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
-    return fprint(os, "{deletable_row: %s %s %s}", dr._created_at, dr._deleted_at, dr._cells);
+    return fprint(os, "{deletable_row: %s %s %s}", dr._marker, dr._deleted_at, dr._cells);
 }
 
 std::ostream&
@@ -400,7 +400,7 @@ rows_equal(const schema& s, const row& r1, const row& r2) {
 
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
-    if (_deleted_at != other._deleted_at || _created_at != other._created_at) {
+    if (_deleted_at != other._deleted_at || _marker != other._marker) {
         return false;
     }
     return rows_equal(s, _cells, other._cells);
@@ -548,7 +548,7 @@ deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at);
-    return _created_at > base_tombstone.timestamp
+    return _marker.is_live(base_tombstone, query_time)
            || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
 }
 

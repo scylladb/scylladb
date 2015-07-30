@@ -186,7 +186,7 @@ public:
 
 class deletable_row final {
     tombstone _deleted_at;
-    api::timestamp_type _created_at = api::missing_timestamp;
+    row_marker _marker;
     row _cells;
 public:
     deletable_row() {}
@@ -196,11 +196,13 @@ public:
     }
 
     void apply(api::timestamp_type created_at) {
-        _created_at = std::max(_created_at, created_at);
+        _marker.apply(row_marker(created_at));
     }
 public:
     tombstone deleted_at() const { return _deleted_at; }
-    api::timestamp_type created_at() const { return _created_at; }
+    api::timestamp_type created_at() const { return _marker.timestamp(); }
+    row_marker& marker() { return _marker; }
+    const row_marker& marker() const { return _marker; }
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
