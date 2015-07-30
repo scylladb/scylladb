@@ -22,14 +22,6 @@
 #include "core/distributed.hh"
 namespace gms {
 
-std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn) {
-    os << "cluster_id:" << syn._cluster_id << ",partioner:" << syn._partioner << ",";
-    os << "digests:{";
-    for (auto& d : syn._digests) {
-        os << d << " ";
-    }
-    return os << "}";
-}
 
 std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack) {
     os << "digests:{";
