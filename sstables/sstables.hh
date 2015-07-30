@@ -166,7 +166,7 @@ public:
     static component_type component_from_sstring(sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static const sstring filename(sstring dir, version_types version, unsigned long generation,
+    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
                                   format_types format, component_type component);
 
     future<> load();

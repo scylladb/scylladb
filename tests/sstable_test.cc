@@ -217,9 +217,9 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
 
 static future<> check_component_integrity(sstable::component_type component) {
     return write_sst_info("tests/sstables/compressed", 1).then([component] {
-        auto file_path = sstable::filename("tests/sstables/compressed", la, 1, big, component);
+        auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 1, big, component);
         return read_file(file_path).then([component] (auto ret) {
-            auto file_path = sstable::filename("tests/sstables/compressed", la, 2, big, component);
+            auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 2, big, component);
             return read_file(file_path).then([ret] (auto ret2) {
                 // assert that both files have the same size.
                 BOOST_REQUIRE(ret.second == ret2.second);
