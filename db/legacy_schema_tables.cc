@@ -1069,18 +1069,13 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
         m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
+
+#if 0
+        for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
+            adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
+#endif
+
         m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
-
-        auto dc = *(s->get_column_definition("dropped_columns"));
-
-        std::vector<std::pair<bytes, atomic_cell>> cells;
-        for (auto& p: table->dropped_columns()) {
-            cells.push_back({utf8_type->decompose(p.first), atomic_cell::make_live(timestamp, long_type->decompose(p.second))});
-        }
-
-        map_type_impl::mutation dc_mut{{}, std::move(cells) };
-        auto col = static_pointer_cast<const collection_type_impl>(dc.type);
-        m.set_clustered_cell(ckey, dc, col->serialize_mutation_form(dc_mut));
 
         if (with_columns_and_triggers) {
             for (auto&& column : table->all_columns_in_select_order()) {
@@ -1362,10 +1357,10 @@ future<> save_system_keyspace_schema() {
             builder.set_bloom_filter_fp_chance(builder.get_bloom_filter_fp_chance());
         }
 
-        if (table_row.has("dropped_columns")) {
-            builder.set_dropped_columns(table_row.get_nonnull<std::map<sstring, int64_t>>("dropped_columns"));
-        }
-
+#if 0
+        if (result.has("dropped_columns"))
+            cfm.droppedColumns(convertDroppedColumns(result.getMap("dropped_columns", UTF8Type.instance, LongType.instance)));
+#endif
         for (auto&& cdef : column_defs) {
             builder.with_column(cdef);
         }
