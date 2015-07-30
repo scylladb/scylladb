@@ -172,8 +172,8 @@ int main(int ac, char** av) {
                 }).then([api_address, api_port] {
                     print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
                 });
-            }).or_terminate();
-        });
+            });
+        }).or_terminate();
     });
 }
 
