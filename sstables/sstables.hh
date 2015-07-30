@@ -113,7 +113,7 @@ public:
         Filter,
         Statistics,
     };
-    enum class version_types { la };
+    enum class version_types { ka, la };
     enum class format_types { big };
 public:
     sstable(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())

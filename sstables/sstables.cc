@@ -74,6 +74,7 @@ public:
 };
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
+    { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" }
 };
 
@@ -81,6 +82,7 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
     { sstable::format_types::big , "big" }
 };
 
+// FIXME: this should be version-dependent
 std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
     { component_type::Index, "Index.db"},
     { component_type::CompressionInfo, "CompressionInfo.db" },
