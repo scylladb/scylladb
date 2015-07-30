@@ -259,4 +259,6 @@ std::ostream& operator<<(std::ostream& os, const failure_detector& x) {
     return os;
 }
 
+distributed<failure_detector> _the_failure_detector;
+
 } // namespace gms

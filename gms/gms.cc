@@ -22,7 +22,6 @@
 #include "core/distributed.hh"
 namespace gms {
 distributed<gossiper> _the_gossiper;
-distributed<failure_detector> _the_failure_detector;
 
 std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn) {
     os << "cluster_id:" << syn._cluster_id << ",partioner:" << syn._partioner << ",";
