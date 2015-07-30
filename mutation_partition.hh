@@ -173,7 +173,13 @@ public:
         return true;
     }
     bool operator==(const row_marker& other) const {
-        if (_timestamp != other._timestamp || _ttl != other._ttl) {
+        if (_timestamp != other._timestamp) {
+            return false;
+        }
+        if (is_missing()) {
+            return true;
+        }
+        if (_ttl != other._ttl) {
             return false;
         }
         return _ttl == no_ttl || _expiry == other._expiry;
