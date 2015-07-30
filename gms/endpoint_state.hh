@@ -73,14 +73,7 @@ public:
         _heart_beat_state = hbs;
     }
 
-    std::experimental::optional<versioned_value> get_application_state(application_state key) const {
-        auto it = _application_state.find(key);
-        if (it == _application_state.end()) {
-            return {};
-        } else {
-            return _application_state.at(key);
-        }
-    }
+    std::experimental::optional<versioned_value> get_application_state(application_state key) const;
 
     /**
      * TODO replace this with operations that don't expose private state
@@ -118,54 +111,14 @@ public:
         _is_alive = false;
     }
 
-    friend inline std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
-        os << "EndpointState: HeartBeatState = " << x._heart_beat_state << ", AppStateMap = ";
-        for (auto&entry : x._application_state) {
-            const application_state& state = entry.first;
-            const versioned_value& value = entry.second;
-            os << " { " << int32_t(state) << " : " << value << " } ";
-        }
-        return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
 
     // The following replaces EndpointStateSerializer from the Java code
-    void serialize(bytes::iterator& out) const {
-        /* serialize the HeartBeatState */
-        _heart_beat_state.serialize(out);
+    void serialize(bytes::iterator& out) const;
 
-        /* serialize the map of ApplicationState objects */
-        int32_t app_state_size = _application_state.size();
-        serialize_int32(out, app_state_size);
-        for (auto& entry : _application_state) {
-            const application_state& state = entry.first;
-            const versioned_value& value = entry.second;
-            serialize_int32(out, int32_t(state));
-            value.serialize(out);
-        }
-    }
+    static endpoint_state deserialize(bytes_view& v);
 
-    static endpoint_state deserialize(bytes_view& v) {
-        heart_beat_state hbs = heart_beat_state::deserialize(v);
-        endpoint_state es = endpoint_state(hbs);
-        int32_t app_state_size = read_simple<int32_t>(v);
-        for (int32_t i = 0; i < app_state_size; ++i) {
-            auto state = static_cast<application_state>(read_simple<int32_t>(v));
-            auto value = versioned_value::deserialize(v);
-            es.add_application_state(state, value);
-        }
-        return es;
-    }
-
-    size_t serialized_size() const {
-        long size = _heart_beat_state.serialized_size();
-        size += serialize_int32_size;
-        for (auto& entry : _application_state) {
-            const versioned_value& value = entry.second;
-            size += serialize_int32_size;
-            size += value.serialized_size();
-        }
-        return size;
-    }
+    size_t serialized_size() const;
 };
 
 } // gms
