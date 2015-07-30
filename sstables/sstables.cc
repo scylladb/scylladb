@@ -980,20 +980,35 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
 }
 
 void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key) {
-    // Missing created_at (api::missing_timestamp) means no row marker.
-    if (clustered_row.row().created_at() == api::missing_timestamp) {
+    const auto& marker = clustered_row.row().marker();
+    if (marker.is_missing()) {
         return;
     }
 
     // Write row mark cell to the beginning of clustered row.
     write_column_name(out, clustering_key, { bytes_view() });
-    column_mask mask = column_mask::none;
-    uint64_t timestamp = clustered_row.row().created_at();
+    uint64_t timestamp = marker.timestamp();
     uint32_t value_length = 0;
 
     update_cell_stats(_c_stats, timestamp);
 
-    write(out, mask, timestamp, value_length);
+    if (marker.is_dead(_now)) {
+        column_mask mask = column_mask::deletion;
+        uint32_t deletion_time_size = sizeof(uint32_t);
+        uint32_t deletion_time = marker.deletion_time().time_since_epoch().count();
+
+        _c_stats.tombstone_histogram.update(deletion_time);
+
+        write(out, mask, timestamp, deletion_time_size, deletion_time);
+    } else if (marker.is_expiring()) {
+        column_mask mask = column_mask::expiration;
+        uint32_t ttl = marker.ttl().count();
+        uint32_t expiration = marker.expiry().time_since_epoch().count();
+        write(out, mask, ttl, expiration, timestamp, value_length);
+    } else {
+        column_mask mask = column_mask::none;
+        write(out, mask, timestamp, value_length);
+    }
 }
 
 void sstable::write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t) {

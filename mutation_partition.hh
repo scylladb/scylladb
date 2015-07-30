@@ -99,9 +99,94 @@ public:
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
 
+class row_marker {
+    static constexpr gc_clock::duration no_ttl { 0 };
+    static constexpr gc_clock::duration dead { -1 };
+    api::timestamp_type _timestamp = api::missing_timestamp;
+    gc_clock::duration _ttl = no_ttl;
+    gc_clock::time_point _expiry;
+public:
+    row_marker() = default;
+    row_marker(api::timestamp_type created_at) : _timestamp(created_at) { }
+    row_marker(api::timestamp_type created_at, gc_clock::duration ttl, gc_clock::time_point expiry)
+        : _timestamp(created_at), _ttl(ttl), _expiry(expiry)
+    { }
+    row_marker(tombstone deleted_at)
+        : _timestamp(deleted_at.timestamp), _ttl(dead), _expiry(deleted_at.deletion_time)
+    { }
+    bool is_missing() const {
+        return _timestamp == api::missing_timestamp;
+    }
+    bool is_live(tombstone t, gc_clock::time_point now) const {
+        if (is_missing() || _ttl == dead) {
+            return false;
+        }
+        if (_ttl != no_ttl && _expiry < now) {
+            return false;
+        }
+        return _timestamp > t.timestamp;
+    }
+    // Can be called only when !is_missing().
+    bool is_dead(gc_clock::time_point now) const {
+        if (_ttl == dead) {
+            return true;
+        }
+        return _ttl != no_ttl && _expiry < now;
+    }
+    // Can be called only when is_live().
+    bool is_expiring() const {
+        return _ttl != no_ttl;
+    }
+    // Can be called only when is_expiring().
+    gc_clock::duration ttl() const {
+        return _ttl;
+    }
+    // Can be called only when is_expiring().
+    gc_clock::time_point expiry() const {
+        return _expiry;
+    }
+    // Can be called only when is_dead().
+    gc_clock::time_point deletion_time() const {
+        return _ttl == dead ? _expiry : _expiry - _ttl;
+    }
+    api::timestamp_type timestamp() const {
+        return _timestamp;
+    }
+    void apply(const row_marker& rm) {
+        if (_timestamp <= rm._timestamp) {
+            *this = rm;
+        }
+    }
+    bool compact_and_expire(tombstone tomb, gc_clock::time_point now) {
+        if (is_missing()) {
+            return false;
+        }
+        if (_timestamp <= tomb.timestamp) {
+            _timestamp = api::missing_timestamp;
+            return false;
+        }
+        if (_ttl != no_ttl && _expiry < now) {
+            _expiry -= _ttl;
+            _ttl = dead;
+            return false;
+        }
+        return true;
+    }
+    bool operator==(const row_marker& other) const {
+        if (_timestamp != other._timestamp || _ttl != other._ttl) {
+            return false;
+        }
+        return _ttl == no_ttl || _expiry == other._expiry;
+    }
+    bool operator!=(const row_marker& other) const {
+        return !(*this == other);
+    }
+    friend std::ostream& operator<<(std::ostream& os, const row_marker& rm);
+};
+
 class deletable_row final {
     tombstone _deleted_at;
-    api::timestamp_type _created_at = api::missing_timestamp;
+    row_marker _marker;
     row _cells;
 public:
     deletable_row() {}
@@ -110,12 +195,14 @@ public:
         _deleted_at.apply(deleted_at);
     }
 
-    void apply(api::timestamp_type created_at) {
-        _created_at = std::max(_created_at, created_at);
+    void apply(const row_marker& rm) {
+        _marker.apply(rm);
     }
 public:
     tombstone deleted_at() const { return _deleted_at; }
-    api::timestamp_type created_at() const { return _created_at; }
+    api::timestamp_type created_at() const { return _marker.timestamp(); }
+    row_marker& marker() { return _marker; }
+    const row_marker& marker() const { return _marker; }
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);

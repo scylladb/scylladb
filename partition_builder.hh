@@ -39,9 +39,9 @@ public:
         _partition.apply_row_tombstone(_schema, prefix, t);
     }
 
-    virtual void accept_row(clustering_key_view key, api::timestamp_type created_at, tombstone deleted_at) override {
+    virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) override {
         deletable_row& r = _partition.clustered_row(_schema, key);
-        r.apply(created_at);
+        r.apply(rm);
         r.apply(deleted_at);
         _current_row = &r;
     }

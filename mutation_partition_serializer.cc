@@ -55,7 +55,13 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
     // rows
     for (const rows_entry& e : p.clustered_rows()) {
         size += clustering_key_view_serializer(e.key()).size();
-        size += sizeof(api::timestamp_type); // e.row().created_at
+        size += sizeof(api::timestamp_type); // e.row().marker()._timestamp
+        if (!e.row().marker().is_missing()) {
+            size += sizeof(gc_clock::duration); // e.row().marker()._ttl
+            if (e.row().marker().ttl().count()) {
+                size += sizeof(gc_clock::time_point); // e.row().marker()._expiry
+            }
+        }
         size += tombstone_serializer(e.row().deleted_at()).size();
         size += sizeof(count_type); // e.row().cells.size()
         for (auto&& cell_entry : e.row().cells()) {
@@ -105,7 +111,14 @@ mutation_partition_serializer::write_without_framing(data_output& out) const {
     // rows
     for (const rows_entry& e : _p.clustered_rows()) {
         clustering_key_view_serializer::write(out, e.key());
-        out.write(e.row().created_at());
+        const auto& rm = e.row().marker();
+        out.write(rm.timestamp());
+        if (!rm.is_missing()) {
+            out.write(rm.ttl().count());
+            if (rm.ttl().count()) {
+                out.write(rm.expiry().time_since_epoch().count());
+            }
+        }
         tombstone_serializer::write(out, e.row().deleted_at());
         out.write<count_type>(e.row().cells().size());
         for (auto&& cell_entry : e.row().cells()) {

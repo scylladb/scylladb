@@ -55,7 +55,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
             _rows.insert(i, *e);
         } else {
             i->row().apply(entry.row().deleted_at());
-            i->row().apply(entry.row().created_at());
+            i->row().apply(entry.row().marker());
             merge_cells(i->row().cells(), entry.row().cells(), find_regular_column_def);
         }
     }
@@ -353,10 +353,21 @@ operator<<(std::ostream& os, const row& r) {
     return fprint(os, "{row: %s}", ::join(", ", r));
 }
 
+std::ostream&
+operator<<(std::ostream& os, const row_marker& rm) {
+    if (rm.is_missing()) {
+        return fprint(os, "{missing row_marker}");
+    } else if (rm._ttl == row_marker::dead) {
+        return fprint(os, "{dead row_marker %s %s}", rm._timestamp, rm._expiry.time_since_epoch().count());
+    } else {
+        return fprint(os, "{row_marker %s %s %s}", rm._timestamp, rm._ttl.count(),
+            rm._ttl != row_marker::no_ttl ? rm._expiry.time_since_epoch().count() : 0);
+    }
+}
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
-    return fprint(os, "{deletable_row: %s %s %s}", dr._created_at, dr._deleted_at, dr._cells);
+    return fprint(os, "{deletable_row: %s %s %s}", dr._marker, dr._deleted_at, dr._cells);
 }
 
 std::ostream&
@@ -376,6 +387,9 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
                   ::join(", ", mp._rows));
 }
 
+constexpr gc_clock::duration row_marker::no_ttl;
+constexpr gc_clock::duration row_marker::dead;
+
 static bool
 rows_equal(const schema& s, const row& r1, const row& r2) {
     return std::equal(r1.begin(), r1.end(), r2.begin(), r2.end(),
@@ -386,7 +400,7 @@ rows_equal(const schema& s, const row& r1, const row& r2) {
 
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
-    if (_deleted_at != other._deleted_at || _created_at != other._created_at) {
+    if (_deleted_at != other._deleted_at || _marker != other._marker) {
         return false;
     }
     return rows_equal(s, _cells, other._cells);
@@ -493,13 +507,12 @@ mutation_partition::compact_for_query(
             rows_entry& e = *last;
             deletable_row& row = e.row();
 
-            // FIXME: row expiry
             tombstone tomb = tombstone_for_row(s, e);
 
             bool is_live = row.cells().compact_and_expire(
                 tomb, query_time, std::bind1st(std::mem_fn(&schema::regular_column_at), &s));
 
-            is_live |= row.created_at() > tomb.timestamp;
+            is_live |= row.marker().compact_and_expire(tomb, query_time);
 
             ++last;
 
@@ -534,7 +547,7 @@ deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at);
-    return _created_at > base_tombstone.timestamp
+    return _marker.is_live(base_tombstone, query_time)
            || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
 }
 

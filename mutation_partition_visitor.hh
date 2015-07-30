@@ -8,6 +8,8 @@
 #include "tombstone.hh"
 #include "keys.hh"
 
+class row_marker;
+
 // Guarantees:
 //
 // - any tombstones which affect cell's liveness are visited before that cell
@@ -35,7 +37,7 @@ public:
 
     virtual void accept_row_tombstone(clustering_key_prefix_view, tombstone) = 0;
 
-    virtual void accept_row(clustering_key_view key, api::timestamp_type created_at, tombstone deleted_at) = 0;
+    virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) = 0;
 
     virtual void accept_row_cell(column_id id, atomic_cell_view) = 0;
 

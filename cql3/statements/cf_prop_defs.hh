@@ -198,9 +198,8 @@ public:
         builder.set_min_compaction_threshold(min_compaction_threshold);
         builder.set_max_compaction_threshold(max_compaction_threshold);
 
-#if 0
-        cfm.defaultTimeToLive(getInt(KW_DEFAULT_TIME_TO_LIVE, cfm.getDefaultTimeToLive()));
-#endif
+        builder.set_default_time_to_live(gc_clock::duration(get_int(KW_DEFAULT_TIME_TO_LIVE, DEFAULT_DEFAULT_TIME_TO_LIVE)));
+
         if (has_property(KW_SPECULATIVE_RETRY)) {
             builder.set_speculative_retry(get_string(KW_SPECULATIVE_RETRY, builder.get_speculative_retry().to_sstring()));
         }
