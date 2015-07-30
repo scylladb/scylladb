@@ -1256,9 +1256,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 
 future<> gossiper::shutdown() {
     return seastar::async([this] {
-        warn(unimplemented::cause::GOSSIP);
-        // if (scheduledGossipTask != null)
-        // 	scheduledGossipTask.cancel(false);
+        _scheduled_gossip_task.cancel();
         logger.info("Announcing shutdown");
         sleep(INTERVAL * 2).get();
         for (inet_address addr : _live_endpoints) {
