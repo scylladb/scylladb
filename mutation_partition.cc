@@ -353,6 +353,17 @@ operator<<(std::ostream& os, const row& r) {
     return fprint(os, "{row: %s}", ::join(", ", r));
 }
 
+std::ostream&
+operator<<(std::ostream& os, const row_marker& rm) {
+    if (rm.is_missing()) {
+        return fprint(os, "{missing row_marker}");
+    } else if (rm._ttl == row_marker::dead) {
+        return fprint(os, "{dead row_marker %s %s}", rm._timestamp, rm._expiry.time_since_epoch().count());
+    } else {
+        return fprint(os, "{row_marker %s %s %s}", rm._timestamp, rm._ttl.count(),
+            rm._ttl != row_marker::no_ttl ? rm._expiry.time_since_epoch().count() : 0);
+    }
+}
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
@@ -375,6 +386,9 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
                   mp._tombstone, ::join(", ", mp._row_tombstones), mp._static_row,
                   ::join(", ", mp._rows));
 }
+
+constexpr gc_clock::duration row_marker::no_ttl;
+constexpr gc_clock::duration row_marker::dead;
 
 static bool
 rows_equal(const schema& s, const row& r1, const row& r2) {
