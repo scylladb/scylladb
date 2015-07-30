@@ -545,7 +545,6 @@ std::set<inet_address> gossiper::get_live_token_owners() {
         if (it != endpoint_state_map.end() && !is_dead_state(it->second) && service::get_local_storage_service().get_token_metadata().is_member(member)) {
             token_owners.insert(member);
         }
-        warn(unimplemented::cause::GOSSIP);
     }
     return token_owners;
 }
@@ -554,7 +553,6 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
-        warn(unimplemented::cause::GOSSIP);
         if (service::get_local_storage_service().get_token_metadata().is_member(endpoint)) {
             token_owners.insert(endpoint);
         }
