@@ -50,6 +50,8 @@ constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
+distributed<gossiper> _the_gossiper;
+
 std::chrono::milliseconds gossiper::quarantine_delay() {
     return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
 }
