@@ -77,6 +77,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     logger.info("Compacting {}", sstable_logger_msg);
 
     auto combined_reader = make_combined_reader(std::move(readers));
+    auto start_time = std::chrono::high_resolution_clock::now();
 
     // We use a fixed-sized pipe between the producer fiber (which reads the
     // individual sstables and merges them) and the consumer fiber (which
@@ -109,21 +110,24 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     };
 
     future<> write_done = newtab->write_components(
-            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats] {
-        return newtab->load().then([newtab, stats] {
+            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats, start_time] {
+        return newtab->load().then([newtab, stats, start_time] {
             uint64_t endsize = newtab->data_size();
             double ratio = (double) endsize / (double) stats->start_size;
+            auto end_time = std::chrono::high_resolution_clock::now();
+            // time taken by compaction in seconds.
+            auto duration = std::chrono::duration<float>(end_time - start_time);
 
             // FIXME: there is some missing information in the log message below.
             // look at CompactionTask::runMayThrow() in origin for reference.
-            // 1) calculate data rate during compaction.
-            // 2) add support to merge summary (message: Partition merge counts were {%s}.).
-            // 3) there is no easy way, currently, to know the exact number of total partitions.
+            // - add support to merge summary (message: Partition merge counts were {%s}.).
+            // - there is no easy way, currently, to know the exact number of total partitions.
             // By the time being, using estimated key count.
             logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
                 "~{} total partitions merged to {}.",
                 stats->sstables, newtab->get_filename(), stats->start_size, endsize, (int) (ratio * 100),
-                0, 0, stats->total_partitions, stats->total_keys_written);
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), (endsize / (1024*1024)) / duration.count(),
+                stats->total_partitions, stats->total_keys_written);
         });
     });
 
