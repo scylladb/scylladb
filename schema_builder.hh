@@ -108,6 +108,30 @@ public:
         return _raw._max_index_interval;
     }
 
+    void set_memtable_flush_period(int32_t t) {
+        _raw._memtable_flush_period = t;
+    }
+
+    int32_t get_memtable_flush_period() const {
+        return _raw._memtable_flush_period;
+    }
+
+    void set_speculative_retry(sstring retry_sstring) {
+        _raw._speculative_retry = speculative_retry::from_sstring(retry_sstring);
+    }
+
+    const speculative_retry& get_speculative_retry() {
+        return _raw._speculative_retry;
+    }
+
+    void set_dropped_columns(std::map<sstring, int64_t> c) {
+        _raw._dropped_columns = std::move(c);
+    }
+
+    const std::map<sstring, int64_t>& get_dropped_columns() {
+        return _raw._dropped_columns;
+    }
+
     void set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
     }

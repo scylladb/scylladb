@@ -1066,18 +1066,21 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "max_compaction_threshold", table->max_compaction_threshold(), timestamp);
         m.set_clustered_cell(ckey, "min_index_interval", table->min_index_interval(), timestamp);
         m.set_clustered_cell(ckey, "max_index_interval", table->max_index_interval(), timestamp);
-#if 0
-        adder.add("memtable_flush_period_in_ms", table.getMemtableFlushPeriod());
-#endif
+        m.set_clustered_cell(ckey, "memtable_flush_period_in_ms", table->memtable_flush_period(), timestamp);
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
-#if 0
-        adder.add("speculative_retry", table.getSpeculativeRetry().toString());
-
-        for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
-            adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
-#endif
-
+        m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
         m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
+
+        auto dc = *(s->get_column_definition("dropped_columns"));
+
+        std::vector<std::pair<bytes, atomic_cell>> cells;
+        for (auto& p: table->dropped_columns()) {
+            cells.push_back({utf8_type->decompose(p.first), atomic_cell::make_live(timestamp, long_type->decompose(p.second))});
+        }
+
+        map_type_impl::mutation dc_mut{{}, std::move(cells) };
+        auto col = static_pointer_cast<const collection_type_impl>(dc.type);
+        m.set_clustered_cell(ckey, dc, col->serialize_mutation_form(dc_mut));
 
         if (with_columns_and_triggers) {
             for (auto&& column : table->all_columns_in_select_order()) {
@@ -1319,14 +1322,19 @@ future<> save_system_keyspace_schema() {
 #if 0
         if (result.has("comment"))
             cfm.comment(result.getString("comment"));
-        if (result.has("memtable_flush_period_in_ms"))
-            cfm.memtableFlushPeriod(result.getInt("memtable_flush_period_in_ms"));
+#endif
+        if (table_row.has("memtable_flush_period_in_ms")) {
+            builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
+        }
+#if 0
         cfm.caching(CachingOptions.fromString(result.getString("caching")));
         if (result.has("default_time_to_live"))
             cfm.defaultTimeToLive(result.getInt("default_time_to_live"));
-        if (result.has("speculative_retry"))
-            cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(result.getString("speculative_retry")));
 #endif
+        if (table_row.has("speculative_retry")) {
+            builder.set_speculative_retry(table_row.get_nonnull<sstring>("speculative_retry"));
+        }
+
         if (table_row.has("compaction_strategy")) {
             auto strategy = table_row.get_nonnull<sstring>("compression_strategy_class");
             builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
@@ -1354,10 +1362,10 @@ future<> save_system_keyspace_schema() {
             builder.set_bloom_filter_fp_chance(builder.get_bloom_filter_fp_chance());
         }
 
-#if 0
-        if (result.has("dropped_columns"))
-            cfm.droppedColumns(convertDroppedColumns(result.getMap("dropped_columns", UTF8Type.instance, LongType.instance)));
-#endif
+        if (table_row.has("dropped_columns")) {
+            builder.set_dropped_columns(table_row.get_nonnull<std::map<sstring, int64_t>>("dropped_columns"));
+        }
+
         for (auto&& cdef : column_defs) {
             builder.with_column(cdef);
         }
