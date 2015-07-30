@@ -343,7 +343,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
 
         run_mutation_source_tests([&dirs] (schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
             tmpdir sstable_dir;
-            auto sst = make_lw_shared<sstables::sstable>(
+            auto sst = make_lw_shared<sstables::sstable>("ks", "cf",
                 sstable_dir.path,
                 1 /* generation */,
                 sstables::sstable::version_types::la,
