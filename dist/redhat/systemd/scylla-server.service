@@ -1,0 +1,15 @@
+[Unit]
+Description=Scylla Server
+After=network.target libvirtd.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/sysconfig/scylla-server
+ExecStartPre=/usr/lib/scylla/scylla_prepare
+ExecStart=/usr/lib/scylla/scylla_run
+ExecStopPost=/usr/lib/scylla/scylla_stop
+KillMode=process
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
