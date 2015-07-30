@@ -1362,13 +1362,7 @@ const bool sstable::has_component(component_type f) {
 }
 
 const sstring sstable::filename(component_type f) {
-
-    auto& version = _version_string.at(_version);
-    auto& format = _format_string.at(_format);
-    auto& component = _component_map.at(f);
-    auto generation =  to_sstring(_generation);
-
-    return _dir + "/" + version + "-" + generation + "-" + format + "-" + component;
+    return filename(_dir, _version, _generation, _format, f);
 }
 
 const sstring sstable::filename(sstring dir, version_types version, unsigned long generation,
