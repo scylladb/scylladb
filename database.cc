@@ -424,20 +424,16 @@ column_family::seal_active_memtable() {
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
-    sstring name = sprint("%s/%s-%s-%d-Data.db",
-            _config.datadir,
-            _schema->ks_name(), _schema->cf_name(),
-            gen);
 
-    return seastar::with_gate(_in_flight_seals, [gen, old, name, this] {
+    return seastar::with_gate(_in_flight_seals, [gen, old, this] {
         sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
             sstables::sstable::version_types::la,
             sstables::sstable::format_types::big);
 
-        dblog.debug("Flushing to {}", name);
-        return do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
+        dblog.debug("Flushing to {}", newtab.get_filename());
+        return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
             // FIXME: write all components
-            return newtab.write_components(*old).then([name, this, &newtab, old] {
+            return newtab.write_components(*old).then([this, &newtab, old] {
                 return newtab.load();
             }).then([this, old, &newtab] {
                 dblog.debug("Flushing done");
@@ -445,7 +441,7 @@ column_family::seal_active_memtable() {
                 // memtable's data after moving to cache can be evicted at any time.
                 add_sstable(std::move(newtab));
                 return update_cache(*old);
-            }).then_wrapped([name, this, old] (future<> ret) {
+            }).then_wrapped([this, old] (future<> ret) {
                 try {
                     ret.get();
 
