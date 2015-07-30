@@ -360,12 +360,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
     // do not remove endpointState until the quarantine expires
     get_local_failure_detector().remove(endpoint);
-    // FIXME: MessagingService
-    //MessagingService.instance().resetVersion(endpoint);
-    warn(unimplemented::cause::GOSSIP);
     quarantine_endpoint(endpoint);
-    // FIXME: MessagingService
-    //MessagingService.instance().destroyConnectionPool(endpoint);
     logger.debug("removing endpoint {}", endpoint);
 }
 
