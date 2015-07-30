@@ -378,4 +378,17 @@ public:
 
 using shared_sstable = lw_shared_ptr<sstable>;
 
+struct entry_descriptor {
+    sstring ks;
+    sstring cf;
+    sstable::version_types version;
+    unsigned long generation;
+    sstable::format_types format;
+    sstable::component_type component;
+
+    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
+                     unsigned long generation, sstable::format_types format,
+                     sstable::component_type component)
+        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+};
 }

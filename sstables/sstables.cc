@@ -1369,12 +1369,17 @@ const sstring sstable::filename(component_type f) {
 
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
                                 format_types format, component_type component) {
-    auto& v = _version_string.at(version);
-    auto& f = _format_string.at(format);
-    auto& c= _component_map.at(component);
-    auto g =  to_sstring(generation);
 
-    return dir + "/" + v + "-" + g + "-" + f + "-" + c;
+    static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
+        { sstable::version_types::ka, [] (entry_descriptor d) {
+            return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _component_map.at(d.component); }
+        },
+        { sstable::version_types::la, [] (entry_descriptor d) {
+            return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
+        }
+    };
+
+    return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {
