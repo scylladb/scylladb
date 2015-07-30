@@ -1285,9 +1285,7 @@ future<> gossiper::stop() {
 }
 
 bool gossiper::is_enabled() {
-    //return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
-    warn(unimplemented::cause::GOSSIP);
-    return true;
+    return _scheduled_gossip_task.armed();
 }
 
 void gossiper::finish_shadow_round() {
