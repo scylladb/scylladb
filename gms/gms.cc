@@ -22,14 +22,4 @@
 #include "core/distributed.hh"
 namespace gms {
 
-
-
-std::ostream& operator<<(std::ostream& os, const gossip_digest_ack2& ack2) {
-    os << "endpoint_state:{";
-    for (auto& d : ack2._map) {
-        os << "[" << d.first << "->" << d.second << "]";
-    }
-    return os << "}";
-}
-
 }
