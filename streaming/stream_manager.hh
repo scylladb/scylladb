@@ -112,22 +112,10 @@ public:
             }
         }));
     }
-
-    public void register(final StreamResultFuture result)
-    {
-        result.addEventListener(notifier);
-        // Make sure we remove the stream on completion (whether successful or not)
-        result.addListener(new Runnable()
-        {
-            public void run()
-            {
-                initiatedStreams.remove(result.planId);
-            }
-        }, MoreExecutors.sameThreadExecutor());
-
-        initiatedStreams.put(result.planId, result);
-    }
 #endif
+
+    void register_sending(shared_ptr<stream_result_future> result);
+
     void register_receiving(shared_ptr<stream_result_future> result);
 
     shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);

@@ -27,6 +27,21 @@ namespace streaming {
 
 distributed<stream_manager> _the_stream_manager;
 
+void stream_manager::register_sending(shared_ptr<stream_result_future> result) {
+#if 0
+    result.addEventListener(notifier);
+    // Make sure we remove the stream on completion (whether successful or not)
+    result.addListener(new Runnable()
+    {
+        public void run()
+        {
+            initiatedStreams.remove(result.planId);
+        }
+    }, MoreExecutors.sameThreadExecutor());
+#endif
+    _initiated_streams[result->plan_id] = std::move(result);
+}
+
 void stream_manager::register_receiving(shared_ptr<stream_result_future> result) {
 #if 0
     result->add_event_listener(notifier);
