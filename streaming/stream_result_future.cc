@@ -114,7 +114,7 @@ void stream_result_future::handle_progress(progress_info progress) {
 shared_ptr<stream_result_future> stream_result_future::create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
     auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
     auto& sm = get_local_stream_manager();
-    sm.register_receiving(future);
+    sm.register_sending(future);
     return future;
 }
 
