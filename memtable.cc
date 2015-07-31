@@ -42,11 +42,6 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     return i->partition();
 }
 
-const memtable::partitions_type&
-memtable::all_partitions() const {
-    return partitions;
-}
-
 boost::iterator_range<memtable::partitions_type::const_iterator>
 memtable::slice(const query::partition_range& range) const {
     if (range.is_singular() && range.start()->value().has_key()) {
@@ -125,4 +120,8 @@ mutation_source memtable::as_data_source() {
     return [mt = shared_from_this()] (const query::partition_range& range) {
         return mt->make_reader(range);
     };
+}
+
+size_t memtable::partition_count() const {
+    return partitions.size();
 }

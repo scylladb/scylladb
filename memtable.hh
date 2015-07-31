@@ -85,7 +85,7 @@ public:
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
 public:
-    const partitions_type& all_partitions() const;
+    size_t partition_count() const;
 
     // Creates a reader of data in this memtable for given partition range.
     //
