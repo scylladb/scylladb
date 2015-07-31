@@ -127,6 +127,16 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([&db] {
+                sstring commitlog = db.local().get_config().commitlog_directory();
+                return recursive_touch_directory(commitlog).then_wrapped([commitlog] (future<> f) {
+                    try {
+                        f.get();
+                    } catch (std::system_error& e) {
+                        fprint(std::cerr, "commitlog directory \"%s\" not found. Tried to created it but failed: %s\n", commitlog, e.what());
+                        throw;
+                    }
+                });
+            }).then([&db] {
                 return db.invoke_on_all([] (database& db) {
                     return db.init_system_keyspace();
                 });
