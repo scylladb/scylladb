@@ -152,7 +152,7 @@ struct compaction_metadata : public metadata {
     auto describe_type(Describer f) { return f(ancestors, cardinality); }
 };
 
-struct la_stats_metadata : public metadata {
+struct ka_stats_metadata : public metadata {
     estimated_histogram estimated_row_size;
     estimated_histogram estimated_column_count;
     replay_position position;
@@ -186,7 +186,7 @@ struct la_stats_metadata : public metadata {
         );
     }
 };
-using stats_metadata = la_stats_metadata;
+using stats_metadata = ka_stats_metadata;
 
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
 // that of an uint32_t is a bit wasteful, but it simplifies the code a lot
