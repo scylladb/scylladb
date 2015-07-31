@@ -20,13 +20,14 @@
 
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/stream_exception.hh"
 #include "log.hh"
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-void stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
+future<stream_state> stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
     auto future = create_and_register(plan_id_, description_, coordinator_);
     for (auto& listener : listeners_) {
         future->add_event_listener(listener);
@@ -39,6 +40,8 @@ void stream_result_future::init(UUID plan_id_, sstring description_, std::vector
         session->init(future);
     }
     coordinator_->connect_all_stream_sessions();
+
+    return future->_done.get_future();
 }
 
 void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
@@ -49,7 +52,8 @@ void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
         sslog.info("[Stream #{} ID#{}] Creating new streaming plan for {}", plan_id, session_index, description);
         // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
         // TODO: stream_result_future needs a ref to stream_coordinator.
-        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level));
+        bool is_receiving = true;
+        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level, is_receiving));
     }
     sslog.info("[Stream #{} ID#{}] Received streaming plan for {}", plan_id, session_index, description);
 }
@@ -87,13 +91,18 @@ void stream_result_future::fire_stream_event(Event event) {
 
 void stream_result_future::maybe_complete() {
     if (!_coordinator->has_active_sessions()) {
+        auto& sm = get_local_stream_manager();
+        if (sslog.is_enabled(logging::log_level::debug)) {
+            sm.show_streams();
+        }
+        sm.remove_stream(plan_id);
         auto final_state = get_current_state();
         if (final_state.has_failed_session()) {
             sslog.warn("[Stream #{}] Stream failed", plan_id);
-            // FIXME: setException(new StreamException(finalState, "Stream failed"));
+            _done.set_exception(stream_exception(final_state, "Stream failed"));
         } else {
             sslog.info("[Stream #{}] All sessions completed", plan_id);
-            // FIXME: set(finalState);
+            _done.set_value(final_state);
         }
     }
 }
@@ -110,7 +119,7 @@ void stream_result_future::handle_progress(progress_info progress) {
 shared_ptr<stream_result_future> stream_result_future::create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
     auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
     auto& sm = get_local_stream_manager();
-    sm.register_receiving(future);
+    sm.register_sending(future);
     return future;
 }
 
