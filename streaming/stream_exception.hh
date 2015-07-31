@@ -14,22 +14,30 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-public class StreamException extends Exception
-{
-    public final StreamState finalState;
+#pragma once
 
-    public StreamException(StreamState finalState, String message)
-    {
-        super(message);
-        this.finalState = finalState;
+#include "streaming/stream_state.hh"
+#include <seastar/core/sstring.hh>
+#include <exception>
+
+namespace streaming {
+
+class stream_exception : public std::exception {
+public:
+    stream_state state;
+    sstring msg;
+    stream_exception(stream_state s, sstring m)
+        : state(std::move(s))
+        , msg(std::move(m)) {
     }
-
-    public StreamException(StreamState finalState, String message, Throwable cause)
-    {
-        super(message, cause);
-        this.finalState = finalState;
+    virtual const char* what() const noexcept override {
+        return msg.c_str();
     }
-}
+};
+
+} // namespace streaming
