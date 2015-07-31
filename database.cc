@@ -308,45 +308,22 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 
     using namespace sstables;
 
-    auto comps = parse_fname(fname);
-    if (comps.size() != 5) {
-        dblog.error("Ignoring malformed file {}", fname);
-        return make_ready_future<>();
-    }
+    entry_descriptor comps = entry_descriptor::make_descriptor(fname);
 
     // Every table will have a TOC. Using a specific file as a criteria, as
     // opposed to, say verifying _sstables.count() to be zero is more robust
     // against parallel loading of the directory contents.
-    if (comps[3] != "TOC") {
+    if (comps.component != sstable::component_type::TOC) {
         return make_ready_future<>();
     }
 
-    sstable::version_types version;
-    sstable::format_types  format;
-
-    try {
-        version = sstable::version_from_sstring(comps[0]);
-    } catch (std::out_of_range) {
-        dblog.error("Uknown version found: {}", comps[0]);
-        return make_ready_future<>();
-    }
-
-    auto generation = boost::lexical_cast<unsigned long>(comps[1]);
     // Make sure new sstables don't overwrite this one.
-    _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
+    _sstable_generation = std::max<uint64_t>(_sstable_generation, comps.generation /  smp::count + 1);
+    assert(_sstables->count(comps.generation) == 0);
 
-    try {
-        format = sstable::format_from_sstring(comps[2]);
-    } catch (std::out_of_range) {
-        dblog.error("Uknown format found: {}", comps[2]);
-        return make_ready_future<>();
-    }
-
-    assert(_sstables->count(generation) == 0);
-
-    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, generation, version, format);
+    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
     auto fut = sst->load();
-    return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
+    return std::move(fut).then([this, sst = std::move(sst)] () mutable {
         add_sstable(std::move(*sst));
         return make_ready_future<>();
     }).then_wrapped([fname] (future<> f) {
