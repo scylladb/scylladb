@@ -40,6 +40,8 @@
 #include "service/storage_service.hh"
 #include "core/thread.hh"
 #include "cql3/query_processor.hh"
+#include "streaming/stream_state.hh"
+#include "streaming/stream_exception.hh"
 
 namespace streaming {
 
@@ -220,7 +222,17 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                     auto ks = sstring("ks");
                     std::vector<query::range<token>> ranges = {query::range<token>::make_open_ended_both_sides()};
                     std::vector<sstring> cfs{tb};
-                    sp.transfer_ranges(to, to, ks, ranges, cfs).request_ranges(to, to, ks, ranges, cfs).execute();
+                    sp.transfer_ranges(to, to, ks, ranges, cfs).request_ranges(to, to, ks, ranges, cfs).execute().then_wrapped([] (auto&& f) {
+                        try {
+                            auto state = f.get0();
+                            sslog.debug("plan_id={} description={} DONE", state.plan_id, state.description);
+                            sslog.debug("================ FINISH STREAM  ==============");
+                        } catch (const stream_exception& e) {
+                            auto& state = e.state;
+                            sslog.debug("plan_id={} description={} FAIL: {}", state.plan_id, state.description, e.what());
+                            sslog.error("================ FAIL   STREAM  ==============");
+                        }
+                    });
                 });
             });
         });

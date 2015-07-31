@@ -21,6 +21,7 @@
 
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_result_future.hh"
+#include "streaming/stream_state.hh"
 
 namespace streaming {
 
@@ -53,7 +54,7 @@ stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_det
     return *this;
 }
 
-void stream_plan::execute() {
+future<stream_state> stream_plan::execute() {
     return stream_result_future::init(_plan_id, _description, _handlers, _coordinator);
 }
 

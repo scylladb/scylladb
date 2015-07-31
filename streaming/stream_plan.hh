@@ -34,6 +34,8 @@
 
 namespace streaming {
 
+class stream_state;
+
 /**
  * {@link StreamPlan} is a helper class that builds StreamOperation of given configuration.
  *
@@ -164,7 +166,7 @@ public:
      *
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
-    void execute();
+    future<stream_state> execute();
 
     /**
      * Set flushBeforeTransfer option.

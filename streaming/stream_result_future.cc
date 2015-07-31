@@ -20,13 +20,14 @@
 
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/stream_exception.hh"
 #include "log.hh"
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-void stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
+future<stream_state> stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
     auto future = create_and_register(plan_id_, description_, coordinator_);
     for (auto& listener : listeners_) {
         future->add_event_listener(listener);
@@ -39,6 +40,8 @@ void stream_result_future::init(UUID plan_id_, sstring description_, std::vector
         session->init(future);
     }
     coordinator_->connect_all_stream_sessions();
+
+    return future->_done.get_future();
 }
 
 void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
@@ -91,10 +94,10 @@ void stream_result_future::maybe_complete() {
         auto final_state = get_current_state();
         if (final_state.has_failed_session()) {
             sslog.warn("[Stream #{}] Stream failed", plan_id);
-            // FIXME: setException(new StreamException(finalState, "Stream failed"));
+            _done.set_exception(stream_exception(final_state, "Stream failed"));
         } else {
             sslog.info("[Stream #{}] All sessions completed", plan_id);
-            // FIXME: set(finalState);
+            _done.set_value(final_state);
         }
     }
 }

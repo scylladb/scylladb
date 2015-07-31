@@ -54,6 +54,7 @@ public:
 private:
     shared_ptr<stream_coordinator> _coordinator;
     std::vector<stream_event_handler*> _event_listeners;
+    promise<stream_state> _done;
 public:
     stream_result_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_, bool is_receiving)
         : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(1, keep_ss_table_levels_, is_receiving)) {
@@ -75,14 +76,15 @@ public:
         , _coordinator(coordinator_) {
         // if there is no session to listen to, we immediately set result for returning
         if (!_coordinator->is_receiving() && !_coordinator->has_active_sessions()) {
-            // set(getCurrentState());
+            _done.set_value(get_current_state());
         }
     }
+
 public:
     shared_ptr<stream_coordinator> get_coordinator() { return _coordinator; };
 
 public:
-    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
+    static future<stream_state> init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
     static void init_receiving_side(int session_index, UUID plan_id,
         sstring description, inet_address from, bool keep_ss_table_level);
 
