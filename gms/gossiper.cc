@@ -50,6 +50,8 @@ constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
+distributed<gossiper> _the_gossiper;
+
 std::chrono::milliseconds gossiper::quarantine_delay() {
     return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
 }
@@ -360,12 +362,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
     // do not remove endpointState until the quarantine expires
     get_local_failure_detector().remove(endpoint);
-    // FIXME: MessagingService
-    //MessagingService.instance().resetVersion(endpoint);
-    warn(unimplemented::cause::GOSSIP);
     quarantine_endpoint(endpoint);
-    // FIXME: MessagingService
-    //MessagingService.instance().destroyConnectionPool(endpoint);
     logger.debug("removing endpoint {}", endpoint);
 }
 
@@ -545,7 +542,6 @@ std::set<inet_address> gossiper::get_live_token_owners() {
         if (it != endpoint_state_map.end() && !is_dead_state(it->second) && service::get_local_storage_service().get_token_metadata().is_member(member)) {
             token_owners.insert(member);
         }
-        warn(unimplemented::cause::GOSSIP);
     }
     return token_owners;
 }
@@ -554,7 +550,6 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
-        warn(unimplemented::cause::GOSSIP);
         if (service::get_local_storage_service().get_token_metadata().is_member(endpoint)) {
             token_owners.insert(endpoint);
         }
@@ -1263,9 +1258,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 
 future<> gossiper::shutdown() {
     return seastar::async([this] {
-        warn(unimplemented::cause::GOSSIP);
-        // if (scheduledGossipTask != null)
-        // 	scheduledGossipTask.cancel(false);
+        _scheduled_gossip_task.cancel();
         logger.info("Announcing shutdown");
         sleep(INTERVAL * 2).get();
         for (inet_address addr : _live_endpoints) {
@@ -1294,9 +1287,7 @@ future<> gossiper::stop() {
 }
 
 bool gossiper::is_enabled() {
-    //return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
-    warn(unimplemented::cause::GOSSIP);
-    return true;
+    return _scheduled_gossip_task.armed();
 }
 
 void gossiper::finish_shadow_round() {
