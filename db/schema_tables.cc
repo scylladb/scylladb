@@ -50,7 +50,7 @@ using namespace db::system_keyspace;
 namespace db {
 namespace schema_tables {
 
-std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES };
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -521,8 +521,10 @@ future<> save_system_keyspace_schema() {
            auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
            auto&& old_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
            /*auto& old_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+#if 0 // not in 2.1.8
            /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
            /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
+#endif
 
            proxy.mutate_locally(std::move(mutations)).get0();
 
@@ -539,8 +541,10 @@ future<> save_system_keyspace_schema() {
            auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
            auto&& new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
            /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+#if 0 // not in 2.1.8
            /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
            /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
+#endif
 
            std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
            merge_tables(proxy, std::move(old_column_families), std::move(new_column_families)).get0();
@@ -1750,7 +1754,7 @@ future<> save_system_keyspace_schema() {
 
 std::vector<schema_ptr> all_tables() {
     return {
-        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates()
+        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), /* Not in 2.1.8 functions(), aggregates() */
     };
 }
 
