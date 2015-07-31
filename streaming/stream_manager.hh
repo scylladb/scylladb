@@ -118,6 +118,8 @@ public:
 
     void register_receiving(shared_ptr<stream_result_future> result);
 
+    shared_ptr<stream_result_future> get_sending_stream(UUID plan_id);
+
     shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);
 #if 0
 

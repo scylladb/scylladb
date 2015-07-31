@@ -57,6 +57,14 @@ void stream_manager::register_receiving(shared_ptr<stream_result_future> result)
     _receiving_streams[result->plan_id] = std::move(result);
 }
 
+shared_ptr<stream_result_future> stream_manager::get_sending_stream(UUID plan_id) {
+    auto it = _initiated_streams.find(plan_id);
+    if (it != _initiated_streams.end()) {
+        return it->second;
+    }
+    return {};
+}
+
 shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_id) {
     auto it = _receiving_streams.find(plan_id);
     if (it != _receiving_streams.end()) {
