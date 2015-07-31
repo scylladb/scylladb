@@ -91,6 +91,7 @@ public:
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
 public:
     size_t partition_count() const;
+    logalloc::occupancy_stats occupancy() const;
 
     // Creates a reader of data in this memtable for given partition range.
     //

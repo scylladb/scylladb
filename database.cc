@@ -384,12 +384,16 @@ column_family::update_cache(memtable& m) {
 
 future<>
 column_family::seal_active_memtable() {
+    auto old = _memtables->back();
+    dblog.debug("Sealing active memtable, partitions: {}, occupancy: {}", old->partition_count(), old->occupancy());
+
     if (!_config.enable_disk_writes) {
+       dblog.warn("Writes disabled, memtable not sealed.");
        return make_ready_future<>();
     }
 
-    auto old = _memtables->back();
     if (old->empty()) {
+        dblog.debug("Memtable is empty");
         return make_ready_future<>();
     }
     add_memtable();
@@ -412,11 +416,13 @@ column_family::seal_active_memtable() {
             sstables::sstable::version_types::la,
             sstables::sstable::format_types::big);
 
+        dblog.debug("Flushing to {}", name);
         return do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
             // FIXME: write all components
             return newtab.write_components(*old).then([name, this, &newtab, old] {
                 return newtab.load();
             }).then([this, old] {
+                dblog.debug("Flushing done");
                 return update_cache(*old);
             }).then_wrapped([name, this, &newtab, old] (future<> ret) {
                 try {
@@ -436,7 +442,7 @@ column_family::seal_active_memtable() {
                         _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
                     }
                     _memtables->erase(boost::range::find(*_memtables, old));
-
+                    dblog.debug("Memtable replaced");
                     trigger_compaction();
                 } catch (std::exception& e) {
                     dblog.error("failed to write sstable: {}", e.what());

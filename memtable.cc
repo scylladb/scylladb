@@ -172,6 +172,10 @@ memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
     update(rp);
 }
 
+logalloc::occupancy_stats memtable::occupancy() const {
+    return _region.occupancy();
+}
+
 mutation_source memtable::as_data_source() {
     return [mt = shared_from_this()] (const query::partition_range& range) {
         return mt->make_reader(range);
