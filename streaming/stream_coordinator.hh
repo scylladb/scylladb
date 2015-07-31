@@ -45,11 +45,13 @@ private:
     std::map<inet_address, host_streaming_data> _peer_sessions;
     int _connections_per_host;
     bool _keep_ss_table_level;
+    bool _is_receiving;
 
 public:
-    stream_coordinator(int connections_per_host, bool keep_ss_table_level)
+    stream_coordinator(int connections_per_host, bool keep_ss_table_level, bool is_receiving = false)
         : _connections_per_host(connections_per_host)
-        , _keep_ss_table_level(keep_ss_table_level) {
+        , _keep_ss_table_level(keep_ss_table_level)
+        , _is_receiving(is_receiving) {
     }
 #if 0
     public void setConnectionFactory(StreamConnectionFactory factory)

@@ -49,7 +49,7 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessi
 }
 
 bool stream_coordinator::is_receiving() {
-    return _connections_per_host == 0;
+    return _is_receiving;
 }
 
 std::set<inet_address> stream_coordinator::get_peers() {

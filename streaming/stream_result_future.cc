@@ -49,7 +49,8 @@ void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
         sslog.info("[Stream #{} ID#{}] Creating new streaming plan for {}", plan_id, session_index, description);
         // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
         // TODO: stream_result_future needs a ref to stream_coordinator.
-        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level));
+        bool is_receiving = true;
+        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level, is_receiving));
     }
     sslog.info("[Stream #{} ID#{}] Received streaming plan for {}", plan_id, session_index, description);
 }
