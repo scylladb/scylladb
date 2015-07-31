@@ -804,7 +804,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     } else {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog());
     }
-    cf->start();
+
     auto ks = _keyspaces.find(schema->ks_name());
     if (ks == _keyspaces.end()) {
         throw std::invalid_argument("Keyspace " + schema->ks_name() + " not defined");
@@ -817,6 +817,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     ks->second.add_column_family(schema);
+    cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
