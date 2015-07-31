@@ -91,6 +91,11 @@ void stream_result_future::fire_stream_event(Event event) {
 
 void stream_result_future::maybe_complete() {
     if (!_coordinator->has_active_sessions()) {
+        auto& sm = get_local_stream_manager();
+        if (sslog.is_enabled(logging::log_level::debug)) {
+            sm.show_streams();
+        }
+        sm.remove_stream(plan_id);
         auto final_state = get_current_state();
         if (final_state.has_failed_session()) {
             sslog.warn("[Stream #{}] Stream failed", plan_id);

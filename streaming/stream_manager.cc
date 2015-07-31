@@ -22,8 +22,11 @@
 #include "core/distributed.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
+#include "log.hh"
 
 namespace streaming {
+
+extern logging::logger sslog;
 
 distributed<stream_manager> _the_stream_manager;
 
@@ -71,6 +74,21 @@ shared_ptr<stream_result_future> stream_manager::get_receiving_stream(UUID plan_
         return it->second;
     }
     return {};
+}
+
+void stream_manager::remove_stream(UUID plan_id) {
+    sslog.debug("stream_manager: removing plan_id={}", plan_id);
+    _initiated_streams.erase(plan_id);
+    _receiving_streams.erase(plan_id);
+}
+
+void stream_manager::show_streams() {
+    for (auto& x : _initiated_streams) {
+        sslog.debug("stream_manager:initiated_stream: plan_id={}", x.first);
+    }
+    for (auto& x : _receiving_streams) {
+        sslog.debug("stream_manager:receiving_stream: plan_id={}", x.first);
+    }
 }
 
 } // namespace streaming

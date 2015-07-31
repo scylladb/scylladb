@@ -121,6 +121,10 @@ public:
     shared_ptr<stream_result_future> get_sending_stream(UUID plan_id);
 
     shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);
+
+    void remove_stream(UUID plan_id);
+
+    void show_streams();
 #if 0
 
     public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback)
