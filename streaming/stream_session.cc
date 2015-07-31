@@ -47,6 +47,15 @@ namespace streaming {
 
 logging::logger sslog("stream_session");
 
+static auto get_stream_result_future(utils::UUID plan_id) {
+    auto& sm = get_local_stream_manager();
+    auto f = sm.get_sending_stream(plan_id);
+    if (!f) {
+        f = sm.get_receiving_stream(plan_id);
+    }
+    return f;
+}
+
 void stream_session::init_messaging_service_handler() {
     ms().register_stream_init_message([] (messages::stream_init_message msg, unsigned src_cpu_id) {
         auto dst_cpu_id = engine().cpu_id();
@@ -59,9 +68,8 @@ void stream_session::init_messaging_service_handler() {
     });
     ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, connecting, src_cpu_id] () mutable {
-            auto& sm = get_local_stream_manager();
-            auto f = sm.get_receiving_stream(plan_id);
-            sslog.debug("GOT PREPARE_MESSAGE: plan_id={}, description={}, from={}, connecting={}", f->plan_id, f->description, from, connecting);
+            auto f = get_stream_result_future(plan_id);
+            sslog.debug("GOT PREPARE_MESSAGE: plan_id={}, from={}, connecting={}", plan_id, from, connecting);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
@@ -98,8 +106,7 @@ void stream_session::init_messaging_service_handler() {
     ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
             sslog.debug("GOT STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
-            auto& sm = get_local_stream_manager();
-            auto f = sm.get_receiving_stream(plan_id);
+            auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
@@ -125,8 +132,7 @@ void stream_session::init_messaging_service_handler() {
     ms().register_complete_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
         smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
             sslog.debug("GOT COMPLETE_MESSAGE, plan_id={}, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
-            auto& sm = get_local_stream_manager();
-            auto f = sm.get_receiving_stream(plan_id);
+            auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
