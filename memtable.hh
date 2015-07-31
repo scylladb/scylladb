@@ -11,13 +11,15 @@
 #include "schema.hh"
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
+#include "utils/logalloc.hh"
 
 class frozen_mutation;
 
 
 namespace bi = boost::intrusive;
 
-class partition_entry : public bi::set_base_hook<> {
+class partition_entry {
+    bi::set_member_hook<> _link;
     dht::decorated_key _key;
     mutation_partition _p;
 public:
@@ -27,6 +29,8 @@ public:
         : _key(std::move(key))
         , _p(std::move(p))
     { }
+
+    partition_entry(partition_entry&& o) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
     const mutation_partition& partition() const { return _p; }
@@ -64,12 +68,16 @@ public:
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable> {
 public:
-    using partitions_type = bi::set<partition_entry, bi::compare<partition_entry::compare>>;
+    using partitions_type = bi::set<partition_entry,
+        bi::member_hook<partition_entry, bi::set_member_hook<>, &partition_entry::_link>,
+        bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
     partitions_type partitions;
     db::replay_position _replay_position;
+    logalloc::region _region;
     void update(const db::replay_position&);
+    friend class row_cache;
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
 public:
@@ -98,4 +106,6 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
+
+    friend class scanning_reader;
 };

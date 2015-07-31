@@ -1039,16 +1039,16 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
 
     // Write all cells of a partition's row.
     for (auto& value: clustered_row.row().cells()) {
-        auto column_id = value.first;
+        auto column_id = value.id();
         auto&& column_definition = schema.regular_column_at(column_id);
         // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
         // non atomic cell maps to multiple trift cell, e.g. collection.
         if (!column_definition.is_atomic()) {
-            write_collection(out, clustering_key, column_definition, value.second.as_collection_mutation());
+            write_collection(out, clustering_key, column_definition, value.cell().as_collection_mutation());
             return;
         }
         assert(column_definition.is_regular());
-        atomic_cell_view cell = value.second.as_atomic_cell();
+        atomic_cell_view cell = value.cell().as_atomic_cell();
         const bytes& column_name = column_definition.name();
 
         if (schema.is_compound()) {
@@ -1070,15 +1070,15 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
 
 void sstable::write_static_row(file_writer& out, const schema& schema, const row& static_row) {
     for (auto& value: static_row) {
-        auto column_id = value.first;
+        auto column_id = value.id();
         auto&& column_definition = schema.static_column_at(column_id);
         if (!column_definition.is_atomic()) {
             auto sp = composite::static_prefix(schema);
-            write_collection(out, sp, column_definition, value.second.as_collection_mutation());
+            write_collection(out, sp, column_definition, value.cell().as_collection_mutation());
             return;
         }
         assert(column_definition.is_static());
-        atomic_cell_view cell = value.second.as_atomic_cell();
+        atomic_cell_view cell = value.cell().as_atomic_cell();
         auto sp = composite::static_prefix(schema);
         write_column_name(out, sp, { bytes_view(column_definition.name()) });
         write_cell(out, cell);

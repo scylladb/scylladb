@@ -25,6 +25,11 @@ bool is_wrap_around(const query::partition_range& range, const schema& s) {
     return range.is_wrap_around(dht::ring_position_comparator(s));
 }
 
+inline
+bool is_single_partition(const query::partition_range& range) {
+    return range.is_singular() && range.start()->value().has_key();
+}
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 class partition_slice {

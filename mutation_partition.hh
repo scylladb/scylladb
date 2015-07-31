@@ -15,26 +15,64 @@
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
 
+//
 // Container for cells of a row. Cells are identified by column_id.
 //
-// Can be used as a range of std::pair<column_id, atomic_cell_or_collection>.
+// Can be used as a range of row::cell_entry.
 //
 class row {
-    using map_type = std::map<column_id, atomic_cell_or_collection>;
+    class cell_entry {
+        boost::intrusive::set_member_hook<> _link;
+        column_id _id;
+        atomic_cell_or_collection _cell;
+        friend class row;
+    public:
+        cell_entry(column_id id, atomic_cell_or_collection cell)
+            : _id(id)
+            , _cell(std::move(cell))
+        { }
+        cell_entry(cell_entry&&) noexcept;
+        cell_entry(const cell_entry&) noexcept;
+
+        column_id id() const { return _id; }
+        const atomic_cell_or_collection& cell() const { return _cell; }
+        atomic_cell_or_collection& cell() { return _cell; }
+
+        struct compare {
+            bool operator()(const cell_entry& e1, const cell_entry& e2) const {
+                return e1._id < e2._id;
+            }
+            bool operator()(column_id id1, const cell_entry& e2) const {
+                return id1 < e2._id;
+            }
+            bool operator()(const cell_entry& e1, column_id id2) const {
+                return e1._id < id2;
+            }
+        };
+    };
+    using map_type = boost::intrusive::set<cell_entry,
+        boost::intrusive::member_hook<cell_entry, boost::intrusive::set_member_hook<>, &cell_entry::_link>,
+        boost::intrusive::compare<cell_entry::compare>>;
+
     map_type _cells;
 public:
-    using value_type = map_type::value_type;
+    using value_type = cell_entry;
     using iterator = map_type::iterator;
     using const_iterator = map_type::const_iterator;
 public:
+    row() = default;
+    ~row();
+    row(const row&);
+    row(row&&) = default;
+    row& operator=(row&&) = default;
+
     iterator begin() { return _cells.begin(); }
     iterator end() { return _cells.end(); }
     const_iterator begin() const { return _cells.begin(); }
     const_iterator end() const { return _cells.end(); }
     size_t size() const { return _cells.size(); }
 
-    // Returns a reference to cell's value or throws std::out_of_range
-    const atomic_cell_or_collection& cell_at(column_id id) const { return _cells.at(id); }
+    const atomic_cell_or_collection& cell_at(column_id id) const;
 
     // Returns a pointer to cell's value or nullptr if column is not set.
     const atomic_cell_or_collection* find_cell(column_id id) const;
@@ -48,11 +86,12 @@ public:
     // Merges given cell into the row.
     template <typename ColumnDefinitionResolver>
     void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
-        auto i = _cells.lower_bound(id);
-        if (i == _cells.end() || i->first != id) {
-            _cells.emplace_hint(i, id, std::move(cell));
+        auto i = _cells.lower_bound(id, cell_entry::compare());
+        if (i == _cells.end() || i->id() != id) {
+            cell_entry* e = current_allocator().construct<cell_entry>(id, std::move(cell));
+            _cells.insert(i, *e);
         } else {
-            merge_column(resolver(id), i->second, std::move(cell));
+            merge_column(resolver(id), i->cell(), std::move(cell));
         }
     }
 
@@ -64,18 +103,18 @@ public:
         for (auto it = _cells.begin(); it != _cells.end(); ) {
             auto& entry = *it;
             bool erase = false;
-            const column_definition& def = resolver(entry.first);
+            const column_definition& def = resolver(entry.id());
             if (def.is_atomic()) {
-                atomic_cell_view cell = entry.second.as_atomic_cell();
+                atomic_cell_view cell = entry.cell().as_atomic_cell();
                 if (cell.is_covered_by(tomb)) {
                     erase = true;
                 } else if (cell.has_expired(query_time)) {
-                    entry.second = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+                    entry.cell() = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
                 } else {
                     any_live |= cell.is_live();
                 }
             } else {
-                auto&& cell = entry.second.as_collection_mutation();
+                auto&& cell = entry.cell().as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
                 auto m_view = ctype->deserialize_mutation_form(cell);
                 collection_type_impl::mutation m = m_view.materialize();
@@ -83,11 +122,12 @@ public:
                 if (m.cells.empty() && m.tomb <= tomb) {
                     erase = true;
                 } else {
-                    entry.second = ctype->serialize_mutation_form(m);
+                    entry.cell() = ctype->serialize_mutation_form(m);
                 }
             }
             if (erase) {
                 it = _cells.erase(it);
+                current_allocator().destroy(&entry);
             } else {
                 ++it;
             }
@@ -216,14 +256,18 @@ public:
     bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
 };
 
-class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
+class row_tombstones_entry {
+    boost::intrusive::set_member_hook<> _link;
     clustering_key_prefix _prefix;
     tombstone _t;
+    friend class mutation_partition;
 public:
     row_tombstones_entry(clustering_key_prefix&& prefix, tombstone t)
         : _prefix(std::move(prefix))
         , _t(std::move(t))
     { }
+    row_tombstones_entry(row_tombstones_entry&& o) noexcept;
+    row_tombstones_entry(const row_tombstones_entry&) = default;
     clustering_key_prefix& prefix() {
         return _prefix;
     }
@@ -274,9 +318,11 @@ public:
     bool equal(const schema& s, const row_tombstones_entry& other) const;
 };
 
-class rows_entry : public boost::intrusive::set_base_hook<> {
+class rows_entry {
+    boost::intrusive::set_member_hook<> _link;
     clustering_key _key;
     deletable_row _row;
+    friend class mutation_partition;
 public:
     rows_entry(clustering_key&& key)
         : _key(std::move(key))
@@ -284,6 +330,7 @@ public:
     rows_entry(const clustering_key& key)
         : _key(key)
     { }
+    rows_entry(rows_entry&& o) noexcept;
     rows_entry(const rows_entry& e)
         : _key(e._key)
         , _row(e._row)
@@ -351,8 +398,14 @@ class serializer;
 
 class mutation_partition final {
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
-    using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
-    using row_tombstones_type = boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>>;
+    using rows_type = boost::intrusive::set<rows_entry,
+        boost::intrusive::member_hook<rows_entry, boost::intrusive::set_member_hook<>, &rows_entry::_link>,
+        boost::intrusive::compare<rows_entry::compare>>;
+    using row_tombstones_type = boost::intrusive::set<row_tombstones_entry,
+        boost::intrusive::member_hook<row_tombstones_entry, boost::intrusive::set_member_hook<>, &row_tombstones_entry::_link>,
+        boost::intrusive::compare<row_tombstones_entry::compare>>;
+    friend rows_entry;
+    friend row_tombstones_entry;
 private:
     tombstone _tombstone;
     row _static_row;
