@@ -6,10 +6,13 @@
 #include "unimplemented.hh"
 #include "core/sstring.hh"
 #include "core/enum.hh"
+#include "log.hh"
 
 namespace unimplemented {
 
 static thread_local std::unordered_map<cause, bool> _warnings;
+
+static logging::logger logger("unimplemented");
 
 std::ostream& operator<<(std::ostream& out, cause c) {
     switch(c) {
@@ -45,7 +48,7 @@ void warn(cause c) {
     auto i = _warnings.find(c);
     if (i == _warnings.end()) {
         _warnings.insert({c, true});
-        std::cerr << "WARNING: Not implemented: " << c << std::endl;
+        logger.warn("{}", c);
     }
 }
 
