@@ -352,6 +352,31 @@ schema_ptr built_indexes() {
     return sstable_activity;
 }
 
+schema_ptr size_estimates() {
+    static thread_local auto size_estimates = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
+            // partition key
+            {{"keyspace_name", utf8_type}},
+            // clustering key
+            {{"table_name", utf8_type}, {"range_start", utf8_type}, {"range_end", utf8_type}},
+            // regular columns
+            {
+                {"mean_partition_size", long_type},
+                {"partitions_count", long_type},
+            },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "per-table primary range size estimates"
+            )));
+        builder.set_gc_grace_seconds(0);
+        return builder.build();
+    }();
+    return size_estimates;
+}
+
 #if 0
 
     public static KSMetaData definition()
@@ -1142,6 +1167,7 @@ std::vector<schema_ptr> all_tables() {
     r.push_back(compactions_in_progress());
     r.push_back(compaction_history());
     r.push_back(sstable_activity());
+    r.push_back(size_estimates());
     return r;
 }
 
