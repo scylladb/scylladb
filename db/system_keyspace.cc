@@ -178,6 +178,11 @@ schema_ptr built_indexes() {
                 {"thrift_version", utf8_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, false)},
                 {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, false)},
+                // The following 3 columns are only present up until 2.1.8 tables
+                {"rpc_address", inet_addr_type},
+                {"broadcast_address", inet_addr_type},
+                {"listen_address", inet_addr_type},
+
         },
         // static columns
         {},
@@ -384,7 +389,7 @@ schema_ptr built_indexes() {
 #endif
 
 static future<> setup_version() {
-    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     return execute_cql(req, db::system_keyspace::LOCAL,
@@ -395,7 +400,10 @@ static future<> setup_version() {
                              to_sstring(version::native_protocol()),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(dht::global_partitioner().name())
+                             sstring(dht::global_partitioner().name()),
+                             gms::inet_address(qctx->db().get_config().rpc_address()).addr(),
+                             utils::fb_utilities::get_broadcast_address().addr(),
+                             net::get_local_messaging_service().listen_address().addr()
     ).discard_result();
 }
 
