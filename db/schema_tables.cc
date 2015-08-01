@@ -117,6 +117,10 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
             {"speculative_retry", utf8_type},
             {"subcomparator", utf8_type},
             {"type", utf8_type},
+            // The following 3 columns are only present up until 2.1.8 tables
+            {"key_aliases", utf8_type},
+            {"value_alias", utf8_type},
+            {"column_aliases", utf8_type},
         },
         // static columns
         {},
@@ -1079,6 +1083,25 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
         m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
 
+
+        auto alias = [] (schema::const_iterator_range_type range) -> sstring {
+            sstring alias("[");
+            for (auto& c: range) {
+                alias += "\"" + c.name_as_text() + "\",";
+            }
+            if (alias.back() == ',') {
+                alias.back() = ']';
+            } else {
+                alias += "]";
+            }
+            return alias;
+        };
+
+        m.set_clustered_cell(ckey, "key_aliases", alias(table->partition_key_columns()), timestamp);
+        m.set_clustered_cell(ckey, "column_aliases", alias(table->clustering_key_columns()), timestamp);
+        if (table->compact_columns_count() == 1) {
+            m.set_clustered_cell(ckey, "value_alias", table->compact_column().name_as_text(), timestamp);
+        } // null if none
 #if 0
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
             adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
