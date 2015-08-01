@@ -50,6 +50,9 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
     logging::logger::set_syslog_enabled(log_to_syslog);
 }
 
+
+logging::logger startlog("start up");
+
 int main(int ac, char** av) {
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
@@ -121,7 +124,7 @@ int main(int ac, char** av) {
                         try {
                             f.get();
                         } catch (std::system_error& e) {
-                            fprint(std::cerr, "Directory \"%s\" not found. Tried to created it but failed: %s\n", datadir, e.what());
+                            startlog.error("Directory '{}' not found. Tried to created it but failed: {}", datadir, e.what());
                             throw;
                         }
                     });
@@ -132,7 +135,7 @@ int main(int ac, char** av) {
                     try {
                         f.get();
                     } catch (std::system_error& e) {
-                        fprint(std::cerr, "commitlog directory \"%s\" not found. Tried to created it but failed: %s\n", commitlog, e.what());
+                        startlog.error("commitlog directory '{}' not found. Tried to created it but failed: {}", commitlog, e.what());
                         throw;
                     }
                 });
