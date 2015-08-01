@@ -443,7 +443,7 @@ public:
         return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
     }
     size_t regular_columns_count() const {
-        return _raw._columns.size() - column_offset(column_kind::static_column);
+        return _raw._columns.size() - column_offset(column_kind::regular_column);
     }
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const {
