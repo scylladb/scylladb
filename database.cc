@@ -964,7 +964,9 @@ keyspace::make_column_family_config(const schema& s) const {
 
 sstring
 keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
-    return sprint("%s/%s-%s", _config.datadir, name, uuid);
+    auto uuid_sstring = uuid.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return sprint("%s/%s-%s", _config.datadir, name, uuid_sstring);
 }
 
 future<>
