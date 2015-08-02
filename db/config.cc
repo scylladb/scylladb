@@ -28,6 +28,28 @@ db::config::config()
 
 namespace bpo = boost::program_options;
 
+// Special "validator" for boost::program_options to allow reading options
+// into an unordered_map<string, string> (we have in config.hh a bunch of
+// those). This validator allows the parameter of each option to look like
+// 'key=value'. It also allows multiple occurrences of this option to add
+// multiple entries into the map. "String" can be any time which can be
+// converted from std::string, e.g., sstring.
+template<typename String>
+static void validate(boost::any& out, const std::vector<std::string>& in,
+        std::unordered_map<String, String>*, int) {
+    if (out.empty()) {
+        out = boost::any(std::unordered_map<String, String>());
+    }
+    auto* p = boost::any_cast<std::unordered_map<String, String>>(&out);
+    for (const auto& s : in) {
+        auto i = s.find_first_of('=');
+        if (i == std::string::npos) {
+            throw boost::program_options::invalid_option_value(s);
+        }
+        (*p)[String(s.substr(0, i))] = String(s.substr(i+1));
+    }
+}
+
 namespace YAML {
 /*
  * Add converters as needed here...
