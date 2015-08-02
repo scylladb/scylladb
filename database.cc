@@ -363,22 +363,30 @@ void column_family::add_memtable() {
 
 future<>
 column_family::update_cache(memtable& m) {
-    // TODO: add option to disable populating of the cache.
-    // TODO: move data into cache instead of copying
-    return _cache.update(m.make_reader());
+    if (_config.enable_cache) {
+       return _cache.update(m.make_reader());
+    } else {
+       return make_ready_future<>();
+    }
 }
 
 future<>
 column_family::seal_active_memtable() {
+    if (!_config.enable_disk_writes) {
+       return make_ready_future<>();
+    }
+
     auto old = _memtables->back();
     if (old->empty()) {
         return make_ready_future<>();
     }
     add_memtable();
+
     assert(_highest_flushed_rp < old->replay_position()
     || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
     );
     _highest_flushed_rp = old->replay_position();
+
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
@@ -386,10 +394,6 @@ column_family::seal_active_memtable() {
             _config.datadir,
             _schema->ks_name(), _schema->cf_name(),
             gen);
-    // FIXME: this does not clear CL. Should it?
-    if (!_config.enable_disk_writes) {
-        return make_ready_future<>();
-    }
 
     return seastar::with_gate(_in_flight_seals, [gen, old, name, this] {
         sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
@@ -799,7 +803,7 @@ void database::drop_keyspace(const sstring& name) {
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     auto uuid = schema->id();
     lw_shared_ptr<column_family> cf;
-    if (_commitlog) {
+    if (cfg.enable_commitlog && _commitlog) {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog);
     } else {
        cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog());
@@ -917,6 +921,8 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.datadir = column_family_directory(s.cf_name(), s.id());
     cfg.enable_disk_reads = _config.enable_disk_reads;
     cfg.enable_disk_writes = _config.enable_disk_writes;
+    cfg.enable_commitlog = _config.enable_commitlog;
+    cfg.enable_cache = _config.enable_cache;
     return cfg;
 }
 
@@ -1148,11 +1154,12 @@ future<> database::apply(const frozen_mutation& m) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
-    if (_commitlog != nullptr) {
+    auto& cf = find_column_family(m.column_family_id());
+    if (cf.commitlog() != nullptr) {
         auto uuid = m.column_family_id();
         bytes_view repr = m.representation();
         auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
-        return _commitlog->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
+        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
             try {
                 return this->apply_in_memory(m, rp);
             } catch (replay_position_reordered_exception&) {
@@ -1175,10 +1182,16 @@ database::make_keyspace_config(const keyspace_metadata& ksm) const {
     keyspace::config cfg;
     if (_cfg->data_file_directories().size() > 0) {
         cfg.datadir = sprint("%s/%s", _cfg->data_file_directories()[0], ksm.name());
-        cfg.enable_disk_writes = ksm.durable_writes();
+        cfg.enable_disk_writes = !_cfg->enable_in_memory_data_store();
+        cfg.enable_disk_reads = true; // we allways read from disk
+        cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
+        cfg.enable_cache = _cfg->enable_cache();
     } else {
         cfg.datadir = "";
         cfg.enable_disk_writes = false;
+        cfg.enable_disk_reads = false;
+        cfg.enable_commitlog = false;
+        cfg.enable_cache = false;
     }
     return cfg;
 }

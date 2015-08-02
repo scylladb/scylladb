@@ -85,6 +85,7 @@ public:
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
         bool enable_cache = true;
+        bool enable_commitlog = true;
     };
     struct no_commitlog {};
 private:
@@ -137,6 +138,7 @@ public:
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }
+    db::commitlog* commitlog() { return _commitlog; }
     future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
     future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
@@ -281,8 +283,10 @@ class keyspace {
 public:
     struct config {
         sstring datadir;
+        bool enable_commitlog = true;
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
+        bool enable_cache = true;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;

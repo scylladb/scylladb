@@ -687,6 +687,9 @@ public:
             "Use --help-loggers for a list of logger names") \
     val(log_to_stdout, bool, true, Used, "Send log output to stdout") \
     val(log_to_syslog, bool, false, Used, "Send log output to syslog") \
+    val(enable_in_memory_data_store, bool, false, Used, "Enable in memory mode (system tables are always persisted)") \
+    val(enable_cache, bool, true, Used, "Enable cache") \
+    val(enable_commitlog, bool, true, Used, "Enable commitlog") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
