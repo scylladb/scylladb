@@ -33,9 +33,9 @@ future<> sstable::read_filter() {
     });
 }
 
-future<> sstable::write_filter() {
+void sstable::write_filter() {
     if (!has_component(sstable::component_type::Filter)) {
-        return make_ready_future<>();
+        return;
     }
 
     auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_filter.get());
@@ -43,8 +43,8 @@ future<> sstable::write_filter() {
     std::vector<utils::filter::bloom_filter::bitmap_block> v;
     boost::to_block_range(f->bits(), std::back_inserter(v));
 
-    return do_with(sstables::filter(f->num_hashes(), std::move(v)), [this] (auto& filter) {
-        return this->write_simple<sstable::component_type::Filter>(filter);
-    });
+    auto filter = sstables::filter(f->num_hashes(), std::move(v));
+    write_simple<sstable::component_type::Filter>(filter);
 }
+
 }

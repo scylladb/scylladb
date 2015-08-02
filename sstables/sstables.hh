@@ -282,27 +282,27 @@ private:
     future<> read_simple(T& comp);
 
     template <sstable::component_type Type, typename T>
-    future<> write_simple(T& comp);
+    void write_simple(T& comp);
 
     future<> read_toc();
-    future<> write_toc();
+    void write_toc();
 
     future<> read_compression();
-    future<> write_compression();
+    void write_compression();
 
     future<> read_filter();
 
-    future<> write_filter();
+    void write_filter();
 
     future<> read_summary() {
         return read_simple<component_type::Summary>(_summary);
     }
-    future<> write_summary() {
-        return write_simple<component_type::Summary>(_summary);
+    void write_summary() {
+        write_simple<component_type::Summary>(_summary);
     }
 
     future<> read_statistics();
-    future<> write_statistics();
+    void write_statistics();
 
     future<> open_data();
     future<> create_data();
