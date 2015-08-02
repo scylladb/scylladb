@@ -39,13 +39,21 @@ static void do_help_loggers() {
     }
 }
 
+static logging::log_level to_loglevel(sstring level) {
+    try {
+        return boost::lexical_cast<logging::log_level>(std::string(level));
+    } catch(boost::bad_lexical_cast e) {
+        throw std::runtime_error("Unknown log level '" + level + "'");
+    }
+}
+
 static void apply_logger_settings(sstring default_level, db::config::string_map levels,
         bool log_to_stdout, bool log_to_syslog) {
-    logging::logger_registry().set_all_loggers_level(boost::lexical_cast<logging::log_level>(std::string(default_level)));
+    logging::logger_registry().set_all_loggers_level(to_loglevel(default_level));
     for (auto&& kv: levels) {
         auto&& k = kv.first;
         auto&& v = kv.second;
-        logging::logger_registry().set_logger_level(k, boost::lexical_cast<logging::log_level>(std::string(v)));
+        logging::logger_registry().set_logger_level(k, to_loglevel(v));
     }
     logging::logger::set_stdout_enabled(log_to_stdout);
     logging::logger::set_syslog_enabled(log_to_syslog);
