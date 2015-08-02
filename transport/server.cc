@@ -149,7 +149,8 @@ public:
         , _client_state(service::client_state::for_external_calls())
     { }
     future<> process() {
-        return do_until([this] { return _read_buf.eof(); }, [this] { return process_request(); });
+        return do_until([this] { return _read_buf.eof(); }, [this] { return process_request(); })
+        .finally([this] { return std::move(_ready_to_respond); });
     }
     future<> process_request();
 private:
