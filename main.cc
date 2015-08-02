@@ -51,7 +51,7 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
 }
 
 
-logging::logger startlog("start up");
+logging::logger startlog("init");
 
 int main(int ac, char** av) {
     runtime::init_uptime();
