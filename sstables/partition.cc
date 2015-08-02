@@ -587,7 +587,7 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
 
 mutation_reader
 sstable::read_range_rows(schema_ptr schema, const query::partition_range& range) {
-    if (is_wrap_around(range, *schema)) {
+    if (query::is_wrap_around(range, *schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
 

@@ -78,7 +78,7 @@ memtable::slice(const query::partition_range& range) const {
 
 mutation_reader
 memtable::make_reader(const query::partition_range& range) const {
-    if (is_wrap_around(range, *_schema)) {
+    if (query::is_wrap_around(range, *_schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
 
