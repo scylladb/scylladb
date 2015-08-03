@@ -540,7 +540,6 @@ void column_family::start_compaction() {
             return with_gate(_in_flight_seals, [this] {
                 sstables::compaction_strategy strategy = _compaction_strategy;
                 return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
-                    dblog.info("started compaction for column_family {}/{}", _schema->ks_name(), _schema->cf_name());
                     return cs.compact(*this).then([this] {
                         // If compaction completed successfully, let's reset sleep time of _compaction_retry.
                         _compaction_retry.reset();
