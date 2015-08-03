@@ -124,6 +124,11 @@ key key::from_partition_key(const schema& s, const partition_key& pk) {
     return from_components(pk.begin(s), pk.end(s), sstable_serializer(), composite);
 }
 
+partition_key
+key::to_partition_key(const schema& s) {
+    return partition_key::from_exploded(s, explode(s));
+}
+
 template <typename ClusteringElement>
 composite composite::from_clustering_element(const schema& s, const ClusteringElement& ce) {
     return from_components(ce.begin(s), ce.end(s), sstable_serializer());
