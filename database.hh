@@ -162,19 +162,8 @@ public:
 
     void start();
     future<> stop();
+    future<> flush();
 
-    future<> flush() {
-        // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
-        // anything about previous writes.
-        _stats.pending_flushes++;
-        return seal_active_memtable().finally([this]() mutable {
-            _stats.pending_flushes--;
-            // In origin memtable_switch_count is incremented inside
-            // ColumnFamilyMeetrics Flush.run
-            _stats.memtable_switch_count++;
-            return make_ready_future<>();
-        });
-    }
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,

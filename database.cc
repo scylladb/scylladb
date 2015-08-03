@@ -1309,3 +1309,16 @@ future<> update_schema_version_and_announce(service::storage_proxy& proxy)
         });
     });
 }
+
+future<> column_family::flush() {
+    // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
+    // anything about previous writes.
+    _stats.pending_flushes++;
+    return seal_active_memtable().finally([this]() mutable {
+        _stats.pending_flushes--;
+        // In origin memtable_switch_count is incremented inside
+        // ColumnFamilyMeetrics Flush.run
+        _stats.memtable_switch_count++;
+        return make_ready_future<>();
+    });
+}
