@@ -234,6 +234,7 @@ private:
     bytes_opt read_value(temporary_buffer<char>& buf);
     sstring_view read_long_string_view(temporary_buffer<char>& buf);
     void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_opt>& values);
+    void read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings);
     void read_value_list(temporary_buffer<char>& buf, std::vector<bytes_opt>& values);
     db::consistency_level read_consistency(temporary_buffer<char>& buf);
     std::unordered_map<sstring, sstring> read_string_map(temporary_buffer<char>& buf);
@@ -1116,6 +1117,14 @@ void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& bu
     for (uint16_t i = 0; i < size; i++) {
         names.emplace_back(read_string(buf));
         values.emplace_back(read_value(buf));
+    }
+}
+
+void cql_server::connection::read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings) {
+    uint16_t size = read_unsigned_short(buf);
+    strings.reserve(size);
+    for (uint16_t i = 0; i < size; i++) {
+        strings.emplace_back(read_string(buf));
     }
 }
 
