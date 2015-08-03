@@ -355,7 +355,9 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
     };
     auto s1 = key_shard(sstable.get_first_partition_key(*_schema));
     auto s2 = key_shard(sstable.get_last_partition_key(*_schema));
-    if (s1 > engine().cpu_id() || engine().cpu_id() < s2) {
+    auto me = engine().cpu_id();
+    auto included = (s1 <= me) && (me <= s2);
+    if (!included) {
         dblog.info("sstable {} not relevant for this shard, ignoring", sstable.get_filename());
         return;
     }
