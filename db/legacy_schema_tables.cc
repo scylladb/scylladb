@@ -683,9 +683,9 @@ future<> save_system_keyspace_schema() {
                         auto cfg = ks.make_column_family_config(*cfm);
                         db.add_column_family(cfm, cfg);
                     }
-                    for (auto&& cfm : altered) {
-                        db.update_column_family(cfm->ks_name(), cfm->cf_name());
-                    }
+                    parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
+                        return db.update_column_family(cfm->ks_name(), cfm->cf_name());
+                    }).get();
                     for (auto&& cfm : dropped) {
                         db.drop_column_family(cfm->ks_name(), cfm->cf_name());
                     }
@@ -1160,17 +1160,17 @@ future<> save_system_keyspace_schema() {
 
         return mutation;
     }
-
-    public static CFMetaData createTableFromName(String keyspace, String table)
-    {
-        Row partition = readSchemaPartitionForTable(COLUMNFAMILIES, keyspace, table);
-
-        if (isEmptySchemaPartition(partition))
-            throw new RuntimeException(String.format("%s:%s not found in the schema definitions keyspace.", keyspace, table));
-
-        return createTableFromTablePartition(partition);
-    }
 #endif
+
+    future<schema_ptr> create_table_from_name(service::storage_proxy& proxy, const sstring& keyspace, const sstring& table)
+    {
+        return read_schema_partition_for_table(proxy, COLUMNFAMILIES, keyspace, table).then([&proxy, keyspace, table] (auto partition) {
+            if (partition.second->empty()) {
+                throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", keyspace, table));
+            }
+            return create_table_from_table_partition(proxy, partition.second);
+        });
+    }
 
     /**
      * Deserialize tables from low-level schema representation, all of them belong to the same keyspace
@@ -1202,13 +1202,10 @@ future<> save_system_keyspace_schema() {
         create_table_from_table_row_and_column_rows(builder, table_row, serialized_columns.second);
     }
 
-#if 0
-    private static CFMetaData createTableFromTablePartition(Row row)
+    future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, const lw_shared_ptr<query::result_set>& partition)
     {
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, COLUMNFAMILIES);
-        return createTableFromTableRow(QueryProcessor.resultify(query, row).one());
+        return create_table_from_table_row(proxy, partition->row(0));
     }
-#endif
 
     /**
      * Deserialize table metadata from low-level representation

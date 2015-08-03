@@ -397,7 +397,7 @@ public:
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
-    void update_column_family(const sstring& ks_name, const sstring& cf_name);
+    future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
     void drop_column_family(const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */

@@ -70,6 +70,9 @@ public:
                 && least_sig_bits == v.least_sig_bits
                 ;
     }
+    bool operator!=(const UUID& v) const {
+        return !(*this == v);
+    }
 
     bool operator<(const UUID& v) const {
          if (most_sig_bits != v.most_sig_bits) {
