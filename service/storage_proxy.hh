@@ -150,6 +150,12 @@ public:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
         lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
 
+    /*
+     * Returns mutation_reader for given column family
+     * which combines data from all shards.
+     */
+    mutation_reader make_local_reader(utils::UUID cf_id, const query::partition_range&);
+
     future<> stop();
 
     friend class abstract_read_executor;
