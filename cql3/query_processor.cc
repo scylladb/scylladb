@@ -256,6 +256,8 @@ query_processor::parse_statement(const sstring_view& query)
         return std::move(statement);
     } catch (const exceptions::recognition_exception& e) {
         throw exceptions::syntax_exception(sprint("Invalid or malformed CQL query string: %s", e.what()));
+    } catch (const exceptions::cassandra_exception& e) {
+        throw;
     } catch (const std::exception& e) {
         log.error("The statement: {} could not be parsed: {}", query, e.what());
         throw exceptions::syntax_exception(sprint("Failed parsing statement: [%s] reason: %s", query, e.what()));
