@@ -27,6 +27,7 @@
 #include "core/sstring.hh"
 #include "types.hh"
 #include "keys.hh"
+#include "utils/managed_bytes.hh"
 #include <memory>
 #include <random>
 #include <utility>
@@ -68,8 +69,8 @@ public:
     //     [0x80] == 0.5
     //     [0x00, 0x80] == 1/512
     //     [0xff, 0x80] == 1 - 1/512
-    bytes _data;
-    token(kind k, bytes d) : _kind(std::move(k)), _data(std::move(d)) {
+    managed_bytes _data;
+    token(kind k, managed_bytes d) : _kind(std::move(k)), _data(std::move(d)) {
     }
 
     bool is_minimum() const {
