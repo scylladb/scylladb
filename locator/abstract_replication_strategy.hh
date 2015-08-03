@@ -32,11 +32,7 @@ private:
     std::unordered_map<token, std::vector<inet_address>> _cached_endpoints;
     uint64_t _cache_hits_count = 0;
 
-    static logging::logger& logger() {
-        static logging::logger lgr("replication_strategy_logger");
-
-        return lgr;
-    }
+    static logging::logger logger;
 
     std::unordered_map<token, std::vector<inet_address>>&
     get_cached_endpoints();
@@ -51,17 +47,17 @@ protected:
 
     template <typename... Args>
     void err(const char* fmt, Args&&... args) const {
-        logger().error(fmt, std::forward<Args>(args)...);
+        logger.error(fmt, std::forward<Args>(args)...);
     }
 
     template <typename... Args>
     void warn(const char* fmt, Args&&... args) const {
-        logger().warn(fmt, std::forward<Args>(args)...);
+        logger.warn(fmt, std::forward<Args>(args)...);
     }
 
     template <typename... Args>
     void debug(const char* fmt, Args&&... args) const {
-        logger().debug(fmt, std::forward<Args>(args)...);
+        logger.debug(fmt, std::forward<Args>(args)...);
     }
 
     void validate_replication_factor(sstring rf);
