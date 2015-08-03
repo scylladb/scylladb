@@ -42,6 +42,7 @@
 #include "cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
 #include "streaming/stream_exception.hh"
+#include "service/storage_proxy.hh"
 
 namespace streaming {
 
@@ -90,17 +91,11 @@ void stream_session::init_messaging_service_handler() {
     });
     ms().register_stream_mutation([] (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
-            auto cf_id = fm.column_family_id();
-            sslog.debug("GOT STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
-            try {
-                auto& db = stream_session::get_local_db();
-                auto& cf = db.find_column_family(cf_id);
-                cf.apply(fm, db::replay_position());
-            } catch (no_such_column_family) {
-                // TODO: Send error msg back
-                sslog.warn("stream_session: {} does not exist\n", cf_id);
+            if (sslog.is_enabled(logging::log_level::debug)) {
+                auto cf_id = fm.column_family_id();
+                sslog.debug("GOT STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
             }
-            return make_ready_future<>();
+            return service::get_storage_proxy().local().mutate_locally(fm);
         });
     });
     ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
@@ -520,7 +515,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         for (auto& range : ranges) {
             auto pr = make_shared<query::range<ring_position>>(query::to_partition_range(range));
             prs.push_back(pr);
-            auto mr = cf->make_reader(*pr);
+            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, *pr);
             readers.push_back(std::move(mr));
         }
         // Store this mutation_reader so we can send mutaions later
