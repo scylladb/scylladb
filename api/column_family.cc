@@ -7,6 +7,7 @@
 #include <vector>
 #include "http/exception.hh"
 #include "sstables/sstables.hh"
+#include "sstables/estimated_histogram.hh"
 #include <algorithm>
 
 namespace api {
@@ -52,6 +53,18 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, const sstring& n
         return mapper(db.find_column_family(uuid));
     }, init, reducer).then([](const I& res) {
         return make_ready_future<json::json_return_type>(res);
+    });
+}
+
+template<class Mapper, class I, class Reducer, class Result>
+future<json::json_return_type> map_reduce_cf(http_context& ctx, const sstring& name, I init,
+        Mapper mapper, Reducer reducer, Result result) {
+    auto uuid = get_uuid(name, ctx.db.local());
+    return ctx.db.map_reduce0([mapper, uuid](database& db) {
+        return mapper(db.find_column_family(uuid));
+    }, init, reducer).then([result](const I& res) mutable {
+        result = res;
+        return make_ready_future<json::json_return_type>(result);
     });
 }
 
@@ -227,11 +240,15 @@ void set_column_family(http_context& ctx, routes& r) {
         return get_cf_stats(ctx, &column_family::stats::memtable_switch_count);
     });
 
-    cf::get_estimated_row_size_histogram.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        std::vector<double> res;
-        return make_ready_future<json::json_return_type>(res);
+    cf::get_estimated_row_size_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+            sstables::estimated_histogram res(0);
+            for (auto i: *cf.get_sstables() ) {
+                res.merge(i.second->get_stats_metadata().estimated_row_size);
+            }
+            return res;
+        },
+        sstables::merge, utils_json::estimated_histogram());
     });
 
     cf::get_estimated_column_count_histogram.set(r, [] (std::unique_ptr<request> req) {
