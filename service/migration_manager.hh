@@ -24,8 +24,8 @@
 
 #pragma once
 
+#include "service/migration_listener.hh"
 #include "db/legacy_schema_tables.hh"
-
 #include "gms/endpoint_state.hh"
 #include "core/distributed.hh"
 #include "gms/inet_address.hh"
@@ -42,19 +42,35 @@ class migration_manager {
     private final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
 #endif
 
-    static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
+    std::vector<migration_listener*> _listeners;
 
-#if 0
-    private final List<IMigrationListener> listeners = new CopyOnWriteArrayList<>();
-#endif
+    static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
 public:
     migration_manager();
+
+    /// Register a migration listener on current shard.
+    void register_listener(migration_listener* listener);
+
+    /// Unregister a migration listener on current shard.
+    void unregister_listener(migration_listener* listener);
 
     future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
     future<> maybe_schedule_schema_pull(service::storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint);
 
     future<> submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint);
+
+    static future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+
+    static future<> notify_create_column_family(schema_ptr cfm);
+
+    static future<> notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+
+    static future<> notify_update_column_family(schema_ptr cfm);
+
+    static future<> notify_drop_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+
+    static future<> notify_drop_column_family(schema_ptr cfm);
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
 
