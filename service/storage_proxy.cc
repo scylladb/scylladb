@@ -3106,4 +3106,9 @@ storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, c
     }
 }
 
+future<>
+storage_proxy::stop() {
+    return make_ready_future<>();
+}
+
 }

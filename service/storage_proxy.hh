@@ -150,7 +150,7 @@ public:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
         lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
 
-    future<> stop() { return make_ready_future<>(); }
+    future<> stop();
 
     friend class abstract_read_executor;
 
