@@ -2,6 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include <seastar/core/thread.hh>
 #include "core/do_with.hh"
 #include "cql_test_env.hh"
 #include "cql3/query_processor.hh"
@@ -203,23 +204,24 @@ future<> init_once() {
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
         return init_once().then([] {
-            auto db = ::make_shared<distributed<database>>();
-            auto cfg = make_lw_shared<db::config>();
-            cfg->data_file_directories() = {};
-            return db->start(std::move(*cfg)).then([db] {
+            return seastar::async([] {
+                auto db = ::make_shared<distributed<database>>();
+                auto cfg = make_lw_shared<db::config>();
+                cfg->data_file_directories() = {};
+                db->start(std::move(*cfg)).get();
+
                 distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
-                return proxy.start(std::ref(*db)).then([qp, db, &proxy] {
-                    return qp->start(std::ref(proxy), std::ref(*db)).then([db, &proxy, qp] {
-                        auto& ss = service::get_local_storage_service();
-                        return ss.init_server().then([db, qp] {
-                            auto env = ::make_shared<in_memory_cql_env>(db, qp);
-                            return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
-                                return env;
-                            });
-                        });
-                    });
-                });
+                proxy.start(std::ref(*db)).get();
+
+                qp->start(std::ref(proxy), std::ref(*db)).get();
+
+                auto& ss = service::get_local_storage_service();
+                ss.init_server().get();
+
+                auto env = ::make_shared<in_memory_cql_env>(db, qp);
+                env->start().get();
+                return dynamic_pointer_cast<cql_test_env>(env);
             });
         });
     });

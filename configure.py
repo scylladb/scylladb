@@ -123,6 +123,7 @@ urchin_tests = [
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
     'tests/urchin/cql_query_test',
+    'tests/urchin/storage_proxy_test',
     'tests/urchin/mutation_reader_test',
     'tests/urchin/mutation_query_test',
     'tests/urchin/row_cache_test',

@@ -3106,4 +3106,74 @@ storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, c
     }
 }
 
+future<>
+storage_proxy::stop() {
+    return make_ready_future<>();
+}
+
+class shard_reader {
+    distributed<database>& _db;
+    unsigned _shard;
+    utils::UUID _cf_id;
+    const query::partition_range& _range;
+    schema_ptr _local_schema;
+    struct remote_state {
+        mutation_reader reader;
+        std::experimental::optional<frozen_mutation> _m;
+    };
+    foreign_ptr<std::unique_ptr<remote_state>> _remote;
+private:
+    future<> init() {
+        _local_schema = _db.local().find_column_family(_cf_id).schema();
+        return _db.invoke_on(_shard, [this] (database& db) {
+            column_family& cf = db.find_column_family(_cf_id);
+            return make_foreign(std::make_unique<remote_state>(remote_state{cf.make_reader(_range)}));
+        }).then([this] (auto&& ptr) {
+            _remote = std::move(ptr);
+        });
+    }
+public:
+    shard_reader(utils::UUID cf_id, distributed<database>& db, unsigned shard, const query::partition_range& range)
+        : _db(db)
+        , _shard(shard)
+        , _cf_id(cf_id)
+        , _range(range)
+    { }
+
+    future<mutation_opt> operator()() {
+        if (!_remote) {
+            return init().then([this] {
+                return (*this)();
+            });
+        }
+
+        // FIXME: batching
+        return _db.invoke_on(_shard, [this] (database&) {
+            return _remote->reader().then([this] (mutation_opt&& m) {
+                if (!m) {
+                    _remote->_m = {};
+                } else {
+                    _remote->_m = freeze(*m);
+                }
+            });
+        }).then([this] () -> mutation_opt {
+            if (!_remote->_m) {
+                return {};
+            }
+            return { _remote->_m->unfreeze(_local_schema) };
+        });
+    }
+};
+
+mutation_reader
+storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range& range) {
+    std::vector<mutation_reader> readers;
+    for (unsigned cpu : smp::all_cpus()) {
+        readers.emplace_back([reader = make_lw_shared<shard_reader>(cf_id, _db, cpu, range)] () mutable {
+            return (*reader)();
+        });
+    }
+    return make_combined_reader(std::move(readers));
+}
+
 }
