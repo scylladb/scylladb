@@ -142,6 +142,19 @@ sstring to_string(const transport::event::schema_change::target_type t) {
     throw std::invalid_argument("unknown target type");
 }
 
+transport::event::event_type parse_event_type(const sstring& value)
+{
+    if (value == "TOPOLOGY_CHANGE") {
+        return transport::event::event_type::TOPOLOGY_CHANGE;
+    } else if (value == "STATUS_CHANGE") {
+        return transport::event::event_type::STATUS_CHANGE;
+    } else if (value == "SCHEMA_CHANGE") {
+        return transport::event::event_type::SCHEMA_CHANGE;
+    } else {
+        throw exceptions::protocol_exception(sprint("Invalid value '%s' for Event.Type", value));
+    }
+}
+
 struct cql_query_state {
     service::query_state query_state;
     std::unique_ptr<cql3::query_options> options;
@@ -756,7 +769,12 @@ future<> cql_server::connection::process_batch(uint16_t stream, temporary_buffer
 
 future<> cql_server::connection::process_register(uint16_t stream, temporary_buffer<char> buf)
 {
-    print("warning: ignoring event registration\n");
+    std::vector<sstring> event_types;
+    read_string_list(buf, event_types);
+    for (auto&& event_type : event_types) {
+        auto et = parse_event_type(event_type);
+        _server._notifier->register_event(et, this);
+    }
     return write_ready(stream);
 }
 
