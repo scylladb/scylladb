@@ -49,6 +49,7 @@ public:
         auto buf = _schema->partition_key_type()->serialize_optionals(parameters);
         auto view = partition_key_view::from_bytes(std::move(buf));
         auto tok = dht::global_partitioner().get_token(*_schema, view);
+        warn(unimplemented::cause::VALIDATION);
         return { tok._data }
                 // TODO:
                 //{ dht::global_partitioner().get_token_validator()->decompose(tok) }
