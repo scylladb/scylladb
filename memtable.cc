@@ -14,13 +14,6 @@ memtable::~memtable() {
     partitions.clear_and_dispose(std::default_delete<partition_entry>());
 }
 
-memtable::const_mutation_partition_ptr
-memtable::find_partition(const dht::decorated_key& key) const {
-    auto i = partitions.find(key, partition_entry::compare(_schema));
-    // FIXME: remove copy if only one data source
-    return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->partition());
-}
-
 mutation_partition&
 memtable::find_or_create_partition_slow(partition_key_view key) {
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
