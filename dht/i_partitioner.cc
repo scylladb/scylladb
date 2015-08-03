@@ -279,12 +279,7 @@ ring_position ring_position::deserialize(bytes_view& in) {
 }
 
 unsigned shard_of(const token& t) {
-    if (t._data.size() < 2) {
-        return 0;
-    }
-    uint16_t v = uint8_t(t._data[t._data.size() - 1])
-            | (uint8_t(t._data[t._data.size() - 2]) << 8);
-    return v % smp::count;
+    return global_partitioner().shard_of(t);
 }
 
 int ring_position_comparator::operator()(const ring_position& lh, const ring_position& rh) const {

@@ -39,6 +39,7 @@ public:
     virtual sstring to_sstring(const dht::token& t) const override {
         return to_hex(t._data);
     }
+    virtual unsigned shard_of(const token& t) const override;
 };
 
 }
