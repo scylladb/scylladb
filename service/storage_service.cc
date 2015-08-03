@@ -405,7 +405,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    logger.debug("handle_state_bootstrap endpoint={}", endpoint);
+    logger.debug("handle_state_normal endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
@@ -513,6 +513,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 }
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
+    logger.debug("handle_state_leaving endpoint={}", endpoint);
 #if 0
     Collection<Token> tokens;
     tokens = get_tokens_for(endpoint);
@@ -542,6 +543,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_left endpoint={}", endpoint);
 #if 0
     assert pieces.length >= 2;
     Collection<Token> tokens;
@@ -555,6 +557,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_moving endpoint={}", endpoint);
 #if 0
     assert pieces.length >= 2;
     Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
@@ -569,6 +572,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_removing endpoint={}", endpoint);
 #if 0
     assert (pieces.length > 0);
 
@@ -646,7 +650,7 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 }
 
 void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) {
-    // no-op
+    logger.debug("before_change endpoint={}", endpoint);
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
@@ -687,6 +691,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 
 
 void storage_service::on_remove(gms::inet_address endpoint) {
+    logger.debug("on_remove endpoint={}", endpoint);
 #if 0
     _token_metadata.removeEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
@@ -694,6 +699,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
+    logger.debug("on_restart endpoint={}", endpoint);
 #if 0
     MessagingService.instance().convict(endpoint);
     for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
@@ -702,6 +708,7 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+    logger.debug("on_restart endpoint={}", endpoint);
 #if 0
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (state.isAlive())
