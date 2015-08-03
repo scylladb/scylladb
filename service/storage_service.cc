@@ -78,8 +78,8 @@ future<> storage_service::prepare_to_join() {
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
             // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            print("Start gossiper service ...\n");
             return gossiper.start(generation_number, app_states).then([this] {
-                print("Start gossiper service ...\n");
 #if SS_DEBUG
                 gms::get_local_gossiper().debug_show();
                 _token_metadata.debug_show();
