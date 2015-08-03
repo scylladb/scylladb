@@ -433,6 +433,8 @@ if args.dpdk:
 elif args.dpdk_target:
     seastar_flags += ['--dpdk-target', args.dpdk_target]
 
+seastar_flags += ['--compiler', args.cxx]
+
 status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
 
 if status != 0:
