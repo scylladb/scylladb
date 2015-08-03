@@ -2085,11 +2085,15 @@ storage_proxy::do_query(schema_ptr s,
     if (partition_ranges.empty()) {
         return make_empty();
     }
-
+    utils::latency_counter lc;
+    lc.start();
     if (partition_ranges[0].is_singular() && partition_ranges[0].start()->value().has_key()) { // do not support mixed partitions (yet?)
         try {
-            return query_singular(cmd, std::move(partition_ranges), cl);
+            return query_singular(cmd, std::move(partition_ranges), cl).finally([lc, this] () mutable {
+                    _stats.read.mark(lc.stop().latency_in_nano());
+            });
         } catch (const no_such_column_family&) {
+            _stats.read.mark(lc.stop().latency_in_nano());
             return make_empty();
         }
     }
@@ -2097,9 +2101,12 @@ storage_proxy::do_query(schema_ptr s,
     if (partition_ranges.size() != 1) {
         // FIXME: implement
         throw std::runtime_error("more than one non singular range not supported yet");
+        _stats.read.mark(lc.stop().latency_in_nano());
     }
 
-    return query_partition_key_range(cmd, std::move(partition_ranges[0]), cl);
+    return query_partition_key_range(cmd, std::move(partition_ranges[0]), cl).finally([lc, this] () mutable {
+        _stats.read.mark(lc.stop().latency_in_nano());
+    });
 }
 
 #if 0
