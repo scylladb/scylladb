@@ -827,7 +827,14 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
 }
 
 future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
-    throw std::runtime_error("not implemented");
+    auto& proxy = service::get_local_storage_proxy();
+    auto old_cfm = find_schema(ks_name, cf_name);
+    return db::legacy_schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
+        if (old_cfm->id() != new_cfm->id()) {
+            return make_exception_future<>(exceptions::configuration_exception(sprint("Column family ID mismatch (found %s; expected %s)", new_cfm->id(), old_cfm->id())));
+        }
+        return make_exception_future<>(std::runtime_error("update column family not implemented"));
+    });
 }
 
 void database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
