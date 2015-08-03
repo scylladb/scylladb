@@ -365,7 +365,7 @@ namespace std {
 template<>
 struct hash<dht::token> {
     size_t operator()(const dht::token& t) const {
-        return (t._kind == dht::token::kind::key) ? std::hash<bytes>()(t._data) : 0;
+        return (t._kind == dht::token::kind::key) ? std::hash<decltype(t._data)>()(t._data) : 0;
     }
 };
 }

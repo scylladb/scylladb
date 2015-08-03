@@ -22,9 +22,9 @@ maximum_token() {
 
 // result + overflow bit
 std::pair<bytes, bool>
-add_bytes(const bytes& b1, const bytes& b2, bool carry = false) {
+add_bytes(bytes_view b1, bytes_view b2, bool carry = false) {
     auto sz = std::max(b1.size(), b2.size());
-    auto expand = [sz] (const bytes& b) {
+    auto expand = [sz] (bytes_view b) {
         bytes ret(bytes::initialized_later(), sz);
         auto bsz = b.size();
         auto p = std::copy(b.begin(), b.end(), ret.begin());
@@ -86,7 +86,7 @@ midpoint_unsigned_tokens(const token& t1, const token& t2) {
     return token{token::kind::key, std::move(avg)};
 }
 
-static inline unsigned char get_byte(const bytes& b, size_t off) {
+static inline unsigned char get_byte(bytes_view b, size_t off) {
     if (off < b.size()) {
         return b[off];
     } else {
