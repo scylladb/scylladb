@@ -349,6 +349,16 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 }
 
 void column_family::add_sstable(sstables::sstable&& sstable) {
+    auto key_shard = [this] (const partition_key& pk) {
+        auto token = dht::global_partitioner().get_token(*_schema, pk);
+        return dht::shard_of(token);
+    };
+    auto s1 = key_shard(sstable.get_first_partition_key(*_schema));
+    auto s2 = key_shard(sstable.get_last_partition_key(*_schema));
+    if (s1 > engine().cpu_id() || engine().cpu_id() < s2) {
+        dblog.info("sstable {} not relevant for this shard, ignoring", sstable.get_filename());
+        return;
+    }
     auto generation = sstable.generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);

@@ -1441,6 +1441,16 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
     });
 }
 
+partition_key
+sstable::get_first_partition_key(const schema& s) const {
+    return key::from_bytes(_summary.first_key.value).to_partition_key(s);
+}
+
+partition_key
+sstable::get_last_partition_key(const schema& s) const {
+    return key::from_bytes(_summary.last_key.value).to_partition_key(s);
+}
+
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file] (auto ep) {

@@ -22,6 +22,7 @@ public:
     virtual bool is_less(const token& t1, const token& t2) override;
     virtual token midpoint(const token& t1, const token& t2) const override;
     virtual sstring to_sstring(const dht::token& t) const override;
+    virtual unsigned shard_of(const token& t) const override;
 private:
     static int64_t normalize(int64_t in);
     token get_token(bytes_view key);

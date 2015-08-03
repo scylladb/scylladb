@@ -235,6 +235,9 @@ public:
     // Returns the total bytes of all components.
     future<uint64_t> bytes_on_disk();
 
+    partition_key get_first_partition_key(const schema& s) const;
+    partition_key get_last_partition_key(const schema& s) const;
+
     const sstring get_filename() {
         return filename(component_type::Data);
     }

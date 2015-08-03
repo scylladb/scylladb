@@ -224,6 +224,11 @@ public:
      * @return name of partitioner.
      */
     virtual const sstring name() = 0;
+
+    /**
+     * Calculates the shard that handles a particular token.
+     */
+    virtual unsigned shard_of(const token& t) const = 0;
 protected:
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.

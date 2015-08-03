@@ -111,6 +111,15 @@ murmur3_partitioner::get_token_validator() {
     abort();
 }
 
+unsigned
+murmur3_partitioner::shard_of(const token& t) const {
+    int64_t l = long_token(t);
+    // treat l as a fraction between 0 and 1 and use 128-bit arithmetic to
+    // divide that range evenly among shards:
+    uint64_t adjusted = uint64_t(l) + uint64_t(std::numeric_limits<int64_t>::min());
+    return (__int128(adjusted) * smp::count) >> 64;
+}
+
 using registry = class_registrator<i_partitioner, murmur3_partitioner>;
 static registry registrator("org.apache.cassandra.dht.Murmur3Partitioner");
 static registry registrator_short_name("Murmur3Partitioner");
