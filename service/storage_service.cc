@@ -373,7 +373,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
+    logger.debug("handle_state_bootstrap endpoint={}", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
@@ -405,7 +405,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
+    logger.debug("handle_state_bootstrap endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
@@ -620,7 +620,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    logger.debug("SS::on_join endpoint={}", endpoint);
+    logger.debug("on_join endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     for (auto t : tokens) {
         logger.debug("t={}", t);
@@ -632,7 +632,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("SS::on_alive endpoint={}", endpoint);
+    logger.debug("on_alive endpoint={}", endpoint);
     get_local_migration_manager().schedule_schema_pull(endpoint, state);
 #if 0
 
@@ -650,7 +650,7 @@ void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_st
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
-    logger.debug("SS::on_change endpoint={}", endpoint);
+    logger.debug("on_change endpoint={}", endpoint);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
