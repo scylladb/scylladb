@@ -1161,34 +1161,32 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
 
 future<> gossiper::do_shadow_round() {
     build_seeds_list();
-    // send a completely empty syn
-    std::vector<gossip_digest> g_digests;
-    gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
     _in_shadow_round = true;
-    for (inet_address seed : _seeds) {
-        auto id = get_shard_id(seed);
-        logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-        ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
-            try {
-                auto ack_msg = f.get0();
-                logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
-                this->handle_ack_msg(id, ack_msg);
-            } catch (...) {
-                logger.error("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
-            }
-        });
-    }
-    return seastar::async([this] {
-        std::chrono::milliseconds slept(0);
-        while (true) {
-            sleep(std::chrono::milliseconds(1000)).get();
-            if (!_in_shadow_round) {
-                break;
-            }
-            slept += std::chrono::milliseconds(1000);
-            if (slept > storage_service_ring_delay()) {
-                throw std::runtime_error(sprint("Unable to gossip with any seeds"));
-            }
+    auto t = clk::now();
+    return do_until([this] { return !this->_in_shadow_round; }, [this, t] {
+        // send a completely empty syn
+        std::vector<gossip_digest> digests;
+        gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
+        for (inet_address seed : _seeds) {
+            auto id = get_shard_id(seed);
+            logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
+            ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+                try {
+                    auto ack_msg = f.get0();
+                    logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
+                    this->handle_ack_msg(id, ack_msg);
+                } catch (...) {
+                    logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
+                }
+            });
+        }
+        if (clk::now() > t + storage_service_ring_delay()) {
+            throw std::runtime_error(sprint("Unable to gossip with any seeds"));
+        }
+        if (this->_in_shadow_round) {
+            return sleep(std::chrono::seconds(1));
+        } else {
+            return make_ready_future<>();
         }
     });
 }
