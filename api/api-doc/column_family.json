@@ -916,6 +916,49 @@
          ]
       },
       {
+         "path":"/column_family/metrics/read/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of reads",
+               "type":"long",
+               "nickname":"get_read",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/read/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of reads from all column family, per shard",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_all_read",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/column_family/metrics/read_latency",
          "operations":[
             {
@@ -991,6 +1034,49 @@
                      "type":"string",
                      "paramType":"path"
                   }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of writes",
+               "type":"long",
+               "nickname":"get_write",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/column_family/metrics/write/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of writes from all column family, per shard",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_all_write",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
                ]
             }
          ]
