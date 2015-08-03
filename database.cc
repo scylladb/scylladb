@@ -826,7 +826,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-void database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
+future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
     throw std::runtime_error("not implemented");
 }
 

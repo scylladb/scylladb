@@ -683,9 +683,9 @@ future<> save_system_keyspace_schema() {
                         auto cfg = ks.make_column_family_config(*cfm);
                         db.add_column_family(cfm, cfg);
                     }
-                    for (auto&& cfm : altered) {
-                        db.update_column_family(cfm->ks_name(), cfm->cf_name());
-                    }
+                    parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
+                        return db.update_column_family(cfm->ks_name(), cfm->cf_name());
+                    }).get();
                     for (auto&& cfm : dropped) {
                         db.drop_column_family(cfm->ks_name(), cfm->cf_name());
                     }
