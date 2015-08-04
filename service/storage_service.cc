@@ -10,6 +10,7 @@
 #include "gms/inet_address.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
+#include "to_string.hh"
 
 namespace service {
 
@@ -359,14 +360,14 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             }
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
-        return sleep(sleep_time).then([] {
+        return sleep(sleep_time).then([tokens = std::move(tokens)] {
             auto& gossiper = gms::get_local_gossiper();
             if (!gossiper.seen_any_seed()) {
                  throw std::runtime_error("Unable to contact any seeds!");
             }
             // setMode(Mode.JOINING, "Starting to bootstrap...", true);
             // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
-            // logger.info("Bootstrap completed! for the tokens {}", tokens);
+            logger.info("Bootstrap completed! for the tokens {}", tokens);
             return make_ready_future<>();
         });
     });
@@ -377,7 +378,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
-    // logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+    logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
@@ -414,8 +415,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     std::unordered_set<token> local_tokens_to_remove;
     std::unordered_set<inet_address> endpoints_to_remove;
 
-    // if (logger.isDebugEnabled())
-    //     logger.debug("Node {} state normal, token {}", endpoint, tokens);
+    logger.debug("Node {} state normal, token {}", endpoint, tokens);
 
     if (_token_metadata.is_member(endpoint)) {
         logger.info("Node {} state jump to normal", endpoint);
