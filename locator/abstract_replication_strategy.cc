@@ -8,7 +8,7 @@
 
 namespace locator {
 
-logging::logger abstract_replication_strategy::logger("replication_strategy_logger");
+logging::logger abstract_replication_strategy::logger("replication_strategy");
 
 abstract_replication_strategy::abstract_replication_strategy(
     const sstring& ks_name,
