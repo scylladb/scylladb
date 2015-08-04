@@ -140,9 +140,9 @@ void row_cache::populate(const mutation& m) {
             _tracker.insert(*entry);
             _partitions.insert(i, *entry);
         } else {
-            cache_entry& entry = *i;
-            _tracker.touch(entry);
-            entry.partition().apply(*m.schema(), m.partition());
+            _tracker.touch(*i);
+            // We cache whole partitions right now, so if cache already has this partition,
+            // it must be complete, so do nothing.
         }
     });
 }
