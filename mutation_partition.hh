@@ -86,13 +86,7 @@ public:
     // Merges given cell into the row.
     template <typename ColumnDefinitionResolver>
     void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
-        auto i = _cells.lower_bound(id, cell_entry::compare());
-        if (i == _cells.end() || i->id() != id) {
-            cell_entry* e = current_allocator().construct<cell_entry>(id, std::move(cell));
-            _cells.insert(i, *e);
-        } else {
-            merge_column(resolver(id), i->cell(), std::move(cell));
-        }
+        apply(resolver(id), std::move(cell));
     }
 
     // Expires cells based on query_time. Removes cells covered by tomb.
