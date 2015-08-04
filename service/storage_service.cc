@@ -625,10 +625,6 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     logger.debug("on_join endpoint={}", endpoint);
-    auto tokens = get_tokens_for(endpoint);
-    for (auto t : tokens) {
-        logger.debug("t={}", t);
-    }
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
