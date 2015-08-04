@@ -442,11 +442,10 @@ bool mutation_partition::equal(const schema& s, const mutation_partition& p) con
 void
 merge_column(const column_definition& def,
              atomic_cell_or_collection& old,
-             const atomic_cell_or_collection& neww) {
+             atomic_cell_or_collection&& neww) {
     if (def.is_atomic()) {
         if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
-            // FIXME: move()?
-            old = neww;
+            old = std::move(neww);
         }
     } else {
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
@@ -463,7 +462,7 @@ row::apply(const column_definition& column, atomic_cell_or_collection value) {
         auto e = current_allocator().construct<cell_entry>(id, std::move(value));
         _cells.insert(i, *e);
     } else {
-        merge_column(column, i->cell(), value);
+        merge_column(column, i->cell(), std::move(value));
     }
 }
 
