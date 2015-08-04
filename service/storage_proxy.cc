@@ -2986,8 +2986,8 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_mutation_done([this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
         gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
-        smp::submit_to(shard, [this, from, response_id] {
-            got_response(response_id, from);
+        get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
+            sp.got_response(response_id, from);
         });
         return net::messaging_service::no_wait();
     });
