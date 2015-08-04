@@ -109,7 +109,9 @@ select_statement::make_partition_slice(const query_options& options) {
     }
 
     if (_parameters->is_distinct()) {
-        return query::partition_slice({}, std::move(static_columns), {}, _opts);
+        _opts.set(query::partition_slice::option::distinct);
+        return query::partition_slice({ query::clustering_range::make_open_ended_both_sides() },
+            std::move(static_columns), {}, _opts);
     }
 
     if (_is_reversed) {
