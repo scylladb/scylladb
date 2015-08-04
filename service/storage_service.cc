@@ -409,10 +409,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
-    std::unordered_set<token> tokensToUpdateInMetadata;
-    std::unordered_set<token> tokensToUpdateInSystemKeyspace;
-    std::unordered_set<token> localTokensToRemove;
-    std::unordered_set<inet_address> endpointsToRemove;
+    std::unordered_set<token> tokens_to_update_in_metadata;
+    std::unordered_set<token> tokens_to_update_in_system_keyspace;
+    std::unordered_set<token> local_tokens_to_remove;
+    std::unordered_set<inet_address> endpoints_to_remove;
 
     // if (logger.isDebugEnabled())
     //     logger.debug("Node {} state normal, token {}", endpoint, tokens);
@@ -461,15 +461,15 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         auto current_owner = _token_metadata.get_endpoint(t);
         if (!current_owner) {
             logger.debug("New node {} at token {}", endpoint, t);
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
         } else if (endpoint == *current_owner) {
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
         } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
 #if 0
 
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
@@ -487,17 +487,17 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
-    _token_metadata.update_normal_tokens(tokensToUpdateInMetadata, endpoint);
+    _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
     // for (auto ep : endpointsToRemove) {
         // removeEndpoint(ep);
         // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
         //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
     // }
-    if (!tokensToUpdateInSystemKeyspace.empty()) {
-        // SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
+    if (!tokens_to_update_in_system_keyspace.empty()) {
+        // SystemKeyspace.updateTokens(endpoint, tokens_to_update_in_system_keyspace);
     }
-    if (!localTokensToRemove.empty()) {
-        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
+    if (!local_tokens_to_remove.empty()) {
+        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
     }
 
     if (is_moving) {
