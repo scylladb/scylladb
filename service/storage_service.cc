@@ -722,13 +722,13 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
         try {
             f.get();
         } catch (...) {
-            logger.error("storage_service: fail to update {} for {}: {}", col, endpoint, std::current_exception());
+            logger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
         }
     });
 }
 
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    logger.debug("storage_service:: Update ep={}, state={}, value={}", endpoint, int(state), value.value);
+    logger.debug("Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
         update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {
@@ -741,7 +741,7 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         try {
             ep = gms::inet_address(value.value);
         } catch (...) {
-            logger.error("storage_service: fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
+            logger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
         update_table(endpoint, col, ep.addr());
@@ -955,7 +955,7 @@ void storage_service::replicate_to_all_cores() {
             _replicate_task.signal();
             f.get();
         } catch (...) {
-            logger.error("storage_service: Fail to replicate _token_metadata");
+            logger.error("Fail to replicate _token_metadata");
         }
     });
 }
