@@ -7,6 +7,7 @@
 #include "core/sstring.hh"
 #include <vector>
 #include <sstream>
+#include <unordered_set>
 
 template<typename PrintableRange>
 static inline
@@ -40,4 +41,10 @@ static inline
 sstring
 to_string(std::initializer_list<Printable> items) {
     return "[" + join(", ", std::begin(items), std::end(items)) + "]";
+}
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
+    os << "{" << join(", ", items) << "}";
+    return os;
 }

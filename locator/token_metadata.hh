@@ -420,7 +420,7 @@ public:
     UUID get_host_id(inet_address endpoint);
 
     /** Return the end-point for a unique host ID */
-    inet_address get_endpoint_for_host_id(UUID host_id);
+    std::experimental::optional<inet_address> get_endpoint_for_host_id(UUID host_id);
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
@@ -467,55 +467,16 @@ public:
             lock.writeLock().unlock();
         }
     }
-
-    public void removeEndpoint(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-            _bootstrap_tokens.removeValue(endpoint);
-            tokenToEndpointMap.removeValue(endpoint);
-            topology.removeEndpoint(endpoint);
-            _leaving_endpoints.remove(endpoint);
-            _endpoint_to_host_id_map.remove(endpoint);
-            sortedTokens = sortTokens();
-            invalidateCachedRings();
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
+#endif
+public:
+    void remove_endpoint(inet_address endpoint);
 
     /**
      * Remove pair of token/address from moving endpoints
      * @param endpoint address of the moving node
      */
-    public void removeFromMoving(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-            for (Pair<Token, InetAddress> pair : _moving_endpoints)
-            {
-                if (pair.right.equals(endpoint))
-                {
-                    _moving_endpoints.remove(pair);
-                    break;
-                }
-            }
-
-            invalidateCachedRings();
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
+    void remove_from_moving(inet_address endpoint);
+#if 0
 
     public Collection<Token> getTokens(InetAddress endpoint)
     {

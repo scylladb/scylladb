@@ -10,6 +10,7 @@
 #include "gms/inet_address.hh"
 #include "log.hh"
 #include "service/migration_manager.hh"
+#include "to_string.hh"
 
 namespace service {
 
@@ -78,8 +79,8 @@ future<> storage_service::prepare_to_join() {
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
             // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            print("Start gossiper service ...\n");
             return gossiper.start(generation_number, app_states).then([this] {
-                print("Start gossiper service ...\n");
 #if SS_DEBUG
                 gms::get_local_gossiper().debug_show();
                 _token_metadata.debug_show();
@@ -359,25 +360,25 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             }
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
-        return sleep(sleep_time).then([] {
+        return sleep(sleep_time).then([tokens = std::move(tokens)] {
             auto& gossiper = gms::get_local_gossiper();
             if (!gossiper.seen_any_seed()) {
                  throw std::runtime_error("Unable to contact any seeds!");
             }
             // setMode(Mode.JOINING, "Starting to bootstrap...", true);
             // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
-            // logger.info("Bootstrap completed! for the tokens {}", tokens);
+            logger.info("Bootstrap completed! for the tokens {}", tokens);
             return make_ready_future<>();
         });
     });
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
+    logger.debug("handle_state_bootstrap endpoint={}", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
-    // logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+    logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
@@ -405,71 +406,67 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-    logger.debug("SS::handle_state_bootstrap endpoint={}", endpoint);
+    logger.debug("handle_state_normal endpoint={}", endpoint);
     auto tokens = get_tokens_for(endpoint);
     auto& gossiper = gms::get_local_gossiper();
 
-    std::unordered_set<token> tokensToUpdateInMetadata;
-    std::unordered_set<token> tokensToUpdateInSystemKeyspace;
-    std::unordered_set<token> localTokensToRemove;
-    std::unordered_set<inet_address> endpointsToRemove;
+    std::unordered_set<token> tokens_to_update_in_metadata;
+    std::unordered_set<token> tokens_to_update_in_system_keyspace;
+    std::unordered_set<token> local_tokens_to_remove;
+    std::unordered_set<inet_address> endpoints_to_remove;
 
-    // if (logger.isDebugEnabled())
-    //     logger.debug("Node {} state normal, token {}", endpoint, tokens);
+    logger.debug("Node {} state normal, token {}", endpoint, tokens);
 
     if (_token_metadata.is_member(endpoint)) {
         logger.info("Node {} state jump to normal", endpoint);
     }
     update_peer_info(endpoint);
-#if 1
+
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (gossiper.uses_host_id(endpoint)) {
         auto host_id = gossiper.get_host_id(endpoint);
-        //inet_address existing = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
         // if (DatabaseDescriptor.isReplacing() &&
         //     Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null &&
         //     (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress())))) {
         if (false) {
             logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
-            if (false /*existing != null && !existing.equals(endpoint)*/) {
-#if 0
-                if (existing == get_broadcast_address()) {
-                    logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
-                    _token_metadata.removeEndpoint(endpoint);
-                    endpointsToRemove.add(endpoint);
-                } else if (gossiper.compare_endpoint_startup(endpoint, existing) > 0) {
-                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
-                    _token_metadata.removeEndpoint(existing);
-                    endpointsToRemove.add(existing);
-                    _token_metadata.update_host_id(hostId, endpoint);
+            if (existing && *existing != endpoint) {
+                if (*existing == get_broadcast_address()) {
+                    logger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
+                    _token_metadata.remove_endpoint(endpoint);
+                    endpoints_to_remove.insert(endpoint);
+                } else if (gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
+                    _token_metadata.remove_endpoint(*existing);
+                    endpoints_to_remove.insert(*existing);
+                    _token_metadata.update_host_id(host_id, endpoint);
                 } else {
-                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
-                    _token_metadata.removeEndpoint(endpoint);
-                    endpointsToRemove.add(endpoint);
+                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
+                    _token_metadata.remove_endpoint(endpoint);
+                    endpoints_to_remove.insert(endpoint);
                 }
-#endif
             } else {
                 _token_metadata.update_host_id(host_id, endpoint);
             }
         }
     }
-#endif
 
     for (auto t : tokens) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
         auto current_owner = _token_metadata.get_endpoint(t);
         if (!current_owner) {
             logger.debug("New node {} at token {}", endpoint, t);
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
         } else if (endpoint == *current_owner) {
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
         } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
-            tokensToUpdateInMetadata.insert(t);
-            tokensToUpdateInSystemKeyspace.insert(t);
+            tokens_to_update_in_metadata.insert(t);
+            tokens_to_update_in_system_keyspace.insert(t);
 #if 0
 
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
@@ -487,17 +484,17 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
-    _token_metadata.update_normal_tokens(tokensToUpdateInMetadata, endpoint);
+    _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
     // for (auto ep : endpointsToRemove) {
         // removeEndpoint(ep);
         // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
         //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
     // }
-    if (!tokensToUpdateInSystemKeyspace.empty()) {
-        // SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
+    if (!tokens_to_update_in_system_keyspace.empty()) {
+        // SystemKeyspace.updateTokens(endpoint, tokens_to_update_in_system_keyspace);
     }
-    if (!localTokensToRemove.empty()) {
-        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
+    if (!local_tokens_to_remove.empty()) {
+        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
     }
 
     if (is_moving) {
@@ -510,9 +507,16 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     // PendingRangeCalculatorService.instance.update();
+    if (logger.is_enabled(logging::log_level::debug)) {
+        auto ver = _token_metadata.get_ring_version();
+        for (auto& x : _token_metadata.get_token_to_endpoint()) {
+            logger.debug("token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
+        }
+    }
 }
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
+    logger.debug("handle_state_leaving endpoint={}", endpoint);
 #if 0
     Collection<Token> tokens;
     tokens = get_tokens_for(endpoint);
@@ -542,6 +546,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_left endpoint={}", endpoint);
 #if 0
     assert pieces.length >= 2;
     Collection<Token> tokens;
@@ -555,6 +560,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_moving endpoint={}", endpoint);
 #if 0
     assert pieces.length >= 2;
     Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
@@ -569,6 +575,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+    logger.debug("handle_state_removing endpoint={}", endpoint);
 #if 0
     assert (pieces.length > 0);
 
@@ -620,11 +627,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
-    logger.debug("SS::on_join endpoint={}", endpoint);
-    auto tokens = get_tokens_for(endpoint);
-    for (auto t : tokens) {
-        logger.debug("t={}", t);
-    }
+    logger.debug("on_join endpoint={}", endpoint);
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
@@ -632,7 +635,7 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("SS::on_alive endpoint={}", endpoint);
+    logger.debug("on_alive endpoint={}", endpoint);
     get_local_migration_manager().schedule_schema_pull(endpoint, state);
 #if 0
 
@@ -646,11 +649,11 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 }
 
 void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) {
-    // no-op
+    logger.debug("before_change endpoint={}", endpoint);
 }
 
 void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
-    logger.debug("SS::on_change endpoint={}", endpoint);
+    logger.debug("on_change endpoint={}", endpoint);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
@@ -687,6 +690,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 
 
 void storage_service::on_remove(gms::inet_address endpoint) {
+    logger.debug("on_remove endpoint={}", endpoint);
 #if 0
     _token_metadata.removeEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
@@ -694,6 +698,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
+    logger.debug("on_restart endpoint={}", endpoint);
 #if 0
     MessagingService.instance().convict(endpoint);
     for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
@@ -702,6 +707,7 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
+    logger.debug("on_restart endpoint={}", endpoint);
 #if 0
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (state.isAlive())
@@ -715,13 +721,13 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
         try {
             f.get();
         } catch (...) {
-            logger.error("storage_service: fail to update {} for {}: {}", col, endpoint, std::current_exception());
+            logger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
         }
     });
 }
 
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    logger.debug("storage_service:: Update ep={}, state={}, value={}", endpoint, int(state), value.value);
+    logger.debug("Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
         update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {
@@ -734,7 +740,7 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         try {
             ep = gms::inet_address(value.value);
         } catch (...) {
-            logger.error("storage_service: fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
+            logger.error("fail to update {} for {}: invalid rcpaddr {}", col, endpoint, value.value);
             return;
         }
         update_table(endpoint, col, ep.addr());
@@ -948,7 +954,7 @@ void storage_service::replicate_to_all_cores() {
             _replicate_task.signal();
             f.get();
         } catch (...) {
-            logger.error("storage_service: Fail to replicate _token_metadata");
+            logger.error("Fail to replicate _token_metadata");
         }
     });
 }

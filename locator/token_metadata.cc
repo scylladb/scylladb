@@ -9,6 +9,17 @@
 
 namespace locator {
 
+template <typename C, typename V>
+static void remove_by_value(C& container, V value) {
+    for (auto it = container.begin(); it != container.end();) {
+        if (it->second == value) {
+            it = container.erase(it);
+        } else {
+            it++;
+        }
+    }
+}
+
 token_metadata::token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     _sorted_tokens = sort_tokens();
@@ -65,8 +76,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
     }
 
     bool should_sort_tokens = false;
-    for (auto&& i : endpoint_tokens)
-    {
+    for (auto&& i : endpoint_tokens) {
         inet_address endpoint = i.first;
         std::unordered_set<token>& tokens = i.second;
 
@@ -81,17 +91,15 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         }
 
         _topology.add_endpoint(endpoint);
-#if 0
-        bootstrapTokens.removeValue(endpoint);
-        leavingEndpoints.remove(endpoint);
-        removeFromMoving(endpoint); // also removing this endpoint from moving
-#endif
+        remove_by_value(_bootstrap_tokens, endpoint);
+        _leaving_endpoints.erase(endpoint);
+        remove_from_moving(endpoint); // also removing this endpoint from moving
         for (const token& t : tokens)
         {
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
-            if (prev.first->second  != endpoint) {
-                //logger.warn("Token {} changing ownership from {} to {}", token, prev.first->second, endpoint);
+            if (prev.first->second != endpoint) {
+                // logger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
                 prev.first->second = endpoint;
             }
         }
@@ -171,14 +179,17 @@ utils::UUID token_metadata::get_host_id(inet_address endpoint) {
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
-gms::inet_address token_metadata::get_endpoint_for_host_id(UUID host_id) {
+std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
         return x.second == host_id;
     });
-    assert(it != end);
-    return (*it).first;
+    if (it == end) {
+        return {};
+    } else {
+        return (*it).first;
+    }
 }
 
 const std::unordered_map<inet_address, utils::UUID>& token_metadata::get_endpoint_to_host_id_map_for_reading() const{
@@ -258,6 +269,22 @@ void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
 bool token_metadata::is_leaving(inet_address endpoint) {
     return _leaving_endpoints.count(endpoint);
 }
+
+void token_metadata::remove_endpoint(inet_address endpoint) {
+    remove_by_value(_bootstrap_tokens, endpoint);
+    remove_by_value(_token_to_endpoint_map, endpoint);
+    _topology.remove_endpoint(endpoint);
+    _leaving_endpoints.erase(endpoint);
+    _endpoint_to_host_id_map.erase(endpoint);
+    _sorted_tokens = sort_tokens();
+    invalidate_cached_rings();
+}
+
+void token_metadata::remove_from_moving(inet_address endpoint) {
+    remove_by_value(_moving_endpoints, endpoint);
+    invalidate_cached_rings();
+}
+
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
