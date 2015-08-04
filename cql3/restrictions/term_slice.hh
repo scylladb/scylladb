@@ -100,13 +100,17 @@ public:
         }
     }
 
-    friend std::ostream& operator<<(std::ostream& out, const term_slice& slice) {
+    sstring to_string() const {
         static auto print_term = [] (::shared_ptr<term> t) -> sstring {
             return t ? t->to_string() : "null";
         };
-        return out << sprint("(%s %s, %s %s)",
-            slice._bounds[0].inclusive ? ">=" : ">", print_term(slice._bounds[0].t),
-            slice._bounds[1].inclusive ? "<=" : "<", print_term(slice._bounds[1].t));
+        return sprint("(%s %s, %s %s)",
+            _bounds[0].inclusive ? ">=" : ">", print_term(_bounds[0].t),
+            _bounds[1].inclusive ? "<=" : "<", print_term(_bounds[1].t));
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const term_slice& slice) {
+        return out << slice.to_string();
     }
 
 #if 0

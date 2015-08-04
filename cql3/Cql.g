@@ -52,6 +52,7 @@ options {
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
 #include "cql3/error_listener.hh"
+#include "cql3/multi_column_relation.hh"
 #include "cql3/single_column_relation.hh"
 #include "cql3/token_relation.hh"
 #include "cql3/index_name.hh"
@@ -138,21 +139,19 @@ struct uninitialized {
         return marker;
     }
 
-#if 0
-    public Tuples.Raw newTupleBindVariables(ColumnIdentifier name)
+    shared_ptr<cql3::tuples::raw> new_tuple_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        Tuples.Raw marker = new Tuples.Raw(bindVariables.size());
-        bindVariables.add(name);
+        auto marker = make_shared<cql3::tuples::raw>(_bind_variables.size());
+        _bind_variables.push_back(std::move(name));
         return marker;
     }
 
-    public Tuples.INRaw newTupleINBindVariables(ColumnIdentifier name)
+    shared_ptr<cql3::tuples::in_raw> new_tuple_in_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        Tuples.INRaw marker = new Tuples.INRaw(bindVariables.size());
-        bindVariables.add(name);
+        auto marker = make_shared<cql3::tuples::in_raw>(_bind_variables.size());
+        _bind_variables.push_back(std::move(name));
         return marker;
     }
-#endif
 
     void set_error_listener(listener_type& listener) {
         this->listener = &listener;
@@ -1257,27 +1256,27 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | name=cident K_CONTAINS { Operator rt = Operator.CONTAINS; } (K_KEY { rt = Operator.CONTAINS_KEY; })?
         t=term { $clauses.add(new SingleColumnRelation(name, rt, t)); }
     | name=cident '[' key=term ']' type=relationType t=term { $clauses.add(new SingleColumnRelation(name, key, type, t)); }
+#endif
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
-              { $clauses.add(MultiColumnRelation.createInRelation(ids, new ArrayList<Tuples.Literal>())); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, std::vector<shared_ptr<cql3::tuples::literal>>())); }
           | tupleInMarker=inMarkerForTuple /* (a, b, c) IN ? */
-              { $clauses.add(MultiColumnRelation.createSingleMarkerInRelation(ids, tupleInMarker)); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_single_marker_in_relation(ids, tupleInMarker)); }
           | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
               {
-                  $clauses.add(MultiColumnRelation.createInRelation(ids, literals));
+                  $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, literals));
               }
           | markers=tupleOfMarkersForTuples /* (a, b, c) IN (?, ?, ...) */
-              { $clauses.add(MultiColumnRelation.createInRelation(ids, markers)); }
+              { $clauses.emplace_back(cql3::multi_column_relation::create_in_relation(ids, markers)); }
           )
       | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
-              $clauses.add(MultiColumnRelation.createNonInRelation(ids, type, literal));
+              $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, *type, literal));
           }
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
-          { $clauses.add(MultiColumnRelation.createNonInRelation(ids, type, tupleMarker)); }
+          { $clauses.emplace_back(cql3::multi_column_relation::create_non_in_relation(ids, *type, tupleMarker)); }
       )
-#endif
     | '(' relation[$clauses] ')'
     ;
 
@@ -1294,27 +1293,23 @@ singleColumnInValues returns [std::vector<::shared_ptr<cql3::term::raw>> terms]
     : '(' ( t1 = term { $terms.push_back(t1); } (',' ti=term { $terms.push_back(ti); })* )? ')'
     ;
 
-#if 0
-tupleOfTupleLiterals returns [List<Tuples.Literal> literals]
-    @init { $literals = new ArrayList<>(); }
-    : '(' t1=tupleLiteral { $literals.add(t1); } (',' ti=tupleLiteral { $literals.add(ti); })* ')'
+tupleOfTupleLiterals returns [std::vector<::shared_ptr<cql3::tuples::literal>> literals]
+    : '(' t1=tupleLiteral { $literals.emplace_back(t1); } (',' ti=tupleLiteral { $literals.emplace_back(ti); })* ')'
     ;
 
-markerForTuple returns [Tuples.Raw marker]
-    : QMARK { $marker = newTupleBindVariables(null); }
-    | ':' name=ident { $marker = newTupleBindVariables(name); }
+markerForTuple returns [shared_ptr<cql3::tuples::raw> marker]
+    : QMARK { $marker = new_tuple_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_tuple_bind_variables(name); }
     ;
 
-tupleOfMarkersForTuples returns [List<Tuples.Raw> markers]
-    @init { $markers = new ArrayList<Tuples.Raw>(); }
-    : '(' m1=markerForTuple { $markers.add(m1); } (',' mi=markerForTuple { $markers.add(mi); })* ')'
+tupleOfMarkersForTuples returns [std::vector<::shared_ptr<cql3::tuples::raw>> markers]
+    : '(' m1=markerForTuple { $markers.emplace_back(m1); } (',' mi=markerForTuple { $markers.emplace_back(mi); })* ')'
     ;
 
-inMarkerForTuple returns [Tuples.INRaw marker]
-    : QMARK { $marker = newTupleINBindVariables(null); }
-    | ':' name=ident { $marker = newTupleINBindVariables(name); }
+inMarkerForTuple returns [shared_ptr<cql3::tuples::in_raw> marker]
+    : QMARK { $marker = new_tuple_in_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_tuple_in_bind_variables(name); }
     ;
-#endif
 
 comparatorType returns [shared_ptr<cql3_type::raw> t]
     : n=native_type     { $t = cql3_type::raw::from(n); }

@@ -22,6 +22,9 @@
 
 #pragma once
 
+#include "term.hh"
+#include "abstract_marker.hh"
+
 namespace cql3 {
 
 /**
@@ -214,177 +217,192 @@ public:
 #endif
     };
 
-#if 0
     /**
      * A terminal value for a list of IN values that are tuples. For example: "SELECT ... WHERE (a, b, c) IN ?"
      * This is similar to Lists.Value, but allows us to keep components of the tuples in the list separate.
      */
-    public static class InValue extends Term.Terminal
-    {
-        List<List<ByteBuffer>> elements;
-
-        public InValue(List<List<ByteBuffer>> items)
-        {
-            this.elements = items;
+    class in_value : public terminal {
+    private:
+        std::vector<std::vector<bytes_opt>> _elements;
+    public:
+        in_value(std::vector<std::vector<bytes_opt>> items) : _elements(items) { }
+        in_value(std::vector<std::vector<bytes_view_opt>> items) {
+            for (auto&& tuple : items) {
+                std::vector<bytes_opt> elems;
+                for (auto&& e : tuple) {
+                    elems.emplace_back(e ? bytes_opt(bytes(e->begin(), e->end())) : bytes_opt());
+                }
+                _elements.emplace_back(std::move(elems));
+            }
         }
 
-        public static InValue fromSerialized(ByteBuffer value, ListType type, QueryOptions options) throws InvalidRequestException
-        {
-            try
-            {
+        static in_value from_serialized(bytes_view value, list_type type, const query_options& options) {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but the deserialization does the validation (so we're fine).
-                List<?> l = (List<?>)type.getSerializer().deserializeForNativeProtocol(value, options.getProtocolVersion());
+                auto l = boost::any_cast<list_type_impl::native_type>(type->deserialize(value, options.get_serialization_format()));
+                auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
+                assert(ttype);
 
-                assert type.getElementsType() instanceof TupleType;
-                TupleType tupleType = (TupleType) type.getElementsType();
-
-                // type.split(bytes)
-                List<List<ByteBuffer>> elements = new ArrayList<>(l.size());
-                for (Object element : l)
-                    elements.add(Arrays.asList(tupleType.split(type.getElementsType().decompose(element))));
-                return new InValue(elements);
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
+                std::vector<std::vector<bytes_view_opt>> elements;
+                elements.reserve(l.size());
+                for (auto&& element : l) {
+                    elements.emplace_back(ttype->split(ttype->decompose(element)));
+                }
+                return in_value(elements);
+            } catch (marshal_exception& e) {
+                throw exceptions::invalid_request_exception(e.what());
             }
         }
 
-        public ByteBuffer get(QueryOptions options)
-        {
-            throw new UnsupportedOperationException();
+        virtual bytes_opt get(const query_options& options) override {
+            throw exceptions::unsupported_operation_exception();
         }
 
-        public List<List<ByteBuffer>> getSplitValues()
-        {
-            return elements;
+        std::vector<std::vector<bytes_opt>> get_split_values() const {
+            return _elements;
         }
-    }
+
+        virtual sstring to_string() const override {
+            std::vector<sstring> tuples(_elements.size());
+            std::transform(_elements.begin(), _elements.end(), tuples.begin(), [] (auto&& e) {
+                return tuple_to_string(e);
+            });
+            return tuple_to_string(tuples);
+        }
+    };
 
     /**
      * A raw placeholder for a tuple of values for different multiple columns, each of which may have a different type.
      * For example, "SELECT ... WHERE (col1, col2) > ?".
      */
-    public static class Raw extends AbstractMarker.Raw implements Term.MultiColumnRaw
-    {
-        public Raw(int bindIndex)
-        {
-            super(bindIndex);
+    class raw : public abstract_marker::raw, public term::multi_column_raw {
+    public:
+        using abstract_marker::raw::raw;
+
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+            return make_shared<tuples::marker>(_bind_index, make_receiver(receivers));
         }
 
-        private static ColumnSpecification makeReceiver(List<? extends ColumnSpecification> receivers)
-        {
-            List<AbstractType<?>> types = new ArrayList<>(receivers.size());
-            StringBuilder inName = new StringBuilder("(");
-            for (int i = 0; i < receivers.size(); i++)
-            {
-                ColumnSpecification receiver = receivers.get(i);
-                inName.append(receiver.name);
-                if (i < receivers.size() - 1)
-                    inName.append(",");
-                types.add(receiver.type);
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw std::runtime_error("Tuples.Raw.prepare() requires a list of receivers");
+        }
+
+        virtual sstring assignment_testable_source_context() const override {
+            return abstract_marker::raw::to_string();
+        }
+
+        virtual sstring to_string() const override {
+            return abstract_marker::raw::to_string();
+        }
+    private:
+        static ::shared_ptr<column_specification> make_receiver(const std::vector<shared_ptr<column_specification>>& receivers) {
+            std::vector<data_type> types;
+            types.reserve(receivers.size());
+            sstring in_name = "(";
+            for (auto&& receiver : receivers) {
+                in_name += receiver->name->text();
+                if (receiver != receivers.back()) {
+                    in_name += ",";
+                }
+                types.push_back(receiver->type);
             }
-            inName.append(')');
+            in_name += ")";
 
-            ColumnIdentifier identifier = new ColumnIdentifier(inName.toString(), true);
-            TupleType type = new TupleType(types);
-            return new ColumnSpecification(receivers.get(0).ksName, receivers.get(0).cfName, identifier, type);
+            auto identifier = make_shared<column_identifier>(in_name, true);
+            auto type = tuple_type_impl::get_instance(types);
+            return make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, type);
         }
-
-        public AbstractMarker prepare(String keyspace, List<? extends ColumnSpecification> receivers) throws InvalidRequestException
-        {
-            return new Tuples.Marker(bindIndex, makeReceiver(receivers));
-        }
-
-        @Override
-        public AbstractMarker prepare(String keyspace, ColumnSpecification receiver)
-        {
-            throw new AssertionError("Tuples.Raw.prepare() requires a list of receivers");
-        }
-    }
+    };
 
     /**
      * A raw marker for an IN list of tuples, like "SELECT ... WHERE (a, b, c) IN ?"
      */
-    public static class INRaw extends AbstractMarker.Raw implements MultiColumnRaw
-    {
-        public INRaw(int bindIndex)
-        {
-            super(bindIndex);
+    class in_raw : public abstract_marker::raw, public term::multi_column_raw {
+    public:
+        using abstract_marker::raw::raw;
+
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+            return make_shared<tuples::in_marker>(_bind_index, make_in_receiver(receivers));
         }
 
-        private static ColumnSpecification makeInReceiver(List<? extends ColumnSpecification> receivers) throws InvalidRequestException
-        {
-            List<AbstractType<?>> types = new ArrayList<>(receivers.size());
-            StringBuilder inName = new StringBuilder("in(");
-            for (int i = 0; i < receivers.size(); i++)
-            {
-                ColumnSpecification receiver = receivers.get(i);
-                inName.append(receiver.name);
-                if (i < receivers.size() - 1)
-                    inName.append(",");
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw std::runtime_error("Tuples.INRaw.prepare() requires a list of receivers");
+        }
 
-                if (receiver.type.isCollection() && receiver.type.isMultiCell())
-                    throw new InvalidRequestException("Non-frozen collection columns do not support IN relations");
+        virtual sstring assignment_testable_source_context() const override {
+            return to_string();
+        }
 
-                types.add(receiver.type);
+        virtual sstring to_string() const override {
+            return abstract_marker::raw::to_string();
+        }
+    private:
+        static ::shared_ptr<column_specification> make_in_receiver(const std::vector<shared_ptr<column_specification>>& receivers) {
+            std::vector<data_type> types;
+            types.reserve(receivers.size());
+            sstring in_name = "in(";
+            for (auto&& receiver : receivers) {
+                in_name += receiver->name->text();
+                if (receiver != receivers.back()) {
+                    in_name += ",";
+                }
+
+                if (receiver->type->is_collection() && receiver->type->is_multi_cell()) {
+                    throw exceptions::invalid_request_exception("Non-frozen collection columns do not support IN relations");
+                }
+
+                types.emplace_back(receiver->type);
             }
-            inName.append(')');
+            in_name += ")";
 
-            ColumnIdentifier identifier = new ColumnIdentifier(inName.toString(), true);
-            TupleType type = new TupleType(types);
-            return new ColumnSpecification(receivers.get(0).ksName, receivers.get(0).cfName, identifier, ListType.getInstance(type, false));
+            auto identifier = make_shared<column_identifier>(in_name, true);
+            auto type = tuple_type_impl::get_instance(types);
+            return make_shared<column_specification>(receivers.front()->ks_name, receivers.front()->cf_name, identifier, list_type_impl::get_instance(type, false));
         }
-
-        public AbstractMarker prepare(String keyspace, List<? extends ColumnSpecification> receivers) throws InvalidRequestException
-        {
-            return new InMarker(bindIndex, makeInReceiver(receivers));
-        }
-
-        @Override
-        public AbstractMarker prepare(String keyspace, ColumnSpecification receiver)
-        {
-            throw new AssertionError("Tuples.INRaw.prepare() requires a list of receivers");
-        }
-    }
+    };
 
     /**
      * Represents a marker for a single tuple, like "SELECT ... WHERE (a, b, c) > ?"
      */
-    public static class Marker extends AbstractMarker
-    {
-        public Marker(int bindIndex, ColumnSpecification receiver)
-        {
-            super(bindIndex, receiver);
-        }
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker(bind_index, std::move(receiver))
+        { }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            ByteBuffer value = options.getValues().get(bindIndex);
-            return value == null ? null : Value.fromSerialized(value, (TupleType)receiver.type);
+        virtual shared_ptr<terminal> bind(const query_options& options) override {
+            auto value = options.get_values().at(_bind_index);
+            if (!value) {
+                return nullptr;
+            } else {
+                auto as_tuple_type = static_pointer_cast<const tuple_type_impl>(_receiver->type);
+                return make_shared(value::from_serialized(*value, as_tuple_type));
+            }
         }
-    }
+    };
 
     /**
      * Represents a marker for a set of IN values that are tuples, like "SELECT ... WHERE (a, b, c) IN ?"
      */
-    public static class InMarker extends AbstractMarker
-    {
-        protected InMarker(int bindIndex, ColumnSpecification receiver)
+    class in_marker : public abstract_marker {
+    public:
+        in_marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker(bind_index, std::move(receiver))
         {
-            super(bindIndex, receiver);
-            assert receiver.type instanceof ListType;
+            assert(dynamic_pointer_cast<const list_type_impl>(receiver->type));
         }
 
-        public InValue bind(QueryOptions options) throws InvalidRequestException
-        {
-            ByteBuffer value = options.getValues().get(bindIndex);
-            return value == null ? null : InValue.fromSerialized(value, (ListType)receiver.type, options);
+        virtual shared_ptr<terminal> bind(const query_options& options) override {
+            auto value = options.get_values().at(_bind_index);
+            if (!value) {
+                return nullptr;
+            } else {
+                auto as_list_type = static_pointer_cast<const list_type_impl>(_receiver->type);
+                return make_shared(in_value::from_serialized(*value, as_list_type, options));
+            }
         }
-    }
-
-#endif
+    };
 
     template <typename T>
     static sstring tuple_to_string(const std::vector<T>& items) {
