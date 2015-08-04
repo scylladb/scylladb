@@ -11,6 +11,7 @@
 
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
+#include "utils/logalloc.hh"
 
 namespace scollectd {
 
@@ -46,6 +47,8 @@ public:
         , _p(std::move(p))
     { }
 
+    cache_entry(cache_entry&&) noexcept;
+
     const dht::decorated_key& key() const { return _key; }
     const mutation_partition& partition() const { return _p; }
     mutation_partition& partition() { return _p; }
@@ -73,15 +76,18 @@ public:
 
 // Tracks accesses and performs eviction of cache entries.
 class cache_tracker final {
-    bi::list<cache_entry,
+public:
+    using lru_type = bi::list<cache_entry,
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
-        bi::constant_time_size<false> // we need this to have bi::auto_unlink on hooks.
-    > _lru;
+        bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
+private:
     size_t _lru_len = 0;
     uint64_t _hits = 0;
     uint64_t _misses = 0;
     memory::reclaimer _reclaimer;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
+    logalloc::region _region;
+    lru_type _lru;
 private:
     void setup_collectd();
 public:
@@ -90,6 +96,8 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
+    allocation_strategy& allocator();
+    logalloc::region& region();
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -107,6 +115,7 @@ cache_tracker& global_cache_tracker();
 // Any incremental change to the underlying data source should result in update() being called on cache.
 //
 class row_cache final {
+public:
     using partitions_type = bi::set<cache_entry,
         bi::member_hook<cache_entry, cache_entry::cache_link_type, &cache_entry::_cache_link>,
         bi::constant_time_size<false>, // we need this to have bi::auto_unlink on hooks
@@ -135,11 +144,11 @@ public:
 public:
     // Populate cache from given mutation. The mutation must contain all
     // information there is for its partition in the underlying data sources.
-    void populate(mutation&& m);
     void populate(const mutation& m);
 
-    // Synchronizes cache with the underlying data source. The supplied reader
-    // should provide mutations representing changes to the underlying data
-    // source.
-    future<> update(mutation_reader);
+    // Synchronizes cache with the underlying data source from a memtable which
+    // has just been flushed to the underlying data source.
+    // The memtable can be queried during the process, but must not be written.
+    // After the update is complete, memtable is empty.
+    future<> update(memtable&);
 };

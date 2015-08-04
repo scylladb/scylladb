@@ -376,7 +376,7 @@ void column_family::add_memtable() {
 future<>
 column_family::update_cache(memtable& m) {
     if (_config.enable_cache) {
-       return _cache.update(m.make_reader());
+       return _cache.update(m);
     } else {
        return make_ready_future<>();
     }
@@ -421,13 +421,15 @@ column_family::seal_active_memtable() {
             // FIXME: write all components
             return newtab.write_components(*old).then([name, this, &newtab, old] {
                 return newtab.load();
-            }).then([this, old] {
+            }).then([this, old, &newtab] {
                 dblog.debug("Flushing done");
+                // We must add sstable before we call update_cache(), because
+                // memtable's data after moving to cache can be evicted at any time.
+                add_sstable(std::move(newtab));
                 return update_cache(*old);
-            }).then_wrapped([name, this, &newtab, old] (future<> ret) {
+            }).then_wrapped([name, this, old] (future<> ret) {
                 try {
                     ret.get();
-                    add_sstable(std::move(newtab));
 
                     // FIXME: until the surrounding function returns a future and
                     // caller ensures ordering (i.e. finish flushing one or more sequential tables before
