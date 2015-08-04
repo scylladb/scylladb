@@ -128,7 +128,9 @@ mutation_query(const mutation_source& source,
         state.reader = source(state.range);
         return consume(state.reader, [&state] (mutation&& m) {
             // FIXME: Make data sources respect row_ranges so that we don't have to filter them out here.
-            auto rows_left = m.partition().compact_for_query(*m.schema(), state.query_time, state.slice.row_ranges, state.limit);
+            auto is_distinct = state.slice.options.contains(query::partition_slice::option::distinct);
+            auto limit = !is_distinct ? state.limit : 1;
+            auto rows_left = m.partition().compact_for_query(*m.schema(), state.query_time, state.slice.row_ranges, limit);
             state.limit -= rows_left;
 
             // NOTE: We must return all columns, regardless of what's in
