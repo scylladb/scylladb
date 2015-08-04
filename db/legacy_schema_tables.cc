@@ -611,11 +611,13 @@ future<> save_system_keyspace_schema() {
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-            return proxy.get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
-                return do_for_each(created, [&db] (auto&& val) {
-                    auto ksm = create_keyspace_from_schema_partition(val);
-                    return db.create_keyspace(std::move(ksm));
-                }).then([&altered, &db] () mutable {
+            return do_for_each(created, [&proxy] (auto&& val) {
+                auto make_ksm = [val] () {
+                    return create_keyspace_from_schema_partition(val);
+                };
+                return database::create_keyspace_on_all(proxy.get_db(), make_ksm);
+            }).then([&proxy, &altered] () mutable {
+                return proxy.get_db().invoke_on_all([&proxy, altered = std::move(altered)] (database& db) {
                     for (auto&& name : altered) {
                         db.update_keyspace(name);
                     }
