@@ -9,6 +9,17 @@
 
 namespace locator {
 
+template <typename C, typename V>
+static void remove_by_value(C& container, V value) {
+    for (auto it = container.begin(); it != container.end();) {
+        if (it->second == value) {
+            it = container.erase(it);
+        } else {
+            it++;
+        }
+    }
+}
+
 token_metadata::token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     _sorted_tokens = sort_tokens();
@@ -257,6 +268,16 @@ void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
 
 bool token_metadata::is_leaving(inet_address endpoint) {
     return _leaving_endpoints.count(endpoint);
+}
+
+void token_metadata::remove_endpoint(inet_address endpoint) {
+    remove_by_value(_bootstrap_tokens, endpoint);
+    remove_by_value(_token_to_endpoint_map, endpoint);
+    _topology.remove_endpoint(endpoint);
+    _leaving_endpoints.erase(endpoint);
+    _endpoint_to_host_id_map.erase(endpoint);
+    _sorted_tokens = sort_tokens();
+    invalidate_cached_rings();
 }
 
 /////////////////// class topology /////////////////////////////////////////////

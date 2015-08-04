@@ -467,27 +467,10 @@ public:
             lock.writeLock().unlock();
         }
     }
-
-    public void removeEndpoint(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-            _bootstrap_tokens.removeValue(endpoint);
-            tokenToEndpointMap.removeValue(endpoint);
-            topology.removeEndpoint(endpoint);
-            _leaving_endpoints.remove(endpoint);
-            _endpoint_to_host_id_map.remove(endpoint);
-            sortedTokens = sortTokens();
-            invalidateCachedRings();
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
+#endif
+public:
+    void remove_endpoint(inet_address endpoint);
+#if 0
 
     /**
      * Remove pair of token/address from moving endpoints
