@@ -10,6 +10,7 @@
 #include "core/distributed.hh"
 #include "core/shared_ptr.hh"
 #include "utils/UUID_gen.hh"
+#include "service/migration_manager.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "db/config.hh"
@@ -179,9 +180,11 @@ public:
     virtual future<> stop() override {
         return _core_local.stop().then([this] {
             return _qp->stop().then([this] {
-                return service::get_storage_proxy().stop().then([this] {
-                    return _db->stop().then([] {
-                        return locator::i_endpoint_snitch::stop_snitch();
+                return service::get_migration_manager().stop().then([this] {
+                    return service::get_storage_proxy().stop().then([this] {
+                        return _db->stop().then([] {
+                            return locator::i_endpoint_snitch::stop_snitch();
+                        });
                     });
                 });
             });
@@ -211,9 +214,10 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
                 db->start(std::move(*cfg)).get();
 
                 distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+                distributed<service::migration_manager>& mm = service::get_migration_manager();
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
                 proxy.start(std::ref(*db)).get();
-
+                mm.start().get();
                 qp->start(std::ref(proxy), std::ref(*db)).get();
 
                 auto& ss = service::get_local_storage_service();

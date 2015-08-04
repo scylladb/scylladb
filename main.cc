@@ -12,6 +12,7 @@
 #include "api/api.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
+#include "service/migration_manager.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "utils/runtime.hh"
@@ -75,6 +76,7 @@ int main(int ac, char** av) {
     debug::db = &db;
     distributed<cql3::query_processor> qp;
     auto& proxy = service::get_storage_proxy();
+    auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
 
     return app.run(ac, av, [&] {
@@ -85,7 +87,7 @@ int main(int ac, char** av) {
         }
         auto&& opts = app.configuration();
 
-        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &opts]() {
+        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             dht::set_global_partitioner(cfg->partitioner());
@@ -113,6 +115,10 @@ int main(int ac, char** av) {
             }).then([&proxy, &db] {
                 return proxy.start(std::ref(db)).then([&proxy] {
                     engine().at_exit([&proxy] { return proxy.stop(); });
+                });
+            }).then([&mm] {
+                return mm.start().then([&mm] {
+                    engine().at_exit([&mm] { return mm.stop(); });
                 });
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {

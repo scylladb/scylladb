@@ -1280,7 +1280,7 @@ future<> update_schema_version_and_announce(service::storage_proxy& proxy)
             return make_ready_future<>();
         }).then([uuid] {
             return db::system_keyspace::update_schema_version(uuid).then([uuid] {
-                return service::migration_manager::passive_announce(uuid);
+                return service::get_local_migration_manager().passive_announce(uuid);
             });
         });
     });

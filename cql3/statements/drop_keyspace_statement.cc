@@ -61,7 +61,7 @@ const sstring& drop_keyspace_statement::keyspace() const
 future<bool> drop_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([&] {
-        return service::migration_manager::announce_keyspace_drop(proxy, _keyspace, is_local_only);
+        return service::get_local_migration_manager().announce_keyspace_drop(proxy, _keyspace, is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

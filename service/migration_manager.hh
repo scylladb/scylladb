@@ -27,6 +27,7 @@
 #include "db/legacy_schema_tables.hh"
 
 #include "gms/endpoint_state.hh"
+#include "core/distributed.hh"
 #include "gms/inet_address.hh"
 #include "utils/UUID.hh"
 
@@ -36,40 +37,38 @@ namespace service {
 
 class migration_manager {
 #if 0
-    private static final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
+    private final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
 
-    public static final MigrationManager instance = new MigrationManager();
-
-    private static final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
+    private final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
 #endif
 
     static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
 
 #if 0
     private final List<IMigrationListener> listeners = new CopyOnWriteArrayList<>();
-
-    private MigrationManager() {}
 #endif
 public:
-    static future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
+    migration_manager();
 
-    static future<> maybe_schedule_schema_pull(service::storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint);
+    future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
-    static future<> submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(service::storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint);
 
-    static bool should_pull_schema_from(const gms::inet_address& endpoint);
+    future<> submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint);
 
-    static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
+    bool should_pull_schema_from(const gms::inet_address& endpoint);
 
-    static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
+    future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
-    static future<> announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
+    future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 
-    static future<> announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally = false);
+    future<> announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
 
-    static future<> announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally = false);
+    future<> announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally = false);
 
-    static future<> announce_column_family_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
+    future<> announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally = false);
+
+    future<> announce_column_family_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
 
     /**
      * actively announce a new version to active hosts via rpc
@@ -85,6 +84,18 @@ public:
     static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema);
 
     static future<> passive_announce(utils::UUID version);
+
+    future<> stop();
 };
+
+extern distributed<migration_manager> _the_migration_manager;
+
+inline distributed<migration_manager>& get_migration_manager() {
+    return _the_migration_manager;
+}
+
+inline migration_manager& get_local_migration_manager() {
+    return _the_migration_manager.local();
+}
 
 }

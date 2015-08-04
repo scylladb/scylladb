@@ -628,12 +628,12 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    migration_manager::schedule_schema_pull(endpoint, ep_state);
+    get_local_migration_manager().schedule_schema_pull(endpoint, ep_state);
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("SS::on_alive endpoint={}", endpoint);
-    migration_manager::schedule_schema_pull(endpoint, state);
+    get_local_migration_manager().schedule_schema_pull(endpoint, state);
 #if 0
 
     if (_token_metadata.isMember(endpoint))
@@ -679,7 +679,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
         do_update_system_peers_table(endpoint, state, value);
         if (state == application_state::SCHEMA) {
-            migration_manager::schedule_schema_pull(endpoint, *ep_state);
+            get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state);
         }
     }
     replicate_to_all_cores();
