@@ -29,12 +29,13 @@ bool is_wrap_around(const query::partition_range& range, const schema& s) {
 // Can be accessed across cores.
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry, reversed };
+    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry, reversed, distinct };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
         option::send_timestamp_and_expiry,
-        option::reversed>>;
+        option::reversed,
+        option::distinct>>;
 public:
     std::vector<clustering_range> row_ranges;
     std::vector<column_id> static_columns; // TODO: consider using bitmap

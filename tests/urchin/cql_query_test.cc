@@ -1633,3 +1633,92 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
     });
 }
 
+SEASTAR_TEST_CASE(test_select_distinct) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table tsd (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
+            e.require_table_exists("ks", "tsd");
+            return e.execute_cql("insert into tsd (p1, c1, r1) values (0, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd (p1, c1, r1) values (1, 1, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd (p1, c1, r1) values (2, 2, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd (p1, c1, r1) values (2, 3, 3);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select distinct p1 from tsd;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0)})
+                .with_row({int32_type->decompose(1)})
+                .with_row({int32_type->decompose(2)});
+            return e.execute_cql("select distinct p1 from tsd limit 3;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0)})
+                .with_row({int32_type->decompose(1)})
+                .with_row({int32_type->decompose(2)});
+            return e.execute_cql("create table tsd2 (p1 int, p2 int, c1 int, r1 int, PRIMARY KEY ((p1, p2), c1));").discard_result();
+        }).then([&e] {
+            e.require_table_exists("ks", "tsd2");
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (0, 0, 1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (1, 1, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (1, 1, 1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (2, 2, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd2 (p1, p2, c1, r1) values (2, 2, 1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select distinct p1, p2 from tsd2;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0), int32_type->decompose(0)})
+                .with_row({int32_type->decompose(1), int32_type->decompose(1)})
+                .with_row({int32_type->decompose(2), int32_type->decompose(2)});
+            return e.execute_cql("select distinct p1, p2 from tsd2 limit 3;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0), int32_type->decompose(0)})
+                .with_row({int32_type->decompose(1), int32_type->decompose(1)})
+                .with_row({int32_type->decompose(2), int32_type->decompose(2)});
+            return e.execute_cql("create table tsd3 (p1 int, r1 int, PRIMARY KEY (p1));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd3 (p1, r1) values (0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd3 (p1, r1) values (1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd3 (p1, r1) values (1, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd3 (p1, r1) values (2, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select distinct p1 from tsd3;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0)})
+                .with_row({int32_type->decompose(1)})
+                .with_row({int32_type->decompose(2)});
+            return e.execute_cql("create table tsd4 (p1 int, c1 int, s1 int static, r1 int, PRIMARY KEY (p1, c1));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd4 (p1, c1, s1, r1) values (0, 0, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd4 (p1, c1, r1) values (0, 1, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd4 (p1, s1) values (2, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tsd4 (p1, s1) values (3, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select distinct p1, s1 from tsd4;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(3)
+                .with_row({int32_type->decompose(0), int32_type->decompose(0)})
+                .with_row({int32_type->decompose(2), int32_type->decompose(1)})
+                .with_row({int32_type->decompose(3), int32_type->decompose(2)});
+        });
+    });
+}
+
