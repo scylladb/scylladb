@@ -9,6 +9,8 @@
 #include <db/commitlog/commitlog.hh>
 #include <gms/gossiper.hh>
 #include <db/system_keyspace.hh>
+#include "http/exception.hh"
+#include "repair/repair.hh"
 
 namespace api {
 
@@ -225,12 +227,32 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::repair_async.set(r, [](std::unique_ptr<request> req) {
-        //TBD
+    ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = req->param["keyspace"];
-        auto column_family = req->get_query_param("option");
+        auto options = req->get_query_param("options");
+        // FIXME: "id" is only needed in a request for information about
+        // a previously-started repare. In that case, "options" is not needed.
         auto id = req->get_query_param("id");
-        return make_ready_future<json::json_return_type>(0);
+        // Currently, we get all the repair options encoded in a single
+        // "options" option, and split it to a map using the "," and ":"
+        // delimiters. TODO: consider if it doesn't make more sense to just
+        // take all the query parameters as this map and pass it to the repair
+        // function.
+        std::unordered_map<sstring, sstring> options_map;
+        for (auto s : split(options, ",")) {
+            auto kv = split(s, ":");
+            if (kv.size() != 2) {
+                throw httpd::bad_param_exception("malformed async repair options");
+            }
+            options_map.emplace(std::move(kv[0]), std::move(kv[1]));
+        }
+
+        // The repair process is asynchronous: repair_start only starts it and
+        // returns immediately, not waiting for the repair to finish. The user
+        // then has other mechanisms to track the ongoing repair's progress,
+        // or stop it.
+        int i = repair_start(ctx.db, keyspace, options_map);
+        return make_ready_future<json::json_return_type>(i);
     });
 
     ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
