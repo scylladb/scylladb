@@ -25,6 +25,8 @@
 using mutation_reader = std::function<future<mutation_opt>()>;
 
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
+// reads from the input readers, in order
+mutation_reader make_joining_reader(std::vector<mutation_reader> readers);
 mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning_many(std::vector<mutation>);
 mutation_reader make_empty_reader();

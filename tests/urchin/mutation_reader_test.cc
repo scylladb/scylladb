@@ -196,3 +196,21 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
             .produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_joining_reader) {
+    return seastar::async([] {
+        auto s = make_schema();
+
+        mutation m1(partition_key::from_single_value(*s, "keyB"), s);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+
+        mutation m2(partition_key::from_single_value(*s, "keyA"), s);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 2);
+
+        auto cr = make_joining_reader({make_reader_returning(m1), make_empty_reader(), make_reader_returning(m2)});
+        assert_that(cr)
+            .produces(m1)
+            .produces(m2)
+            .produces_end_of_stream();
+    });
+}

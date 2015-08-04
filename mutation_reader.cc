@@ -7,6 +7,8 @@
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
 
+namespace stdx = std::experimental;
+
 template<typename T>
 inline
 std::experimental::optional<T>
@@ -95,6 +97,39 @@ public:
 mutation_reader
 make_combined_reader(std::vector<mutation_reader> readers) {
     return combined_reader(std::move(readers));
+}
+
+class joining_reader final {
+    std::vector<mutation_reader> _readers;
+    std::vector<mutation_reader>::iterator _current;
+public:
+    joining_reader(std::vector<mutation_reader> readers)
+            : _readers(std::move(readers))
+            , _current(_readers.begin()) {
+    }
+    joining_reader(const joining_reader& x)
+            : _readers(x._readers)
+            , _current(_readers.begin() + (x._current - x._readers.begin())) {
+    }
+    joining_reader(joining_reader&&) = default;
+    future<mutation_opt> operator()() {
+        if (_current == _readers.end()) {
+            return make_ready_future<mutation_opt>(stdx::nullopt);
+        }
+        return (*_current)().then([this] (mutation_opt m) {
+            if (!m) {
+                ++_current;
+                return operator()();
+            } else {
+                return make_ready_future<mutation_opt>(std::move(m));
+            }
+        });
+    }
+};
+
+mutation_reader
+make_joining_reader(std::vector<mutation_reader> readers) {
+    return joining_reader(std::move(readers));
 }
 
 mutation_reader make_reader_returning(mutation m) {
