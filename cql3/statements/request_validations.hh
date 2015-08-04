@@ -118,7 +118,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      */
     template <typename T, typename... MessageArgs>
     T check_not_null(T object, const char* message_template, const MessageArgs&... message_args) {
-        check_true(object != nullptr, message_template, message_args...);
+        check_true(bool(object), message_template, message_args...);
         return object;
     }
 
@@ -134,7 +134,7 @@ invalid_request(const char* message_template, const MessageArgs&... message_args
      */
     template <typename T, typename... MessageArgs>
     T check_null(T object, const char* message_template, const MessageArgs&... message_args) {
-        check_true(object == nullptr, message_template, message_args...);
+        check_true(!bool(object), message_template, message_args...);
         return object;
     }
 
