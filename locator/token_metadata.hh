@@ -470,35 +470,13 @@ public:
 #endif
 public:
     void remove_endpoint(inet_address endpoint);
-#if 0
 
     /**
      * Remove pair of token/address from moving endpoints
      * @param endpoint address of the moving node
      */
-    public void removeFromMoving(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-            for (Pair<Token, InetAddress> pair : _moving_endpoints)
-            {
-                if (pair.right.equals(endpoint))
-                {
-                    _moving_endpoints.remove(pair);
-                    break;
-                }
-            }
-
-            invalidateCachedRings();
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
+    void remove_from_moving(inet_address endpoint);
+#if 0
 
     public Collection<Token> getTokens(InetAddress endpoint)
     {

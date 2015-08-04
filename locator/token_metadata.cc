@@ -76,8 +76,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
     }
 
     bool should_sort_tokens = false;
-    for (auto&& i : endpoint_tokens)
-    {
+    for (auto&& i : endpoint_tokens) {
         inet_address endpoint = i.first;
         std::unordered_set<token>& tokens = i.second;
 
@@ -92,17 +91,15 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
         }
 
         _topology.add_endpoint(endpoint);
-#if 0
-        bootstrapTokens.removeValue(endpoint);
-        leavingEndpoints.remove(endpoint);
-        removeFromMoving(endpoint); // also removing this endpoint from moving
-#endif
+        remove_by_value(_bootstrap_tokens, endpoint);
+        _leaving_endpoints.erase(endpoint);
+        remove_from_moving(endpoint); // also removing this endpoint from moving
         for (const token& t : tokens)
         {
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
-            if (prev.first->second  != endpoint) {
-                //logger.warn("Token {} changing ownership from {} to {}", token, prev.first->second, endpoint);
+            if (prev.first->second != endpoint) {
+                // logger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
                 prev.first->second = endpoint;
             }
         }
@@ -282,6 +279,12 @@ void token_metadata::remove_endpoint(inet_address endpoint) {
     _sorted_tokens = sort_tokens();
     invalidate_cached_rings();
 }
+
+void token_metadata::remove_from_moving(inet_address endpoint) {
+    remove_by_value(_moving_endpoints, endpoint);
+    invalidate_cached_rings();
+}
+
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
