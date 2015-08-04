@@ -421,40 +421,37 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         logger.info("Node {} state jump to normal", endpoint);
     }
     update_peer_info(endpoint);
-#if 1
+
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (gossiper.uses_host_id(endpoint)) {
         auto host_id = gossiper.get_host_id(endpoint);
-        //inet_address existing = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
         // if (DatabaseDescriptor.isReplacing() &&
         //     Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null &&
         //     (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress())))) {
         if (false) {
             logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
-            if (false /*existing != null && !existing.equals(endpoint)*/) {
-#if 0
-                if (existing == get_broadcast_address()) {
-                    logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
-                    _token_metadata.removeEndpoint(endpoint);
-                    endpointsToRemove.add(endpoint);
-                } else if (gossiper.compare_endpoint_startup(endpoint, existing) > 0) {
-                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
-                    _token_metadata.removeEndpoint(existing);
-                    endpointsToRemove.add(existing);
-                    _token_metadata.update_host_id(hostId, endpoint);
+            if (existing && *existing != endpoint) {
+                if (*existing == get_broadcast_address()) {
+                    logger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
+                    _token_metadata.remove_endpoint(endpoint);
+                    endpoints_to_remove.insert(endpoint);
+                } else if (gossiper.compare_endpoint_startup(endpoint, *existing) > 0) {
+                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
+                    _token_metadata.remove_endpoint(*existing);
+                    endpoints_to_remove.insert(*existing);
+                    _token_metadata.update_host_id(host_id, endpoint);
                 } else {
-                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
-                    _token_metadata.removeEndpoint(endpoint);
-                    endpointsToRemove.add(endpoint);
+                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
+                    _token_metadata.remove_endpoint(endpoint);
+                    endpoints_to_remove.insert(endpoint);
                 }
-#endif
             } else {
                 _token_metadata.update_host_id(host_id, endpoint);
             }
         }
     }
-#endif
 
     for (auto t : tokens) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
