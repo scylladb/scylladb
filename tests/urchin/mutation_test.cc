@@ -33,6 +33,15 @@ static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(0, std::move(value));
 };
 
+template <typename Func>
+future<>
+with_column_family(schema_ptr s, column_family::config cfg, Func func) {
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog());
+    return func(*cf).then([cf] {
+        return cf->stop();
+    }).finally([cf] {});
+}
+
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
@@ -227,37 +236,37 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog());
+    return with_column_family(s, cfg, [s] (column_family& cf) {
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
-    const column_definition& r1_col = *s->get_column_definition("r1");
-    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-
-    auto insert_row = [&] (int32_t c1, int32_t r1) {
-        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-        mutation m(key, s);
-        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
-        cf->apply(std::move(m));
-        cf->flush();
-    };
-    insert_row(1001, 2001);
-    insert_row(1002, 2002);
-    insert_row(1003, 2003);
-
-    auto verify_row = [&] (int32_t c1, int32_t r1) {
-      auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-      return cf->find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
-        BOOST_REQUIRE(r);
-        auto i = r->find_cell(r1_col.id);
-        BOOST_REQUIRE(i);
-        auto cell = i->as_atomic_cell();
-        BOOST_REQUIRE(cell.is_live());
-        BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
-      });
-    };
-    verify_row(1001, 2001);
-    verify_row(1002, 2002);
-    verify_row(1003, 2003);
-    return make_ready_future<>();
+        auto insert_row = [&] (int32_t c1, int32_t r1) {
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
+            cf.apply(std::move(m));
+            return cf.flush();
+        };
+        return when_all(
+                insert_row(1001, 2001),
+                insert_row(1002, 2002),
+                insert_row(1003, 2003)).discard_result().then([s, &r1_col, &cf, key] {
+            auto verify_row = [&] (int32_t c1, int32_t r1) {
+                auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+                return cf.find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
+                    BOOST_REQUIRE(r);
+                    auto i = r->find_cell(r1_col.id);
+                    BOOST_REQUIRE(i);
+                    auto cell = i->as_atomic_cell();
+                    BOOST_REQUIRE(cell.is_live());
+                    BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
+                });
+            };
+            verify_row(1001, 2001);
+            verify_row(1002, 2002);
+            verify_row(1003, 2003);
+        });
+    });
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
