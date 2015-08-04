@@ -20,6 +20,8 @@ SEASTAR_TEST_CASE(test_memtable_conforms_to_mutation_source) {
                 mt->apply(m);
             }
 
+            logalloc::shard_tracker().full_compaction();
+
             return mt->as_data_source();
         });
     });
