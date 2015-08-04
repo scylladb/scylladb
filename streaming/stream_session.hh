@@ -318,7 +318,7 @@ public:
     /**
      * Prepare this session for sending/receiving files.
      */
-    messages::prepare_message prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
+    future<messages::prepare_message> prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
     /**
      * Call back after sending FileMessageHeader.
