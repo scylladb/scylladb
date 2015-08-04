@@ -77,6 +77,9 @@ statement_restrictions::initial_key_restrictions<partition_key>::merge_to(schema
 template<>
 ::shared_ptr<primary_key_restrictions<clustering_key_prefix>>
 statement_restrictions::initial_key_restrictions<clustering_key_prefix>::merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) {
+    if (restriction->is_multi_column()) {
+        return static_pointer_cast<primary_key_restrictions<clustering_key_prefix>>(restriction);
+    }
     return do_merge_to(std::move(schema), std::move(restriction));
 }
 
