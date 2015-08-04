@@ -53,7 +53,11 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
     for (auto&& kv: levels) {
         auto&& k = kv.first;
         auto&& v = kv.second;
-        logging::logger_registry().set_logger_level(k, to_loglevel(v));
+        try {
+            logging::logger_registry().set_logger_level(k, to_loglevel(v));
+        } catch(std::out_of_range e) {
+            throw std::runtime_error("Unknown logger '" + k + "'. Use --help-loggers to list available loggers.");
+        }
     }
     logging::logger::set_stdout_enabled(log_to_stdout);
     logging::logger::set_syslog_enabled(log_to_syslog);
