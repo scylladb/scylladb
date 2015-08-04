@@ -16,6 +16,7 @@
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
+#include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 
 using namespace ::apache::thrift;
@@ -450,56 +451,34 @@ public:
             ire.why = sprint("Keyspace %s already exists", ks_def.name);
             exn_cob(TDelayedException::delayException(ire));
         }
-        std::vector<utils::UUID> cf_ids;
-        cf_ids.reserve(ks_def.cf_defs.size());
-        boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
-            cf_ids.push_back(utils::UUID_gen::get_time_UUID());
-        });
 
-        _db.invoke_on_all([this, ks_def, cf_ids] (database& db) {
-            auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
-                    to_sstring(ks_def.strategy_class),
-                    std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
-                    ks_def.durable_writes,
-                    std::vector<schema_ptr>{}); // FIXME
-
-            return db.create_keyspace(ksm);
-        }).then([this, ks_def, cf_ids] {
-            return parallel_for_each(boost::combine(ks_def.cf_defs, cf_ids), [this, ks_def, cf_ids] (auto&& cf_def_and_id) {
-                // We create the directory on the local shard, since the same directory is
-                // used for all shards.
-                auto&& name = boost::get<0>(cf_def_and_id).name;
-                auto&& uuid = boost::get<1>(cf_def_and_id);
-                return _db.local().find_keyspace(ks_def.name).make_directory_for_column_family(name, uuid);
-            });
-        }).then([this, ks_def, cf_ids] {
-            return _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
-                std::vector<schema_ptr> cf_defs;
-                cf_defs.reserve(ks_def.cf_defs.size());
-                auto id_iterator = cf_ids.begin();
-                for (const CfDef& cf_def : ks_def.cf_defs) {
-                    std::vector<schema::column> partition_key;
-                    std::vector<schema::column> clustering_key;
-                    std::vector<schema::column> regular_columns;
-                    // FIXME: get this from comparator
-                    auto column_name_type = utf8_type;
-                    // FIXME: look at key_alias and key_validator first
-                    partition_key.push_back({"key", bytes_type});
-                    // FIXME: guess clustering keys
-                    for (const ColumnDef& col_def : cf_def.column_metadata) {
-                        // FIXME: look at all fields, not just name
-                        regular_columns.push_back({to_bytes(col_def.name), bytes_type});
-                    }
-                    auto id = *id_iterator++;
-                    auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
-                            std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
-                            std::vector<schema::column>(), column_name_type));
-                    auto& ks = db.find_keyspace(ks_def.name);
-                    db.add_column_family(s, ks.make_column_family_config(*s));
-                    cf_defs.push_back(s);
-                }
-            });
-        }).then([schema_id = std::move(schema_id)] {
+        std::vector<schema_ptr> cf_defs;
+        cf_defs.reserve(ks_def.cf_defs.size());
+        for (const CfDef& cf_def : ks_def.cf_defs) {
+            std::vector<schema::column> partition_key;
+            std::vector<schema::column> clustering_key;
+            std::vector<schema::column> regular_columns;
+            // FIXME: get this from comparator
+            auto column_name_type = utf8_type;
+            // FIXME: look at key_alias and key_validator first
+            partition_key.push_back({"key", bytes_type});
+            // FIXME: guess clustering keys
+            for (const ColumnDef& col_def : cf_def.column_metadata) {
+                // FIXME: look at all fields, not just name
+                regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+            }
+            auto id = utils::UUID_gen::get_time_UUID();
+            auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
+                std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
+                std::vector<schema::column>(), column_name_type));
+            cf_defs.push_back(s);
+        }
+        auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
+            to_sstring(ks_def.strategy_class),
+            std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+            ks_def.durable_writes,
+            std::move(cf_defs));
+        service::get_local_migration_manager().announce_new_keyspace(service::get_storage_proxy(), ksm, false).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {
             complete(result, cob, exn_cob);
