@@ -3167,13 +3167,15 @@ public:
 
 mutation_reader
 storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range& range) {
+    unsigned first_shard = range.start() ? dht::shard_of(range.start()->value().token()) : 0;
+    unsigned last_shard = range.end() ? dht::shard_of(range.end()->value().token()) : smp::count - 1;
     std::vector<mutation_reader> readers;
-    for (unsigned cpu : smp::all_cpus()) {
+    for (auto cpu = first_shard; cpu <= last_shard; ++cpu) {
         readers.emplace_back([reader = make_lw_shared<shard_reader>(cf_id, _db, cpu, range)] () mutable {
             return (*reader)();
         });
     }
-    return make_combined_reader(std::move(readers));
+    return make_joining_reader(std::move(readers));
 }
 
 }

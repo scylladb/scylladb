@@ -7,6 +7,8 @@
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
 
+namespace stdx = std::experimental;
+
 template<typename T>
 inline
 std::experimental::optional<T>
@@ -95,6 +97,59 @@ public:
 mutation_reader
 make_combined_reader(std::vector<mutation_reader> readers) {
     return combined_reader(std::move(readers));
+}
+
+class joining_reader final {
+    std::vector<mutation_reader> _readers;
+    std::vector<mutation_reader>::iterator _current;
+public:
+    joining_reader(std::vector<mutation_reader> readers)
+            : _readers(std::move(readers))
+            , _current(_readers.begin()) {
+    }
+    joining_reader(const joining_reader& x)
+            : _readers(x._readers)
+            , _current(_readers.begin() + (x._current - x._readers.begin())) {
+    }
+    joining_reader(joining_reader&&) = default;
+    future<mutation_opt> operator()() {
+        if (_current == _readers.end()) {
+            return make_ready_future<mutation_opt>(stdx::nullopt);
+        }
+        return (*_current)().then([this] (mutation_opt m) {
+            if (!m) {
+                ++_current;
+                return operator()();
+            } else {
+                return make_ready_future<mutation_opt>(std::move(m));
+            }
+        });
+    }
+};
+
+mutation_reader
+make_joining_reader(std::vector<mutation_reader> readers) {
+    return joining_reader(std::move(readers));
+}
+
+class lazy_reader final {
+    std::function<mutation_reader ()> _make_reader;
+    stdx::optional<mutation_reader> _reader;
+public:
+    lazy_reader(std::function<mutation_reader ()> make_reader)
+            : _make_reader(std::move(make_reader)) {
+    }
+    future<mutation_opt> operator()() {
+        if (!_reader) {
+            _reader = _make_reader();
+        }
+        return (*_reader)();
+    }
+};
+
+mutation_reader
+make_lazy_reader(std::function<mutation_reader ()> make_reader) {
+    return lazy_reader(std::move(make_reader));
 }
 
 mutation_reader make_reader_returning(mutation m) {
