@@ -42,4 +42,9 @@ size_t stream_summary::serialized_size() const {
     return cf_id.serialized_size() + serialize_int32_size + serialize_int64_size;
 }
 
+std::ostream& operator<<(std::ostream& os, const stream_summary& x) {
+    os << "[ cf_id=" << x.cf_id << " ]";
+    return os;
+}
+
 } // namespace streaming
