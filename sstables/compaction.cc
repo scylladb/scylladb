@@ -58,6 +58,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto stats = make_lw_shared<compaction_stats>();
     sstring sstable_logger_msg = "[";
 
+    assert(sstables.size() > 0);
+
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
         readers.emplace_back([sst, r = make_lw_shared(sst->read_rows(schema))] () mutable { return r->read(); });

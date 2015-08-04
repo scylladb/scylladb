@@ -470,6 +470,11 @@ column_family::stop() {
 
 future<>
 column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) {
+    if (!sstables.size()) {
+        // if there is nothing to compact, just return.
+        return make_ready_future<>();
+    }
+
     auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(sstables));
 
     auto new_tables = make_lw_shared<std::vector<
@@ -522,6 +527,8 @@ column_family::compact_all_sstables() {
     for (auto&& entry : *_sstables) {
         sstables.push_back(entry.second);
     }
+    // FIXME: check if the lower bound min_compaction_threshold() from schema
+    // should be taken into account before proceeding with compaction.
     return compact_sstables(std::move(sstables));
 }
 
