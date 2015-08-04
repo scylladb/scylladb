@@ -132,6 +132,26 @@ make_joining_reader(std::vector<mutation_reader> readers) {
     return joining_reader(std::move(readers));
 }
 
+class lazy_reader final {
+    std::function<mutation_reader ()> _make_reader;
+    stdx::optional<mutation_reader> _reader;
+public:
+    lazy_reader(std::function<mutation_reader ()> make_reader)
+            : _make_reader(std::move(make_reader)) {
+    }
+    future<mutation_opt> operator()() {
+        if (!_reader) {
+            _reader = _make_reader();
+        }
+        return (*_reader)();
+    }
+};
+
+mutation_reader
+make_lazy_reader(std::function<mutation_reader ()> make_reader) {
+    return lazy_reader(std::move(make_reader));
+}
+
 mutation_reader make_reader_returning(mutation m) {
     return make_reader_returning_many({std::move(m)});
 }
