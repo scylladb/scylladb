@@ -153,7 +153,7 @@ public:
         return do_until([this] { return _read_buf.eof(); }, [this] { return process_request(); })
         .finally([this] {
             return _pending_requests_gate.close().then([this] {
-                std::move(_ready_to_respond);
+                return std::move(_ready_to_respond);
             });
         });
     }
