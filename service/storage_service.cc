@@ -507,6 +507,12 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     // PendingRangeCalculatorService.instance.update();
+    if (logger.is_enabled(logging::log_level::debug)) {
+        auto ver = _token_metadata.get_ring_version();
+        for (auto& x : _token_metadata.get_token_to_endpoint()) {
+            logger.debug("token_metadata.ring_version={}, token={} -> endpoint={}", ver, x.first, x.second);
+        }
+    }
 }
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
