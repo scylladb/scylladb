@@ -182,14 +182,17 @@ utils::UUID token_metadata::get_host_id(inet_address endpoint) {
     return _endpoint_to_host_id_map.at(endpoint);
 }
 
-gms::inet_address token_metadata::get_endpoint_for_host_id(UUID host_id) {
+std::experimental::optional<inet_address> token_metadata::get_endpoint_for_host_id(UUID host_id) {
     auto beg = _endpoint_to_host_id_map.cbegin();
     auto end = _endpoint_to_host_id_map.cend();
     auto it = std::find_if(beg, end, [host_id] (auto x) {
         return x.second == host_id;
     });
-    assert(it != end);
-    return (*it).first;
+    if (it == end) {
+        return {};
+    } else {
+        return (*it).first;
+    }
 }
 
 const std::unordered_map<inet_address, utils::UUID>& token_metadata::get_endpoint_to_host_id_map_for_reading() const{

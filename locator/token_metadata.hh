@@ -420,7 +420,7 @@ public:
     UUID get_host_id(inet_address endpoint);
 
     /** Return the end-point for a unique host ID */
-    inet_address get_endpoint_for_host_id(UUID host_id);
+    std::experimental::optional<inet_address> get_endpoint_for_host_id(UUID host_id);
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
