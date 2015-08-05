@@ -489,7 +489,13 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
     // }
     if (!tokens_to_update_in_system_keyspace.empty()) {
-        // SystemKeyspace.updateTokens(endpoint, tokens_to_update_in_system_keyspace);
+        db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
+            try {
+                f.get();
+            } catch (...) {
+                logger.error("fail to update tokens for {}: {}", endpoint, std::current_exception());
+            }
+        });
     }
     if (!local_tokens_to_remove.empty()) {
         // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
