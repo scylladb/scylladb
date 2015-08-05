@@ -256,6 +256,8 @@ private:
     utils::filter_ptr _filter;
     summary _summary;
     statistics _statistics;
+    // NOTE: _collector and _c_stats are used to generation of statistics file
+    // when writing a new sstable.
     metadata_collector _collector;
     column_stats _c_stats;
     file _index_file;
