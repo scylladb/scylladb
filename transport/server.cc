@@ -921,6 +921,7 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
 future<> cql_server::connection::write_schema_change_event(const transport::event::schema_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
+    response->write_string("SCHEMA_CHANGE");
     response->write_string(to_string(event.change));
     response->write_string(to_string(event.target));
     response->write_string(event.keyspace);
