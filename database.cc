@@ -263,19 +263,27 @@ public:
 protected:
     future<> _visit(directory_entry de) {
 
-        // FIXME: stat and try to recover
-        if (!de.type) {
-            dblog.error("database found file with unknown type {}", de.name);
-            return make_ready_future<>();
-        }
+        return guarantee_type(std::move(de)).then([this] (directory_entry de) {
+            // Hide all synthetic directories and hidden files.
+            if ((de.type != _expected_type) || (de.name[0] == '.')) {
+                return make_ready_future<>();
+            }
+            return _walker(de);
+        });
 
-        // Hide all synthetic directories and hidden files.
-        if ((de.type != _expected_type) || (de.name[0] == '.')) {
-            return make_ready_future<>();
-        }
-        return _walker(de);
     }
     future<> done() { return _listing.done(); }
+private:
+    future<directory_entry> guarantee_type(directory_entry de) {
+        if (de.type) {
+            return make_ready_future<directory_entry>(std::move(de));
+        } else {
+            return engine().file_type(de.name).then([de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+                de.type = t;
+                return make_ready_future<directory_entry>(std::move(de));
+            });
+        }
+    }
 };
 
 
