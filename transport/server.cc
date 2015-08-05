@@ -512,7 +512,7 @@ cql_server::do_accepts(int which) {
             try {
                 f.get();
             } catch (std::exception& ex) {
-                std::cout << "connection error " << ex.what() << "\n";
+                logger.debug("connection error: {}", ex.what());
             }
         });
         do_accepts(which);
@@ -520,7 +520,7 @@ cql_server::do_accepts(int which) {
         try {
             f.get();
         } catch (std::exception& ex) {
-            std::cout << "accept failed: " << ex.what() << "\n";
+            logger.debug("accept failed: {}", ex.what());
         }
     });
 }
