@@ -95,6 +95,11 @@ public:
         int64_t pending_flushes = 0;
         int64_t reads = 0;
         int64_t writes = 0;
+        int64_t live_disk_space_used = 0;
+        int64_t total_disk_space_used = 0;
+        int64_t live_sstable_count = 0;
+        /** Estimated number of compactions pending for this column family */
+        int64_t pending_compactions = 0;
     };
 
 private:
@@ -115,6 +120,7 @@ private:
     semaphore _compaction_sem;
     exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
 private:
+    void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
     future<> update_cache(memtable&);

@@ -359,6 +359,12 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     });
 }
 
+void column_family::update_stats_for_new_sstable(uint64_t new_sstable_data_size) {
+    _stats.live_disk_space_used += new_sstable_data_size;
+    _stats.total_disk_space_used += new_sstable_data_size;
+    _stats.live_sstable_count++;
+}
+
 void column_family::add_sstable(sstables::sstable&& sstable) {
     auto key_shard = [this] (const partition_key& pk) {
         auto token = dht::global_partitioner().get_token(*_schema, pk);
@@ -375,6 +381,7 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
     auto generation = sstable.generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
+    update_stats_for_new_sstable(sstable.data_size());
     _sstables->emplace(generation, make_lw_shared(std::move(sstable)));
 }
 
@@ -517,10 +524,17 @@ column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) 
         // on-going reads can continue to use the old list.
         auto current_sstables = _sstables;
         _sstables = make_lw_shared<sstable_list>();
+
+        // zeroing live_disk_space_used and live_sstable_count because the
+        // sstable list is re-created below.
+        _stats.live_disk_space_used = 0;
+        _stats.live_sstable_count = 0;
+
         std::unordered_set<sstables::shared_sstable> s(
                 sstables_to_compact->begin(), sstables_to_compact->end());
         for (const auto& oldtab : *current_sstables) {
             if (!s.count(oldtab.second)) {
+                update_stats_for_new_sstable(oldtab.second->data_size());
                 _sstables->emplace(oldtab.first, oldtab.second);
             }
         }
@@ -528,6 +542,7 @@ column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) 
         for (const auto& newtab : *new_tables) {
             // FIXME: rename the new sstable(s). Verify a rename doesn't cause
             // problems for the sstable object.
+            update_stats_for_new_sstable(newtab.second->data_size());
             _sstables->emplace(newtab.first, newtab.second);
         }
 
@@ -562,7 +577,9 @@ void column_family::start_compaction() {
     _compaction_done = keep_doing([this] {
         // Semaphore is used here to allow at most one compaction to happen
         // at any time yet queueing pending requests.
+        _stats.pending_compactions++;
         return _compaction_sem.wait().then([this] {
+            _stats.pending_compactions--;
             return with_gate(_in_flight_seals, [this] {
                 sstables::compaction_strategy strategy = _compaction_strategy;
                 return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
@@ -580,6 +597,7 @@ void column_family::start_compaction() {
             try {
                 f.get();
             } catch (broken_semaphore& e) {
+                _stats.pending_compactions--; // if sem is busted, handle the leak in pending_compactions.
                 dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
                 throw;
             } catch (seastar::gate_closed_exception& e) {
