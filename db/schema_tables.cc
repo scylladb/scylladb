@@ -21,8 +21,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#include "utils/UUID_gen.hh"
-#include "legacy_schema_tables.hh"
+#include "db/schema_tables.hh"
 
 #include "service/migration_manager.hh"
 #include "partition_slice_builder.hh"
@@ -32,7 +31,7 @@
 #include "query-result-set.hh"
 #include "schema_builder.hh"
 #include "map_difference.hh"
-
+#include "utils/UUID_gen.hh"
 #include "core/do_with.hh"
 #include "core/thread.hh"
 #include "json.hh"
@@ -49,7 +48,7 @@ using namespace db::system_keyspace;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
-namespace legacy_schema_tables {
+namespace schema_tables {
 
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES };
 
@@ -1751,5 +1750,5 @@ std::vector<schema_ptr> all_tables() {
     };
 }
 
-} // namespace legacy_schema_tables
+} // namespace schema_tables
 } // namespace schema

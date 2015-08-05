@@ -36,7 +36,7 @@ class result_set;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
-namespace legacy_schema_tables {
+namespace schema_tables {
 
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 
@@ -112,5 +112,5 @@ sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
 
-} // namespace legacy_schema_tables
+} // namespace schema_tables
 } // namespace db

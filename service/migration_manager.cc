@@ -258,7 +258,7 @@ future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadat
         throw exceptions::already_exists_exception{ksm->name()};
     }
     logger.info("Create new Keyspace: {}", ksm->name());
-    auto mutations = db::legacy_schema_tables::make_create_keyspace_mutations(ksm, timestamp);
+    auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
     return announce(std::move(mutations), announce_locally);
 }
 
@@ -273,7 +273,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
         logger.info("Create new table: {}", cfm->cf_name());
-        auto mutations = db::legacy_schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
+        auto mutations = db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
@@ -438,7 +438,7 @@ future<> migration_manager::announce(mutation schema, bool announce_locally)
 future<> migration_manager::announce(std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
-        return db::legacy_schema_tables::merge_schema(get_local_storage_proxy(), std::move(mutations), false);
+        return db::schema_tables::merge_schema(get_local_storage_proxy(), std::move(mutations), false);
     } else {
         return announce(std::move(mutations));
     }
@@ -473,7 +473,7 @@ future<> migration_manager::announce(std::vector<mutation> schema)
                 }
                 return make_ready_future<>();
             }).then([&schema] {
-                return db::legacy_schema_tables::merge_schema(get_local_storage_proxy(), std::move(schema));
+                return db::schema_tables::merge_schema(get_local_storage_proxy(), std::move(schema));
             });
         });
     });

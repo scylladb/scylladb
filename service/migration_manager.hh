@@ -25,8 +25,8 @@
 #pragma once
 
 #include "service/migration_listener.hh"
-#include "db/legacy_schema_tables.hh"
 #include "gms/endpoint_state.hh"
+#include "db/schema_tables.hh"
 #include "core/distributed.hh"
 #include "gms/inet_address.hh"
 #include "utils/UUID.hh"
