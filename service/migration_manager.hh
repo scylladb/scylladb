@@ -38,7 +38,7 @@ namespace service {
 class migration_manager {
     std::vector<migration_listener*> _listeners;
 
-    static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
+    static const std::chrono::milliseconds migration_delay;
 public:
     migration_manager();
 

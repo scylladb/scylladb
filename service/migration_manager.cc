@@ -39,7 +39,7 @@ distributed<service::migration_manager> _the_migration_manager;
 
 using namespace std::chrono_literals;
 
-const std::chrono::milliseconds migration_manager::MIGRATION_DELAY_IN_MS = 60000ms;
+const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 
 migration_manager::migration_manager()
     : _listeners{}
@@ -84,14 +84,14 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
         return make_ready_future<>();
     }
 
-    if (db.get_version() == database::empty_version || runtime::get_uptime() < MIGRATION_DELAY_IN_MS) {
+    if (db.get_version() == database::empty_version || runtime::get_uptime() < migration_delay) {
         // If we think we may be bootstrapping or have recently started, submit MigrationTask immediately
         logger.debug("Submitting migration task for {}", endpoint);
         return submit_migration_task(endpoint);
     } else {
         // Include a delay to make sure we have a chance to apply any changes being
         // pushed out simultaneously. See CASSANDRA-5025
-        return sleep(MIGRATION_DELAY_IN_MS).then([this, &proxy, endpoint] {
+        return sleep(migration_delay).then([this, &proxy, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
             auto& gossiper = gms::get_local_gossiper();
             auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
