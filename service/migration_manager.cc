@@ -33,7 +33,7 @@
 
 namespace service {
 
-static logging::logger logger("Migration Manager");
+static logging::logger logger("migration_manager");
 
 distributed<service::migration_manager> _the_migration_manager;
 
