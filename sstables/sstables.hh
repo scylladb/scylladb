@@ -386,6 +386,8 @@ struct entry_descriptor {
     sstable::format_types format;
     sstable::component_type component;
 
+    static entry_descriptor make_descriptor(sstring fname);
+
     entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
                      unsigned long generation, sstable::format_types format,
                      sstable::component_type component)

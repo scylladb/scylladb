@@ -20,6 +20,7 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include <boost/algorithm/string.hpp>
+#include <regex>
 
 namespace sstables {
 
@@ -1380,6 +1381,40 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     };
 
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+}
+
+entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
+    static std::regex la("la-(\\d+)-(\\w+)-(.*)");
+    static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
+
+    std::smatch match;
+
+    sstable::version_types version;
+
+    sstring generation;
+    sstring format;
+    sstring component;
+    sstring ks;
+    sstring cf;
+
+    if (std::regex_match(std::string(fname), match, la)) {
+        sstring ks = "";
+        sstring cf = "";
+        version = sstable::version_types::la;
+        generation = match[1].str();
+        format = sstring(match[2].str());
+        component = sstring(match[3].str());
+    } else if (std::regex_match(std::string(fname), match, ka)) {
+        ks = match[1].str();
+        cf = match[2].str();
+        version = sstable::version_types::ka;
+        format = sstring("big");
+        generation = match[3].str();
+        component = sstring(match[4].str());
+    } else {
+        throw malformed_sstable_exception("invalid version");
+    }
+    return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(component));
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {
