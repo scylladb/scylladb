@@ -19,6 +19,8 @@
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
+#include "stream_manager.hh"
+
 namespace api {
 
 future<> set_server(http_context& ctx) {
@@ -74,6 +76,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "hinted_handoff",
                         "The hinted handoff API");
         set_hinted_handoff(ctx, r);
+        rb->register_function(r, "stream_manager",
+                "The stream manager API");
+        set_stream_manager(ctx, r);
     });
 }
 
