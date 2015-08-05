@@ -47,6 +47,7 @@
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "utils/histogram.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -93,13 +94,13 @@ public:
         int64_t memtable_switch_count = 0;
         /** Estimated number of tasks pending for this column family */
         int64_t pending_flushes = 0;
-        int64_t reads = 0;
-        int64_t writes = 0;
         int64_t live_disk_space_used = 0;
         int64_t total_disk_space_used = 0;
         int64_t live_sstable_count = 0;
         /** Estimated number of compactions pending for this column family */
         int64_t pending_compactions = 0;
+        utils::ihistogram reads{256, 100};
+        utils::ihistogram writes{256, 100};
     };
 
 private:
@@ -456,9 +457,11 @@ class secondary_index_manager {};
 inline
 void
 column_family::apply(const mutation& m, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
     active_memtable().apply(m, rp);
-    _stats.writes++;
     seal_on_overflow();
+    _stats.writes.mark(lc);
 }
 
 inline
@@ -482,10 +485,12 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
 inline
 void
 column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
     check_valid_rp(rp);
     active_memtable().apply(m, rp);
-    _stats.writes++;
     seal_on_overflow();
+    _stats.writes.mark(lc);
 }
 
 future<> update_schema_version_and_announce(service::storage_proxy& proxy);
