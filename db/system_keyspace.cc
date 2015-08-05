@@ -729,7 +729,7 @@ future<> remove_endpoint(gms::inet_address ep) {
         lc._cached_dc_rack_info.erase(ep);
     }).then([ep] {
         sstring req = "DELETE FROM system.%s WHERE peer = ?";
-        return execute_cql(req, PEERS, ep).discard_result();
+        return execute_cql(req, PEERS, ep.addr()).discard_result();
     });
 }
 
