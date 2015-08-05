@@ -388,6 +388,7 @@ api = ['api/api.cc',
        'api/hinted_handoff.cc',
        'api/api-doc/utils.json',
        'api/lsa.cc',
+       'api/api-doc/stream_manager.json',
        ]
 
 urchin_tests_dependencies = urchin_core + [
