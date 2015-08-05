@@ -129,13 +129,6 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
             && !gms::get_gossiper().local().is_gossip_only_member(endpoint);
 }
 
-#if 0
-public static boolean isReadyForBootstrap()
-{
-    return ((ThreadPoolExecutor) StageManager.getStage(Stage.MIGRATION)).getActiveCount() == 0;
-}
-#endif
-
 future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
 {
     return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
