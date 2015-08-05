@@ -36,12 +36,6 @@
 namespace service {
 
 class migration_manager {
-#if 0
-    private final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
-
-    private final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
-#endif
-
     std::vector<migration_listener*> _listeners;
 
     static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
