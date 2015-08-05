@@ -454,7 +454,7 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     }).then([] {
         return check_health();
     }).then([] {
-        return db::legacy_schema_tables::save_system_keyspace_schema();
+        return db::schema_tables::save_system_keyspace_schema();
     });
 }
 
@@ -1121,7 +1121,7 @@ future<> set_bootstrap_state(bootstrap_state state) {
 
 std::vector<schema_ptr> all_tables() {
     std::vector<schema_ptr> r;
-    auto legacy_tables = db::legacy_schema_tables::all_tables();
+    auto legacy_tables = db::schema_tables::all_tables();
     std::copy(legacy_tables.begin(), legacy_tables.end(), std::back_inserter(r));
     r.push_back(built_indexes());
     r.push_back(hints());

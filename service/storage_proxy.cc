@@ -2956,12 +2956,12 @@ void storage_proxy::init_messaging_service() {
                 schema_ptr s = get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
-            return db::legacy_schema_tables::merge_schema(*this, schema);
+            return db::schema_tables::merge_schema(*this, schema);
         }).discard_result();
         return net::messaging_service::no_wait();
     });
     ms.register_migration_request([this] (gms::inet_address reply_to, unsigned shard) {
-        return db::legacy_schema_tables::convert_schema_to_mutations(*this);
+        return db::schema_tables::convert_schema_to_mutations(*this);
     });
     ms.register_mutation([this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {

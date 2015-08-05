@@ -693,7 +693,7 @@ future<> database::populate(sstring datadir) {
 template <typename Func>
 static future<>
 do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
-    using namespace db::legacy_schema_tables;
+    using namespace db::schema_tables;
     static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result::value_type&)>>::value,
                   "bad Func signature");
 
@@ -728,12 +728,12 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
 }
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
-    using namespace db::legacy_schema_tables;
-    return do_parse_system_tables(proxy, db::legacy_schema_tables::KEYSPACES, [this] (schema_result::value_type &v) {
+    using namespace db::schema_tables;
+    return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result::value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::legacy_schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
+        return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
             return create_tables_from_tables_partition(proxy.local(), v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 for (auto& t: tables) {
                     auto s = t.second;
@@ -847,7 +847,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
 future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
     auto& proxy = service::get_local_storage_proxy();
     auto old_cfm = find_schema(ks_name, cf_name);
-    return db::legacy_schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
+    return db::schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
         if (old_cfm->id() != new_cfm->id()) {
             return make_exception_future<>(exceptions::configuration_exception(sprint("Column family ID mismatch (found %s; expected %s)", new_cfm->id(), old_cfm->id())));
         }
@@ -1292,7 +1292,7 @@ const sstring& database::get_snitch_name() const {
 
 future<> update_schema_version_and_announce(service::storage_proxy& proxy)
 {
-    return db::legacy_schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
+    return db::schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
         return proxy.get_db().invoke_on_all([uuid] (database& db) {
             db.update_version(uuid);
             return make_ready_future<>();

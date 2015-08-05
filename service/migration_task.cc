@@ -25,8 +25,8 @@
 #include "service/migration_task.hh"
 
 #include "message/messaging_service.hh"
-#include "db/legacy_schema_tables.hh"
 #include "gms/failure_detector.hh"
+#include "db/schema_tables.hh"
 #include "frozen_mutation.hh"
 
 namespace service {
@@ -48,7 +48,7 @@ future<> migration_task::run_may_throw(service::storage_proxy& proxy, const gms:
                 schema_ptr s = proxy.get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
-            return db::legacy_schema_tables::merge_schema(proxy, schema);
+            return db::schema_tables::merge_schema(proxy, schema);
         } catch (const exceptions::configuration_exception& e) {
             logger.error("Configuration exception merging remote schema: {}", e.what());
         }

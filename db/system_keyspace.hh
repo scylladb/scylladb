@@ -26,7 +26,7 @@
 #include <unordered_map>
 #include <utility>
 #include "schema.hh"
-#include "legacy_schema_tables.hh"
+#include "db/schema_tables.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"
