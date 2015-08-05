@@ -81,15 +81,40 @@ static future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  map_cf_stats(http_context& ctx,
-        int64_t column_family::stats::*f) {
-    return ctx.db.map([f](const database& db) {
-        int64_t res = 0;
+static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
+        utils::ihistogram column_family::stats::*f) {
+    return map_reduce_cf(ctx, name, 0, [f](const column_family& cf) {
+        return (cf.get_stats().*f).count;
+    }, std::plus<int64_t>());
+}
+
+static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx,
+        utils::ihistogram column_family::stats::*f) {
+    return map_reduce_cf(ctx, 0, [f](const column_family& cf) {
+        return (cf.get_stats().*f).count;
+    }, std::plus<int64_t>());
+}
+
+static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
+        utils::ihistogram column_family::stats::*f) {
+    utils::UUID uuid = get_uuid(name, ctx.db.local());
+    return ctx.db.map_reduce0([f, uuid](const database& p) {return p.find_column_family(uuid).get_stats().*f;},
+            httpd::utils_json::histogram(),
+            add_histogram)
+            .then([](const httpd::utils_json::histogram& val) {
+                return make_ready_future<json::json_return_type>(val);
+    });
+}
+
+static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils::ihistogram column_family::stats::*f) {
+    std::function<httpd::utils_json::histogram(const database&)> fun = [f] (const database& db)  {
+        httpd::utils_json::histogram res;
         for (auto i : db.get_column_families()) {
-            res += i.second.get()->get_stats().*f;
+            res = add_histogram(res, i.second->get_stats().*f);
         }
         return res;
-    }).then([](const std::vector<int64_t>& res) {
+    };
+    return ctx.db.map(fun).then([](const std::vector<httpd::utils_json::histogram> &res) {
         return make_ready_future<json::json_return_type>(res);
     });
 }
@@ -243,19 +268,35 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_read.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx,req->param["name"] ,&column_family::stats::reads);
+        return get_cf_stats_sum(ctx,req->param["name"] ,&column_family::stats::reads);
     });
 
     cf::get_all_read.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_cf_stats(ctx, &column_family::stats::reads);
+        return get_cf_stats_sum(ctx, &column_family::stats::reads);
     });
 
     cf::get_write.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats(ctx,req->param["name"] ,&column_family::stats::writes);
+        return get_cf_stats_sum(ctx, req->param["name"] ,&column_family::stats::writes);
     });
 
     cf::get_all_write.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return map_cf_stats(ctx, &column_family::stats::writes);
+        return get_cf_stats_sum(ctx, &column_family::stats::writes);
+    });
+
+    cf::get_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::reads);
+    });
+
+    cf::get_all_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, &column_family::stats::writes);
+    });
+
+    cf::get_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::reads);
+    });
+
+    cf::get_all_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, &column_family::stats::writes);
     });
 
     cf::get_pending_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -518,5 +559,6 @@ void set_column_family(http_context& ctx, routes& r) {
         std::vector<double> res;
         return make_ready_future<json::json_return_type>(res);
     });
+
 }
 }
