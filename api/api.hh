@@ -204,4 +204,12 @@ public:
 inline void unimplemented() {
     throw unimplemented_exception();
 }
+
+template <class T>
+std::vector<T> concat(std::vector<T> a, std::vector<T>&& b) {
+    a.reserve( a.size() + b.size());
+    a.insert(a.end(), b.begin(), b.end());
+    return a;
+}
+
 }
