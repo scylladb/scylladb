@@ -126,7 +126,7 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
     auto& ms = net::get_local_messaging_service();
     return ms.knows_version(endpoint)
             && ms.get_raw_version(endpoint) == net::messaging_service::current_version
-            && !gms::get_gossiper().local().is_gossip_only_member(endpoint);
+            && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
 
 future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
