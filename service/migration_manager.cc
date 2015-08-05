@@ -468,9 +468,10 @@ future<> migration_manager::announce(std::vector<mutation> schema)
             }).then_wrapped([] (future<> f) {
                 try {
                     f.get();
-                } catch (std::exception& ex) {
-                    std::cout << "announce error " << ex.what() << "\n";
+                } catch (...) {
+                    return make_exception_future<>(std::current_exception());
                 }
+                return make_ready_future<>();
             }).then([&schema] {
                 return db::legacy_schema_tables::merge_schema(get_local_storage_proxy(), std::move(schema));
             });
