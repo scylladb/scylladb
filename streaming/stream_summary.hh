@@ -22,6 +22,7 @@
 #pragma once
 
 #include "utils/UUID.hh"
+#include <ostream>
 
 namespace streaming {
 
@@ -45,7 +46,7 @@ public:
         , files(_files)
         , total_size(_total_size) {
     }
-
+    friend std::ostream& operator<<(std::ostream& os, const stream_summary& r);
 #if 0
     @Override
     public boolean equals(Object o)
