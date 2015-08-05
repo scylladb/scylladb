@@ -879,14 +879,12 @@ private:
         addExpireTimeIfFound(endpoint, expireTime);
         excise(tokens, endpoint);
     }
+#endif
 
+private:
     /** unlike excise we just need this endpoint gone without going through any notifications **/
-    private void removeEndpoint(InetAddress endpoint)
-    {
-        Gossiper.instance.removeEndpoint(endpoint);
-        SystemKeyspace.removeEndpoint(endpoint);
-    }
-
+    void remove_endpoint(inet_address endpoint);
+#if 0
     protected void addExpireTimeIfFound(InetAddress endpoint, long expireTime)
     {
         if (expireTime != 0L)

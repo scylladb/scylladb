@@ -355,9 +355,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
         } else {
             // Dont set any state for the node which is bootstrapping the existing token...
-            for (auto t : tokens) {
-                _token_metadata.update_normal_token(t, get_broadcast_address());
-            }
+            _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
         return sleep(sleep_time).then([tokens = std::move(tokens)] {
@@ -392,7 +390,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
         if (!_token_metadata.is_leaving(endpoint)) {
             logger.info("Node {} state jump to bootstrap", endpoint);
         }
-        // _token_metadata.removeEndpoint(endpoint);
+        _token_metadata.remove_endpoint(endpoint);
     }
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
@@ -461,10 +459,12 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (endpoint == *current_owner) {
+            logger.debug("endpoint={} == current_owner={}", endpoint, *current_owner);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
+            logger.debug("compare_endpoint_startup: endpoint={} > current_owner={}", endpoint, *current_owner);
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
 #if 0
@@ -485,20 +485,29 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    // for (auto ep : endpointsToRemove) {
-        // removeEndpoint(ep);
-        // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-        //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-    // }
+    for (auto ep : endpoints_to_remove) {
+        remove_endpoint(ep);
+#if 0
+        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
+            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+#endif
+    }
+    logger.debug("ep={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
-        // SystemKeyspace.updateTokens(endpoint, tokens_to_update_in_system_keyspace);
+        db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
+            try {
+                f.get();
+            } catch (...) {
+                logger.error("fail to update tokens for {}: {}", endpoint, std::current_exception());
+            }
+        });
     }
     if (!local_tokens_to_remove.empty()) {
         // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
     }
 
     if (is_moving) {
-        // _token_metadata.remove_from_moving(endpoint);
+        _token_metadata.remove_from_moving(endpoint);
         // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
         //     subscriber.onMove(endpoint);
     } else {
@@ -794,12 +803,10 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 }
 
 future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
-    // logger.debug("Setting tokens to {}", tokens);
+    logger.debug("Setting tokens to {}", tokens);
     auto f = db::system_keyspace::update_tokens(tokens);
     return f.then([this, tokens = std::move(tokens)] {
-        for (auto t : tokens) {
-            _token_metadata.update_normal_token(t, get_broadcast_address());
-        }
+        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
         // Collection<Token> localTokens = getLocalTokens();
         auto local_tokens = _bootstrap_tokens;
         auto& gossiper = gms::get_local_gossiper();
@@ -1006,5 +1013,18 @@ future<> storage_service::check_for_endpoint_collision() {
         gossiper.reset_endpoint_state_map();
     });
 }
+
+void storage_service::remove_endpoint(inet_address endpoint) {
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.remove_endpoint(endpoint);
+    db::system_keyspace::remove_endpoint(endpoint).then_wrapped([endpoint] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            logger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
+        }
+    });
+}
+
 
 } // namespace service

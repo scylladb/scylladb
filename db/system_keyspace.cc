@@ -641,14 +641,14 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
     }
 
     sstring req = "INSERT INTO system.%s (peer, tokens) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep, prepare_tokens(tokens)).discard_result().then([] {
+    return execute_cql(req, PEERS, ep.addr(), prepare_tokens(tokens)).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep, preferred_ip).discard_result().then([] {
+    return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
@@ -692,7 +692,7 @@ template future<> update_peer_info<net::ipv4_address>(gms::inet_address ep, sstr
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value) {
     // with 30 day TTL
     sstring req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
-    return execute_cql(req, PEER_EVENTS, time_period, value, ep).discard_result();
+    return execute_cql(req, PEER_EVENTS, time_period, value, ep.addr()).discard_result();
 }
 
 future<> update_schema_version(utils::UUID version) {
@@ -729,7 +729,7 @@ future<> remove_endpoint(gms::inet_address ep) {
         lc._cached_dc_rack_info.erase(ep);
     }).then([ep] {
         sstring req = "DELETE FROM system.%s WHERE peer = ?";
-        return execute_cql(req, PEERS, ep).discard_result();
+        return execute_cql(req, PEERS, ep.addr()).discard_result();
     });
 }
 
