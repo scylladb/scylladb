@@ -679,6 +679,13 @@ future<> save_system_keyspace_schema() {
                     for (auto&& cfm : dropped) {
                         db.drop_column_family(cfm->ks_name(), cfm->cf_name());
                     }
+                    // FIXME: clean this up by reorganizing the code
+                    // Send CQL events only once, not once per shard.
+                    if (engine().cpu_id() == 0) {
+                        for (auto&& cfm : created) {
+                            service::migration_manager::notify_create_column_family(cfm).get0();
+                        }
+                    }
                 });
             });
         });
