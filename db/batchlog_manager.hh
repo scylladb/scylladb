@@ -47,6 +47,9 @@ private:
     semaphore _sem;
     bool _stop = false;
 
+    std::random_device _rd;
+    std::default_random_engine _e1;
+
     future<> replay_all_failed_batches();
 public:
     // Takes a QP, not a distributes. Because this object is supposed
@@ -72,18 +75,7 @@ public:
     mutation get_batch_log_mutation_for(std::vector<mutation>, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
 
-    class endpoint_filter {
-    private:
-        const sstring _local_rack;
-        const std::unordered_map<sstring, std::vector<gms::inet_address>> _endpoints;
-
-    public:
-        endpoint_filter(sstring, std::unordered_map<sstring, std::vector<gms::inet_address>>);
-        /**
-         * @return list of candidates for batchlog hosting. If possible these will be two nodes from different racks.
-         */
-        std::vector<gms::inet_address> filter() const;
-    };
+    std::unordered_set<gms::inet_address> endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);
 };
 
 }
