@@ -267,17 +267,6 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
     return aggregates;
 }
 
-#if 0
-    public static final List<CFMetaData> All = Arrays.asList(Keyspaces, Columnfamilies, Columns, Triggers, Usertypes, Functions, Aggregates);
-
-    private static CFMetaData compile(String name, String description, String schema)
-    {
-        return CFMetaData.compile(String.format(schema, name), SystemKeyspace.NAME)
-                         .comment(description)
-                         .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
-    }
-#endif
-
 /** add entries to system.schema_* for the hardcoded system definitions */
 future<> save_system_keyspace_schema() {
     auto& ks = db::qctx->db().find_keyspace(db::system_keyspace::NAME);
