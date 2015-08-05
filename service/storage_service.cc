@@ -459,10 +459,12 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (endpoint == *current_owner) {
+            logger.debug("endpoint={} == current_owner={}", endpoint, *current_owner);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
         } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
+            logger.debug("compare_endpoint_startup: endpoint={} > current_owner={}", endpoint, *current_owner);
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
 #if 0
@@ -488,6 +490,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
         //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
     // }
+    logger.debug("ep={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
         db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
             try {
@@ -798,7 +801,7 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 }
 
 future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
-    // logger.debug("Setting tokens to {}", tokens);
+    logger.debug("Setting tokens to {}", tokens);
     auto f = db::system_keyspace::update_tokens(tokens);
     return f.then([this, tokens = std::move(tokens)] {
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
