@@ -496,7 +496,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     if (is_moving) {
-        // _token_metadata.remove_from_moving(endpoint);
+        _token_metadata.remove_from_moving(endpoint);
         // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
         //     subscriber.onMove(endpoint);
     } else {
