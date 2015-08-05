@@ -390,7 +390,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
         if (!_token_metadata.is_leaving(endpoint)) {
             logger.info("Node {} state jump to bootstrap", endpoint);
         }
-        // _token_metadata.removeEndpoint(endpoint);
+        _token_metadata.remove_endpoint(endpoint);
     }
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
@@ -485,11 +485,13 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    // for (auto ep : endpointsToRemove) {
-        // removeEndpoint(ep);
-        // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-        //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-    // }
+    for (auto ep : endpoints_to_remove) {
+        remove_endpoint(ep);
+#if 0
+        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
+            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+#endif
+    }
     logger.debug("ep={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
         db::system_keyspace::update_tokens(endpoint, tokens_to_update_in_system_keyspace).then_wrapped([endpoint] (auto&& f) {
@@ -1011,5 +1013,18 @@ future<> storage_service::check_for_endpoint_collision() {
         gossiper.reset_endpoint_state_map();
     });
 }
+
+void storage_service::remove_endpoint(inet_address endpoint) {
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.remove_endpoint(endpoint);
+    db::system_keyspace::remove_endpoint(endpoint).then_wrapped([endpoint] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            logger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
+        }
+    });
+}
+
 
 } // namespace service
