@@ -403,7 +403,8 @@ public:
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
-
+    /// Creates a keyspace on all shards.
+    static future<> create_keyspace_on_all(seastar::sharded<database>& db, std::function<lw_shared_ptr<keyspace_metadata>()>&&);
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
      *
