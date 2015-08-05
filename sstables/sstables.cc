@@ -1389,6 +1389,10 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
     return reverse_map(s, _format_string);
 }
 
+sstable::component_type sstable::component_from_sstring(sstring &s) {
+    return reverse_map(s, _component_map);
+}
+
 input_stream<char> sstable::data_stream_at(uint64_t pos) {
     if (_compression) {
         return make_compressed_file_input_stream(

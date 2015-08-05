@@ -161,6 +161,7 @@ public:
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
+    static component_type component_from_sstring(sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, version_types version, unsigned long generation,
