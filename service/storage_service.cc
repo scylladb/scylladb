@@ -355,9 +355,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
         } else {
             // Dont set any state for the node which is bootstrapping the existing token...
-            for (auto t : tokens) {
-                _token_metadata.update_normal_token(t, get_broadcast_address());
-            }
+            _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
         return sleep(sleep_time).then([tokens = std::move(tokens)] {
@@ -797,9 +795,7 @@ future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
     // logger.debug("Setting tokens to {}", tokens);
     auto f = db::system_keyspace::update_tokens(tokens);
     return f.then([this, tokens = std::move(tokens)] {
-        for (auto t : tokens) {
-            _token_metadata.update_normal_token(t, get_broadcast_address());
-        }
+        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
         // Collection<Token> localTokens = getLocalTokens();
         auto local_tokens = _bootstrap_tokens;
         auto& gossiper = gms::get_local_gossiper();
