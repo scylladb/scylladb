@@ -110,8 +110,8 @@ public:
     }
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override {
-        return make_ready_future<>().then([this, &proxy, is_local_only] {
-            return service::get_local_migration_manager().announce_new_keyspace(proxy, _attrs->as_ks_metadata(_name), is_local_only);
+        return make_ready_future<>().then([this, is_local_only] {
+            return service::get_local_migration_manager().announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only);
         }).then_wrapped([this] (auto&& f) {
             try {
                 f.get();

@@ -36,15 +36,9 @@
 namespace service {
 
 class migration_manager {
-#if 0
-    private final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
-
-    private final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
-#endif
-
     std::vector<migration_listener*> _listeners;
 
-    static const std::chrono::milliseconds MIGRATION_DELAY_IN_MS;
+    static const std::chrono::milliseconds migration_delay;
 public:
     migration_manager();
 
@@ -56,9 +50,9 @@ public:
 
     future<> schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state);
 
-    future<> maybe_schedule_schema_pull(service::storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint);
+    future<> maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint);
 
-    future<> submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint);
+    future<> submit_migration_task(const gms::inet_address& endpoint);
 
     static future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
 
@@ -74,30 +68,30 @@ public:
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
 
-    future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
+    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
-    future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
+    future<> announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 
-    future<> announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
+    future<> announce_column_family_update(schema_ptr cfm, bool from_thrift, bool announce_locally = false);
 
-    future<> announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally = false);
+    future<> announce_new_column_family(schema_ptr cfm, bool announce_locally = false);
 
-    future<> announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally = false);
+    future<> announce_keyspace_drop(const sstring& ks_name, bool announce_locally = false);
 
-    future<> announce_column_family_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
+    future<> announce_column_family_drop(const sstring& ks_name, const sstring& cf_name, bool announce_locally = false);
 
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    static future<> announce(distributed<service::storage_proxy>& proxy, mutation schema, bool announce_locally);
+    static future<> announce(mutation schema, bool announce_locally);
 
-    static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally);
+    static future<> announce(std::vector<mutation> mutations, bool announce_locally);
 
     static future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
     // Returns a future on the local application of the schema
-    static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema);
+    static future<> announce(std::vector<mutation> schema);
 
     static future<> passive_announce(utils::UUID version);
 

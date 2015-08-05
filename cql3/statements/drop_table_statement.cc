@@ -60,7 +60,7 @@ void drop_table_statement::validate(distributed<service::storage_proxy>&, const 
 future<bool> drop_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     return make_ready_future<>().then([&] {
-        return service::get_local_migration_manager().announce_column_family_drop(proxy, keyspace(), column_family(), is_local_only);
+        return service::get_local_migration_manager().announce_column_family_drop(keyspace(), column_family(), is_local_only);
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();

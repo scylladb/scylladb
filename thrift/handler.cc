@@ -478,7 +478,7 @@ public:
             std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
             ks_def.durable_writes,
             std::move(cf_defs));
-        service::get_local_migration_manager().announce_new_keyspace(service::get_storage_proxy(), ksm, false).then([schema_id = std::move(schema_id)] {
+        service::get_local_migration_manager().announce_new_keyspace(ksm, false).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {
             complete(result, cob, exn_cob);

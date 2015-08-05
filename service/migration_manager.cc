@@ -33,13 +33,13 @@
 
 namespace service {
 
-static logging::logger logger("Migration Manager");
+static logging::logger logger("migration_manager");
 
 distributed<service::migration_manager> _the_migration_manager;
 
 using namespace std::chrono_literals;
 
-const std::chrono::milliseconds migration_manager::MIGRATION_DELAY_IN_MS = 60000ms;
+const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 
 migration_manager::migration_manager()
     : _listeners{}
@@ -63,12 +63,10 @@ void migration_manager::unregister_listener(migration_listener* listener)
 
 future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoint, const gms::endpoint_state& state)
 {
-    auto& proxy = service::get_local_storage_proxy();
-
     const auto& value = state.get_application_state(gms::application_state::SCHEMA);
 
     if (endpoint != utils::fb_utilities::get_broadcast_address() && value) {
-        return maybe_schedule_schema_pull(proxy, utils::UUID{value->value}, endpoint);
+        return maybe_schedule_schema_pull(utils::UUID{value->value}, endpoint);
     }
     return make_ready_future<>();
 }
@@ -77,22 +75,23 @@ future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoi
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
  */
-future<> migration_manager::maybe_schedule_schema_pull(storage_proxy& proxy, const utils::UUID& their_version, const gms::inet_address& endpoint)
+future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_version, const gms::inet_address& endpoint)
 {
+    auto& proxy = get_local_storage_proxy();
     auto& db = proxy.get_db().local();
     if (db.get_version() == their_version || !should_pull_schema_from(endpoint)) {
         logger.debug("Not pulling schema because versions match or shouldPullSchemaFrom returned false");
         return make_ready_future<>();
     }
 
-    if (db.get_version() == database::empty_version || runtime::get_uptime() < MIGRATION_DELAY_IN_MS) {
+    if (db.get_version() == database::empty_version || runtime::get_uptime() < migration_delay) {
         // If we think we may be bootstrapping or have recently started, submit MigrationTask immediately
         logger.debug("Submitting migration task for {}", endpoint);
-        return submit_migration_task(proxy, endpoint);
+        return submit_migration_task(endpoint);
     } else {
         // Include a delay to make sure we have a chance to apply any changes being
         // pushed out simultaneously. See CASSANDRA-5025
-        return sleep(MIGRATION_DELAY_IN_MS).then([this, &proxy, endpoint] {
+        return sleep(migration_delay).then([this, &proxy, endpoint] {
             // grab the latest version of the schema since it may have changed again since the initial scheduling
             auto& gossiper = gms::get_local_gossiper();
             auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
@@ -108,14 +107,14 @@ future<> migration_manager::maybe_schedule_schema_pull(storage_proxy& proxy, con
                 return make_ready_future<>();
             }
             logger.debug("submitting migration task for {}", endpoint);
-            return submit_migration_task(proxy, endpoint);
+            return submit_migration_task(endpoint);
         });
     }
 }
 
-future<> migration_manager::submit_migration_task(service::storage_proxy& proxy, const gms::inet_address& endpoint)
+future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
 {
-    return service::migration_task::run_may_throw(proxy, endpoint);
+    return service::migration_task::run_may_throw(get_local_storage_proxy(), endpoint);
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint)
@@ -127,15 +126,8 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
     auto& ms = net::get_local_messaging_service();
     return ms.knows_version(endpoint)
             && ms.get_raw_version(endpoint) == net::messaging_service::current_version
-            && !gms::get_gossiper().local().is_gossip_only_member(endpoint);
+            && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
-
-#if 0
-public static boolean isReadyForBootstrap()
-{
-    return ((ThreadPoolExecutor) StageManager.getStage(Stage.MIGRATION)).getActiveCount() == 0;
-}
-#endif
 
 future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
 {
@@ -251,43 +243,44 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
-future<>migration_manager::announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
+future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
 {
-    return announce_new_keyspace(proxy, ksm, db_clock::now_in_usecs(), announce_locally);
+    return announce_new_keyspace(ksm, db_clock::now_in_usecs(), announce_locally);
 }
 
-future<> migration_manager::announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
+future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
 {
 #if 0
     ksm.validate();
 #endif
-    if (proxy.local().get_db().local().has_keyspace(ksm->name())) {
+    auto& proxy = get_local_storage_proxy();
+    if (proxy.get_db().local().has_keyspace(ksm->name())) {
         throw exceptions::already_exists_exception{ksm->name()};
     }
     logger.info("Create new Keyspace: {}", ksm->name());
     auto mutations = db::legacy_schema_tables::make_create_keyspace_mutations(ksm, timestamp);
-    return announce(proxy, std::move(mutations), announce_locally);
+    return announce(std::move(mutations), announce_locally);
 }
 
-future<> migration_manager::announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally) {
+future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool announce_locally) {
 #if 0
     cfm.validate();
 #endif
     try {
-        auto& db = proxy.local().get_db().local();
+        auto& db = get_local_storage_proxy().get_db().local();
         auto&& keyspace = db.find_keyspace(cfm->ks_name());
         if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
         logger.info("Create new table: {}", cfm->cf_name());
         auto mutations = db::legacy_schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
-        return announce(proxy, std::move(mutations), announce_locally);
+        return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
     }
 }
 
-future<> migration_manager::announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally) {
+future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, bool announce_locally) {
     warn(unimplemented::cause::MIGRATIONS);
     return make_ready_future<>();
 #if 0
@@ -369,10 +362,10 @@ public static void announceTypeUpdate(UserType updatedType, boolean announceLoca
 }
 #endif
 
-future<> migration_manager::announce_keyspace_drop(distributed<service::storage_proxy>& proxy, const sstring& ks_name, bool announce_locally)
+future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool announce_locally)
 {
     try {
-        auto& db = proxy.local().get_db().local();
+        auto& db = get_local_storage_proxy().get_db().local();
         /*auto&& keyspace = */db.find_keyspace(ks_name);
 #if 0
         logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
@@ -385,13 +378,12 @@ future<> migration_manager::announce_keyspace_drop(distributed<service::storage_
     }
 }
 
-future<> migration_manager::announce_column_family_drop(distributed<service::storage_proxy>& proxy,
-                                                        const sstring& ks_name,
+future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
                                                         const sstring& cf_name,
                                                         bool announce_locally)
 {
     try {
-        auto& db = proxy.local().get_db().local();
+        auto& db = get_local_storage_proxy().get_db().local();
         /*auto&& cfm = */db.find_schema(ks_name, cf_name);
         /*auto&& ksm = */db.find_keyspace(ks_name);
 #if 0
@@ -436,19 +428,19 @@ public static void announceAggregateDrop(UDAggregate udf, boolean announceLocall
  * actively announce a new version to active hosts via rpc
  * @param schema The schema mutation to be applied
  */
-future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, mutation schema, bool announce_locally)
+future<> migration_manager::announce(mutation schema, bool announce_locally)
 {
     std::vector<mutation> mutations;
     mutations.emplace_back(std::move(schema));
-    return announce(proxy, std::move(mutations), announce_locally);
+    return announce(std::move(mutations), announce_locally);
 }
 
-future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally)
+future<> migration_manager::announce(std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
-        return db::legacy_schema_tables::merge_schema(proxy.local(), std::move(mutations), false);
+        return db::legacy_schema_tables::merge_schema(get_local_storage_proxy(), std::move(mutations), false);
     } else {
-        return announce(proxy, std::move(mutations));
+        return announce(std::move(mutations));
     }
 }
 
@@ -460,10 +452,10 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 }
 
 // Returns a future on the local application of the schema
-future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema)
+future<> migration_manager::announce(std::vector<mutation> schema)
 {
-    return gms::get_live_members().then([&proxy, schema = std::move(schema)](std::set<gms::inet_address> live_members) {
-        return do_with(std::move(schema), [&proxy, live_members] (auto&& schema) {
+    return gms::get_live_members().then([schema = std::move(schema)](std::set<gms::inet_address> live_members) {
+        return do_with(std::move(schema), [live_members] (auto&& schema) {
             return parallel_for_each(live_members.begin(), live_members.end(), [&schema] (auto& endpoint) {
                 // only push schema to nodes with known and equal versions
                 if (endpoint != utils::fb_utilities::get_broadcast_address() &&
@@ -476,11 +468,12 @@ future<> migration_manager::announce(distributed<service::storage_proxy>& proxy,
             }).then_wrapped([] (future<> f) {
                 try {
                     f.get();
-                } catch (std::exception& ex) {
-                    std::cout << "announce error " << ex.what() << "\n";
+                } catch (...) {
+                    return make_exception_future<>(std::current_exception());
                 }
-            }).then([&proxy, &schema] {
-                return db::legacy_schema_tables::merge_schema(proxy.local(), std::move(schema));
+                return make_ready_future<>();
+            }).then([&schema] {
+                return db::legacy_schema_tables::merge_schema(get_local_storage_proxy(), std::move(schema));
             });
         });
     });
