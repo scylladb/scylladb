@@ -34,7 +34,6 @@ namespace query {
 class result_set;
 }
 
-/** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace schema_tables {
 
