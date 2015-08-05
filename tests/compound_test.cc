@@ -8,7 +8,7 @@
 #include <boost/test/unit_test.hpp>
 #include "compound.hh"
 #include "compound_compat.hh"
-#include "tests/urchin/range_assert.hh"
+#include "tests/range_assert.hh"
 
 static std::vector<bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<bytes> result;

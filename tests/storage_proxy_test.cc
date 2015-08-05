@@ -7,9 +7,9 @@
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
 
-#include "tests/urchin/cql_test_env.hh"
-#include "tests/urchin/mutation_source_test.hh"
-#include "tests/urchin/result_set_assertions.hh"
+#include "tests/cql_test_env.hh"
+#include "tests/mutation_source_test.hh"
+#include "tests/result_set_assertions.hh"
 #include "service/storage_proxy.hh"
 #include "partition_slice_builder.hh"
 

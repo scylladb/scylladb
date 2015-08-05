@@ -112,42 +112,42 @@ modes = {
 }
 
 urchin_tests = [
-    'tests/urchin/mutation_test',
-    'tests/urchin/range_test',
-    'tests/urchin/types_test',
-    'tests/urchin/keys_test',
-    'tests/urchin/partitioner_test',
-    'tests/urchin/frozen_mutation_test',
+    'tests/mutation_test',
+    'tests/range_test',
+    'tests/types_test',
+    'tests/keys_test',
+    'tests/partitioner_test',
+    'tests/frozen_mutation_test',
     'tests/perf/perf_mutation',
     'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
-    'tests/urchin/cql_query_test',
-    'tests/urchin/storage_proxy_test',
-    'tests/urchin/mutation_reader_test',
-    'tests/urchin/mutation_query_test',
-    'tests/urchin/row_cache_test',
+    'tests/cql_query_test',
+    'tests/storage_proxy_test',
+    'tests/mutation_reader_test',
+    'tests/mutation_query_test',
+    'tests/row_cache_test',
     'tests/test-serialization',
-    'tests/urchin/sstable_test',
-    'tests/urchin/sstable_mutation_test',
-    'tests/urchin/memtable_test',
-    'tests/urchin/commitlog_test',
+    'tests/sstable_test',
+    'tests/sstable_mutation_test',
+    'tests/memtable_test',
+    'tests/commitlog_test',
     'tests/cartesian_product_test',
-    'tests/urchin/hash_test',
-    'tests/urchin/serializer_test',
-    'tests/urchin/map_difference_test',
-    'tests/urchin/message',
-    'tests/urchin/gossip',
-    'tests/urchin/gossip_test',
-    'tests/urchin/compound_test',
-    'tests/urchin/config_test',
-    'tests/urchin/gossiping_property_file_snitch_test',
-    'tests/urchin/network_topology_strategy_test',
-    'tests/urchin/query_processor_test',
-    'tests/urchin/batchlog_manager_test',
-    'tests/urchin/bytes_ostream_test',
-    'tests/urchin/UUID_test',
-    'tests/urchin/murmur_hash_test',
+    'tests/hash_test',
+    'tests/serializer_test',
+    'tests/map_difference_test',
+    'tests/message',
+    'tests/gossip',
+    'tests/gossip_test',
+    'tests/compound_test',
+    'tests/config_test',
+    'tests/gossiping_property_file_snitch_test',
+    'tests/network_topology_strategy_test',
+    'tests/query_processor_test',
+    'tests/batchlog_manager_test',
+    'tests/bytes_ostream_test',
+    'tests/UUID_test',
+    'tests/murmur_hash_test',
 ]
 
 apps = [
@@ -368,10 +368,10 @@ api = ['api/api.cc',
        ]
 
 urchin_tests_dependencies = urchin_core + [
-    'tests/urchin/cql_test_env.cc',
-    'tests/urchin/cql_assertions.cc',
-    'tests/urchin/result_set_assertions.cc',
-    'tests/urchin/mutation_source_test.cc',
+    'tests/cql_test_env.cc',
+    'tests/cql_assertions.cc',
+    'tests/result_set_assertions.cc',
+    'tests/mutation_source_test.cc',
 ]
 
 urchin_tests_seastar_deps = [
@@ -385,14 +385,14 @@ deps = {
 
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
-    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/urchin/gossip' and 'compound_test' not in t and 'range_test' not in t:
+    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/gossip' and 'compound_test' not in t and 'range_test' not in t:
         deps[t] += urchin_tests_seastar_deps
 
-deps['tests/urchin/sstable_test'] += ['tests/urchin/sstable_datafile_test.cc']
+deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 
-deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
-deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
-deps['tests/urchin/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/urchin/murmur_hash_test.cc']
+deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
+deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
+deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only

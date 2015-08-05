@@ -12,8 +12,8 @@
 #include <query-result-set.hh>
 
 #include "tests/test-utils.hh"
-#include "tests/urchin/mutation_assertions.hh"
-#include "tests/urchin/result_set_assertions.hh"
+#include "tests/mutation_assertions.hh"
+#include "tests/result_set_assertions.hh"
 
 #include "mutation_query.hh"
 #include "core/do_with.hh"

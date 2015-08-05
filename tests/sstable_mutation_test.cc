@@ -20,7 +20,7 @@
 using namespace sstables;
 
 SEASTAR_TEST_CASE(nonexistent_key) {
-    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+    return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(key::from_bytes(to_bytes("invalid_key")), [sstp] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
@@ -32,7 +32,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
 }
 
 future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, boost::any> &&map) {
-    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
+    return reusable_sst("tests/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
             return sstp->read_row(s, key).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
@@ -98,7 +98,7 @@ SEASTAR_TEST_CASE(uncompressed_4) {
 // FIXME: we are lacking a full deletion test
 template <int Generation>
 future<mutation> generate_clustered(bytes&& key) {
-    return reusable_sst("tests/urchin/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
+    return reusable_sst("tests/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
@@ -279,7 +279,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 }
 
 future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
-    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
+    return reusable_sst("tests/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
@@ -365,7 +365,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_sparse_read) {
-    return reusable_sst("tests/urchin/sstables/compact_sparse", 1).then([] (auto sstp) {
+    return reusable_sst("tests/sstables/compact_sparse", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_sparse_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
@@ -380,7 +380,7 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
-    return reusable_sst("tests/urchin/sstables/compact_simple_dense", 1).then([] (auto sstp) {
+    return reusable_sst("tests/sstables/compact_simple_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_simple_dense_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
@@ -398,7 +398,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
 }
 
 SEASTAR_TEST_CASE(compact_storage_dense_read) {
-    return reusable_sst("tests/urchin/sstables/compact_dense", 1).then([] (auto sstp) {
+    return reusable_sst("tests/sstables/compact_dense", 1).then([] (auto sstp) {
         return do_with(sstables::key("first_row"), [sstp] (auto& key) {
             auto s = compact_dense_schema();
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {

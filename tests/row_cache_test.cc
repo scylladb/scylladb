@@ -7,9 +7,9 @@
 #include <boost/test/unit_test.hpp>
 
 #include "tests/test-utils.hh"
-#include "tests/urchin/mutation_assertions.hh"
-#include "tests/urchin/mutation_reader_assertions.hh"
-#include "tests/urchin/mutation_source_test.hh"
+#include "tests/mutation_assertions.hh"
+#include "tests/mutation_reader_assertions.hh"
+#include "tests/mutation_source_test.hh"
 
 #include "schema_builder.hh"
 #include "row_cache.hh"

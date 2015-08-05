@@ -11,8 +11,8 @@
 #include <stdint.h>
 
 #include "tests/test-utils.hh"
-#include "tests/urchin/cql_test_env.hh"
-#include "tests/urchin/cql_assertions.hh"
+#include "tests/cql_test_env.hh"
+#include "tests/cql_assertions.hh"
 
 #include "core/future-util.hh"
 #include "core/shared_ptr.hh"

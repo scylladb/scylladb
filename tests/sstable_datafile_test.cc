@@ -67,7 +67,7 @@ protected:
 public:
     static future<> do_with_test_directory(std::function<future<> ()>&& fut);
 };
-sstring test_setup::path = "tests/urchin/sstables/tests-temporary";
+sstring test_setup::path = "tests/sstables/tests-temporary";
 
 future<> test_setup::do_with_test_directory(std::function<future<> ()>&& fut) {
     return test_setup::create_empty_test_dir().then([fut = std::move(fut)] () mutable {
@@ -121,9 +121,9 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 1, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 1, la, big);
 
-        auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 1, big, sstable::component_type::Data);
+        auto fname = sstable::filename("tests/sstables/tests-temporary", la, 1, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -187,9 +187,9 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 2, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 2, la, big);
 
-        auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 2, big, sstable::component_type::Data);
+        auto fname = sstable::filename("tests/sstables/tests-temporary", la, 2, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -255,9 +255,9 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 3, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 3, la, big);
 
-        auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 3, big, sstable::component_type::Data);
+        auto fname = sstable::filename("tests/sstables/tests-temporary", la, 3, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -326,9 +326,9 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 4, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 4, la, big);
 
-        auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 4, big, sstable::component_type::Data);
+        auto fname = sstable::filename("tests/sstables/tests-temporary", la, 4, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -397,10 +397,10 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
         mt->apply(std::move(m));
 
         auto now = to_gc_clock(db_clock::from_time_t(0));
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 5, la, big, now);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 5, la, big, now);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 5, big, sstable::component_type::Data);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 5, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -469,10 +469,10 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
         m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 6, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 6, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 6, big, sstable::component_type::Data);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 6, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -545,10 +545,10 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
         m2.set_clustered_cell(c_key2, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m2));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 7, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 7, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 7, big, sstable::component_type::Index);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 7, big, sstable::component_type::Index);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -602,10 +602,10 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
             mt->apply(std::move(m));
         }
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 8, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 8, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 8, big, sstable::component_type::Summary);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 8, big, sstable::component_type::Summary);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -665,10 +665,10 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 9, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 9, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 9, la, big);
+            auto sst2 = make_lw_shared<sstable>("tests/sstables/tests-temporary", 9, la, big);
 
             return sstables::test(sst2).read_summary().then([sst, sst2] {
                 summary& sst1_s = sstables::test(sst).get_summary();
@@ -711,10 +711,10 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 10, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 10, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::Data);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 10, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -725,7 +725,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                     uint32_t adler = checksum_adler32(buf, size);
                     f.close().finally([f]{});
 
-                    auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::CRC);
+                    auto fname = sstable::filename("tests/sstables/tests-temporary", la, 10, big, sstable::component_type::CRC);
                     return engine().open_file_dma(fname, open_flags::ro).then([adler] (file f) {
                         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -747,7 +747,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                             return f.close().finally([f]{});
                         });
                     }).then([adler] {
-                        auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::Digest);
+                        auto fname = sstable::filename("tests/sstables/tests-temporary", la, 10, big, sstable::component_type::Digest);
                         return engine().open_file_dma(fname, open_flags::ro).then([adler] (file f) {
                             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -819,9 +819,9 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
             return t->deserialize_mutation_form(cell->as_collection_mutation());
         };
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 11, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 11, la, big);
         return sst->write_components(*mt).then([s, sst, mt, verifier, tomb, &static_set_col] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
+            return reusable_sst("tests/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
                         auto verify_set = [&tomb] (auto m) {
@@ -878,9 +878,9 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         m.partition().apply_delete(*s, cp, tomb);
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 12, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 12, la, big);
         return sst->write_components(*mt).then([s, tomb] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
+            return reusable_sst("tests/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -913,9 +913,9 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         m.partition().apply_delete(*s, cp, tomb);
         mtp->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", generation, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", generation, la, big);
         return sst->write_components(*mtp).then([s, tomb, generation] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
+            return reusable_sst("tests/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -958,9 +958,9 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
             mtp->apply(std::move(m));
         }
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 16, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 16, la, big);
         return sst->write_components(*mtp).then([s] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 16).then([] (auto s) {
+            return reusable_sst("tests/sstables/tests-temporary", 16).then([] (auto s) {
                 // Not crashing is enough
                 return make_ready_future<>();
             });
@@ -1034,10 +1034,10 @@ SEASTAR_TEST_CASE(compact) {
             "Example table for compaction"
            ));
 
-    return open_sstables("tests/urchin/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
+    return open_sstables("tests/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
         return test_setup::do_with_test_directory([sstables, s, generation] {
             auto new_sstable = [generation] {
-                return make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
+                return make_lw_shared<sstables::sstable>("tests/sstables/tests-temporary",
                         generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
             };
             return sstables::compact_sstables(std::move(sstables), std::move(s), new_sstable).then([s, generation] {
@@ -1048,7 +1048,7 @@ SEASTAR_TEST_CASE(compact) {
                 //    tom |  20 |    180
                 //   john |  20 |   deleted
                 //   nadav - deleted partition
-                return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
+                return open_sstable("tests/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
                     auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
                     return reader().then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
@@ -1125,7 +1125,7 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
 
     return f.then([generations, sstables, s, create_sstables] () mutable {
         if (!create_sstables) {
-            return open_sstables("tests/urchin/sstables/tests-temporary", *generations).then([sstables] (auto opened_sstables) mutable {
+            return open_sstables("tests/sstables/tests-temporary", *generations).then([sstables] (auto opened_sstables) mutable {
                 for (auto& sst : opened_sstables) {
                     sstables->push_back(sst);
                 }
@@ -1145,7 +1145,7 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
             mt->apply(std::move(m));
 
-            auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", generation, la, big);
+            auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", generation, la, big);
 
             return sst->write_components(*mt).then([mt, sst, s, sstables] {
                 return sst->load().then([sst, sstables] {
@@ -1157,7 +1157,7 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
     }).then([s, sstables, new_generation, generations] {
         unsigned long generation = new_generation;
         auto new_sstable = [generation] {
-            return make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
+            return make_lw_shared<sstables::sstable>("tests/sstables/tests-temporary",
                     generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
         };
         // We must have opened at least all original candidates.
@@ -1179,7 +1179,7 @@ static future<> check_compacted_sstables(unsigned long generation, std::vector<u
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(compacted_generations));
 
-    return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s, generations] (shared_sstable sst) {
+    return open_sstable("tests/sstables/tests-temporary", generation).then([s, generations] (shared_sstable sst) {
         auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<bytes>>();
 
@@ -1261,9 +1261,9 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(to_bytes("cl2"))));
         mtp->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 37, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 37, la, big);
         return sst->write_components(*mtp).then([s] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 37).then([s] (auto sstp) {
+            return reusable_sst("tests/sstables/tests-temporary", 37).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -1297,9 +1297,9 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
         m.set_clustered_cell(c_key, cl3, make_atomic_cell(bytes_type->decompose(to_bytes("cl3"))));
         mtp->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 38, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 38, la, big);
         return sst->write_components(*mtp).then([s] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 38).then([s] (auto sstp) {
+            return reusable_sst("tests/sstables/tests-temporary", 38).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -1333,9 +1333,9 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
         m.set_clustered_cell(c_key, cl2, make_atomic_cell(bytes_type->decompose(to_bytes("cl2"))));
         mtp->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 39, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 39, la, big);
         return sst->write_components(*mtp).then([s] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 39).then([s] (auto sstp) {
+            return reusable_sst("tests/sstables/tests-temporary", 39).then([s] (auto sstp) {
                 return do_with(sstables::key("key1"), [sstp, s] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -1384,10 +1384,10 @@ SEASTAR_TEST_CASE(datafile_generation_40) {
         m.set_clustered_cell(cb, r1_col, make_atomic_cell(int32_type->decompose(1)));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 40, la, big);
+        auto sst = make_lw_shared<sstable>("tests/sstables/tests-temporary", 40, la, big);
 
         return sst->write_components(*mt).then([mt, sst, s] {
-            auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 40, big, sstable::component_type::Data);
+            auto fname = sstable::filename("tests/sstables/tests-temporary", la, 40, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 

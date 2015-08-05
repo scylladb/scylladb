@@ -3,7 +3,7 @@
  */
 
 #include <boost/range/irange.hpp>
-#include "tests/urchin/cql_test_env.hh"
+#include "tests/cql_test_env.hh"
 #include "tests/perf/perf.hh"
 #include "core/app-template.hh"
 

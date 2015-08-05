@@ -9,7 +9,7 @@
 
 #include "frozen_mutation.hh"
 #include "schema_builder.hh"
-#include "tests/urchin/mutation_assertions.hh"
+#include "tests/mutation_assertions.hh"
 
 static schema_builder new_table() {
     return { "some_keyspace", "some_table" };

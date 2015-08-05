@@ -12,7 +12,7 @@
 #include <string>
 #include <tuple>
 
-static boost::filesystem::path test_files_subdir("tests/urchin/snitch_property_files");
+static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;

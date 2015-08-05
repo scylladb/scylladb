@@ -22,9 +22,9 @@
 #include "partition_slice_builder.hh"
 
 #include "tests/test-utils.hh"
-#include "tests/urchin/mutation_assertions.hh"
-#include "tests/urchin/mutation_reader_assertions.hh"
-#include "tests/urchin/result_set_assertions.hh"
+#include "tests/mutation_assertions.hh"
+#include "tests/mutation_reader_assertions.hh"
+#include "tests/result_set_assertions.hh"
 
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
