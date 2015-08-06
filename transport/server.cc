@@ -1327,8 +1327,12 @@ void cql_server::response::write_option_list(std::vector<std::pair<int16_t, boos
 
 void cql_server::response::write_inet(ipv4_addr inet)
 {
-    // FIXME
-    assert(0);
+    write_byte(4);
+    write_byte(((inet.ip & 0xff000000) >> 24));
+    write_byte(((inet.ip & 0x00ff0000) >> 16));
+    write_byte(((inet.ip & 0x0000ff00) >> 8 ));
+    write_byte(((inet.ip & 0x000000ff)      ));
+    write_int(inet.port);
 }
 
 void cql_server::response::write_consistency(db::consistency_level c)
