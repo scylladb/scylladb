@@ -709,7 +709,8 @@ uint64_t tracker::impl::reclaim(uint64_t bytes) {
     // TODO: eviction step involving evictable pools.
     //
 
-    auto segments_to_release = (bytes + segment::size - 1) >> segment::size_shift;
+    constexpr auto max_segments = std::numeric_limits<uint64_t>::max() >> segment::size_shift;
+    auto segments_to_release = std::min((uint64_t)align_up(__int128(bytes), __int128(segment::size)), max_segments);
 
     auto cmp = [] (region::impl* c1, region::impl* c2) {
         if (c1->is_compactible() != c2->is_compactible()) {
