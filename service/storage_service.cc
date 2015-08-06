@@ -1030,7 +1030,7 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 }
 
 std::unordered_set<token> storage_service::prepare_replacement_info() {
-    return {};
+    return std::unordered_set<token>();
 #if 0
     logger.info("Gathering node replacement information for {}", DatabaseDescriptor.getReplaceAddress());
     if (!MessagingService.instance().isListening())
