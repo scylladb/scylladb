@@ -11,6 +11,7 @@
 #include "gossiper.hh"
 #include "failure_detector.hh"
 #include "column_family.hh"
+#include "lsa.hh"
 #include "messaging_service.hh"
 #include "storage_proxy.hh"
 #include "cache_service.hh"
@@ -43,6 +44,10 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "column_family",
                                         "The column family API");
         set_column_family(ctx, r);
+
+        rb->register_function(r, "lsa", "Log-structured allocator API");
+        set_lsa(ctx, r);
+
         rb->register_function(r, "failure_detector",
                                 "The failure detector API");
         set_failure_detector(ctx,r);
