@@ -11,6 +11,11 @@
 #include "log.hh"
 #include "service/migration_manager.hh"
 #include "to_string.hh"
+#include "gms/gossiper.hh"
+
+using token = dht::token;
+using UUID = utils::UUID;
+using inet_address = gms::inet_address;
 
 namespace service {
 
@@ -20,12 +25,56 @@ int storage_service::RING_DELAY = storage_service::get_ring_delay();
 
 distributed<storage_service> _the_storage_service;
 
+bool is_replacing() {
+    // FIXME: DatabaseDescriptor.isReplacing()
+    return false;
+}
+
+bool is_auto_bootstrap() {
+    // FIXME: DatabaseDescriptor.isAutoBootstrap()
+    return true;
+}
+
+std::set<inet_address> get_seeds() {
+    // FIXME: DatabaseDescriptor.getSeeds()
+    auto& gossiper = gms::get_local_gossiper();
+    return gossiper.get_seeds();
+}
+
+std::set<inet_address> get_replace_tokens() {
+    // FIXME: DatabaseDescriptor.getReplaceTokens()
+    return {};
+}
+
+std::experimental::optional<UUID> get_replace_node() {
+    // FIXME: DatabaseDescriptor.getReplaceNode()
+    return {};
+}
+
+std::experimental::optional<inet_address> get_replace_address() {
+    // FIXME: DatabaseDescriptor.getReplaceAddress()
+    return {};
+}
+
+bool get_property_join_ring() {
+    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
+    return true;
+}
+
+bool get_property_rangemovement() {
+    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")
+    return true;
+}
+
+bool get_property_load_ring_state() {
+    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true"))
+    return true;
+}
+
 bool storage_service::should_bootstrap() {
     // FIXME: Currently, we do boostrap if we are not a seed node.
     // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-    auto& gossiper = gms::get_local_gossiper();
-    auto seeds = gossiper.get_seeds();
-    return !seeds.count(get_broadcast_address());
+    return is_auto_bootstrap() && !get_seeds().count(get_broadcast_address());
 }
 
 future<> storage_service::prepare_to_join() {
