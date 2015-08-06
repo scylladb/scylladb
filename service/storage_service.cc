@@ -511,11 +511,17 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
     if (is_moving) {
         _token_metadata.remove_from_moving(endpoint);
-        // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-        //     subscriber.onMove(endpoint);
+        get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+            for (auto&& subscriber : ss._lifecycle_subscribers) {
+                subscriber->on_move(endpoint);
+            }
+        });
     } else {
-        // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-        //     subscriber.onJoinCluster(endpoint);
+        get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+            for (auto&& subscriber : ss._lifecycle_subscribers) {
+                subscriber->on_join_cluster(endpoint);
+            }
+        });
     }
 
     // PendingRangeCalculatorService.instance.update();
@@ -649,15 +655,16 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("on_alive endpoint={}", endpoint);
     get_local_migration_manager().schedule_schema_pull(endpoint, state);
+    if (_token_metadata.is_member(endpoint)) {
 #if 0
-
-    if (_token_metadata.isMember(endpoint))
-    {
         HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onUp(endpoint);
-    }
 #endif
+        get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+            for (auto&& subscriber : ss._lifecycle_subscribers) {
+                subscriber->on_up(endpoint);
+            }
+        });
+    }
 }
 
 void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) {
@@ -713,9 +720,12 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
     logger.debug("on_restart endpoint={}", endpoint);
 #if 0
     MessagingService.instance().convict(endpoint);
-    for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-        subscriber.onDown(endpoint);
 #endif
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            subscriber->on_down(endpoint);
+        }
+    });
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -818,6 +828,16 @@ future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
         set_mode(mode::NORMAL, false);
         replicate_to_all_cores();
     });
+}
+
+void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
+{
+    _lifecycle_subscribers.emplace_back(subscriber);
+}
+
+void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subscriber)
+{
+    _lifecycle_subscribers.erase(std::remove(_lifecycle_subscribers.begin(), _lifecycle_subscribers.end(), subscriber), _lifecycle_subscribers.end());
 }
 
 future<> storage_service::init_server(int delay) {
