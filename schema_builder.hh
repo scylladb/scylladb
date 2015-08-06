@@ -142,6 +142,10 @@ public:
         _raw._compaction_strategy_options = std::move(options);
     }
 
+    void set_caching_options(caching_options c) {
+        _raw._caching_options = std::move(c);
+    }
+
     void set_is_dense(bool is_dense) {
         _raw._is_dense = is_dense;
     }

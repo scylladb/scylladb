@@ -19,6 +19,7 @@
 #include "utils/UUID.hh"
 #include "compress.hh"
 #include "compaction_strategy.hh"
+#include "caching_options.hh"
 
 using column_id = uint32_t;
 
@@ -255,6 +256,7 @@ private:
         // we will use by default - when we have the choice.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
+        caching_options _caching_options;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -384,6 +386,10 @@ public:
 
     const ::speculative_retry& speculative_retry() const {
         return _raw._speculative_retry;
+    }
+
+    const ::caching_options& caching_options() const {
+        return _raw._caching_options;
     }
 
     const column_definition* get_column_definition(const bytes& name) const;
