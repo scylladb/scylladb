@@ -5,7 +5,9 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
-#include <db/config.hh>
+#include <seastar/core/distributed.hh>
+#include "db/config.hh"
+#include "database.hh"
 
-future<> init_storage_service();
+future<> init_storage_service(distributed<database>& db);
 future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider);

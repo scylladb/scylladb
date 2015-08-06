@@ -34,6 +34,8 @@
 #include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
+#include "database.hh"
+#include <seastar/core/distributed.hh>
 
 namespace service {
 
@@ -57,7 +59,11 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
+    distributed<database>& _db;
 public:
+    storage_service(distributed<database>& db)
+        : _db(db) {
+    }
     static int RING_DELAY; // delay after which we assume ring has stablized
 
     // Needed by distributed<>
@@ -139,12 +145,14 @@ private:
 
     bool _joined = false;
 
+public:
+    enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+private:
+    mode _operation_mode = mode::STARTING;
+    friend std::ostream& operator<<(std::ostream& os, const mode& mode);
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
     private double traceProbability = 0.0;
-
-    private static enum Mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED }
-    private Mode operationMode = Mode.STARTING;
 
     /* Used for tracking drain progress */
     private volatile int totalCFs, remainingCFs;
@@ -325,37 +333,9 @@ public:
             throw new IllegalStateException("No configured daemon");
         daemon.deactivate();
     }
-
-    public synchronized Collection<Token> prepareReplacementInfo() throws ConfigurationException
-    {
-        logger.info("Gathering node replacement information for {}", DatabaseDescriptor.getReplaceAddress());
-        if (!MessagingService.instance().isListening())
-            MessagingService.instance().listen(FBUtilities.getLocalAddress());
-
-        // make magic happen
-        Gossiper.instance.doShadowRound();
-
-        UUID hostId = null;
-        // now that we've gossiped at least once, we should be able to find the node we're replacing
-        if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress())== null)
-            throw new RuntimeException("Cannot replace_address " + DatabaseDescriptor.getReplaceAddress() + " because it doesn't exist in gossip");
-        hostId = Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress());
-        try
-        {
-            if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()).getApplicationState(ApplicationState.TOKENS) == null)
-                throw new RuntimeException("Could not find tokens for " + DatabaseDescriptor.getReplaceAddress() + " to replace");
-            Collection<Token> tokens = TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(get_application_state_value(DatabaseDescriptor.getReplaceAddress(), ApplicationState.TOKENS))));
-
-            SystemKeyspace.setLocalHostId(hostId); // use the replacee's host Id as our own so we receive hints, etc
-            Gossiper.instance.resetEndpointStateMap(); // clean up since we have what we need
-            return tokens;
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
 #endif
+public:
+    std::unordered_set<token> prepare_replacement_info();
 
     future<> check_for_endpoint_collision();
 #if 0
@@ -455,23 +435,12 @@ public:
     {
         DatabaseDescriptor.setIncrementalBackupsEnabled(value);
     }
-
-    private void setMode(Mode m, boolean log)
-    {
-        setMode(m, null, log);
-    }
-
-    private void setMode(Mode m, String msg, boolean log)
-    {
-        operationMode = m;
-        String logMsg = msg == null ? m.toString() : String.format("%s: %s", m, msg);
-        if (log)
-            logger.info(logMsg);
-        else
-            logger.debug(logMsg);
-    }
 #endif
 
+private:
+    void set_mode(mode m, bool log);
+    void set_mode(mode m, sstring msg, bool log);
+public:
     future<> bootstrap(std::unordered_set<token> tokens);
 
     bool is_bootstrap_mode() {
@@ -3310,8 +3279,8 @@ inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
     });
 }
 
-inline future<> init_storage_service() {
-    return service::get_storage_service().start().then([] {
+inline future<> init_storage_service(distributed<database>& db) {
+    return service::get_storage_service().start(std::ref(db)).then([] {
         print("Start Storage service ...\n");
     });
 }

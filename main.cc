@@ -114,8 +114,8 @@ int main(int ac, char** av) {
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
-            }).then([] {
-                return init_storage_service();
+            }).then([&db] {
+                return init_storage_service(db);
             }).then([&db, cfg] {
                 return db.start(std::move(*cfg)).then([&db] {
                     engine().at_exit([&db] { return db.stop(); });

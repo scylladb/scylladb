@@ -8,8 +8,8 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 
-future<> init_storage_service() {
-    return service::init_storage_service().then([] {
+future<> init_storage_service(distributed<database>& db) {
+    return service::init_storage_service(db).then([] {
         engine().at_exit([] { return service::deinit_storage_service(); });
     });
 }
