@@ -8,13 +8,14 @@
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "gc_clock.hh"
+#include "utils/managed_bytes.hh"
 #include "net/byteorder.hh"
 #include <cstdint>
 #include <iostream>
 
 template<typename T>
 static inline
-void set_field(bytes& v, unsigned offset, T val) {
+void set_field(managed_bytes& v, unsigned offset, T val) {
     reinterpret_cast<net::packed<T>*>(v.begin() + offset)->raw = net::hton(val);
 }
 
@@ -86,24 +87,24 @@ private:
         assert(is_live_and_has_ttl(cell));
         return gc_clock::duration(get_field<int32_t>(cell, ttl_offset));
     }
-    static bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
-        bytes b(bytes::initialized_later(), flags_size + timestamp_size + deletion_time_size);
+    static managed_bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
+        managed_bytes b(managed_bytes::initialized_later(), flags_size + timestamp_size + deletion_time_size);
         b[0] = DEAD_FLAGS;
         set_field(b, timestamp_offset, timestamp);
         set_field(b, deletion_time_offset, deletion_time.time_since_epoch().count());
         return b;
     }
-    static bytes make_live(api::timestamp_type timestamp, bytes_view value) {
+    static managed_bytes make_live(api::timestamp_type timestamp, bytes_view value) {
         auto value_offset = flags_size + timestamp_size;
-        bytes b(bytes::initialized_later(), value_offset + value.size());
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
         b[0] = LIVE_FLAG;
         set_field(b, timestamp_offset, timestamp);
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
-    static bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
+    static managed_bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
         auto value_offset = flags_size + timestamp_size + expiry_size + ttl_size;
-        bytes b(bytes::initialized_later(), value_offset + value.size());
+        managed_bytes b(managed_bytes::initialized_later(), value_offset + value.size());
         b[0] = EXPIRY_FLAG | LIVE_FLAG;
         set_field(b, timestamp_offset, timestamp);
         set_field(b, expiry_offset, expiry.time_since_epoch().count());
@@ -180,8 +181,8 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
 };
 
-class atomic_cell final : public atomic_cell_base<bytes> {
-    atomic_cell(bytes b) : atomic_cell_base(std::move(b)) {}
+class atomic_cell final : public atomic_cell_base<managed_bytes> {
+    atomic_cell(managed_bytes b) : atomic_cell_base(std::move(b)) {}
 public:
     atomic_cell(const atomic_cell&) = default;
     atomic_cell(atomic_cell&&) = default;
@@ -229,10 +230,10 @@ public:
         static view from_bytes(bytes_view v) { return { v }; }
     };
     struct one {
-        bytes data;
+        managed_bytes data;
         one() {}
-        one(bytes b) : data(std::move(b)) {}
-        one(view v) : data(v.data.begin(), v.data.end()) {}
+        one(managed_bytes b) : data(std::move(b)) {}
+        one(view v) : data(v.data) {}
         operator view() const { return { data }; }
     };
 };
@@ -245,13 +246,13 @@ class serializer;
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determinied by the schema.
 class atomic_cell_or_collection final {
-    bytes _data;
+    managed_bytes _data;
 
     template<typename T>
     friend class db::serializer;
 private:
     atomic_cell_or_collection() = default;
-    atomic_cell_or_collection(bytes&& data) : _data(std::move(data)) {}
+    atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
 public:
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }

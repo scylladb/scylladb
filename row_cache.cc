@@ -7,6 +7,7 @@
 #include "core/do_with.hh"
 #include "core/future-util.hh"
 #include <seastar/core/scollectd.hh>
+#include "memtable.hh"
 
 static logging::logger logger("cache");
 
@@ -53,7 +54,9 @@ cache_tracker::setup_collectd() {
 
 void cache_tracker::clear() {
     _lru_len = 0;
-    _lru.clear_and_dispose(std::default_delete<cache_entry>());
+    with_allocator(_region.allocator(), [this] {
+        _lru.clear_and_dispose(current_deleter<cache_entry>());
+    });
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -66,6 +69,14 @@ void cache_tracker::insert(cache_entry& entry) {
     ++_misses;
     ++_lru_len;
     _lru.push_front(entry);
+}
+
+allocation_strategy& cache_tracker::allocator() {
+    return _region.allocator();
+}
+
+logalloc::region& cache_tracker::region() {
+    return _region;
 }
 
 // Reader which populates the cache using data from the delegate.
@@ -116,43 +127,51 @@ row_cache::make_reader(const query::partition_range& range) {
 }
 
 row_cache::~row_cache() {
-    _partitions.clear_and_dispose(std::default_delete<cache_entry>());
+    with_allocator(_tracker.allocator(), [this] {
+        _partitions.clear_and_dispose(current_deleter<cache_entry>());
+    });
 }
 
 void row_cache::populate(const mutation& m) {
-    populate(mutation(m));
+    with_allocator(_tracker.allocator(), [this, &m] {
+        auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
+        if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
+            cache_entry* entry = current_allocator().construct<cache_entry>(m.decorated_key(), m.partition());
+            _tracker.insert(*entry);
+            _partitions.insert(i, *entry);
+        } else {
+            _tracker.touch(*i);
+            // We cache whole partitions right now, so if cache already has this partition,
+            // it must be complete, so do nothing.
+        }
+    });
 }
 
-void row_cache::populate(mutation&& m) {
-    auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
-    if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
-        cache_entry* entry = new cache_entry(m.decorated_key(), std::move(m.partition()));
-        _tracker.insert(*entry);
-        _partitions.insert(i, *entry);
-    } else {
-        cache_entry& entry = *i;
-        _tracker.touch(entry);
-        entry.partition().apply(*m.schema(), m.partition());
-    }
-}
-
-future<> row_cache::update(mutation_reader reader) {
-    return do_with(std::move(reader), [this] (mutation_reader& r) {
-        return consume(r, [this] (mutation&& m) {
-            auto i = _partitions.find(m.decorated_key(), cache_entry::compare(_schema));
+future<> row_cache::update(memtable& m) {
+    _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
+    with_allocator(_tracker.allocator(), [this, &m] {
+        auto i = m.partitions.begin();
+        const schema& s = *m.schema();
+        while (i != m.partitions.end()) {
+            partition_entry& mem_e = *i;
+            // FIXME: Optimize knowing we lookup in-order.
+            auto cache_i = _partitions.lower_bound(mem_e.key(), cache_entry::compare(_schema));
             // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
             // FIXME: if the bloom filters say the data isn't in any sstable yet (other than the
             //        one we are caching now), we can.
             //        Alternatively, keep a bitmap indicating which sstables we do cover, so we don't have to
             //        search it.
-            if (i != _partitions.end()) {
-                cache_entry& entry = *i;
+            if (cache_i != _partitions.end() && cache_i->key().equal(s, mem_e.key())) {
+                cache_entry& entry = *cache_i;
                 _tracker.touch(entry);
-                entry.partition().apply(*m.schema(), std::move(m.partition()));
+                entry.partition().apply(s, std::move(mem_e.partition()));
             }
-            return stop_iteration::no;
-        });
+            i = m.partitions.erase(i);
+            current_allocator().destroy(&mem_e);
+        }
     });
+    // FIXME: yield voluntarily every now and then to cap latency.
+    return make_ready_future<>();
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_tracker& tracker)
@@ -161,3 +180,22 @@ row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_track
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
 { }
+
+cache_entry::cache_entry(cache_entry&& o) noexcept
+    : _key(std::move(o._key))
+    , _p(std::move(o._p))
+    , _lru_link()
+    , _cache_link()
+{
+    {
+        auto prev = o._lru_link.prev_;
+        o._lru_link.unlink();
+        cache_tracker::lru_type::node_algorithms::link_after(prev, _lru_link.this_ptr());
+    }
+
+    {
+        using container_type = row_cache::partitions_type;
+        container_type::node_algorithms::replace_node(o._cache_link.this_ptr(), _cache_link.this_ptr());
+        container_type::node_algorithms::init(o._cache_link.this_ptr());
+    }
+}

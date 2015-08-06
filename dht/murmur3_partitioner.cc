@@ -62,8 +62,8 @@ inline long long_token(const token& t) {
         throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(long), t._data.size()));
     }
 
-    auto ptr = const_cast<int8_t *>(t._data.c_str());
-    auto lp = reinterpret_cast<long *>(ptr);
+    auto ptr = t._data.begin();
+    auto lp = reinterpret_cast<const long *>(ptr);
     return net::ntoh(*lp);
 }
 

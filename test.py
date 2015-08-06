@@ -25,6 +25,7 @@ boost_tests = [
     'serializer_test',
     'test-serialization',
     'cartesian_product_test',
+    'allocation_strategy_test',
     'UUID_test',
     'compound_test',
     'murmur_hash_test',
@@ -35,6 +36,7 @@ boost_tests = [
     'network_topology_strategy_test',
     'query_processor_test',
     'batchlog_manager_test',
+    'logalloc_test',
 ]
 
 other_tests = [

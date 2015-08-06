@@ -42,7 +42,7 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
     size += sizeof(count_type);
     for (auto&& e : p.static_row()) {
         size += sizeof(column_id);
-        size += bytes_view_serializer(e.second.serialize()).size();
+        size += bytes_view_serializer(e.cell().serialize()).size();
     }
 
     // row tombstones
@@ -66,11 +66,11 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
         size += sizeof(count_type); // e.row().cells.size()
         for (auto&& cell_entry : e.row().cells()) {
             size += sizeof(column_id);
-            const column_definition& def = schema.regular_column_at(cell_entry.first);
+            const column_definition& def = schema.regular_column_at(cell_entry.id());
             if (def.is_atomic()) {
-                size += atomic_cell_view_serializer(cell_entry.second.as_atomic_cell()).size();
+                size += atomic_cell_view_serializer(cell_entry.cell().as_atomic_cell()).size();
             } else {
-                size += collection_mutation_view_serializer(cell_entry.second.as_collection_mutation()).size();
+                size += collection_mutation_view_serializer(cell_entry.cell().as_collection_mutation()).size();
             }
         }
     }
@@ -94,8 +94,8 @@ mutation_partition_serializer::write_without_framing(data_output& out) const {
     out.write<count_type>(n_static_columns);
 
     for (auto&& e : _p.static_row()) {
-        out.write(e.first);
-        bytes_view_serializer::write(out, e.second.serialize());
+        out.write(e.id());
+        bytes_view_serializer::write(out, e.cell().serialize());
     }
 
     // row tombstones
@@ -122,12 +122,12 @@ mutation_partition_serializer::write_without_framing(data_output& out) const {
         tombstone_serializer::write(out, e.row().deleted_at());
         out.write<count_type>(e.row().cells().size());
         for (auto&& cell_entry : e.row().cells()) {
-            out.write(cell_entry.first);
-            const column_definition& def = _schema.regular_column_at(cell_entry.first);
+            out.write(cell_entry.id());
+            const column_definition& def = _schema.regular_column_at(cell_entry.id());
             if (def.is_atomic()) {
-                atomic_cell_view_serializer::write(out, cell_entry.second.as_atomic_cell());
+                atomic_cell_view_serializer::write(out, cell_entry.cell().as_atomic_cell());
             } else {
-                collection_mutation_view_serializer::write(out, cell_entry.second.as_collection_mutation());
+                collection_mutation_view_serializer::write(out, cell_entry.cell().as_collection_mutation());
             }
         }
     }

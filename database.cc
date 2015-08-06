@@ -387,7 +387,7 @@ void column_family::add_memtable() {
 future<>
 column_family::update_cache(memtable& m) {
     if (_config.enable_cache) {
-       return _cache.update(m.make_reader());
+       return _cache.update(m);
     } else {
        return make_ready_future<>();
     }
@@ -395,12 +395,16 @@ column_family::update_cache(memtable& m) {
 
 future<>
 column_family::seal_active_memtable() {
+    auto old = _memtables->back();
+    dblog.debug("Sealing active memtable, partitions: {}, occupancy: {}", old->partition_count(), old->occupancy());
+
     if (!_config.enable_disk_writes) {
+       dblog.warn("Writes disabled, memtable not sealed.");
        return make_ready_future<>();
     }
 
-    auto old = _memtables->back();
     if (old->empty()) {
+        dblog.debug("Memtable is empty");
         return make_ready_future<>();
     }
     add_memtable();
@@ -423,16 +427,20 @@ column_family::seal_active_memtable() {
             sstables::sstable::version_types::la,
             sstables::sstable::format_types::big);
 
+        dblog.debug("Flushing to {}", name);
         return do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
             // FIXME: write all components
             return newtab.write_components(*old).then([name, this, &newtab, old] {
                 return newtab.load();
-            }).then([this, old] {
+            }).then([this, old, &newtab] {
+                dblog.debug("Flushing done");
+                // We must add sstable before we call update_cache(), because
+                // memtable's data after moving to cache can be evicted at any time.
+                add_sstable(std::move(newtab));
                 return update_cache(*old);
-            }).then_wrapped([name, this, &newtab, old] (future<> ret) {
+            }).then_wrapped([name, this, old] (future<> ret) {
                 try {
                     ret.get();
-                    add_sstable(std::move(newtab));
 
                     // FIXME: until the surrounding function returns a future and
                     // caller ensures ordering (i.e. finish flushing one or more sequential tables before
@@ -447,7 +455,7 @@ column_family::seal_active_memtable() {
                         _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
                     }
                     _memtables->erase(boost::range::find(*_memtables, old));
-
+                    dblog.debug("Memtable replaced");
                     trigger_compaction();
                 } catch (std::exception& e) {
                     dblog.error("failed to write sstable: {}", e.what());
@@ -1303,5 +1311,18 @@ future<> update_schema_version_and_announce(service::storage_proxy& proxy)
                 return service::get_local_migration_manager().passive_announce(uuid);
             });
         });
+    });
+}
+
+future<> column_family::flush() {
+    // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
+    // anything about previous writes.
+    _stats.pending_flushes++;
+    return seal_active_memtable().finally([this]() mutable {
+        _stats.pending_flushes--;
+        // In origin memtable_switch_count is incremented inside
+        // ColumnFamilyMeetrics Flush.run
+        _stats.memtable_switch_count++;
+        return make_ready_future<>();
     });
 }

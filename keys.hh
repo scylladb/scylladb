@@ -8,6 +8,7 @@
 #include "bytes.hh"
 #include "types.hh"
 #include "compound_compat.hh"
+#include "utils/managed_bytes.hh"
 
 //
 // This header defines type system for primary key holders.
@@ -109,9 +110,9 @@ public:
 template <typename TopLevel, typename TopLevelView>
 class compound_wrapper {
 protected:
-    bytes _bytes;
+    managed_bytes _bytes;
 protected:
-    compound_wrapper(bytes&& b) : _bytes(std::move(b)) {}
+    compound_wrapper(managed_bytes&& b) : _bytes(std::move(b)) {}
 
     static inline const auto& get_compound_type(const schema& s) {
         return TopLevel::get_compound_type(s);

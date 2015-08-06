@@ -11,13 +11,15 @@
 #include "schema.hh"
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
+#include "utils/logalloc.hh"
 
 class frozen_mutation;
 
 
 namespace bi = boost::intrusive;
 
-class partition_entry : public bi::set_base_hook<> {
+class partition_entry {
+    bi::set_member_hook<> _link;
     dht::decorated_key _key;
     mutation_partition _p;
 public:
@@ -27,6 +29,8 @@ public:
         : _key(std::move(key))
         , _p(std::move(p))
     { }
+
+    partition_entry(partition_entry&& o) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
     const mutation_partition& partition() const { return _p; }
@@ -64,16 +68,18 @@ public:
 // Managed by lw_shared_ptr<>.
 class memtable final : public enable_lw_shared_from_this<memtable> {
 public:
-    using partitions_type = bi::set<partition_entry, bi::compare<partition_entry::compare>>;
+    using partitions_type = bi::set<partition_entry,
+        bi::member_hook<partition_entry, bi::set_member_hook<>, &partition_entry::_link>,
+        bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
     partitions_type partitions;
     db::replay_position _replay_position;
+    logalloc::region _region;
     void update(const db::replay_position&);
+    friend class row_cache;
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
-public:
-    using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
 public:
     explicit memtable(schema_ptr schema);
     ~memtable();
@@ -81,11 +87,11 @@ public:
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(partition_key_view key);
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
-    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
 public:
-    const partitions_type& all_partitions() const;
+    size_t partition_count() const;
+    logalloc::occupancy_stats occupancy() const;
 
     // Creates a reader of data in this memtable for given partition range.
     //
@@ -101,4 +107,6 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
+
+    friend class scanning_reader;
 };
