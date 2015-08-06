@@ -258,48 +258,36 @@ void set_column_family(http_context& ctx, routes& r) {
         return map_cf_stats(ctx, &column_family::stats::writes);
     });
 
-    cf::get_pending_compactions.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_pending_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, req->param["name"], &column_family::stats::pending_compactions);
     });
 
-    cf::get_all_pending_compactions.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_pending_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::pending_compactions);
     });
 
-    cf::get_live_ss_table_count.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, req->param["name"], &column_family::stats::live_sstable_count);
     });
 
-    cf::get_all_live_ss_table_count.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::live_sstable_count);
     });
 
-    cf::get_live_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, req->param["name"], &column_family::stats::live_disk_space_used);
     });
 
-    cf::get_all_live_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
     });
 
-    cf::get_total_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, req->param["name"], &column_family::stats::total_disk_space_used);
     });
 
-    cf::get_all_total_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::total_disk_space_used);
     });
 
     cf::get_min_row_size.set(r, [] (std::unique_ptr<request> req) {
