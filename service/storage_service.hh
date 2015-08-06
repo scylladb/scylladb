@@ -325,37 +325,9 @@ public:
             throw new IllegalStateException("No configured daemon");
         daemon.deactivate();
     }
-
-    public synchronized Collection<Token> prepareReplacementInfo() throws ConfigurationException
-    {
-        logger.info("Gathering node replacement information for {}", DatabaseDescriptor.getReplaceAddress());
-        if (!MessagingService.instance().isListening())
-            MessagingService.instance().listen(FBUtilities.getLocalAddress());
-
-        // make magic happen
-        Gossiper.instance.doShadowRound();
-
-        UUID hostId = null;
-        // now that we've gossiped at least once, we should be able to find the node we're replacing
-        if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress())== null)
-            throw new RuntimeException("Cannot replace_address " + DatabaseDescriptor.getReplaceAddress() + " because it doesn't exist in gossip");
-        hostId = Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress());
-        try
-        {
-            if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()).getApplicationState(ApplicationState.TOKENS) == null)
-                throw new RuntimeException("Could not find tokens for " + DatabaseDescriptor.getReplaceAddress() + " to replace");
-            Collection<Token> tokens = TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(get_application_state_value(DatabaseDescriptor.getReplaceAddress(), ApplicationState.TOKENS))));
-
-            SystemKeyspace.setLocalHostId(hostId); // use the replacee's host Id as our own so we receive hints, etc
-            Gossiper.instance.resetEndpointStateMap(); // clean up since we have what we need
-            return tokens;
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
 #endif
+public:
+    std::unordered_set<token> prepare_replacement_info();
 
     future<> check_for_endpoint_collision();
 #if 0
