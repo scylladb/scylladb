@@ -14,5 +14,5 @@ BOOST_AUTO_TEST_CASE(test_standrard_allocator_respects_alignment) {
     struct alignas(alignment) A {};
     auto m = make_managed<A>();
     auto addr = reinterpret_cast<uintptr_t>(&*m);
-    BOOST_REQUIRE((addr & alignment) == 0);
+    BOOST_REQUIRE((addr & (alignment - 1)) == 0);
 }
