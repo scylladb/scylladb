@@ -13,6 +13,7 @@
 #include "to_string.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/thread.hh>
+#include <sstream>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -180,8 +181,8 @@ future<> storage_service::join_token_ring(int delay) {
             logger.warn("Detected previous bootstrap failure; retrying");
         else
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
-        setMode(Mode.JOINING, "waiting for ring information", true);
 #endif
+        set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see all our peers
         for (int i = 0; i < delay; i += 1000) {
             // if we see schema, we can proceed to the next check directly
@@ -198,14 +199,14 @@ future<> storage_service::join_token_ring(int delay) {
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
         while (!MigrationManager.isReadyForBootstrap())
         {
-            setMode(Mode.JOINING, "waiting for schema information to complete", true);
+            set_mode(mode::JOINING, "waiting for schema information to complete", true);
             Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
         }
-        setMode(Mode.JOINING, "schema complete, ready to bootstrap", true);
-        setMode(Mode.JOINING, "waiting for pending range calculation", true);
-        PendingRangeCalculatorService.instance.blockUntilFinished();
-        setMode(Mode.JOINING, "calculation complete, ready to bootstrap", true);
 #endif
+        set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
+        set_mode(mode::JOINING, "waiting for pending range calculation", true);
+        //PendingRangeCalculatorService.instance.blockUntilFinished();
+        set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 #if 0
         if (Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")) &&
@@ -221,7 +222,7 @@ future<> storage_service::join_token_ring(int delay) {
             if (_token_metadata.is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
-            // setMode(Mode.JOINING, "getting bootstrap token", true);
+            set_mode(mode::JOINING, "getting bootstrap token", true);
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
         } else {
             auto replace_addr = get_replace_address();
@@ -249,7 +250,9 @@ future<> storage_service::join_token_ring(int delay) {
             } else {
                 sleep(std::chrono::milliseconds(RING_DELAY)).get();
             }
-            //setMode(Mode.JOINING, "Replacing a node with token(s): " + _bootstrap_tokens, true);
+            std::stringstream ss;
+            ss << _bootstrap_tokens;
+            set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
         }
         bootstrap(_bootstrap_tokens).get();
         // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
@@ -354,7 +357,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
             gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
             sleep_time = std::chrono::milliseconds(RING_DELAY);
-            // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
+            set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", RING_DELAY), true);
         } else {
             // Dont set any state for the node which is bootstrapping the existing token...
             _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
@@ -365,7 +368,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             if (!gossiper.seen_any_seed()) {
                  throw std::runtime_error("Unable to contact any seeds!");
             }
-            this->set_mode(Mode::JOINING, "Starting to bootstrap...", true);
+            this->set_mode(mode::JOINING, "Starting to bootstrap...", true);
             // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
             logger.info("Bootstrap completed! for the tokens {}", tokens);
             return make_ready_future<>();
@@ -814,7 +817,7 @@ future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
         auto& gossiper = gms::get_local_gossiper();
         gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
         gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
-        //setMode(Mode.NORMAL, false);
+        set_mode(mode::NORMAL, false);
         replicate_to_all_cores();
     });
 }
