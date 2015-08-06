@@ -360,12 +360,12 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
             _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
-        return sleep(sleep_time).then([tokens = std::move(tokens)] {
+        return sleep(sleep_time).then([this, tokens = std::move(tokens)] {
             auto& gossiper = gms::get_local_gossiper();
             if (!gossiper.seen_any_seed()) {
                  throw std::runtime_error("Unable to contact any seeds!");
             }
-            // setMode(Mode.JOINING, "Starting to bootstrap...", true);
+            this->set_mode(Mode::JOINING, "Starting to bootstrap...", true);
             // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
             logger.info("Bootstrap completed! for the tokens {}", tokens);
             return make_ready_future<>();
@@ -1060,5 +1060,33 @@ std::unordered_set<token> storage_service::prepare_replacement_info() {
 #endif
 }
 
+static const std::map<storage_service::mode, sstring> mode_names = {
+    {storage_service::mode::STARTING,       "STARTING"},
+    {storage_service::mode::NORMAL,         "NORMAL"},
+    {storage_service::mode::JOINING,        "JOINING"},
+    {storage_service::mode::LEAVING,        "LEAVING"},
+    {storage_service::mode::DECOMMISSIONED, "DECOMMISSIONED"},
+    {storage_service::mode::MOVING,         "MOVING"},
+    {storage_service::mode::DRAINING,       "DRAINING"},
+    {storage_service::mode::DRAINED,        "DRAINED"},
+};
+
+std::ostream& operator<<(std::ostream& os, const storage_service::mode& m) {
+    os << mode_names.at(m);
+    return os;
+}
+
+void storage_service::set_mode(mode m, bool log) {
+    set_mode(m, "", log);
+}
+
+void storage_service::set_mode(mode m, sstring msg, bool log) {
+    _operation_mode = m;
+    if (log) {
+        logger.info("{}: {}", m, msg);
+    } else {
+        logger.debug("{}: {}", m, msg);
+    }
+}
 
 } // namespace service

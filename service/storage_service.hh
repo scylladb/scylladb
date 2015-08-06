@@ -139,12 +139,14 @@ private:
 
     bool _joined = false;
 
+public:
+    enum class mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED };
+private:
+    mode _operation_mode = mode::STARTING;
+    friend std::ostream& operator<<(std::ostream& os, const mode& mode);
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
     private double traceProbability = 0.0;
-
-    private static enum Mode { STARTING, NORMAL, JOINING, LEAVING, DECOMMISSIONED, MOVING, DRAINING, DRAINED }
-    private Mode operationMode = Mode.STARTING;
 
     /* Used for tracking drain progress */
     private volatile int totalCFs, remainingCFs;
@@ -427,23 +429,12 @@ public:
     {
         DatabaseDescriptor.setIncrementalBackupsEnabled(value);
     }
-
-    private void setMode(Mode m, boolean log)
-    {
-        setMode(m, null, log);
-    }
-
-    private void setMode(Mode m, String msg, boolean log)
-    {
-        operationMode = m;
-        String logMsg = msg == null ? m.toString() : String.format("%s: %s", m, msg);
-        if (log)
-            logger.info(logMsg);
-        else
-            logger.debug(logMsg);
-    }
 #endif
 
+private:
+    void set_mode(mode m, bool log);
+    void set_mode(mode m, sstring msg, bool log);
+public:
     future<> bootstrap(std::unordered_set<token> tokens);
 
     bool is_bootstrap_mode() {
