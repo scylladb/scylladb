@@ -210,7 +210,7 @@ class thrift_schema {
     bool _compound = true;
 public:
     bool has_compound_comparator() const;
-    friend class schema_builder;
+    friend class schema;
 };
 
 bool operator==(const column_definition&, const column_definition&);

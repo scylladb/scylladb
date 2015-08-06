@@ -76,6 +76,8 @@ schema::schema(const raw_schema& raw)
         }
     };
 
+    thrift()._compound = is_compound();
+
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
             _raw._columns.begin()
@@ -354,7 +356,7 @@ schema_ptr schema_builder::build(compact_storage cp) {
             s._raw._is_compound = true;
         }
     }
-    s._thrift._compound = s._raw._is_compound;
+
     if (s._raw._is_dense) {
         // In Origin, dense CFs always have at least one regular column
         if (s.regular_columns_count() == 0) {
