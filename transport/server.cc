@@ -1246,7 +1246,7 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
 
 void cql_server::response::write_byte(uint8_t b)
 {
-    _body.insert(_body.end(), b, 1);
+    _body.insert(_body.end(), b);
 }
 
 void cql_server::response::write_int(int32_t n)
