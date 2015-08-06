@@ -82,12 +82,12 @@ struct segment {
 
     uint8_t data[size];
 
-    template<typename T>
+    template<typename T = void>
     const T* at(size_t offset) const {
         return reinterpret_cast<const T*>(data + offset);
     }
 
-    template<typename T>
+    template<typename T = void>
     T* at(size_t offset) {
         return reinterpret_cast<T*>(data + offset);
     }
@@ -416,10 +416,10 @@ private:
         auto descriptor_offset = obj_offset - sizeof(object_descriptor);
         auto padding = descriptor_offset - _active_offset;
 
-        new (_active->data + _active_offset) obj_flags(obj_flags::make_padding(padding));
-        new (_active->data + descriptor_offset) object_descriptor(migrator, size, alignment, padding);
+        new (_active->at(_active_offset)) obj_flags(obj_flags::make_padding(padding));
+        new (_active->at(descriptor_offset)) object_descriptor(migrator, size, alignment, padding);
 
-        void* obj = _active->data + obj_offset;
+        void* obj = _active->at(obj_offset);
         _active_offset = obj_offset + size;
         _active->record_alloc(size + sizeof(object_descriptor) + padding);
         return obj;
@@ -439,7 +439,7 @@ private:
             }
             offset += sizeof(object_descriptor);
             if (desc->is_live()) {
-                func(desc, reinterpret_cast<void*>(seg->data + offset));
+                func(desc, seg->at(offset));
             }
             offset += desc->size();
         }
@@ -450,7 +450,7 @@ private:
             return;
         }
         if (_active_offset < segment::size) {
-            new (_active->data + _active_offset) obj_flags(obj_flags::make_end_of_segment());
+            new (_active->at(_active_offset)) obj_flags(obj_flags::make_end_of_segment());
         }
         logger.debug("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
