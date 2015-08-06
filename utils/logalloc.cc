@@ -720,9 +720,7 @@ uint64_t tracker::impl::reclaim(uint64_t bytes) {
 
     uint64_t in_use = shard_segment_pool.segments_in_use();
 
-    auto target = in_use >= segments_to_release
-                  ? (in_use - segments_to_release)
-                  : in_use;
+    auto target = in_use - std::min(segments_to_release, in_use);
 
     logger.debug("Compacting, {} segments in use ({} B), trying to release {} ({} B).",
         in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
