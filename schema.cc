@@ -8,6 +8,7 @@
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include "version.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -388,6 +389,11 @@ namespace cell_comparator {
 static constexpr auto _composite_str = "org.apache.cassandra.db.marshal.CompositeType";
 static constexpr auto _collection_str = "org.apache.cassandra.db.marshal.ColumnToCollectionType";
 
+static bool always_include_default() {
+    static thread_local bool def = version::version::current() < version::version(2, 2);
+    return def;
+};
+
 static sstring collection_name(const collection_type& t) {
     sstring collection_str(_collection_str);
     collection_str += "(00000000:" + t->name() + ")";
@@ -402,7 +408,8 @@ static sstring compound_name(const schema& s) {
         for (auto &t : s.clustering_key_columns()) {
             compound += t.type->name() + ",";
         }
-    } else {
+    }
+    if (always_include_default() || (s.clustering_key_size() == 0)) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
