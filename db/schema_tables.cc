@@ -1060,9 +1060,7 @@ future<> save_system_keyspace_schema() {
         }
 
         m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
-#if 0
-        adder.add("caching", table.getCaching().toString());
-#endif
+        m.set_clustered_cell(ckey, "caching", table->caching_options().to_sstring(), timestamp);
         m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
 
         m.set_clustered_cell(ckey, "compaction_strategy_class", sstables::compaction_strategy::name(table->compaction_strategy()), timestamp);
@@ -1350,9 +1348,11 @@ future<> save_system_keyspace_schema() {
         if (table_row.has("memtable_flush_period_in_ms")) {
             builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
         }
-#if 0
-        cfm.caching(CachingOptions.fromString(result.getString("caching")));
-#endif
+
+        if (table_row.has("caching")) {
+            builder.set_caching_options(caching_options::from_sstring(table_row.get_nonnull<sstring>("caching")));
+        }
+
         if (table_row.has("default_time_to_live")) {
             builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<gc_clock::rep>("default_time_to_live")));
         }
