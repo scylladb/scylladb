@@ -124,6 +124,25 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     }
 }
 
+sstring to_string(const transport::event::topology_change::change_type t) {
+    using type = transport::event::topology_change::change_type;
+    switch (t) {
+    case type::NEW_NODE:     return "NEW_NODE";
+    case type::REMOVED_NODE: return "REMOVED_NODE";
+    case type::MOVED_NODE:   return "MOVED_NODE";
+    }
+    throw std::invalid_argument("unknown change type");
+}
+
+sstring to_string(const transport::event::status_change::status_type t) {
+    using type = transport::event::status_change::status_type;
+    switch (t) {
+    case type::UP:   return "NEW_NODE";
+    case type::DOWN: return "REMOVED_NODE";
+    }
+    throw std::invalid_argument("unknown change type");
+}
+
 sstring to_string(const transport::event::schema_change::change_type t) {
     switch (t) {
     case transport::event::schema_change::change_type::CREATED: return "CREATED";
@@ -220,6 +239,8 @@ private:
     future<> write_ready(int16_t stream);
     future<> write_supported(int16_t stream);
     future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
+    future<> write_topology_change_event(const transport::event::topology_change& event);
+    future<> write_status_change_event(const transport::event::status_change& event);
     future<> write_schema_change_event(const transport::event::schema_change& event);
     future<> write_response(shared_ptr<cql_server::response> response);
 
@@ -915,6 +936,24 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
     fmt_visitor fmt{_version, response};
     msg->accept(fmt);
+    return write_response(response);
+}
+
+future<> cql_server::connection::write_topology_change_event(const transport::event::topology_change& event)
+{
+    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
+    response->write_string("TOPOLOGY_CHANGE");
+    response->write_string(to_string(event.change));
+    response->write_inet(event.node);
+    return write_response(response);
+}
+
+future<> cql_server::connection::write_status_change_event(const transport::event::status_change& event)
+{
+    auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
+    response->write_string("STATUS_CHANGE");
+    response->write_string(to_string(event.status));
+    response->write_inet(event.node);
     return write_response(response);
 }
 
