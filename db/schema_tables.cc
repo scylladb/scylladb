@@ -130,7 +130,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "table definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return columnfamilies;
 }
@@ -159,7 +159,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "column definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return columns;
 }
@@ -183,7 +183,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "trigger definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return triggers;
 }
@@ -208,7 +208,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return usertypes;
 }
@@ -237,7 +237,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return functions;
 }
@@ -266,7 +266,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined aggregate definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return aggregates;
 }

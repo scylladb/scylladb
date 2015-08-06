@@ -96,7 +96,7 @@ public:
         return _db->invoke_on_all([schema_maker, id, this] (database& db) {
             schema_builder builder(make_lw_shared(schema_maker(ks_name)));
             builder.set_uuid(id);
-            auto cf_schema = builder.build();
+            auto cf_schema = builder.build(schema_builder::compact_storage::no);
             auto& ks = db.find_keyspace(ks_name);
             auto cfg = ks.make_column_family_config(*cf_schema);
             db.add_column_family(std::move(cf_schema), std::move(cfg));

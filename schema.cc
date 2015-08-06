@@ -336,6 +336,10 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
+schema_ptr schema_builder::build() {
+    return make_lw_shared<schema>(schema(_raw));
+}
+
 schema_ptr schema_builder::build(compact_storage cp) {
     schema s(_raw);
 

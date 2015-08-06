@@ -900,7 +900,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         // NOTE: set a given compressor algorithm to schema.
         schema_builder builder(complex_schema());
         builder.set_compressor_params(c);
-        auto s = builder.build();
+        auto s = builder.build(schema_builder::compact_storage::no);
 
         auto mtp = make_lw_shared<memtable>(s);
 
