@@ -192,11 +192,11 @@ public:
     }
 };
 
-future<> init_once() {
+future<> init_once(distributed<database>& db) {
     static bool done = false;
     if (!done) {
         done = true;
-        return init_storage_service().then([] {
+        return init_storage_service(db).then([] {
             return init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
         });
     } else {
@@ -206,9 +206,9 @@ future<> init_once() {
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
-        return init_once().then([] {
-            return seastar::async([] {
-                auto db = ::make_shared<distributed<database>>();
+        auto db = ::make_shared<distributed<database>>();
+        return init_once(*db).then([db] {
+            return seastar::async([db] {
                 auto cfg = make_lw_shared<db::config>();
                 cfg->data_file_directories() = {"."};
                 db->start(std::move(*cfg)).get();

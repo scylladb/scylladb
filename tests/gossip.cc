@@ -11,15 +11,16 @@
 namespace bpo = boost::program_options;
 
 int main(int ac, char ** av) {
+    distributed<database> db;
     app_template app;
     app.add_options()
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
-    return app.run(ac, av, [&app] {
+    return app.run(ac, av, [&db, &app] {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        service::init_storage_service().then([listen, config] {
+        service::init_storage_service(db).then([listen, config] {
             return net::get_messaging_service().start(listen);
         }).then([config] {
             auto& server = net::get_local_messaging_service();

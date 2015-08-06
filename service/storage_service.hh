@@ -34,6 +34,8 @@
 #include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
+#include "database.hh"
+#include <seastar/core/distributed.hh>
 
 namespace service {
 
@@ -57,7 +59,11 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
+    distributed<database>& _db;
 public:
+    storage_service(distributed<database>& db)
+        : _db(db) {
+    }
     static int RING_DELAY; // delay after which we assume ring has stablized
 
     // Needed by distributed<>
@@ -3273,8 +3279,8 @@ inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
     });
 }
 
-inline future<> init_storage_service() {
-    return service::get_storage_service().start().then([] {
+inline future<> init_storage_service(distributed<database>& db) {
+    return service::get_storage_service().start(std::ref(db)).then([] {
         print("Start Storage service ...\n");
     });
 }
