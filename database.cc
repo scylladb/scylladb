@@ -250,13 +250,15 @@ class lister {
     std::function<future<> (directory_entry de)> _walker;
     directory_entry_type _expected_type;
     subscription<directory_entry> _listing;
+    sstring _dirname;
 
 public:
-    lister(file f, directory_entry_type type, std::function<future<> (directory_entry)> walker)
+    lister(file f, directory_entry_type type, std::function<future<> (directory_entry)> walker, sstring dirname)
             : _f(std::move(f))
             , _walker(std::move(walker))
             , _expected_type(type)
-            , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); })) {
+            , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
+            , _dirname(dirname) {
     }
 
     static future<> scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker);
@@ -278,7 +280,8 @@ private:
         if (de.type) {
             return make_ready_future<directory_entry>(std::move(de));
         } else {
-            return engine().file_type(de.name).then([de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
+            auto f = engine().file_type(_dirname + "/" + de.name);
+            return f.then([de = std::move(de)] (std::experimental::optional<directory_entry_type> t) mutable {
                 de.type = t;
                 return make_ready_future<directory_entry>(std::move(de));
             });
@@ -289,8 +292,8 @@ private:
 
 future<> lister::scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker) {
 
-    return engine().open_directory(name).then([type, walker = std::move(walker)] (file f) {
-        auto l = make_lw_shared<lister>(std::move(f), type, walker);
+    return engine().open_directory(name).then([type, walker = std::move(walker), name] (file f) {
+        auto l = make_lw_shared<lister>(std::move(f), type, walker, name);
         return l->done().then([l] { });
     });
 }
