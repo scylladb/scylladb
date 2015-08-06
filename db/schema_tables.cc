@@ -599,19 +599,27 @@ future<> save_system_keyspace_schema() {
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-            return do_for_each(created, [&proxy] (auto&& val) {
-                auto make_ksm = [val] () {
-                    return create_keyspace_from_schema_partition(val);
-                };
-                return database::create_keyspace_on_all(proxy.get_db(), make_ksm);
-            }).then([&proxy, &altered] () mutable {
-                return proxy.get_db().invoke_on_all([&proxy, altered = std::move(altered)] (database& db) {
+            return proxy.get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
+                return do_for_each(created, [&db] (auto&& val) {
+                    auto ksm = create_keyspace_from_schema_partition(val);
+                    return db.create_keyspace(std::move(ksm));
+                }).then([&altered, &db] () mutable {
                     for (auto&& name : altered) {
                         db.update_keyspace(name);
                     }
 
                     return make_ready_future<>();
                 });
+            }).then([&created] {
+                // FIXME: clean this up by reorganizing the code
+                // Send CQL events only once, not once per shard.
+                if (engine().cpu_id() == 0) {
+                    for (auto&& partition : created) {
+                        auto ksm = create_keyspace_from_schema_partition(partition);
+                        return service::migration_manager::notify_create_keyspace(ksm);
+                    }
+                }
+                return make_ready_future<>();
             });
         }).then([dropped = std::move(dropped)] () {
             return make_ready_future<std::set<sstring>>(dropped);

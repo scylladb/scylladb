@@ -1004,15 +1004,6 @@ void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>&
 }
 
 future<>
-database::create_keyspace_on_all(seastar::sharded<database>& db, std::function<lw_shared_ptr<keyspace_metadata>()>&& make_ksm) {
-    return db.invoke_on_all([make_ksm] (auto&& db) {
-        return db.create_keyspace(std::move(make_ksm()));
-    }).then([make_ksm] () {
-        return service::migration_manager::notify_create_keyspace(std::move(make_ksm()));
-    });
-}
-
-future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     auto i = _keyspaces.find(ksm->name());
     if (i != _keyspaces.end()) {
