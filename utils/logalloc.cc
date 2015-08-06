@@ -148,7 +148,7 @@ segment_pool::descriptor(const segment* seg) {
 
 segment*
 segment_pool::new_segment() {
-    auto seg = new (with_alignment(segment::size)) segment();
+    auto seg = new (with_alignment(segment::size)) segment;
 
     // segment_pool::descriptor() is relying on segment alignment
     auto seg_addr = reinterpret_cast<uintptr_t>(seg);
@@ -186,7 +186,7 @@ class segment_pool {
 public:
     segment* new_segment() {
         ++_segments_in_use;
-        auto seg = new (with_alignment(segment::size)) segment();
+        auto seg = new (with_alignment(segment::size)) segment;
         assert((reinterpret_cast<uintptr_t>(seg) & (sizeof(segment) - 1)) == 0);
         segment_descriptor& desc = _segments[seg];
         desc._lsa_managed = true;
