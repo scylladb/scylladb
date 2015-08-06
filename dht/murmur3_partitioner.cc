@@ -63,7 +63,7 @@ inline long long_token(const token& t) {
     }
 
     auto ptr = t._data.begin();
-    auto lp = reinterpret_cast<const long *>(ptr);
+    auto lp = unaligned_cast<const long *>(ptr);
     return net::ntoh(*lp);
 }
 
