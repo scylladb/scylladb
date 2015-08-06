@@ -50,85 +50,85 @@ public:
     class schema_change;
 };
 
-    class event::topology_change : public event {
-    public:
-        enum class change_type { NEW_NODE, REMOVED_NODE, MOVED_NODE };
+class event::topology_change : public event {
+public:
+    enum class change_type { NEW_NODE, REMOVED_NODE, MOVED_NODE };
 
-        const change_type change;
-        const ipv4_addr node;
+    const change_type change;
+    const ipv4_addr node;
 
-        topology_change(change_type change, const ipv4_addr& node)
-            : event{event_type::TOPOLOGY_CHANGE}
-            , change{change}
-            , node{node}
-        { }
+    topology_change(change_type change, const ipv4_addr& node)
+        : event{event_type::TOPOLOGY_CHANGE}
+        , change{change}
+        , node{node}
+    { }
 
-        static topology_change new_node(const gms::inet_address& host, uint16_t port)
-        {
-            return topology_change{change_type::NEW_NODE, ipv4_addr{host.raw_addr(), port}};
-        }
+    static topology_change new_node(const gms::inet_address& host, uint16_t port)
+    {
+        return topology_change{change_type::NEW_NODE, ipv4_addr{host.raw_addr(), port}};
+    }
 
-        static topology_change removed_node(const gms::inet_address& host, uint16_t port)
-        {
-            return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
-        }
+    static topology_change removed_node(const gms::inet_address& host, uint16_t port)
+    {
+        return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
+    }
 
-        static topology_change moved_node(const gms::inet_address& host, uint16_t port)
-        {
-            return topology_change{change_type::MOVED_NODE, ipv4_addr{host.raw_addr(), port}};
-        }
-    };
+    static topology_change moved_node(const gms::inet_address& host, uint16_t port)
+    {
+        return topology_change{change_type::MOVED_NODE, ipv4_addr{host.raw_addr(), port}};
+    }
+};
 
-    class event::status_change : public event {
-    public:
-        enum class status_type { UP, DOWN };
+class event::status_change : public event {
+public:
+    enum class status_type { UP, DOWN };
 
-        const status_type status;
-        const ipv4_addr node;
+    const status_type status;
+    const ipv4_addr node;
 
-        status_change(status_type status, const ipv4_addr& node)
-            : event{event_type::STATUS_CHANGE}
-            , status{status}
-            , node{node}
-        { }
+    status_change(status_type status, const ipv4_addr& node)
+        : event{event_type::STATUS_CHANGE}
+        , status{status}
+        , node{node}
+    { }
 
-        static status_change node_up(const gms::inet_address& host, uint16_t port)
-        {
-            return status_change{status_type::UP, ipv4_addr{host.raw_addr(), port}};
-        }
+    static status_change node_up(const gms::inet_address& host, uint16_t port)
+    {
+        return status_change{status_type::UP, ipv4_addr{host.raw_addr(), port}};
+    }
 
-        static status_change node_down(const gms::inet_address& host, uint16_t port)
-        {
-            return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
-        }
-    };
+    static status_change node_down(const gms::inet_address& host, uint16_t port)
+    {
+        return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
+    }
+};
 
-    class event::schema_change : public event {
-    public:
-        enum class change_type { CREATED, UPDATED, DROPPED };
-        enum class target_type { KEYSPACE, TABLE, TYPE };
+class event::schema_change : public event {
+public:
+    enum class change_type { CREATED, UPDATED, DROPPED };
+    enum class target_type { KEYSPACE, TABLE, TYPE };
 
-        const change_type change;
-        const target_type target;
-        const sstring keyspace;
-        const std::experimental::optional<sstring> table_or_type_or_function;
+    const change_type change;
+    const target_type target;
+    const sstring keyspace;
+    const std::experimental::optional<sstring> table_or_type_or_function;
 
-        schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_)
-            : event{event_type::SCHEMA_CHANGE}
-            , change{change_}
-            , target{target_}
-            , keyspace{keyspace_}
-            , table_or_type_or_function{table_or_type_or_function_}
-        {
+    schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_)
+        : event{event_type::SCHEMA_CHANGE}
+        , change{change_}
+        , target{target_}
+        , keyspace{keyspace_}
+        , table_or_type_or_function{table_or_type_or_function_}
+    {
 #if 0
-            if (target != Target.KEYSPACE)
-                assert this.tableOrTypeOrFunction != null : "Table or type should be set for non-keyspace schema change events";
+        if (target != Target.KEYSPACE)
+            assert this.tableOrTypeOrFunction != null : "Table or type should be set for non-keyspace schema change events";
 #endif
-        }
+    }
 
-        schema_change(const change_type change_, const sstring keyspace_)
-            : schema_change{change_, target_type::KEYSPACE, keyspace_, std::experimental::optional<sstring>{}}
-        { }
-    };
+    schema_change(const change_type change_, const sstring keyspace_)
+        : schema_change{change_, target_type::KEYSPACE, keyspace_, std::experimental::optional<sstring>{}}
+    { }
+};
 
 }
