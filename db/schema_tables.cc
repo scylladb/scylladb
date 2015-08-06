@@ -1423,7 +1423,7 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
         m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
         if (!column.is_on_all_components()) {
-            m.set_clustered_cell(ckey, "component_index", int32_t(column.position()), timestamp);
+            m.set_clustered_cell(ckey, "component_index", int32_t(table->position(column)), timestamp);
         }
 #if 0
         adder.add("index_name", column.getIndexName());
