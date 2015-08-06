@@ -113,6 +113,10 @@ schema::schema(const raw_schema& raw)
                 // Which is true of #pk == 1
                 def._thrift_bits.is_on_all_components = partition_key_size() == 1;
                 break;
+            case column_kind::compact_column:
+                // compact values are alone, so they have no index
+                def._thrift_bits.is_on_all_components = true;
+                break;
             default:
                 // Or any other column where "comparator" is not compound
                 def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();
