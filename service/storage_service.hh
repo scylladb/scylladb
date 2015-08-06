@@ -23,6 +23,7 @@
 #pragma once
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
 #include "utils/UUID_gen.hh"
@@ -158,9 +159,11 @@ private:
     private volatile int totalCFs, remainingCFs;
 
     private static final AtomicInteger nextRepairCommand = new AtomicInteger();
+#endif
 
-    private final List<IEndpointLifecycleSubscriber> lifecycleSubscribers = new CopyOnWriteArrayList<>();
+    std::vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
 
+#if 0
     private static final BackgroundActivityMonitor bgMonitor = new BackgroundActivityMonitor();
 
     private final ObjectName jmxObjectName;
@@ -182,17 +185,13 @@ public:
     {
         this.daemon = daemon;
     }
+#endif
 
-    public void register(IEndpointLifecycleSubscriber subscriber)
-    {
-        lifecycleSubscribers.add(subscriber);
-    }
+    void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
-    public void unregister(IEndpointLifecycleSubscriber subscriber)
-    {
-        lifecycleSubscribers.remove(subscriber);
-    }
+    void unregister_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
+#if 0
     // should only be called via JMX
     public void stopGossiping()
     {
