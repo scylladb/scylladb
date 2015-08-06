@@ -6,6 +6,7 @@
 
 #include <bits/unique_ptr.h>
 #include <seastar/core/scollectd.hh>
+#include <seastar/core/memory.hh>
 #include "allocation_strategy.hh"
 
 namespace logalloc {
@@ -18,6 +19,7 @@ public:
     class impl;
 private:
     std::unique_ptr<impl> _impl;
+    memory::reclaimer _reclaimer;
     friend class region;
 public:
     tracker();

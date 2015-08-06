@@ -42,6 +42,9 @@ public:
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
+    , _reclaimer([this] {
+        reclaim(10*1024*1024);
+    })
 { }
 
 tracker::~tracker() {
