@@ -3167,6 +3167,16 @@ public:
 
 mutation_reader
 storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range& range) {
+    // Split ranges which wrap around, because the individual readers created
+    // by shard_reader do not support them:
+    auto schema = _db.local().find_column_family(cf_id).schema();
+    if (range.is_wrap_around(dht::ring_position_comparator(*schema))) {
+        auto unwrapped = range.unwrap();
+        return make_joining_reader({
+            make_local_reader(cf_id, unwrapped.second),
+            make_local_reader(cf_id, unwrapped.first)});
+    }
+
     unsigned first_shard = range.start() ? dht::shard_of(range.start()->value().token()) : 0;
     unsigned last_shard = range.end() ? dht::shard_of(range.end()->value().token()) : smp::count - 1;
     std::vector<mutation_reader> readers;
