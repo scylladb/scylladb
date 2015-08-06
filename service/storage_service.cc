@@ -186,12 +186,10 @@ future<> storage_service::join_token_ring(int delay) {
         // first sleep the delay to make sure we see all our peers
         for (int i = 0; i < delay; i += 1000) {
             // if we see schema, we can proceed to the next check directly
-#if 0
-            if (!Schema.instance.getVersion().equals(Schema.emptyVersion)) {
-                logger.debug("got schema: {}", Schema.instance.getVersion());
+            if (_db.local().get_version() != database::empty_version) {
+                logger.debug("got schema: {}", _db.local().get_version());
                 break;
             }
-#endif
             sleep(std::chrono::seconds(1)).get();
         }
 #if 0
