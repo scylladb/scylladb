@@ -25,6 +25,7 @@ boost_tests = [
     'serializer_test',
     'test-serialization',
     'cartesian_product_test',
+    'allocation_strategy_test',
     'UUID_test',
     'compound_test',
     'murmur_hash_test',

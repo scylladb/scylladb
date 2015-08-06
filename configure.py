@@ -148,6 +148,7 @@ urchin_tests = [
     'tests/bytes_ostream_test',
     'tests/UUID_test',
     'tests/murmur_hash_test',
+    'tests/allocation_strategy_test',
 ]
 
 apps = [
@@ -393,6 +394,7 @@ deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
 deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
+deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
