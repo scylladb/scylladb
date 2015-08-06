@@ -15,9 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.service;
 
-import java.net.InetAddress;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "gms/inet_address.hh"
+
+namespace service {
 
 /**
  * Interface on which interested parties can be notified of high level endpoint
@@ -27,41 +36,46 @@ import java.net.InetAddress;
  * changes (IEndpointStateChangeSubscriber.onJoin() is called when a node join
  * gossip), this interface allows to be notified about higher level events.
  */
-public interface IEndpointLifecycleSubscriber
-{
+class endpoint_lifecycle_subscriber {
+public:
+    virtual ~endpoint_lifecycle_subscriber()
+    { }
+
     /**
      * Called when a new node joins the cluster, i.e. either has just been
      * bootstrapped or "instajoins".
      *
      * @param endpoint the newly added endpoint.
      */
-    public void onJoinCluster(InetAddress endpoint);
+    virtual void on_join_cluster(const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a new node leave the cluster (decommission or removeToken).
      *
      * @param endpoint the endpoint that is leaving.
      */
-    public void onLeaveCluster(InetAddress endpoint);
+    virtual void on_leave_cluster(const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a node is marked UP.
      *
      * @param endpoint the endpoint marked UP.
      */
-    public void onUp(InetAddress endpoint);
+    virtual void on_up(const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a node is marked DOWN.
      *
      * @param endpoint the endpoint marked DOWN.
      */
-    public void onDown(InetAddress endpoint);
+    virtual void on_down(const gms::inet_address& endpoint) = 0;
 
     /**
      * Called when a node has moved (to a new token).
      *
      * @param endpoint the endpoint that has moved.
      */
-    public void onMove(InetAddress endpoint);
+    virtual void on_move(const gms::inet_address& endpoint) = 0;
+};
+
 }
