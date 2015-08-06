@@ -12,6 +12,7 @@
 #include "service/migration_manager.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
+#include <seastar/core/thread.hh>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -151,7 +152,7 @@ future<> storage_service::prepare_to_join() {
 }
 
 future<> storage_service::join_token_ring(int delay) {
-    auto f = make_ready_future<>();
+    return seastar::async([this, delay] {
     _joined = true;
 #if 0
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
@@ -169,48 +170,30 @@ future<> storage_service::join_token_ring(int delay) {
                  SystemKeyspace.bootstrapInProgress(),
                  SystemKeyspace.bootstrapComplete(),
                  DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
-    if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
-        logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
 #endif
+    if (is_auto_bootstrap() && /* !SystemKeyspace.bootstrapComplete() && */ get_seeds().count(get_broadcast_address())) {
+        logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
+    }
     if (should_bootstrap()) {
-        auto elapsed = make_shared<int>(0);
-        auto stop_cond = [elapsed, delay] {
-            // FIXME
-            // if we see schema, we can proceed to the next check directly
-            // if (!Schema.instance.getVersion().equals(Schema.emptyVersion)) {
-            //    return true;
-            // }
-            if (*elapsed < delay) {
-                return false;
-            }
-            return true;
-        };
-        f = do_until(stop_cond, [elapsed] {
-            auto t = 1000;
-            return sleep(std::chrono::milliseconds(t)).then([elapsed, t] {
-                *elapsed += t;
-            });
-        }).then([this] {
-            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
-            return bootstrap(_bootstrap_tokens);
-        });
 #if 0
         if (SystemKeyspace.bootstrapInProgress())
             logger.warn("Detected previous bootstrap failure; retrying");
         else
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
         setMode(Mode.JOINING, "waiting for ring information", true);
+#endif
         // first sleep the delay to make sure we see all our peers
-        for (int i = 0; i < delay; i += 1000)
-        {
+        for (int i = 0; i < delay; i += 1000) {
             // if we see schema, we can proceed to the next check directly
-            if (!Schema.instance.getVersion().equals(Schema.emptyVersion))
-            {
+#if 0
+            if (!Schema.instance.getVersion().equals(Schema.emptyVersion)) {
                 logger.debug("got schema: {}", Schema.instance.getVersion());
                 break;
             }
-            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+#endif
+            sleep(std::chrono::seconds(1)).get();
         }
+#if 0
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
         while (!MigrationManager.isReadyForBootstrap())
@@ -222,11 +205,9 @@ future<> storage_service::join_token_ring(int delay) {
         setMode(Mode.JOINING, "waiting for pending range calculation", true);
         PendingRangeCalculatorService.instance.blockUntilFinished();
         setMode(Mode.JOINING, "calculation complete, ready to bootstrap", true);
-
-
-        if (logger.isDebugEnabled())
-            logger.debug("... got ring + schema info");
-
+#endif
+        logger.debug("... got ring + schema info");
+#if 0
         if (Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")) &&
                 (
                     _token_metadata.getBootstrapTokens().valueSet().size() > 0 ||
@@ -234,71 +215,50 @@ future<> storage_service::join_token_ring(int delay) {
                     _token_metadata.getMovingEndpoints().size() > 0
                 ))
             throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+#endif
 
-        if (!DatabaseDescriptor.isReplacing())
-        {
-            if (_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
-            {
-                String s = "This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)";
-                throw new UnsupportedOperationException(s);
+        if (!is_replacing()) {
+            if (_token_metadata.is_member(get_broadcast_address())) {
+                throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
-            setMode(Mode.JOINING, "getting bootstrap token", true);
-            _bootstrap_tokens = BootStrapper.getBootstrapTokens(_token_metadata);
-        }
-        else
-        {
-            if (!DatabaseDescriptor.getReplaceAddress().equals(FBUtilities.getBroadcastAddress()))
-            {
-                try
-                {
-                    // Sleep additionally to make sure that the server actually is not alive
-                    // and giving it more time to gossip if alive.
-                    Thread.sleep(LoadBroadcaster.BROADCAST_INTERVAL);
-                }
-                catch (InterruptedException e)
-                {
-                    throw new AssertionError(e);
-                }
+            // setMode(Mode.JOINING, "getting bootstrap token", true);
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
+        } else {
+            auto replace_addr = get_replace_address();
+            if (replace_addr && *replace_addr != get_broadcast_address()) {
+                // Sleep additionally to make sure that the server actually is not alive
+                // and giving it more time to gossip if alive.
+                // FIXME: LoadBroadcaster.BROADCAST_INTERVAL
+                std::chrono::milliseconds broadcast_interval(60 * 1000);
+                sleep(broadcast_interval).get();
 
                 // check for operator errors...
-                for (Token token : _bootstrap_tokens)
-                {
-                    InetAddress existing = _token_metadata.getEndpoint(token);
-                    if (existing != null)
-                    {
+                for (auto token : _bootstrap_tokens) {
+                    auto existing = _token_metadata.get_endpoint(token);
+                    if (existing) {
+#if 0
                         long nanoDelay = delay * 1000000L;
                         if (Gossiper.instance.getEndpointStateForEndpoint(existing).getUpdateTimestamp() > (System.nanoTime() - nanoDelay))
                             throw new UnsupportedOperationException("Cannot replace a live node... ");
                         current.add(existing);
-                    }
-                    else
-                    {
-                        throw new UnsupportedOperationException("Cannot replace token " + token + " which does not exist!");
-                    }
-                }
-            }
-            else
-            {
-                try
-                {
-                    Thread.sleep(RING_DELAY);
-                }
-                catch (InterruptedException e)
-                {
-                    throw new AssertionError(e);
-                }
-
-            }
-            setMode(Mode.JOINING, "Replacing a node with token(s): " + _bootstrap_tokens, true);
-        }
-
-        bootstrap(_bootstrap_tokens);
-        assert !_is_bootstrap_mode; // bootstrap will block until finished
 #endif
+                    } else {
+                        throw std::runtime_error(sprint("Cannot replace token %s which does not exist!", token));
+                    }
+                }
+            } else {
+                sleep(std::chrono::milliseconds(RING_DELAY)).get();
+            }
+            //setMode(Mode.JOINING, "Replacing a node with token(s): " + _bootstrap_tokens, true);
+        }
+        bootstrap(_bootstrap_tokens).get();
+        // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
+        // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         // FIXME: DatabaseDescriptor.getNumTokens()
         size_t num_tokens = 3;
         _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
+        logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
 #if 0
         _bootstrap_tokens = SystemKeyspace.getSavedTokens();
         if (_bootstrap_tokens.isEmpty())
@@ -329,9 +289,7 @@ future<> storage_service::join_token_ring(int delay) {
         }
 #endif
     }
-
-    return f.then([this] {
-        return set_tokens(_bootstrap_tokens);
+    set_tokens(_bootstrap_tokens).get();
 #if 0
     // if we don't have system_traces keyspace at this point, then create it manually
     if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
