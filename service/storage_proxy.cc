@@ -3115,7 +3115,7 @@ class shard_reader {
     distributed<database>& _db;
     unsigned _shard;
     utils::UUID _cf_id;
-    const query::partition_range& _range;
+    const query::partition_range _range;
     schema_ptr _local_schema;
     struct remote_state {
         mutation_reader reader;
