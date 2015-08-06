@@ -370,10 +370,8 @@ schema_ptr schema_builder::build(compact_storage cp) {
 
         // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
         // from the constructor
-        return make_lw_shared<schema>(schema(s._raw));
-    } else {
-        return make_lw_shared<schema>(s);
     }
+    return make_lw_shared<schema>(schema(s._raw));
 }
 
 // Useful functions to manipulate the schema's comparator field
