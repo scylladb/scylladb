@@ -24,7 +24,10 @@
 
 #pragma once
 
-#include "core/sstring.hh"
+#include "gms/inet_address.hh"
+
+#include <seastar/core/sstring.hh>
+#include <seastar/net/api.hh>
 
 #include <experimental/optional>
 
@@ -71,39 +74,40 @@ public:
     protected abstract void serializeEvent(ByteBuf dest, int version);
     protected abstract int eventSerializedSize(int version);
 #endif
+    class topology_change;
+    class status_change;
     class schema_change;
 };
 
+    class event::topology_change : public event {
+    public:
+        enum class change_type { NEW_NODE, REMOVED_NODE, MOVED_NODE };
+
+        const change_type change;
+        const ipv4_addr node;
+
+        topology_change(change_type change, const ipv4_addr& node)
+            : event{event_type::TOPOLOGY_CHANGE}
+            , change{change}
+            , node{node}
+        { }
+
+        static topology_change new_node(const gms::inet_address& host, uint16_t port)
+        {
+            return topology_change{change_type::NEW_NODE, ipv4_addr{host.raw_addr(), port}};
+        }
+
+        static topology_change removed_node(const gms::inet_address& host, uint16_t port)
+        {
+            return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
+        }
+
+        static topology_change moved_node(const gms::inet_address& host, uint16_t port)
+        {
+            return topology_change{change_type::MOVED_NODE, ipv4_addr{host.raw_addr(), port}};
+        }
+
 #if 0
-    public static class TopologyChange extends Event
-    {
-        public enum Change { NEW_NODE, REMOVED_NODE, MOVED_NODE }
-
-        public final Change change;
-        public final InetSocketAddress node;
-
-        private TopologyChange(Change change, InetSocketAddress node)
-        {
-            super(Type.TOPOLOGY_CHANGE);
-            this.change = change;
-            this.node = node;
-        }
-
-        public static TopologyChange newNode(InetAddress host, int port)
-        {
-            return new TopologyChange(Change.NEW_NODE, new InetSocketAddress(host, port));
-        }
-
-        public static TopologyChange removedNode(InetAddress host, int port)
-        {
-            return new TopologyChange(Change.REMOVED_NODE, new InetSocketAddress(host, port));
-        }
-
-        public static TopologyChange movedNode(InetAddress host, int port)
-        {
-            return new TopologyChange(Change.MOVED_NODE, new InetSocketAddress(host, port));
-        }
-
         // Assumes the type has already been deserialized
         private static TopologyChange deserializeEvent(ByteBuf cb, int version)
         {
@@ -145,32 +149,33 @@ public:
             return Objects.equal(change, tpc.change)
                 && Objects.equal(node, tpc.node);
         }
-    }
+#endif
+    };
 
-    public static class StatusChange extends Event
-    {
-        public enum Status { UP, DOWN }
+    class event::status_change : public event {
+    public:
+        enum class status_type { UP, DOWN };
 
-        public final Status status;
-        public final InetSocketAddress node;
+        const status_type status;
+        const ipv4_addr node;
 
-        private StatusChange(Status status, InetSocketAddress node)
+        status_change(status_type status, const ipv4_addr& node)
+            : event{event_type::STATUS_CHANGE}
+            , status{status}
+            , node{node}
+        { }
+
+        static status_change node_up(const gms::inet_address& host, uint16_t port)
         {
-            super(Type.STATUS_CHANGE);
-            this.status = status;
-            this.node = node;
+            return status_change{status_type::UP, ipv4_addr{host.raw_addr(), port}};
         }
 
-        public static StatusChange nodeUp(InetAddress host, int port)
+        static status_change node_down(const gms::inet_address& host, uint16_t port)
         {
-            return new StatusChange(Status.UP, new InetSocketAddress(host, port));
+            return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
         }
 
-        public static StatusChange nodeDown(InetAddress host, int port)
-        {
-            return new StatusChange(Status.DOWN, new InetSocketAddress(host, port));
-        }
-
+#if 0
         // Assumes the type has already been deserialized
         private static StatusChange deserializeEvent(ByteBuf cb, int version)
         {
@@ -212,8 +217,8 @@ public:
             return Objects.equal(status, stc.status)
                 && Objects.equal(node, stc.node);
         }
-    }
 #endif
+    };
 
     class event::schema_change : public event {
     public:
