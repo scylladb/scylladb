@@ -306,16 +306,16 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    bool send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    future<bool> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
 
     /* Sends a Gossip message to a live member and returns true if the recipient was a seed */
-    bool do_gossip_to_live_member(gossip_digest_syn message);
+    future<bool> do_gossip_to_live_member(gossip_digest_syn message);
 
     /* Sends a Gossip message to an unreachable member */
-    void do_gossip_to_unreachable_member(gossip_digest_syn message);
+    future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
     /* Gossip to a seed for facilitating partition healing */
-    void do_gossip_to_seed(gossip_digest_syn prod);
+    future<> do_gossip_to_seed(gossip_digest_syn prod);
 
     void do_status_check();
 
