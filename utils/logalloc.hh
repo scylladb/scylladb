@@ -33,7 +33,7 @@ public:
     //
     // Invalidates references to objects in all compactible and evictable regions.
     //
-    uint64_t reclaim(uint64_t bytes);
+    size_t reclaim(size_t bytes);
 
     // Compacts as much as possible. Very expensive, mainly for testing.
     // Invalidates references to objects in all compactible and evictable regions.

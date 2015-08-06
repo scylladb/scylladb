@@ -188,10 +188,10 @@ public:
     atomic_cell(atomic_cell&&) = default;
     atomic_cell& operator=(const atomic_cell&) = default;
     atomic_cell& operator=(atomic_cell&&) = default;
-    static atomic_cell from_bytes(bytes b) {
+    static atomic_cell from_bytes(managed_bytes b) {
         return atomic_cell(std::move(b));
     }
-    atomic_cell(atomic_cell_view other) : atomic_cell_base(bytes { other._data.begin(), other._data.end() }) {}
+    atomic_cell(atomic_cell_view other) : atomic_cell_base(managed_bytes{other._data}) {}
     operator atomic_cell_view() const {
         return atomic_cell_view(_data);
     }
