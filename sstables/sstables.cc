@@ -877,18 +877,6 @@ future<> sstable::load() {
     });
 }
 
-future<> sstable::store() {
-    _components.erase(component_type::Index);
-    _components.erase(component_type::Data);
-    return seastar::async([this] {
-        write_statistics();
-        write_compression();
-        write_filter();
-        write_summary();
-        write_toc();
-    });
-}
-
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
 void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m) {

@@ -167,9 +167,6 @@ public:
                                   format_types format, component_type component);
 
     future<> load();
-    // Used to serialize sstable components, but so far only for the purpose
-    // of testing.
-    future<> store();
 
     void set_generation(unsigned long generation) {
         _generation = generation;
