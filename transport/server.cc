@@ -12,6 +12,7 @@
 #include <boost/range/adaptor/sliced.hpp>
 
 #include "service/migration_manager.hh"
+#include "service/storage_service.hh"
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
 #include "core/reactor.hh"
@@ -280,15 +281,18 @@ private:
     friend event_notifier;
 };
 
+cql_server::event_notifier::event_notifier(uint16_t port)
+    : _port{port}
+{
+}
+
 void cql_server::event_notifier::register_event(transport::event::event_type et, cql_server::connection* conn)
 {
     switch (et) {
     case transport::event::event_type::TOPOLOGY_CHANGE:
-        logger.warn("TOPOLOGY_CHANGE events are not supported");
         _topology_change_listeners.emplace(conn);
         break;
     case transport::event::event_type::STATUS_CHANGE:
-        logger.warn("STATUS_CHANGE events are not supported");
         _status_change_listeners.emplace(conn);
         break;
     case transport::event::event_type::SCHEMA_CHANGE:
@@ -445,6 +449,46 @@ void cql_server::event_notifier::on_drop_aggregate(const sstring& ks_name, const
     logger.warn("%s event ignored", __func__);
 }
 
+void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
+{
+    for (auto&& conn : _topology_change_listeners) {
+        using namespace transport;
+        conn->write_topology_change_event(event::topology_change::new_node(endpoint, _port));
+    }
+}
+
+void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpoint)
+{
+    for (auto&& conn : _topology_change_listeners) {
+        using namespace transport;
+        conn->write_topology_change_event(event::topology_change::removed_node(endpoint, _port));
+    }
+}
+
+void cql_server::event_notifier::on_move(const gms::inet_address& endpoint)
+{
+    for (auto&& conn : _topology_change_listeners) {
+        using namespace transport;
+        conn->write_topology_change_event(event::topology_change::moved_node(endpoint, _port));
+    }
+}
+
+void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
+{
+    for (auto&& conn : _status_change_listeners) {
+        using namespace transport;
+        conn->write_status_change_event(event::status_change::node_up(endpoint, _port));
+    }
+}
+
+void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
+{
+    for (auto&& conn : _status_change_listeners) {
+        using namespace transport;
+        conn->write_status_change_event(event::status_change::node_down(endpoint, _port));
+    }
+}
+
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
@@ -481,7 +525,6 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     : _proxy(proxy)
     , _query_processor(qp)
     , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
-    , _notifier{std::make_unique<event_notifier>()}
 {
 }
 
@@ -508,13 +551,16 @@ cql_server::setup_collectd() {
 }
 
 future<> cql_server::stop() {
+    service::get_local_storage_service().unregister_subscriber(_notifier.get());
     service::get_local_migration_manager().unregister_listener(_notifier.get());
     return make_ready_future<>();
 }
 
 future<>
 cql_server::listen(ipv4_addr addr) {
+    _notifier = std::make_unique<event_notifier>(addr.port);
     service::get_local_migration_manager().register_listener(_notifier.get());
+    service::get_local_storage_service().register_subscriber(_notifier.get());
     listen_options lo;
     lo.reuse_address = true;
     _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));

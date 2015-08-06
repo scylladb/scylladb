@@ -6,6 +6,7 @@
 #define CQL_SERVER_HH
 
 #include "core/reactor.hh"
+#include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
@@ -46,11 +47,15 @@ private:
     friend class type_codec;
 };
 
-class cql_server::event_notifier : public service::migration_listener {
+class cql_server::event_notifier : public service::migration_listener,
+                                   public service::endpoint_lifecycle_subscriber
+{
+    uint16_t _port;
     std::set<cql_server::connection*> _topology_change_listeners;
     std::set<cql_server::connection*> _status_change_listeners;
     std::set<cql_server::connection*> _schema_change_listeners;
 public:
+    event_notifier(uint16_t port);
     void register_event(transport::event::event_type et, cql_server::connection* conn);
     void unregister_connection(cql_server::connection* conn);
 
@@ -71,6 +76,12 @@ public:
     virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override;
     virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override;
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
+
+    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
+    virtual void on_leave_cluster(const gms::inet_address& endpoint) override;
+    virtual void on_up(const gms::inet_address& endpoint) override;
+    virtual void on_down(const gms::inet_address& endpoint) override;
+    virtual void on_move(const gms::inet_address& endpoint) override;
 };
 
 #endif
