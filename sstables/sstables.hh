@@ -273,7 +273,7 @@ private:
     lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
 
     bool _marked_for_deletion = false;
-    
+
     gc_clock::time_point _now;
 
     const bool has_component(component_type f);

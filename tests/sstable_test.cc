@@ -188,7 +188,7 @@ static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>(dir, generation, la, big);
     return sst->load().then([sst, generation] {
         sst->set_generation(generation + 1);
-        auto fut = sst->store();
+        auto fut = sstables::test(sst).store();
         return std::move(fut).then([sst = std::move(sst)] {
             return make_ready_future<sstable_ptr>(std::move(sst));
         });

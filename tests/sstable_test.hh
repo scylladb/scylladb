@@ -3,6 +3,7 @@
 #include "sstables/sstables.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "core/thread.hh"
 
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
@@ -59,6 +60,18 @@ public:
     template <typename T>
     int binary_search(const T& entries, const key& sk) {
         return _sst->binary_search(entries, sk);
+    }
+
+    future<> store() {
+        _sst->_components.erase(sstable::component_type::Index);
+        _sst->_components.erase(sstable::component_type::Data);
+        return seastar::async([sst = _sst] {
+            sst->write_statistics();
+            sst->write_compression();
+            sst->write_filter();
+            sst->write_summary();
+            sst->write_toc();
+        });
     }
 };
 
