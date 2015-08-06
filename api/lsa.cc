@@ -12,7 +12,7 @@
 
 namespace api {
 
-logging::logger logger("lsa-api");
+static logging::logger logger("lsa-api");
 
 void set_lsa(http_context& ctx, routes& r) {
     httpd::lsa_json::lsa_compact.set(r, [&ctx](std::unique_ptr<request> req) {
