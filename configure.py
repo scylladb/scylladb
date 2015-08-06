@@ -344,6 +344,7 @@ urchin_core = (['database.cc',
 
 api = ['api/api.cc',
        'api/api-doc/storage_service.json',
+       'api/api-doc/lsa.json',
        'api/storage_service.cc',
        'api/api-doc/commitlog.json',
        'api/commitlog.cc',
@@ -368,6 +369,7 @@ api = ['api/api.cc',
        'api/api-doc/hinted_handoff.json',
        'api/hinted_handoff.cc',
        'api/api-doc/utils.json',
+       'api/lsa.cc',
        ]
 
 urchin_tests_dependencies = urchin_core + [
