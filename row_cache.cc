@@ -36,8 +36,8 @@ cache_tracker::setup_collectd() {
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
-                , "queue_length", "total_rows")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, _lru_len)
+                , "bytes", "used")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _region.occupancy().used_space(); })
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
@@ -53,7 +53,6 @@ cache_tracker::setup_collectd() {
 }
 
 void cache_tracker::clear() {
-    _lru_len = 0;
     with_allocator(_region.allocator(), [this] {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
@@ -67,7 +66,6 @@ void cache_tracker::touch(cache_entry& e) {
 
 void cache_tracker::insert(cache_entry& entry) {
     ++_misses;
-    ++_lru_len;
     _lru.push_front(entry);
 }
 

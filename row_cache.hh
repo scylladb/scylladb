@@ -81,7 +81,6 @@ public:
         bi::member_hook<cache_entry, cache_entry::lru_link_type, &cache_entry::_lru_link>,
         bi::constant_time_size<false>>; // we need this to have bi::auto_unlink on hooks.
 private:
-    size_t _lru_len = 0;
     uint64_t _hits = 0;
     uint64_t _misses = 0;
     memory::reclaimer _reclaimer;
