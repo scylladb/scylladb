@@ -23,6 +23,7 @@
 #include "locator/token_metadata.hh"
 #include "dht/i_partitioner.hh"
 #include <unordered_set>
+#include "database.hh"
 
 namespace dht {
 
@@ -77,7 +78,7 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::unordered_set<token> get_bootstrap_tokens(token_metadata metadata) {
+    static std::unordered_set<token> get_bootstrap_tokens(token_metadata metadata, database& db) {
 #if 0
         Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
         // if user specified tokens, use those
