@@ -942,6 +942,7 @@ void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> re
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
@@ -951,18 +952,26 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     local_state.mark_dead();
     shard_id id = get_shard_id(addr);
     logger.trace("Sending a EchoMessage to {}", id);
-    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state)] (auto&& f) mutable {
+    auto ok = make_shared<bool>(false);
+    // FIXME: Add timeout
+    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state), ok] (auto&& f) mutable {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");
-            this->set_last_processed_message_at();
-            this->real_mark_alive(id.addr, local_state);
+            *ok = true;
         } catch (...) {
             logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
         }
-    });
+        return make_ready_future<>();
+    }).get();
+
+    if (*ok) {
+        this->set_last_processed_message_at();
+        this->real_mark_alive(id.addr, local_state);
+    }
 }
 
+// Runs inside seastar::async context
 void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     logger.trace("marking as alive {}", addr);
     local_state.mark_alive();
