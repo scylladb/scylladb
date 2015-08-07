@@ -244,3 +244,17 @@ BOOST_AUTO_TEST_CASE(test_writing_placeholders) {
     BOOST_REQUIRE(read_simple<int>(buf_view) == 2);
     BOOST_REQUIRE(buf_view.empty());
 }
+
+BOOST_AUTO_TEST_CASE(test_append_big_and_small_chunks) {
+    bytes_ostream small;
+    append_sequence(small, 12);
+
+    bytes_ostream big;
+    append_sequence(big, 513);
+
+    bytes_ostream buf;
+    buf.append(big);
+    buf.append(small);
+    buf.append(big);
+    buf.append(small);
+}
