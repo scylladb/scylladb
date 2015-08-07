@@ -360,23 +360,31 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& m
 }
 
 void gossiper::remove_endpoint(inet_address endpoint) {
-    // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-    for (auto& subscriber : _subscribers) {
-        subscriber->on_remove(endpoint);
-    }
+    seastar::async([this, endpoint] {
+        // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
+        for (auto& subscriber : _subscribers) {
+            subscriber->on_remove(endpoint);
+        }
 
-    if(_seeds.count(endpoint)) {
-        build_seeds_list();
-        _seeds.erase(endpoint);
-        // logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
-    }
+        if(_seeds.count(endpoint)) {
+            build_seeds_list();
+            _seeds.erase(endpoint);
+            // logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
+        }
 
-    _live_endpoints.erase(endpoint);
-    _unreachable_endpoints.erase(endpoint);
-    // do not remove endpointState until the quarantine expires
-    get_local_failure_detector().remove(endpoint);
-    quarantine_endpoint(endpoint);
-    logger.debug("removing endpoint {}", endpoint);
+        _live_endpoints.erase(endpoint);
+        _unreachable_endpoints.erase(endpoint);
+        // do not remove endpointState until the quarantine expires
+        get_local_failure_detector().remove(endpoint);
+        quarantine_endpoint(endpoint);
+        logger.debug("removing endpoint {}", endpoint);
+    }).then_wrapped([endpoint] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            logger.error("Fail to remove_endpoint={}: {}", endpoint, std::current_exception());
+        }
+    });
 }
 
 void gossiper::do_status_check() {
