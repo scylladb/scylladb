@@ -304,58 +304,59 @@ void gossiper::notify_failure_detector(inet_address endpoint, endpoint_state rem
 }
 
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) {
-    for (auto& entry : map) {
-        auto& ep = entry.first;
-        if (ep == get_broadcast_address() && !is_in_shadow_round()) {
-            continue;
-        }
-        if (_just_removed_endpoints.count(ep)) {
-            logger.trace("Ignoring gossip for {} because it is quarantined", ep);
-            continue;
-        }
-        /*
-           If state does not exist just add it. If it does then add it if the remote generation is greater.
-           If there is a generation tie, attempt to break it by heartbeat version.
-           */
-        endpoint_state& remote_state = entry.second;
-        auto it = endpoint_state_map.find(ep);
-        if (it != endpoint_state_map.end()) {
-            endpoint_state& local_ep_state_ptr = it->second;
-            int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
-            int remote_generation = remote_state.get_heart_beat_state().get_generation();
-            logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
-            // }
-            if (local_generation != 0 && remote_generation > local_generation + MAX_GENERATION_DIFFERENCE) {
-                // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
-                logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
-                    ep, local_generation, remote_generation);
-            } else if (remote_generation > local_generation) {
-                logger.trace("Updating heartbeat state generation to {} from {} for {}", remote_generation, local_generation, ep);
-                // major state change will handle the update by inserting the remote state directly
-                handle_major_state_change(ep, remote_state);
-            } else if (remote_generation == local_generation) {  //generation has not changed, apply new states
-                /* find maximum state */
-                int local_max_version = get_max_endpoint_state_version(local_ep_state_ptr);
-                int remote_max_version = get_max_endpoint_state_version(remote_state);
-                if (remote_max_version > local_max_version) {
-                    // apply states, but do not notify since there is no major change
-                    apply_new_states(ep, local_ep_state_ptr, remote_state);
+    return seastar::async([this, map = std::move(map)] () mutable {
+        for (auto& entry : map) {
+            auto& ep = entry.first;
+            if (ep == get_broadcast_address() && !is_in_shadow_round()) {
+                continue;
+            }
+            if (_just_removed_endpoints.count(ep)) {
+                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+                continue;
+            }
+            /*
+               If state does not exist just add it. If it does then add it if the remote generation is greater.
+               If there is a generation tie, attempt to break it by heartbeat version.
+               */
+            endpoint_state& remote_state = entry.second;
+            auto it = endpoint_state_map.find(ep);
+            if (it != endpoint_state_map.end()) {
+                endpoint_state& local_ep_state_ptr = it->second;
+                int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
+                int remote_generation = remote_state.get_heart_beat_state().get_generation();
+                logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
+                // }
+                if (local_generation != 0 && remote_generation > local_generation + MAX_GENERATION_DIFFERENCE) {
+                    // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
+                    logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
+                        ep, local_generation, remote_generation);
+                } else if (remote_generation > local_generation) {
+                    logger.trace("Updating heartbeat state generation to {} from {} for {}", remote_generation, local_generation, ep);
+                    // major state change will handle the update by inserting the remote state directly
+                    handle_major_state_change(ep, remote_state);
+                } else if (remote_generation == local_generation) {  //generation has not changed, apply new states
+                    /* find maximum state */
+                    int local_max_version = get_max_endpoint_state_version(local_ep_state_ptr);
+                    int remote_max_version = get_max_endpoint_state_version(remote_state);
+                    if (remote_max_version > local_max_version) {
+                        // apply states, but do not notify since there is no major change
+                        apply_new_states(ep, local_ep_state_ptr, remote_state);
+                    } else {
+                        logger.trace("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, ep);
+                    }
+                    if (!local_ep_state_ptr.is_alive() && !is_dead_state(local_ep_state_ptr)) { // unless of course, it was dead
+                        mark_alive(ep, local_ep_state_ptr);
+                    }
                 } else {
-                    logger.trace("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, ep);
-                }
-                if (!local_ep_state_ptr.is_alive() && !is_dead_state(local_ep_state_ptr)) { // unless of course, it was dead
-                    mark_alive(ep, local_ep_state_ptr);
+                    logger.trace("Ignoring remote generation {} < {}", remote_generation, local_generation);
                 }
             } else {
-                logger.trace("Ignoring remote generation {} < {}", remote_generation, local_generation);
+                // this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive
+                get_local_failure_detector().report(ep);
+                handle_major_state_change(ep, remote_state);
             }
-        } else {
-            // this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive
-            get_local_failure_detector().report(ep);
-            handle_major_state_change(ep, remote_state);
         }
-    }
-    return make_ready_future<>();
+    });
 }
 
 void gossiper::remove_endpoint(inet_address endpoint) {
@@ -989,6 +990,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     if (!is_dead_state(eps)) {
         if (endpoint_state_map.count(ep))  {
@@ -1033,6 +1035,7 @@ bool gossiper::is_dead_state(endpoint_state eps) {
     return false;
 }
 
+// Runs inside seastar::async context
 void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
