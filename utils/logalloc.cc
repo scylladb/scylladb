@@ -616,7 +616,11 @@ public:
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
     void merge(region::impl& other) {
-        if (!_active || _active->is_empty()) {
+        if (_active && _active->is_empty()) {
+            shard_segment_pool.free_segment(_active);
+            _active = nullptr;
+        }
+        if (!_active) {
             _active = other._active;
             other._active = nullptr;
             _active_offset = other._active_offset;
