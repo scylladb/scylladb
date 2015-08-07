@@ -20,6 +20,7 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include <boost/algorithm/string.hpp>
+#include <regex>
 
 namespace sstables {
 
@@ -74,6 +75,7 @@ public:
 };
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
+    { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" }
 };
 
@@ -81,6 +83,7 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
     { sstable::format_types::big , "big" }
 };
 
+// FIXME: this should be version-dependent
 std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
     { component_type::Index, "Index.db"},
     { component_type::CompressionInfo, "CompressionInfo.db" },
@@ -1362,23 +1365,56 @@ const bool sstable::has_component(component_type f) {
 }
 
 const sstring sstable::filename(component_type f) {
-
-    auto& version = _version_string.at(_version);
-    auto& format = _format_string.at(_format);
-    auto& component = _component_map.at(f);
-    auto generation =  to_sstring(_generation);
-
-    return _dir + "/" + version + "-" + generation + "-" + format + "-" + component;
+    return filename(_dir, _ks, _cf, _version, _generation, _format, f);
 }
 
-const sstring sstable::filename(sstring dir, version_types version, unsigned long generation,
+const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
                                 format_types format, component_type component) {
-    auto& v = _version_string.at(version);
-    auto& f = _format_string.at(format);
-    auto& c= _component_map.at(component);
-    auto g =  to_sstring(generation);
 
-    return dir + "/" + v + "-" + g + "-" + f + "-" + c;
+    static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
+        { sstable::version_types::ka, [] (entry_descriptor d) {
+            return d.ks + "-" + d.cf + "-" + _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _component_map.at(d.component); }
+        },
+        { sstable::version_types::la, [] (entry_descriptor d) {
+            return _version_string.at(d.version) + "-" + to_sstring(d.generation) + "-" + _format_string.at(d.format) + "-" + _component_map.at(d.component); }
+        }
+    };
+
+    return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+}
+
+entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
+    static std::regex la("la-(\\d+)-(\\w+)-(.*)");
+    static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
+
+    std::smatch match;
+
+    sstable::version_types version;
+
+    sstring generation;
+    sstring format;
+    sstring component;
+    sstring ks;
+    sstring cf;
+
+    if (std::regex_match(std::string(fname), match, la)) {
+        sstring ks = "";
+        sstring cf = "";
+        version = sstable::version_types::la;
+        generation = match[1].str();
+        format = sstring(match[2].str());
+        component = sstring(match[3].str());
+    } else if (std::regex_match(std::string(fname), match, ka)) {
+        ks = match[1].str();
+        cf = match[2].str();
+        version = sstable::version_types::ka;
+        format = sstring("big");
+        generation = match[3].str();
+        component = sstring(match[4].str());
+    } else {
+        throw malformed_sstable_exception("invalid version");
+    }
+    return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(component));
 }
 
 sstable::version_types sstable::version_from_sstring(sstring &s) {
@@ -1387,6 +1423,10 @@ sstable::version_types sstable::version_from_sstring(sstring &s) {
 
 sstable::format_types sstable::format_from_sstring(sstring &s) {
     return reverse_map(s, _format_string);
+}
+
+sstable::component_type sstable::component_from_sstring(sstring &s) {
+    return reverse_map(s, _component_map);
 }
 
 input_stream<char> sstable::data_stream_at(uint64_t pos) {

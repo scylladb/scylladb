@@ -28,7 +28,7 @@ bytes as_bytes(const sstring& s) {
 
 static future<> broken_sst(sstring dir, unsigned long generation) {
 
-    auto sst = std::make_unique<sstable>(dir, generation, la, big);
+    auto sst = std::make_unique<sstable>("ks", "cf", dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then_wrapped([sst = std::move(sst)] (future<> f) mutable {
         try {
@@ -185,7 +185,7 @@ SEASTAR_TEST_CASE(big_summary_query_32) {
 }
 
 static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(dir, generation, la, big);
+    auto sst = make_lw_shared<sstable>("ks", "cf", dir, generation, la, big);
     return sst->load().then([sst, generation] {
         sst->set_generation(generation + 1);
         auto fut = sstables::test(sst).store();
@@ -217,9 +217,9 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
 
 static future<> check_component_integrity(sstable::component_type component) {
     return write_sst_info("tests/sstables/compressed", 1).then([component] {
-        auto file_path = sstable::filename("tests/sstables/compressed", la, 1, big, component);
+        auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 1, big, component);
         return read_file(file_path).then([component] (auto ret) {
-            auto file_path = sstable::filename("tests/sstables/compressed", la, 2, big, component);
+            auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 2, big, component);
             return read_file(file_path).then([ret] (auto ret2) {
                 // assert that both files have the same size.
                 BOOST_REQUIRE(ret.second == ret2.second);
@@ -239,7 +239,7 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
 
 SEASTAR_TEST_CASE(check_summary_func) {
     return do_write_sst("tests/sstables/compressed", 1).then([] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>("tests/sstables/compressed", 2, la, big);
+        auto sst2 = make_lw_shared<sstable>("ks", "cf", "tests/sstables/compressed", 2, la, big);
         return sstables::test(sst2).read_summary().then([sst1, sst2] {
             summary& sst1_s = sstables::test(sst1).get_summary();
             summary& sst2_s = sstables::test(sst2).get_summary();
@@ -259,7 +259,7 @@ SEASTAR_TEST_CASE(check_filter_func) {
 
 SEASTAR_TEST_CASE(check_statistics_func) {
     return do_write_sst("tests/sstables/compressed", 1).then([] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>("tests/sstables/compressed", 2, la, big);
+        auto sst2 = make_lw_shared<sstable>("ks", "cf", "tests/sstables/compressed", 2, la, big);
         return sstables::test(sst2).read_statistics().then([sst1, sst2] {
             statistics& sst1_s = sstables::test(sst1).get_statistics();
             statistics& sst2_s = sstables::test(sst2).get_statistics();
@@ -279,7 +279,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 
 SEASTAR_TEST_CASE(check_toc_func) {
     return do_write_sst("tests/sstables/compressed", 1).then([] (auto sst1) {
-        auto sst2 = make_lw_shared<sstable>("tests/sstables/compressed", 2, la, big);
+        auto sst2 = make_lw_shared<sstable>("ks", "cf", "tests/sstables/compressed", 2, la, big);
         return sstables::test(sst2).read_toc().then([sst1, sst2] {
             auto& sst1_c = sstables::test(sst1).get_components();
             auto& sst2_c = sstables::test(sst2).get_components();

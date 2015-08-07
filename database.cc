@@ -308,45 +308,22 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 
     using namespace sstables;
 
-    auto comps = parse_fname(fname);
-    if (comps.size() != 5) {
-        dblog.error("Ignoring malformed file {}", fname);
-        return make_ready_future<>();
-    }
+    entry_descriptor comps = entry_descriptor::make_descriptor(fname);
 
     // Every table will have a TOC. Using a specific file as a criteria, as
     // opposed to, say verifying _sstables.count() to be zero is more robust
     // against parallel loading of the directory contents.
-    if (comps[3] != "TOC") {
+    if (comps.component != sstable::component_type::TOC) {
         return make_ready_future<>();
     }
 
-    sstable::version_types version;
-    sstable::format_types  format;
-
-    try {
-        version = sstable::version_from_sstring(comps[0]);
-    } catch (std::out_of_range) {
-        dblog.error("Uknown version found: {}", comps[0]);
-        return make_ready_future<>();
-    }
-
-    auto generation = boost::lexical_cast<unsigned long>(comps[1]);
     // Make sure new sstables don't overwrite this one.
-    _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
+    _sstable_generation = std::max<uint64_t>(_sstable_generation, comps.generation /  smp::count + 1);
+    assert(_sstables->count(comps.generation) == 0);
 
-    try {
-        format = sstable::format_from_sstring(comps[2]);
-    } catch (std::out_of_range) {
-        dblog.error("Uknown format found: {}", comps[2]);
-        return make_ready_future<>();
-    }
-
-    assert(_sstables->count(generation) == 0);
-
-    auto sst = std::make_unique<sstables::sstable>(sstdir, generation, version, format);
+    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
     auto fut = sst->load();
-    return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
+    return std::move(fut).then([this, sst = std::move(sst)] () mutable {
         add_sstable(std::move(*sst));
         return make_ready_future<>();
     }).then_wrapped([fname] (future<> f) {
@@ -424,20 +401,17 @@ column_family::seal_active_memtable() {
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
-    sstring name = sprint("%s/%s-%s-%d-Data.db",
-            _config.datadir,
-            _schema->ks_name(), _schema->cf_name(),
-            gen);
 
-    return seastar::with_gate(_in_flight_seals, [gen, old, name, this] {
-        sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
-            sstables::sstable::version_types::la,
+    return seastar::with_gate(_in_flight_seals, [gen, old, this] {
+        sstables::sstable newtab = sstables::sstable(_schema->ks_name(), _schema->cf_name(),
+            _config.datadir, gen,
+            sstables::sstable::version_types::ka,
             sstables::sstable::format_types::big);
 
-        dblog.debug("Flushing to {}", name);
-        return do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
+        dblog.debug("Flushing to {}", newtab.get_filename());
+        return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
             // FIXME: write all components
-            return newtab.write_components(*old).then([name, this, &newtab, old] {
+            return newtab.write_components(*old).then([this, &newtab, old] {
                 return newtab.load();
             }).then([this, old, &newtab] {
                 dblog.debug("Flushing done");
@@ -445,7 +419,7 @@ column_family::seal_active_memtable() {
                 // memtable's data after moving to cache can be evicted at any time.
                 add_sstable(std::move(newtab));
                 return update_cache(*old);
-            }).then_wrapped([name, this, old] (future<> ret) {
+            }).then_wrapped([this, old] (future<> ret) {
                 try {
                     ret.get();
 
@@ -509,8 +483,8 @@ column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) 
             // FIXME: this generation calculation should be in a function.
             auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
             // FIXME: use "tmp" marker in names of incomplete sstable
-            auto sst = make_lw_shared<sstables::sstable>(_config.datadir, gen,
-                    sstables::sstable::version_types::la,
+            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
+                    sstables::sstable::version_types::ka,
                     sstables::sstable::format_types::big);
             new_tables->emplace_back(gen, sst);
             return sst;
@@ -990,7 +964,9 @@ keyspace::make_column_family_config(const schema& s) const {
 
 sstring
 keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
-    return sprint("%s/%s-%s", _config.datadir, name, uuid);
+    auto uuid_sstring = uuid.to_sstring();
+    boost::erase_all(uuid_sstring, "-");
+    return sprint("%s/%s-%s", _config.datadir, name, uuid_sstring);
 }
 
 future<>

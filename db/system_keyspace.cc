@@ -178,6 +178,11 @@ schema_ptr built_indexes() {
                 {"thrift_version", utf8_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, false)},
                 {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, false)},
+                // The following 3 columns are only present up until 2.1.8 tables
+                {"rpc_address", inet_addr_type},
+                {"broadcast_address", inet_addr_type},
+                {"listen_address", inet_addr_type},
+
         },
         // static columns
         {},
@@ -347,6 +352,31 @@ schema_ptr built_indexes() {
     return sstable_activity;
 }
 
+schema_ptr size_estimates() {
+    static thread_local auto size_estimates = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, SIZE_ESTIMATES), NAME, SIZE_ESTIMATES,
+            // partition key
+            {{"keyspace_name", utf8_type}},
+            // clustering key
+            {{"table_name", utf8_type}, {"range_start", utf8_type}, {"range_end", utf8_type}},
+            // regular columns
+            {
+                {"mean_partition_size", long_type},
+                {"partitions_count", long_type},
+            },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "per-table primary range size estimates"
+            )));
+        builder.set_gc_grace_seconds(0);
+        return builder.build();
+    }();
+    return size_estimates;
+}
+
 #if 0
 
     public static KSMetaData definition()
@@ -384,7 +414,7 @@ schema_ptr built_indexes() {
 #endif
 
 static future<> setup_version() {
-    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     return execute_cql(req, db::system_keyspace::LOCAL,
@@ -395,7 +425,10 @@ static future<> setup_version() {
                              to_sstring(version::native_protocol()),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
-                             sstring(dht::global_partitioner().name())
+                             sstring(dht::global_partitioner().name()),
+                             gms::inet_address(qctx->db().get_config().rpc_address()).addr(),
+                             utils::fb_utilities::get_broadcast_address().addr(),
+                             net::get_local_messaging_service().listen_address().addr()
     ).discard_result();
 }
 
@@ -1134,6 +1167,7 @@ std::vector<schema_ptr> all_tables() {
     r.push_back(compactions_in_progress());
     r.push_back(compaction_history());
     r.push_back(sstable_activity());
+    r.push_back(size_estimates());
     return r;
 }
 

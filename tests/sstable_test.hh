@@ -76,7 +76,7 @@ public:
 };
 
 inline future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
-    auto sst = make_lw_shared<sstable>(dir, generation, la, big);
+    auto sst = make_lw_shared<sstable>("ks", "cf", dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));

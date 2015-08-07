@@ -50,7 +50,7 @@ using namespace db::system_keyspace;
 namespace db {
 namespace schema_tables {
 
-std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES };
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -117,6 +117,10 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
             {"speculative_retry", utf8_type},
             {"subcomparator", utf8_type},
             {"type", utf8_type},
+            // The following 3 columns are only present up until 2.1.8 tables
+            {"key_aliases", utf8_type},
+            {"value_alias", utf8_type},
+            {"column_aliases", utf8_type},
         },
         // static columns
         {},
@@ -521,8 +525,10 @@ future<> save_system_keyspace_schema() {
            auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
            auto&& old_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
            /*auto& old_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+#if 0 // not in 2.1.8
            /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
            /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
+#endif
 
            proxy.mutate_locally(std::move(mutations)).get0();
 
@@ -539,8 +545,10 @@ future<> save_system_keyspace_schema() {
            auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
            auto&& new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
            /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+#if 0 // not in 2.1.8
            /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
            /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
+#endif
 
            std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
            merge_tables(proxy, std::move(old_column_families), std::move(new_column_families)).get0();
@@ -1075,6 +1083,25 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "read_repair_chance", table->read_repair_chance(), timestamp);
         m.set_clustered_cell(ckey, "speculative_retry", table->speculative_retry().to_sstring(), timestamp);
 
+
+        auto alias = [] (schema::const_iterator_range_type range) -> sstring {
+            sstring alias("[");
+            for (auto& c: range) {
+                alias += "\"" + c.name_as_text() + "\",";
+            }
+            if (alias.back() == ',') {
+                alias.back() = ']';
+            } else {
+                alias += "]";
+            }
+            return alias;
+        };
+
+        m.set_clustered_cell(ckey, "key_aliases", alias(table->partition_key_columns()), timestamp);
+        m.set_clustered_cell(ckey, "column_aliases", alias(table->clustering_key_columns()), timestamp);
+        if (table->compact_columns_count() == 1) {
+            m.set_clustered_cell(ckey, "value_alias", table->compact_column().name_as_text(), timestamp);
+        } // null if none
 #if 0
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
             adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
@@ -1750,7 +1777,7 @@ future<> save_system_keyspace_schema() {
 
 std::vector<schema_ptr> all_tables() {
     return {
-        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates()
+        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), /* Not in 2.1.8 functions(), aggregates() */
     };
 }
 

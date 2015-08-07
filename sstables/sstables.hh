@@ -113,11 +113,13 @@ public:
         Filter,
         Statistics,
     };
-    enum class version_types { la };
+    enum class version_types { ka, la };
     enum class format_types { big };
 public:
-    sstable(sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
-        : _dir(dir)
+    sstable(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
+        : _ks(std::move(ks))
+        , _cf(std::move(cf))
+        , _dir(std::move(dir))
         , _generation(generation)
         , _version(v)
         , _format(f)
@@ -161,9 +163,10 @@ public:
     // Like data_consume_rows() with bounds, but iterates over whole range
     data_consume_context data_consume_rows(row_consumer& consumer);
 
+    static component_type component_from_sstring(sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static const sstring filename(sstring dir, version_types version, unsigned long generation,
+    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
                                   format_types format, component_type component);
 
     future<> load();
@@ -262,6 +265,8 @@ private:
     uint64_t _data_file_size;
     uint64_t _bytes_on_disk = 0;
 
+    sstring _ks;
+    sstring _cf;
     sstring _dir;
     unsigned long _generation = 0;
     version_types _version;
@@ -373,4 +378,19 @@ public:
 
 using shared_sstable = lw_shared_ptr<sstable>;
 
+struct entry_descriptor {
+    sstring ks;
+    sstring cf;
+    sstable::version_types version;
+    unsigned long generation;
+    sstable::format_types format;
+    sstable::component_type component;
+
+    static entry_descriptor make_descriptor(sstring fname);
+
+    entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
+                     unsigned long generation, sstable::format_types format,
+                     sstable::component_type component)
+        : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
+};
 }

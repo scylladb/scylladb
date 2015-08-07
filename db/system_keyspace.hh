@@ -59,6 +59,7 @@ static constexpr auto RANGE_XFERS = "range_xfers";
 static constexpr auto COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
 static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
+static constexpr auto SIZE_ESTIMATES = "size_estimates";
 
 
 extern schema_ptr hints();
