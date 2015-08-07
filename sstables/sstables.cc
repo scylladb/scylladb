@@ -1397,14 +1397,15 @@ entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
     sstring ks;
     sstring cf;
 
-    if (std::regex_match(std::string(fname), match, la)) {
+    std::string s(fname);
+    if (std::regex_match(s, match, la)) {
         sstring ks = "";
         sstring cf = "";
         version = sstable::version_types::la;
         generation = match[1].str();
         format = sstring(match[2].str());
         component = sstring(match[3].str());
-    } else if (std::regex_match(std::string(fname), match, ka)) {
+    } else if (std::regex_match(s, match, ka)) {
         ks = match[1].str();
         cf = match[2].str();
         version = sstable::version_types::ka;
