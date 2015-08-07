@@ -528,6 +528,12 @@ void gossiper::run() {
         } catch (...) {
             logger.trace("=== Gossip round FAIL");
         }
+
+        if (logger.is_enabled(logging::log_level::debug)) {
+            for (auto& x : endpoint_state_map) {
+                logger.debug("ep={}, eps={}", x.first, x.second);
+            }
+        }
         _scheduled_gossip_task.arm(INTERVAL);
     });
 }
