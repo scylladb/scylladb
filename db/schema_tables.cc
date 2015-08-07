@@ -117,10 +117,11 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
             {"speculative_retry", utf8_type},
             {"subcomparator", utf8_type},
             {"type", utf8_type},
-            // The following 3 columns are only present up until 2.1.8 tables
+            // The following 4 columns are only present up until 2.1.8 tables
             {"key_aliases", utf8_type},
             {"value_alias", utf8_type},
             {"column_aliases", utf8_type},
+            {"index_interval", int32_type},
         },
         // static columns
         {},
@@ -1376,6 +1377,8 @@ future<> save_system_keyspace_schema() {
 
         if (table_row.has("min_index_interval")) {
             builder.set_min_index_interval(table_row.get_nonnull<int>("min_index_interval"));
+        } else if (table_row.has("index_interval")) { // compatibility
+            builder.set_min_index_interval(table_row.get_nonnull<int>("index_interval"));
         }
 
         if (table_row.has("max_index_interval")) {
