@@ -23,6 +23,7 @@ class bytes_ostream {
         // FIXME: group fragment pointers to reduce pointer chasing when packetizing
         std::unique_ptr<chunk> next;
         size_type offset; // Also means "size" after chunk is closed
+        size_type size;
         value_type data[0];
         void operator delete(void* ptr) { free(ptr); }
     };
@@ -67,7 +68,7 @@ private:
         if (!_current) {
             return 0;
         }
-        return usable_chunk_size - _current->offset;
+        return _current->size - _current->offset;
     }
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
@@ -86,6 +87,7 @@ private:
             }
             auto new_chunk = std::unique_ptr<chunk>(new (space) chunk());
             new_chunk->offset = size;
+            new_chunk->size = alloc_size - sizeof(chunk);
             if (_current) {
                 _current->next = std::move(new_chunk);
                 _current = _current->next.get();
@@ -225,6 +227,7 @@ public:
 
         auto new_chunk = std::unique_ptr<chunk>(new (space) chunk());
         new_chunk->offset = _size;
+        new_chunk->size = _size;
 
         auto dst = new_chunk->data;
         auto r = _begin.get();
