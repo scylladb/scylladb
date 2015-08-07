@@ -30,6 +30,7 @@
 #include <seastar/net/api.hh>
 
 #include <experimental/optional>
+#include <stdexcept>
 
 namespace transport {
 
@@ -120,10 +121,11 @@ public:
         , keyspace{keyspace_}
         , table_or_type_or_function{table_or_type_or_function_}
     {
-#if 0
-        if (target != Target.KEYSPACE)
-            assert this.tableOrTypeOrFunction != null : "Table or type should be set for non-keyspace schema change events";
-#endif
+        if (target != target_type::KEYSPACE) {
+            if (!table_or_type_or_function_) {
+                throw std::invalid_argument("Table or type should be set for non-keyspace schema change events");
+            }
+        }
     }
 
     schema_change(const change_type change_, const sstring keyspace_)
