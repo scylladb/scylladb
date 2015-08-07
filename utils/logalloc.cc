@@ -118,6 +118,31 @@ struct segment_descriptor {
     bool is_empty() const {
         return _free_space == segment::size;
     }
+
+    bool is_lsa_managed() const {
+        return _lsa_managed;
+    }
+
+    occupancy_stats occupancy() const {
+        return { _free_space, segment::size };
+    }
+
+    void record_alloc(segment::size_type size) {
+        _free_space -= size;
+    }
+
+    void record_free(segment::size_type size) {
+        _free_space += size;
+    }
+
+    void set_heap_handle(segment_heap::handle_type h) {
+        _heap_handle = h;
+    }
+
+    const segment_heap::handle_type& heap_handle() const {
+        return _heap_handle;
+    }
+
 };
 
 #ifndef DEFAULT_ALLOCATOR
@@ -135,6 +160,7 @@ public:
     segment* new_segment();
     segment_descriptor& descriptor(const segment*);
     void free_segment(segment*);
+    void free_segment(segment*, segment_descriptor&);
     size_t segments_in_use() const;
     bool is_lsa_managed(segment*);
 };
@@ -162,8 +188,12 @@ segment_pool::new_segment() {
 }
 
 void segment_pool::free_segment(segment* seg) {
+    free_segment(seg, descriptor(seg));
+}
+
+void segment_pool::free_segment(segment* seg, segment_descriptor& desc) {
     logger.debug("Releasing segment {}", seg);
-    descriptor(seg)._lsa_managed = false;
+    desc._lsa_managed = false;
     delete seg;
     --_segments_in_use;
 }
@@ -203,6 +233,9 @@ public:
             return desc;
         }
     }
+    void free_segment(segment* seg, segment_descriptor& desc) {
+        free_segment(seg);
+    }
     void free_segment(segment* seg) {
         --_segments_in_use;
         auto i = _segments.find(seg);
@@ -228,11 +261,11 @@ size_t segment_pool::segments_in_use() const {
 static thread_local segment_pool shard_segment_pool;
 
 void segment::record_alloc(segment::size_type size) {
-    shard_segment_pool.descriptor(this)._free_space -= size;
+    shard_segment_pool.descriptor(this).record_alloc(size);
 }
 
 void segment::record_free(segment::size_type size) {
-    shard_segment_pool.descriptor(this)._free_space += size;
+    shard_segment_pool.descriptor(this).record_free(size);
 }
 
 bool segment::is_empty() const {
@@ -538,7 +571,9 @@ public:
         auto segment_addr = align_down(obj_addr, (uintptr_t)segment::size);
         segment* seg = reinterpret_cast<segment*>(segment_addr);
 
-        if (!shard_segment_pool.is_lsa_managed(seg)) {
+        segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
+
+        if (!seg_desc.is_lsa_managed()) {
             standard_allocator().free(obj);
             return;
         }
@@ -550,15 +585,15 @@ public:
             _closed_occupancy -= seg->occupancy();
         }
 
-        seg->record_free(desc->size() + sizeof(object_descriptor) + desc->padding());
+        seg_desc.record_free(desc->size() + sizeof(object_descriptor) + desc->padding());
 
         if (seg != _active) {
-            if (seg->is_empty()) {
-                _segments.erase(seg->heap_handle());
-                shard_segment_pool.free_segment(seg);
+            if (seg_desc.is_empty()) {
+                _segments.erase(seg_desc.heap_handle());
+                shard_segment_pool.free_segment(seg, seg_desc);
             } else {
-                _closed_occupancy += seg->occupancy();
-                _segments.decrease(seg->heap_handle());
+                _closed_occupancy += seg_desc.occupancy();
+                _segments.decrease(seg_desc.heap_handle());
             }
         }
     }
