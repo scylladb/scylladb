@@ -80,7 +80,7 @@ int main(int ac, char** av) {
         ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
                 "The directory location of the API GUI")
         // TODO : default, always read?
-        ("options-file", bpo::value<sstring>(), "cassandra.yaml file to read options from")
+        ("options-file", bpo::value<sstring>()->default_value("conf/scylla.yaml"), "scylla.yaml file to read options from")
         ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
         ;
 
