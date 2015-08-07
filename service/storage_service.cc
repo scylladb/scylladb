@@ -256,8 +256,7 @@ future<> storage_service::join_token_ring(int delay) {
         // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
         // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
-        // FIXME: DatabaseDescriptor.getNumTokens()
-        size_t num_tokens = 3;
+        size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
         logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
 #if 0

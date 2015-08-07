@@ -24,6 +24,7 @@
 #include "dht/i_partitioner.hh"
 #include <unordered_set>
 #include "database.hh"
+#include "db/config.hh"
 
 namespace dht {
 
@@ -96,8 +97,7 @@ public:
             return tokens;
         }
 #endif
-        // FIXME: DatabaseDescriptor.getNumTokens();
-        size_t num_tokens = 3;
+        size_t num_tokens = db.get_config().num_tokens();
         if (num_tokens < 1) {
             throw std::runtime_error("num_tokens must be >= 1");
         }
