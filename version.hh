@@ -2,18 +2,16 @@
 
 #include "core/sstring.hh"
 #include "core/print.hh"
+#include <tuple>
 
 namespace version {
 class version {
-    uint8_t maj;
-    uint8_t min;
-    uint16_t rev;
-
+    std::tuple<uint8_t, uint8_t, uint16_t> _version;
 public:
-    version(uint8_t x, uint8_t y = 0, uint16_t z = 0): maj(x), min(y), rev(z) {}
+    version(uint8_t x, uint8_t y = 0, uint16_t z = 0): _version(std::make_tuple(x, y, z)) {}
 
     sstring to_sstring() {
-        return sprint("%d.%d.%d", maj, min, rev);
+        return sprint("%d.%d.%d", std::get<0>(_version), std::get<1>(_version), std::get<2>(_version));
     }
 
     static version current() {
@@ -22,35 +20,24 @@ public:
     }
 
     bool operator==(version v) const {
-        return (maj == v.maj) && (min == v.min) && (rev == v.rev);
+        return _version == v._version;
     }
 
     bool operator!=(version v) const {
-        return !(v == *this);
+        return _version != v._version;
     }
 
     bool operator<(version v) const {
-        if (maj < v.maj) {
-            return true;
-        } else if (maj > v.maj) {
-            return false;
-        }
-
-        if (min < v.min) {
-            return true;
-        } else if (min > v.min) {
-            return false;
-        }
-        return rev < v.rev;
+        return _version < v._version;
     }
     bool operator<=(version v) {
-        return ((*this < v) || (*this == v));
+        return _version <= v._version;
     }
     bool operator>(version v) {
-        return !(*this <= v);
+        return _version > v._version;
     }
     bool operator>=(version v) {
-        return ((*this == v) || !(*this < v));
+        return _version >= v._version;
     }
 };
 
