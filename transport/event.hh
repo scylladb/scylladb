@@ -39,13 +39,9 @@ public:
     enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE };
 
     const event_type type;
-
 private:
-    event(const event_type& type_)
-        : type{type_}
-    { }
+    event(const event_type& type_);
 public:
-
     class topology_change;
     class status_change;
     class schema_change;
@@ -58,26 +54,13 @@ public:
     const change_type change;
     const ipv4_addr node;
 
-    topology_change(change_type change, const ipv4_addr& node)
-        : event{event_type::TOPOLOGY_CHANGE}
-        , change{change}
-        , node{node}
-    { }
+    topology_change(change_type change, const ipv4_addr& node);
 
-    static topology_change new_node(const gms::inet_address& host, uint16_t port)
-    {
-        return topology_change{change_type::NEW_NODE, ipv4_addr{host.raw_addr(), port}};
-    }
+    static topology_change new_node(const gms::inet_address& host, uint16_t port);
 
-    static topology_change removed_node(const gms::inet_address& host, uint16_t port)
-    {
-        return topology_change{change_type::REMOVED_NODE, ipv4_addr{host.raw_addr(), port}};
-    }
+    static topology_change removed_node(const gms::inet_address& host, uint16_t port);
 
-    static topology_change moved_node(const gms::inet_address& host, uint16_t port)
-    {
-        return topology_change{change_type::MOVED_NODE, ipv4_addr{host.raw_addr(), port}};
-    }
+    static topology_change moved_node(const gms::inet_address& host, uint16_t port);
 };
 
 class event::status_change : public event {
@@ -87,21 +70,11 @@ public:
     const status_type status;
     const ipv4_addr node;
 
-    status_change(status_type status, const ipv4_addr& node)
-        : event{event_type::STATUS_CHANGE}
-        , status{status}
-        , node{node}
-    { }
+    status_change(status_type status, const ipv4_addr& node);
 
-    static status_change node_up(const gms::inet_address& host, uint16_t port)
-    {
-        return status_change{status_type::UP, ipv4_addr{host.raw_addr(), port}};
-    }
+    static status_change node_up(const gms::inet_address& host, uint16_t port);
 
-    static status_change node_down(const gms::inet_address& host, uint16_t port)
-    {
-        return status_change{status_type::DOWN, ipv4_addr{host.raw_addr(), port}};
-    }
+    static status_change node_down(const gms::inet_address& host, uint16_t port);
 };
 
 class event::schema_change : public event {
@@ -114,23 +87,9 @@ public:
     const sstring keyspace;
     const std::experimental::optional<sstring> table_or_type_or_function;
 
-    schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_)
-        : event{event_type::SCHEMA_CHANGE}
-        , change{change_}
-        , target{target_}
-        , keyspace{keyspace_}
-        , table_or_type_or_function{table_or_type_or_function_}
-    {
-        if (target != target_type::KEYSPACE) {
-            if (!table_or_type_or_function_) {
-                throw std::invalid_argument("Table or type should be set for non-keyspace schema change events");
-            }
-        }
-    }
+    schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_);
 
-    schema_change(const change_type change_, const sstring keyspace_)
-        : schema_change{change_, target_type::KEYSPACE, keyspace_, std::experimental::optional<sstring>{}}
-    { }
+    schema_change(const change_type change_, const sstring keyspace_);
 };
 
 }
