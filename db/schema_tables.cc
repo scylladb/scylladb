@@ -117,10 +117,11 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
             {"speculative_retry", utf8_type},
             {"subcomparator", utf8_type},
             {"type", utf8_type},
-            // The following 3 columns are only present up until 2.1.8 tables
+            // The following 4 columns are only present up until 2.1.8 tables
             {"key_aliases", utf8_type},
             {"value_alias", utf8_type},
             {"column_aliases", utf8_type},
+            {"index_interval", int32_type},
         },
         // static columns
         {},
@@ -130,7 +131,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "table definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return columnfamilies;
 }
@@ -159,7 +160,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "column definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return columns;
 }
@@ -183,7 +184,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "trigger definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return triggers;
 }
@@ -208,7 +209,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return usertypes;
 }
@@ -237,7 +238,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return functions;
 }
@@ -266,7 +267,7 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined aggregate definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return aggregates;
 }
@@ -1060,9 +1061,7 @@ future<> save_system_keyspace_schema() {
         }
 
         m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
-#if 0
-        adder.add("caching", table.getCaching().toString());
-#endif
+        m.set_clustered_cell(ckey, "caching", table->caching_options().to_sstring(), timestamp);
         m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
 
         m.set_clustered_cell(ckey, "compaction_strategy_class", sstables::compaction_strategy::name(table->compaction_strategy()), timestamp);
@@ -1350,9 +1349,11 @@ future<> save_system_keyspace_schema() {
         if (table_row.has("memtable_flush_period_in_ms")) {
             builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
         }
-#if 0
-        cfm.caching(CachingOptions.fromString(result.getString("caching")));
-#endif
+
+        if (table_row.has("caching")) {
+            builder.set_caching_options(caching_options::from_sstring(table_row.get_nonnull<sstring>("caching")));
+        }
+
         if (table_row.has("default_time_to_live")) {
             builder.set_default_time_to_live(gc_clock::duration(table_row.get_nonnull<gc_clock::rep>("default_time_to_live")));
         }
@@ -1376,6 +1377,8 @@ future<> save_system_keyspace_schema() {
 
         if (table_row.has("min_index_interval")) {
             builder.set_min_index_interval(table_row.get_nonnull<int>("min_index_interval"));
+        } else if (table_row.has("index_interval")) { // compatibility
+            builder.set_min_index_interval(table_row.get_nonnull<int>("index_interval"));
         }
 
         if (table_row.has("max_index_interval")) {
@@ -1423,7 +1426,7 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
         m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
         if (!column.is_on_all_components()) {
-            m.set_clustered_cell(ckey, "component_index", int32_t(column.position()), timestamp);
+            m.set_clustered_cell(ckey, "component_index", int32_t(table->position(column)), timestamp);
         }
 #if 0
         adder.add("index_name", column.getIndexName());

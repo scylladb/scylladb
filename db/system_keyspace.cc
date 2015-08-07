@@ -105,7 +105,7 @@ schema_ptr batchlog() {
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
        )));
        builder.set_gc_grace_seconds(0);
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return batchlog;
 }
@@ -129,7 +129,7 @@ schema_ptr batchlog() {
         // operations on resulting CFMetaData:
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return paxos;
 }
@@ -176,8 +176,8 @@ schema_ptr built_indexes() {
                 {"release_version", utf8_type},
                 {"schema_version", uuid_type},
                 {"thrift_version", utf8_type},
-                {"tokens", set_type_impl::get_instance(utf8_type, false)},
-                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, false)},
+                {"tokens", set_type_impl::get_instance(utf8_type, true)},
+                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, true)},
                 // The following 3 columns are only present up until 2.1.8 tables
                 {"rpc_address", inet_addr_type},
                 {"broadcast_address", inet_addr_type},
@@ -191,7 +191,7 @@ schema_ptr built_indexes() {
         // comment
         "information about the local node"
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
 }
@@ -212,7 +212,7 @@ schema_ptr built_indexes() {
                 {"release_version", utf8_type},
                 {"rpc_address", inet_addr_type},
                 {"schema_version", uuid_type},
-                {"tokens", set_type_impl::get_instance(utf8_type, false)},
+                {"tokens", set_type_impl::get_instance(utf8_type, true)},
         },
         // static columns
         {},
@@ -221,7 +221,7 @@ schema_ptr built_indexes() {
         // comment
         "information about known peers in the cluster"
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return peers;
 }
@@ -235,7 +235,7 @@ schema_ptr built_indexes() {
         {},
         // regular columns
         {
-            {"hints_dropped", map_type_impl::get_instance(uuid_type, int32_type, false)},
+            {"hints_dropped", map_type_impl::get_instance(uuid_type, int32_type, true)},
         },
         // static columns
         {},
@@ -244,7 +244,7 @@ schema_ptr built_indexes() {
         // comment
         "events related to peers"
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return peer_events;
 }
@@ -265,7 +265,7 @@ schema_ptr built_indexes() {
         // comment
         "ranges requested for transfer"
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return range_xfers;
 }
@@ -280,7 +280,7 @@ schema_ptr built_indexes() {
         // regular columns
         {
             {"columnfamily_name", utf8_type},
-            {"inputs", set_type_impl::get_instance(int32_type, false)},
+            {"inputs", set_type_impl::get_instance(int32_type, true)},
             {"keyspace_name", utf8_type},
         },
         // static columns
@@ -290,7 +290,7 @@ schema_ptr built_indexes() {
         // comment
         "unfinished compactions"
         )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return compactions_in_progress;
 }
@@ -309,7 +309,7 @@ schema_ptr built_indexes() {
             {"columnfamily_name", utf8_type},
             {"compacted_at", timestamp_type},
             {"keyspace_name", utf8_type},
-            {"rows_merged", map_type_impl::get_instance(int32_type, long_type, false)},
+            {"rows_merged", map_type_impl::get_instance(int32_type, long_type, true)},
         },
         // static columns
         {},
@@ -319,7 +319,7 @@ schema_ptr built_indexes() {
         "week-long compaction history"
         )));
         builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return compaction_history;
 }
@@ -347,7 +347,7 @@ schema_ptr built_indexes() {
         // comment
         "historic sstable read rates"
        )));
-       return builder.build();
+       return builder.build(schema_builder::compact_storage::no);
     }();
     return sstable_activity;
 }
@@ -372,7 +372,7 @@ schema_ptr size_estimates() {
             "per-table primary range size estimates"
             )));
         builder.set_gc_grace_seconds(0);
-        return builder.build();
+        return builder.build(schema_builder::compact_storage::no);
     }();
     return size_estimates;
 }

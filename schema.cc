@@ -8,6 +8,7 @@
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include "version.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -76,6 +77,8 @@ schema::schema(const raw_schema& raw)
         }
     };
 
+    thrift()._compound = is_compound();
+
     std::sort(
             _raw._columns.begin() + column_offset(column_kind::static_column),
             _raw._columns.begin()
@@ -110,6 +113,10 @@ schema::schema(const raw_schema& raw)
                 // In origin, ci == null is true for a PK column where CFMetaData "keyValidator" is non-composite.
                 // Which is true of #pk == 1
                 def._thrift_bits.is_on_all_components = partition_key_size() == 1;
+                break;
+            case column_kind::compact_column:
+                // compact values are alone, so they have no index
+                def._thrift_bits.is_on_all_components = true;
                 break;
             default:
                 // Or any other column where "comparator" is not compound
@@ -334,6 +341,10 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
+schema_ptr schema_builder::build() {
+    return make_lw_shared<schema>(schema(_raw));
+}
+
 schema_ptr schema_builder::build(compact_storage cp) {
     schema s(_raw);
 
@@ -354,7 +365,7 @@ schema_ptr schema_builder::build(compact_storage cp) {
             s._raw._is_compound = true;
         }
     }
-    s._thrift._compound = s._raw._is_compound;
+
     if (s._raw._is_dense) {
         // In Origin, dense CFs always have at least one regular column
         if (s.regular_columns_count() == 0) {
@@ -368,10 +379,8 @@ schema_ptr schema_builder::build(compact_storage cp) {
 
         // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
         // from the constructor
-        return make_lw_shared<schema>(schema(s._raw));
-    } else {
-        return make_lw_shared<schema>(s);
     }
+    return make_lw_shared<schema>(schema(s._raw));
 }
 
 // Useful functions to manipulate the schema's comparator field
@@ -379,6 +388,11 @@ namespace cell_comparator {
 
 static constexpr auto _composite_str = "org.apache.cassandra.db.marshal.CompositeType";
 static constexpr auto _collection_str = "org.apache.cassandra.db.marshal.ColumnToCollectionType";
+
+static bool always_include_default() {
+    static thread_local bool def = version::version::current() < version::version(2, 2);
+    return def;
+};
 
 static sstring collection_name(const collection_type& t) {
     sstring collection_str(_collection_str);
@@ -394,7 +408,8 @@ static sstring compound_name(const schema& s) {
         for (auto &t : s.clustering_key_columns()) {
             compound += t.type->name() + ",";
         }
-    } else {
+    }
+    if (always_include_default() || (s.clustering_key_size() == 0)) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
