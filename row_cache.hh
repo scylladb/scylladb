@@ -83,7 +83,6 @@ public:
 private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
-    memory::reclaimer _reclaimer;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;

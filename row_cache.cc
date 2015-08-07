@@ -16,15 +16,15 @@ cache_tracker& global_cache_tracker() {
     return instance;
 }
 
-cache_tracker::cache_tracker()
-    : _reclaimer([this] {
-        logger.warn("Clearing cache from reclaimer hook");
-        // FIXME: perform incremental eviction. We should first switch to a
-        // compacting memory allocator to avoid problems with memory
-        // fragmentation.
-        clear();
-    }) {
+cache_tracker::cache_tracker() {
     setup_collectd();
+
+    _region.make_evictable([this] {
+        with_allocator(_region.allocator(), [this] {
+            assert(!_lru.empty());
+            _lru.pop_back_and_dispose(current_deleter<cache_entry>());
+        });
+    });
 }
 
 cache_tracker::~cache_tracker() {

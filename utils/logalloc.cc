@@ -19,8 +19,6 @@ struct segment;
 static logging::logger logger("lsa");
 static thread_local tracker tracker_instance;
 
-using eviction_fn = std::function<void(size_t)>;
-
 class tracker::impl {
     std::vector<region::impl*> _regions;
     scollectd::registrations _collectd_registrations;
@@ -549,6 +547,10 @@ public:
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
+    bool empty() const {
+        return occupancy().used_space() == 0;
+    }
+
     occupancy_stats occupancy() const {
         occupancy_stats total{};
         total += _closed_occupancy;
@@ -687,6 +689,20 @@ public:
         _compactible = compactible;
     }
 
+    //
+    // Returns true if this pool is evictable and evict_some() will make some forward progress, so
+    // this will eventually stop:
+    //
+    //     while (evictable()) { evict_some(); }
+    //
+    bool is_evictable() const {
+        return _evictable;
+    }
+
+    void evict_some() {
+        _eviction_fn();
+    }
+
     void make_not_evictable() {
         _evictable = false;
         _eviction_fn = {};
@@ -715,6 +731,10 @@ void region::merge(region& other) {
 
 void region::full_compaction() {
     _impl->full_compaction();
+}
+
+void region::make_evictable(eviction_fn fn) {
+    _impl->make_evictable(std::move(fn));
 }
 
 allocation_strategy& region::allocator() {
@@ -750,6 +770,40 @@ void tracker::impl::full_compaction() {
     logger.debug("Compaction done, {}", occupancy());
 }
 
+static void reclaim_from_evictable(region::impl& r, size_t target_segments_in_use) {
+    while (true) {
+        auto deficit = (shard_segment_pool.segments_in_use() - target_segments_in_use) * segment::size;
+        auto occupancy = r.occupancy();
+        auto used = occupancy.used_space();
+        if (used == 0) {
+            // FIXME: There could be still some objects which are allocated
+            // using that region but were too large and are not managed by
+            // LSA. We should avoid having large objects in the first place,
+            // and make the managed_blob object fracture them internally. To
+            // handle eviction of large objects we should first move the
+            // segment pool service into the seastar allocator, so that
+            // evicting large objects counts towards that pool. It also makes
+            // sense to have the reclaimer coupled with that segment pool, and
+            // not with the page pool like it is now.
+            break;
+        }
+        auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
+        logger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
+        while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
+            r.evict_some();
+            if (shard_segment_pool.segments_in_use() <= target_segments_in_use) {
+                logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
+                return;
+            }
+            if (r.empty()) {
+                return;
+            }
+        }
+        logger.debug("Compacting after evicting {} bytes", used - r.occupancy().used_space());
+        r.compact();
+    }
+}
+
 size_t tracker::impl::reclaim(size_t bytes) {
     //
     // Algorithm outline.
@@ -760,11 +814,13 @@ size_t tracker::impl::reclaim(size_t bytes) {
     // the region which has the sparsest segment. We do it until we released
     // enough segments or there are no more regions we can compact.
     //
-    // TODO: eviction step involving evictable pools.
+    // When compaction is not sufficient to reclaim space, we evict data from
+    // evictable regions.
     //
+    size_t in_use = shard_segment_pool.segments_in_use();
 
     constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
-    auto segments_to_release = align_up(std::min(max_bytes, bytes), segment::size) >> segment::size_shift;
+    auto segments_to_release = std::min(in_use, align_up(std::min(max_bytes, bytes), segment::size) >> segment::size_shift);
 
     auto cmp = [] (region::impl* c1, region::impl* c2) {
         if (c1->is_compactible() != c2->is_compactible()) {
@@ -773,9 +829,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
         return c2->min_occupancy() < c1->min_occupancy();
     };
 
-    size_t in_use = shard_segment_pool.segments_in_use();
-
-    auto target = in_use - std::min(segments_to_release, in_use);
+    auto target = in_use - segments_to_release;
 
     logger.debug("Compacting, {} segments in use ({} B), trying to release {} ({} B).",
         in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
@@ -795,7 +849,6 @@ size_t tracker::impl::reclaim(size_t bytes) {
 
         if (!r->is_compactible()) {
             logger.warn("Unable to release segments, no compactible pools.");
-            // FIXME: Evict data from evictable pools.
             break;
         }
 
@@ -804,9 +857,24 @@ size_t tracker::impl::reclaim(size_t bytes) {
         boost::range::push_heap(_regions, cmp);
     }
 
-    size_t nr_released = in_use - shard_segment_pool.segments_in_use();
-    logger.debug("Released {} segments.", nr_released);
+    auto released_during_compaction = in_use - shard_segment_pool.segments_in_use();
 
+    if (released_during_compaction < segments_to_release) {
+        logger.debug("Considering evictable regions.");
+        // FIXME: Fair eviction
+        for (region::impl* r : _regions) {
+            if (r->is_evictable()) {
+                reclaim_from_evictable(*r, target);
+                if (shard_segment_pool.segments_in_use() <= target) {
+                    break;
+                }
+            }
+        }
+    }
+
+    auto nr_released = in_use - shard_segment_pool.segments_in_use();
+    logger.debug("Released {} segments (wanted {}), {} during compaction.",
+        nr_released, segments_to_release, released_during_compaction);
     return nr_released * segment::size;
 }
 
