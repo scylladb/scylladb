@@ -192,7 +192,7 @@ void segment_pool::free_segment(segment* seg) {
 }
 
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) {
-    logger.debug("Releasing segment {}", seg);
+    logger.trace("Releasing segment {}", seg);
     desc._lsa_managed = false;
     delete seg;
     --_segments_in_use;
@@ -485,7 +485,7 @@ private:
         if (_active_offset < segment::size) {
             new (_active->at(_active_offset)) obj_flags(obj_flags::make_end_of_segment());
         }
-        logger.debug("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
+        logger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
         auto handle = _segments.push(_active);
         _active->set_heap_handle(handle);
