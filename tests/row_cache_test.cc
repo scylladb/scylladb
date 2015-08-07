@@ -33,6 +33,12 @@ mutation make_key_mutation(schema_ptr s, bytes key) {
 }
 
 static
+mutation make_new_mutation(schema_ptr s) {
+    static thread_local int next = 0;
+    return make_key_mutation(s, to_bytes(sprint("key%d", next++)));
+}
+
+static
 mutation make_unique_mutation(schema_ptr s) {
     static int key_sequence = 0;
     return make_key_mutation(s, bytes(sprint("key%d", key_sequence++).c_str()));
@@ -195,5 +201,32 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                 return cache->make_reader(range);
             };
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_eviction) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, mt->as_data_source(), tracker);
+
+        std::vector<dht::decorated_key> keys;
+        for (int i = 0; i < 100000; i++) {
+            auto m = make_new_mutation(s);
+            keys.emplace_back(m.decorated_key());
+            cache.populate(m);
+        }
+
+        std::random_shuffle(keys.begin(), keys.end());
+
+        for (auto&& key : keys) {
+            cache.make_reader(query::partition_range::make_singular(key));
+        }
+
+        while (tracker.region().occupancy().used_space() > 0) {
+            logalloc::shard_tracker().reclaim(100);
+        }
     });
 }
