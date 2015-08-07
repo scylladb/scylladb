@@ -160,37 +160,39 @@ future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
     auto g_digest_list = ack_msg.get_gossip_digest_list();
     auto ep_state_map = ack_msg.get_endpoint_state_map();
 
+    auto f = make_ready_future<>();
     if (ep_state_map.size() > 0) {
         /* Notify the Failure Detector */
         this->notify_failure_detector(ep_state_map);
-        this->apply_state_locally(ep_state_map);
+        f = this->apply_state_locally(ep_state_map);
     }
 
-    if (this->is_in_shadow_round()) {
-        this->finish_shadow_round();
-        // don't bother doing anything else, we have what we came for
-        return make_ready_future<>();
-    }
-
-    /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
-    std::map<inet_address, endpoint_state> delta_ep_state_map;
-    for (auto g_digest : g_digest_list) {
-        inet_address addr = g_digest.get_endpoint();
-        auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-        if (local_ep_state_ptr) {
-            delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+    return f.then([id, g_digest_list = std::move(g_digest_list), this] {
+        if (this->is_in_shadow_round()) {
+            this->finish_shadow_round();
+            // don't bother doing anything else, we have what we came for
+            return make_ready_future<>();
         }
-    }
-    gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-    logger.trace("Sending a GossipDigestACK2 to {}", id);
-    return this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
-        try {
-            f.get();
-            logger.trace("Got GossipDigestACK2 Reply");
-        } catch (...) {
-            logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+        /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+        std::map<inet_address, endpoint_state> delta_ep_state_map;
+        for (auto g_digest : g_digest_list) {
+            inet_address addr = g_digest.get_endpoint();
+            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+            if (local_ep_state_ptr) {
+                delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+            }
         }
-        return make_ready_future<>();
+        gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+        logger.trace("Sending a GossipDigestACK2 to {}", id);
+        return this->ms().send_gossip_digest_ack2(id, std::move(ack2_msg)).then_wrapped([id] (auto&& f) {
+            try {
+                f.get();
+                logger.trace("Got GossipDigestACK2 Reply");
+            } catch (...) {
+                logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+            }
+            return make_ready_future<>();
+        });
     });
 }
 
@@ -225,7 +227,7 @@ void gossiper::init_messaging_service_handler() {
             auto& remote_ep_state_map = msg.get_endpoint_state_map();
             /* Notify the Failure Detector */
             gossiper.notify_failure_detector(remote_ep_state_map);
-            gossiper.apply_state_locally(remote_ep_state_map);
+            return gossiper.apply_state_locally(remote_ep_state_map);
         }).discard_result();
         return messaging_service::no_wait();
     });
@@ -301,7 +303,7 @@ void gossiper::notify_failure_detector(inet_address endpoint, endpoint_state rem
     }
 }
 
-void gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) {
+future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) {
     for (auto& entry : map) {
         auto& ep = entry.first;
         if (ep == get_broadcast_address() && !is_in_shadow_round()) {
@@ -353,6 +355,7 @@ void gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) 
             handle_major_state_change(ep, remote_state);
         }
     }
+    return make_ready_future<>();
 }
 
 void gossiper::remove_endpoint(inet_address endpoint) {
