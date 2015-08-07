@@ -101,7 +101,7 @@ public:
 
 inline
 standard_allocation_strategy& standard_allocator() {
-    static thread_local auto instance = std::make_unique<standard_allocation_strategy>();
+    static thread_local auto instance = new standard_allocation_strategy();
     return *instance;
 }
 
