@@ -347,12 +347,12 @@ void cql_server::event_notifier::on_create_user_type(const sstring& ks_name, con
 
 void cql_server::event_notifier::on_create_function(const sstring& ks_name, const sstring& function_name)
 {
-    logger.warn("%s event ignored", __func__);
+    logger.warn("{} event ignored", __func__);
 }
 
 void cql_server::event_notifier::on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name)
 {
-    logger.warn("%s event ignored", __func__);
+    logger.warn("{} event ignored", __func__);
 }
 
 void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
