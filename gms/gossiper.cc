@@ -38,6 +38,7 @@
 #include "log.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/semaphore.hh>
 #include <chrono>
 
 namespace gms {
@@ -241,8 +242,9 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
     int index = dist(_random);
     inet_address to = __live_endpoints[index];
     auto id = get_shard_id(to);
+    auto sem = make_shared<semaphore>();
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    return ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+    ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id, sem] (auto&& f) {
         try {
             auto ack_msg = f.get0();
             logger.trace("Got GossipDigestSyn Reply");
@@ -254,7 +256,11 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
             logger.trace("Fail to send GossipDigestSyn to {}: {}", id, std::current_exception());
         }
         return make_ready_future<>();
-    }).then([this, to] {
+    }).then([sem] {
+        sem->signal();
+    });
+
+    return sem->wait(std::chrono::milliseconds(1000)).then([this, to] {
         return make_ready_future<bool>(_seeds.count(to));
     });
 }
