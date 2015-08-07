@@ -1154,6 +1154,7 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
         DatabaseDescriptor.getEndpointSnitch().gossiperStarting();
 #endif
         logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
+        _enabled = true;
         _scheduled_gossip_task.arm(INTERVAL);
         return make_ready_future<>();
     });
@@ -1256,6 +1257,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 
 future<> gossiper::shutdown() {
     return seastar::async([this] {
+        _enabled = false;
         _scheduled_gossip_task.cancel();
         logger.info("Announcing shutdown");
         sleep(INTERVAL * 2).get();
@@ -1275,6 +1277,7 @@ future<> gossiper::shutdown() {
 }
 
 future<> gossiper::stop() {
+    _enabled = false;
     _scheduled_gossip_task.cancel();
     return _handlers.stop().then( [this] () {
         if (engine().cpu_id() == 0) {
@@ -1285,7 +1288,7 @@ future<> gossiper::stop() {
 }
 
 bool gossiper::is_enabled() {
-    return _scheduled_gossip_task.armed();
+    return _enabled;
 }
 
 void gossiper::finish_shadow_round() {

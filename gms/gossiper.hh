@@ -85,6 +85,7 @@ private:
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<clk> _scheduled_gossip_task;
+    bool _enabled = false;
     sstring get_cluster_name() {
         // FIXME: DatabaseDescriptor.getClusterName()
         return "my_cluster_name";
