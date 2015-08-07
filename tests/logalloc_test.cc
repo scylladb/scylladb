@@ -15,6 +15,7 @@
 #include "utils/managed_bytes.hh"
 #include "log.hh"
 
+[[gnu::unused]]
 static auto x = [] {
     logging::logger_registry().set_all_loggers_level(logging::log_level::debug);
     return 0;
