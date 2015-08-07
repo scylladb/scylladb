@@ -6,9 +6,9 @@
 
 namespace version {
 class version {
-    std::tuple<uint8_t, uint8_t, uint16_t> _version;
+    std::tuple<uint16_t, uint16_t, uint16_t> _version;
 public:
-    version(uint8_t x, uint8_t y = 0, uint16_t z = 0): _version(std::make_tuple(x, y, z)) {}
+    version(uint16_t x, uint16_t y = 0, uint16_t z = 0): _version(std::make_tuple(x, y, z)) {}
 
     sstring to_sstring() {
         return sprint("%d.%d.%d", std::get<0>(_version), std::get<1>(_version), std::get<2>(_version));
