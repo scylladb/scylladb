@@ -108,6 +108,7 @@ segment_occupancy_descending_less_compare::operator()(segment* s1, segment* s2) 
 
 struct segment_descriptor {
     bool _lsa_managed;
+    segment::size_type _offset;
     segment::size_type _free_space;
     segment_heap::handle_type _heap_handle;
 
@@ -117,10 +118,6 @@ struct segment_descriptor {
 
     bool is_empty() const {
         return _free_space == segment::size;
-    }
-
-    bool is_lsa_managed() const {
-        return _lsa_managed;
     }
 
     occupancy_stats occupancy() const {
@@ -159,10 +156,11 @@ public:
     segment_pool();
     segment* new_segment();
     segment_descriptor& descriptor(const segment*);
+    // Returns segment containing given object or nullptr.
+    segment* containing_segment(void* obj) const;
     void free_segment(segment*);
     void free_segment(segment*, segment_descriptor&);
     size_t segments_in_use() const;
-    bool is_lsa_managed(segment*);
 };
 
 segment_descriptor&
@@ -173,16 +171,33 @@ segment_pool::descriptor(const segment* seg) {
 }
 
 segment*
+segment_pool::containing_segment(void* obj) const {
+    auto addr = reinterpret_cast<uintptr_t>(obj);
+    auto offset = addr & (segment::size - 1);
+    auto index = (addr - _segments_base) >> segment::size_shift;
+    auto& desc = _segments[index];
+    if (desc._lsa_managed && offset >= desc._offset) {
+        return reinterpret_cast<segment*>(addr - offset + desc._offset);
+    } else {
+        if (index == 0) {
+            return nullptr;
+        }
+        auto& prev = _segments[index - 1];
+        if (prev._lsa_managed && offset < prev._offset) {
+            return reinterpret_cast<segment*>(addr - offset - segment::size + prev._offset);
+        } else {
+            return nullptr;
+        }
+    }
+}
+
+segment*
 segment_pool::new_segment() {
-    auto seg = new (with_alignment(segment::size)) segment;
-
-    // segment_pool::descriptor() is relying on segment alignment
-    auto seg_addr = reinterpret_cast<uintptr_t>(seg);
-    assert((seg_addr & ((uintptr_t)segment::size - 1)) == 0);
-
+    auto seg = new segment;
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
     desc._lsa_managed = true;
+    desc._offset = reinterpret_cast<uintptr_t>(seg) & (segment::size - 1);
     desc._free_space = segment::size;
     return seg;
 }
@@ -201,8 +216,7 @@ void segment_pool::free_segment(segment* seg, segment_descriptor& desc) {
 segment_pool::segment_pool()
     : _layout(memory::get_memory_layout())
 {
-    // We're relying here on the fact that segments are aligned to their size.
-    _segments_base = align_up(_layout.start, (uintptr_t) segment::size);
+    _segments_base = align_down(_layout.start, (uintptr_t)segment::size);
     _segments.resize((_layout.end - _segments_base) / segment::size);
 }
 
@@ -243,16 +257,19 @@ public:
         _segments.erase(i);
         delete seg;
     }
+    segment* containing_segment(void* obj) const {
+        uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+        auto seg = reinterpret_cast<segment*>(align_down(addr, static_cast<uintptr_t>(segment::size)));
+        auto i = _segments.find(seg);
+        if (i == _segments.end()) {
+            return nullptr;
+        }
+        return seg;
+    }
     size_t segments_in_use() const;
-    bool is_lsa_managed(segment*);
 };
 
 #endif
-
-bool
-segment_pool::is_lsa_managed(segment* seg) {
-    return descriptor(seg)._lsa_managed;
-}
 
 size_t segment_pool::segments_in_use() const {
     return _segments_in_use;
@@ -567,18 +584,16 @@ public:
     }
 
     virtual void free(void* obj) override {
-        auto obj_addr = reinterpret_cast<uintptr_t>(obj);
-        auto segment_addr = align_down(obj_addr, (uintptr_t)segment::size);
-        segment* seg = reinterpret_cast<segment*>(segment_addr);
+        segment* seg = shard_segment_pool.containing_segment(obj);
 
-        segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
-
-        if (!seg_desc.is_lsa_managed()) {
+        if (!seg) {
             standard_allocator().free(obj);
             return;
         }
 
-        auto desc = reinterpret_cast<object_descriptor*>(obj_addr - sizeof(object_descriptor));
+        segment_descriptor& seg_desc = shard_segment_pool.descriptor(seg);
+
+        auto desc = reinterpret_cast<object_descriptor*>(reinterpret_cast<uintptr_t>(obj) - sizeof(object_descriptor));
         desc->mark_dead();
 
         if (seg != _active) {
