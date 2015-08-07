@@ -998,13 +998,21 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
-    _live_endpoints.erase(addr);
-    _unreachable_endpoints[addr] = now();
-    logger.info("inet_address {} is now DOWN", addr);
-    for (auto& subscriber : _subscribers) {
-        subscriber->on_dead(addr, local_state);
-        logger.trace("Notified {}", subscriber);
-    }
+    seastar::async([this, addr, local_state] {
+        _live_endpoints.erase(addr);
+        _unreachable_endpoints[addr] = now();
+        logger.info("inet_address {} is now DOWN", addr);
+        for (auto& subscriber : _subscribers) {
+            subscriber->on_dead(addr, local_state);
+            logger.trace("Notified {}", subscriber);
+        }
+    }).then_wrapped([addr] (auto&& f) {
+        try {
+            f.get();
+        } catch (...) {
+            logger.error("Fail to mark_dead={}: {}", addr, std::current_exception());
+        }
+    });
 }
 
 // Runs inside seastar::async context
