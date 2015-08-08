@@ -136,6 +136,10 @@ static void repair_range(seastar::sharded<database>& db, sstring keyspace,
     auto neighbors = get_neighbors(db.local(), keyspace, range);
     logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
     for (auto peer : neighbors) {
+        // FIXME: think: if we have several neighbors, perhaps we need to
+        // request ranges from all of them and only later transfer ranges to
+        // all of them? Otherwise, we won't necessarily fully repair the
+        // other ndoes, just this one? What does Cassandra do here?
         sp.transfer_ranges(peer, peer, keyspace, {range}, cfs);
         sp.request_ranges(peer, peer, keyspace, {range}, cfs);
         sp.execute().handle_exception([id] (auto ep) {
