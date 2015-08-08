@@ -16,15 +16,15 @@ cache_tracker& global_cache_tracker() {
     return instance;
 }
 
-cache_tracker::cache_tracker()
-    : _reclaimer([this] {
-        logger.warn("Clearing cache from reclaimer hook");
-        // FIXME: perform incremental eviction. We should first switch to a
-        // compacting memory allocator to avoid problems with memory
-        // fragmentation.
-        clear();
-    }) {
+cache_tracker::cache_tracker() {
     setup_collectd();
+
+    _region.make_evictable([this] {
+        with_allocator(_region.allocator(), [this] {
+            assert(!_lru.empty());
+            _lru.pop_back_and_dispose(current_deleter<cache_entry>());
+        });
+    });
 }
 
 cache_tracker::~cache_tracker() {
@@ -36,8 +36,8 @@ cache_tracker::setup_collectd() {
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
-                , "queue_length", "total_rows")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, _lru_len)
+                , "bytes", "used")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _region.occupancy().used_space(); })
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
@@ -53,7 +53,6 @@ cache_tracker::setup_collectd() {
 }
 
 void cache_tracker::clear() {
-    _lru_len = 0;
     with_allocator(_region.allocator(), [this] {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
@@ -67,7 +66,6 @@ void cache_tracker::touch(cache_entry& e) {
 
 void cache_tracker::insert(cache_entry& entry) {
     ++_misses;
-    ++_lru_len;
     _lru.push_front(entry);
 }
 
