@@ -138,7 +138,9 @@ static void repair_range(seastar::sharded<database>& db, sstring keyspace,
     for (auto peer : neighbors) {
         sp.transfer_ranges(peer, peer, keyspace, {range}, cfs);
         sp.request_ranges(peer, peer, keyspace, {range}, cfs);
-        sp.execute(); // FIXME: use future return value, and handle errors
+        sp.execute().handle_exception([id] (auto ep) {
+            logger.error("repair session #{} stream failed: {}", id, ep);
+        });
     }
 }
 
