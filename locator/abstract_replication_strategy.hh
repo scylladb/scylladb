@@ -77,6 +77,11 @@ public:
     virtual size_t get_replication_factor() const = 0;
     uint64_t get_cache_hits_count() const { return _cache_hits_count; }
     replication_strategy_type get_type() const { return _my_type; }
+
+    // get_ranges() returns the list of ranges held by the given endpoint.
+    // It the analogue of Origin's getAddressRanges().get(endpoint).
+    // This function is not efficient, and not meant for the fast path.
+    std::vector<range<token>> get_ranges(inet_address ep);
 };
 
 }
