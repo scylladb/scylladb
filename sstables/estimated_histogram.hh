@@ -243,39 +243,35 @@ public:
         return 0;
     }
 
+#endif
+
     /**
      * @return the mean histogram value (average of bucket offsets, weighted by count)
-     * @throws IllegalStateException if any values were greater than the largest bucket threshold
      */
-    public long mean()
-    {
-        int lastBucket = buckets.length() - 1;
-        if (buckets.get(lastBucket) > 0)
-            throw new IllegalStateException("Unable to compute ceiling for max when histogram overflowed");
-
-        long elements = 0;
-        long sum = 0;
-        for (int i = 0; i < lastBucket; i++)
-        {
-            long bCount = buckets.get(i);
+    int64_t mean() {
+        auto lastBucket = buckets.size() - 1;
+        int64_t elements = 0;
+        int64_t sum = 0;
+        for (size_t i = 0; i < lastBucket; i++) {
+            long bCount = buckets[i];
             elements += bCount;
-            sum += bCount * bucketOffsets[i];
+            sum += bCount * bucket_offsets[i];
         }
 
-        return (long) Math.ceil((double) sum / elements);
+        return ((double) (sum + elements -1)/ elements);
     }
 
     /**
      * @return the total number of non-zero values
      */
-    public long count()
-    {
-       long sum = 0L;
-       for (int i = 0; i < buckets.length(); i++)
-           sum += buckets.get(i);
-       return sum;
+    int64_t count() const {
+        int64_t sum = 0L;
+        for (size_t i = 0; i < buckets.size(); i++) {
+            sum += buckets[i];
+        }
+        return sum;
     }
-
+#if 0
     /**
      * @return true if this histogram has overflowed -- that is, a value larger than our largest bucket could bound was added
      */
