@@ -149,6 +149,9 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
     memtable& active_memtable() { return *_memtables->back(); }
+    const row_cache& get_row_cache() const {
+        return _cache;
+    }
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager&);
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
