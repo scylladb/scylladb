@@ -119,6 +119,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             auto end_time = std::chrono::high_resolution_clock::now();
             // time taken by compaction in seconds.
             auto duration = std::chrono::duration<float>(end_time - start_time);
+            auto throughput = ((double) endsize / (1024*1024)) / duration.count();
 
             // FIXME: there is some missing information in the log message below.
             // look at CompactionTask::runMayThrow() in origin for reference.
@@ -128,7 +129,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
                 "~{} total partitions merged to {}.",
                 stats->sstables, newtab->get_filename(), stats->start_size, endsize, (int) (ratio * 100),
-                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), (endsize / (1024*1024)) / duration.count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
                 stats->total_partitions, stats->total_keys_written);
         });
     });
