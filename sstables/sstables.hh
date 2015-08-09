@@ -370,6 +370,9 @@ private:
     void write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t);
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation::view collection);
 public:
+    bool filter_has_key(const schema& s, const partition_key& key) {
+        return filter_has_key(key::from_partition_key(s, key));
+    }
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
