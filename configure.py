@@ -150,6 +150,7 @@ urchin_tests = [
     'tests/murmur_hash_test',
     'tests/allocation_strategy_test',
     'tests/logalloc_test',
+    'tests/crc_test',
 ]
 
 apps = [
@@ -391,7 +392,7 @@ deps = {
 
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
-    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/gossip' and 'compound_test' not in t and 'range_test' not in t:
+    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/gossip' and 'compound_test' not in t and 'range_test' not in t and 'crc_test' not in t:
         deps[t] += urchin_tests_seastar_deps
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
@@ -470,6 +471,7 @@ for mode in build_modes:
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
+args.user_cflags = '-march=nehalem ' + args.user_cflags
 libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
 user_cflags = args.user_cflags
 

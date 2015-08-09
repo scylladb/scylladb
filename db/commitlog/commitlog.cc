@@ -22,7 +22,6 @@
  */
 
 #include <stdexcept>
-#include <boost/crc.hpp>  // for boost::crc_32_type
 #include <string>
 #include <sys/stat.h>
 #include <malloc.h>
@@ -39,13 +38,26 @@
 #include "commitlog.hh"
 #include "db/config.hh"
 #include "utils/data_input.hh"
+#include "utils/crc.hh"
 
-class crc32: public boost::crc_32_type {
+class crc32_nbo {
+    crc32 _c;
 public:
-    template<typename T>
+    template <typename T>
     void process(T t) {
-        auto v = net::hton(t);
-        this->process_bytes(&v, sizeof(T));
+        _c.process(net::hton(t));
+    }
+    uint32_t checksum() const {
+        return _c.get();
+    }
+    void process_bytes(const uint8_t* data, size_t size) {
+        return _c.process(data, size);
+    }
+    void process_bytes(const int8_t* data, size_t size) {
+        return _c.process(reinterpret_cast<const uint8_t*>(data), size);
+    }
+    void process_bytes(const char* data, size_t size) {
+        return _c.process(reinterpret_cast<const uint8_t*>(data), size);
     }
 };
 
@@ -324,7 +336,7 @@ public:
             // first block. write file header.
             out.write(_desc.ver);
             out.write(_desc.id);
-            crc32 crc;
+            crc32_nbo crc;
             crc.process(_desc.ver);
             crc.process<int32_t>(_desc.id & 0xffffffff);
             crc.process<int32_t>(_desc.id >> 32);
@@ -333,7 +345,7 @@ public:
         }
 
         // write chunk header
-        crc32 crc;
+        crc32_nbo crc;
         crc.process<int32_t>(_desc.id & 0xffffffff);
         crc.process<int32_t>(_desc.id >> 32);
         crc.process(uint32_t(off + header_size));
@@ -392,7 +404,7 @@ public:
         auto * e = _buffer.get_write() + pos + s - sizeof(uint32_t);
 
         data_output out(p, e);
-        crc32 crc;
+        crc32_nbo crc;
 
         out.write(uint32_t(s));
         crc.process(uint32_t(s));
@@ -733,7 +745,7 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
            auto id = in.read<uint64_t>();
            auto checksum = in.read<uint32_t>();
 
-           crc32 crc;
+           crc32_nbo crc;
            crc.process(ver);
            crc.process<int32_t>(id & 0xffffffff);
            crc.process<int32_t>(id >> 32);
@@ -760,7 +772,7 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
                    auto next = in.read<uint32_t>();
                    auto checksum = in.read<uint32_t>();
 
-                   crc32 crc;
+                   crc32_nbo crc;
                    crc.process<int32_t>(w->id & 0xffffffff);
                    crc.process<int32_t>(w->id >> 32);
                    crc.process<uint32_t>(w->pos);
@@ -800,7 +812,7 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
                                in.skip(data_size);
                                auto checksum = in.read<uint32_t>();
 
-                               crc32 crc;
+                               crc32_nbo crc;
                                crc.process(size);
                                crc.process_bytes(buf.get(), data_size);
 
