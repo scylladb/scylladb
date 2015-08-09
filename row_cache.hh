@@ -148,5 +148,5 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(memtable&);
+    future<> update(memtable&, negative_mutation_reader underlying_negative);
 };

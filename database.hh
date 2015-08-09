@@ -123,7 +123,7 @@ private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
-    future<> update_cache(memtable&);
+    future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
 private:
     // Creates a mutation reader which covers sstables.
@@ -132,6 +132,7 @@ private:
     mutation_reader make_sstable_reader(const query::partition_range& range) const;
 
     mutation_source sstables_as_mutation_source();
+    negative_mutation_reader make_negative_mutation_reader(lw_shared_ptr<sstable_list> old_sstables);
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
