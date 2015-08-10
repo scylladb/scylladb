@@ -64,8 +64,15 @@ void stream_transfer_task::start() {
                 sslog.debug("GOT STREAM_MUTATION Reply");
                 return stop_iteration::no;
             });
-        }).then([this, seq] {
-           this->complete(seq);
+        }).then_wrapped([this, seq, id] (auto&& f){
+            // TODO: Add retry and timeout logic
+            try {
+                f.get();
+                this->complete(seq);
+            } catch (...) {
+                sslog.error("stream_transfer_task: Fail to send outgoing_file_message to {}", id);
+                this->session->on_error();
+            }
         });
     }
 }
