@@ -23,6 +23,8 @@
 #include "locator/token_metadata.hh"
 #include "dht/i_partitioner.hh"
 #include <unordered_set>
+#include "database.hh"
+#include "db/config.hh"
 
 namespace dht {
 
@@ -77,7 +79,7 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::unordered_set<token> get_bootstrap_tokens(token_metadata metadata) {
+    static std::unordered_set<token> get_bootstrap_tokens(token_metadata metadata, database& db) {
 #if 0
         Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
         // if user specified tokens, use those
@@ -95,8 +97,7 @@ public:
             return tokens;
         }
 #endif
-        // FIXME: DatabaseDescriptor.getNumTokens();
-        size_t num_tokens = 3;
+        size_t num_tokens = db.get_config().num_tokens();
         if (num_tokens < 1) {
             throw std::runtime_error("num_tokens must be >= 1");
         }
