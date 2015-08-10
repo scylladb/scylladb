@@ -114,7 +114,6 @@ struct i_endpoint_snitch {
 
     void set_snitch_ready() {
         _state = snitch_state::running;
-        _snitch_is_ready.set_value();
     }
 
     virtual sstring get_name() const = 0;
@@ -128,7 +127,6 @@ protected:
 protected:
     static logging::logger snitch_logger;
 
-    promise<> _snitch_is_ready;
     enum class snitch_state {
         initializing,
         running,
