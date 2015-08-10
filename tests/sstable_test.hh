@@ -416,6 +416,7 @@ class test_setup {
     file _f;
     std::function<future<> (directory_entry de)> _walker;
     subscription<directory_entry> _listing;
+
     static sstring& path() {
         static sstring _p = "tests/sstables/tests-temporary";
         return _p;
@@ -448,6 +449,7 @@ protected:
             return l->done().then([l] { });
         });
     }
+public:
     static future<> create_empty_test_dir() {
         return engine().make_directory(path()).then_wrapped([] (future<> f) {
             try {
@@ -457,7 +459,7 @@ protected:
             return empty_test_dir();
         });
     }
-public:
+
     static future<> do_with_test_directory(std::function<future<> ()>&& fut) {
         return test_setup::create_empty_test_dir().then([fut = std::move(fut)] () mutable {
                 return fut();
