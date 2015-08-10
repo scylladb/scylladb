@@ -58,6 +58,17 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl)
     add_memtable();
 }
 
+negative_mutation_reader
+column_family::make_negative_mutation_reader(lw_shared_ptr<sstable_list> old_sstables) {
+    return [this, old_sstables = std::move(old_sstables)] (const partition_key& key) {
+        for (auto&& s : *old_sstables) {
+            if (s.second->filter_has_key(*_schema, key)) {
+                return negative_mutation_reader_result::maybe_exists;
+            }
+        }
+        return negative_mutation_reader_result::definitely_doesnt_exists;
+    };
+}
 
 mutation_source
 column_family::sstables_as_mutation_source() {
@@ -369,9 +380,11 @@ void column_family::add_memtable() {
 }
 
 future<>
-column_family::update_cache(memtable& m) {
+column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstables) {
     if (_config.enable_cache) {
-       return _cache.update(m);
+       // be careful to use the old sstable list, since the new one will hit every
+       // mutation in m.
+       return _cache.update(m, make_negative_mutation_reader(std::move(old_sstables)));
     } else {
        return make_ready_future<>();
     }
@@ -417,8 +430,9 @@ column_family::seal_active_memtable() {
                 dblog.debug("Flushing done");
                 // We must add sstable before we call update_cache(), because
                 // memtable's data after moving to cache can be evicted at any time.
+                auto old_sstables = _sstables;
                 add_sstable(std::move(newtab));
-                return update_cache(*old);
+                return update_cache(*old, std::move(old_sstables));
             }).then_wrapped([this, old] (future<> ret) {
                 try {
                     ret.get();
