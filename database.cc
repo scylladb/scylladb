@@ -36,24 +36,26 @@
 
 logging::logger dblog("database");
 
-column_family::column_family(schema_ptr schema, config config, db::commitlog& cl)
+column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
     , _commitlog(&cl)
+    , _compaction_manager(compaction_manager)
 {
     add_memtable();
 }
 
-column_family::column_family(schema_ptr schema, config config, no_commitlog cl)
+column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
     , _commitlog(nullptr)
+    , _compaction_manager(compaction_manager)
 {
     add_memtable();
 }
@@ -475,10 +477,7 @@ column_family::stop() {
     seal_active_memtable();
 
     return _in_flight_seals.close().then([this] {
-        _compaction_sem.broken();
-        return _compaction_done.then([] {
-            return make_ready_future<>();
-        });
+        return make_ready_future<>();
     });
 }
 
@@ -556,78 +555,20 @@ column_family::compact_all_sstables() {
 
 void column_family::start_compaction() {
     set_compaction_strategy(_schema->compaction_strategy());
-
-    // NOTE: Compaction code runs in parallel to the rest of the system, so
-    // when it's time to stop a column family, we need to prevent any new
-    // compaction from starting and wait for a possible ongoing compaction.
-    // That's possible by closing gate, busting semaphore and waiting for
-    // _compaction_done future to resolve.
-    _compaction_done = keep_doing([this] {
-        // Semaphore is used here to allow at most one compaction to happen
-        // at any time yet queueing pending requests.
-        _stats.pending_compactions++;
-        return _compaction_sem.wait().then([this] {
-            _stats.pending_compactions--;
-            return with_gate(_in_flight_seals, [this] {
-                sstables::compaction_strategy strategy = _compaction_strategy;
-                return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
-                    return cs.compact(*this).then([this] {
-                        // If compaction completed successfully, let's reset sleep time of _compaction_retry.
-                        _compaction_retry.reset();
-                    });
-                });
-            });
-        }).then_wrapped([this] (future<> f) {
-            bool retry = false;
-
-            // NOTE: broken_semaphore and seastar::gate_closed_exception exceptions
-            // are used for regular termination of compaction fiber.
-            try {
-                f.get();
-            } catch (broken_semaphore& e) {
-                _stats.pending_compactions--; // if sem is busted, handle the leak in pending_compactions.
-                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
-                throw;
-            } catch (seastar::gate_closed_exception& e) {
-                dblog.info("compaction for column_family {}/{} not restarted due to shutdown", _schema->ks_name(), _schema->cf_name());
-                throw;
-            } catch (std::exception& e) {
-                dblog.error("compaction for column_family {}/{} failed: {}", _schema->ks_name(), _schema->cf_name(), e.what());
-                retry = true;
-            } catch (...) {
-                dblog.error("compaction for column_family {}/{} failed: unknown error", _schema->ks_name(), _schema->cf_name());
-                retry = true;
-            }
-
-            if (retry) {
-                dblog.info("compaction task for column_family {}/{} sleeping for {} seconds",
-                    _schema->ks_name(), _schema->cf_name(), std::chrono::duration_cast<std::chrono::seconds>(_compaction_retry.sleep_time()).count());
-                return _compaction_retry.retry().then([this] {
-                    // after sleeping, signal semaphore for the next compaction attempt.
-                    _compaction_sem.signal();
-                });
-            }
-            return make_ready_future<>();
-        });
-    }).then_wrapped([this] (future<> f) {
-        // here, we ignore both broken_semaphore and seastar::gate_closed_exception that
-        // were used for regular termination of the compaction fiber.
-        try {
-            f.get();
-        } catch (broken_semaphore& e) {
-            // exception logged in keep_doing.
-        } catch (seastar::gate_closed_exception& e) {
-            // exception logged in keep_doing.
-        } catch (...) {
-            // this shouldn't happen, let's log it anyway.
-            dblog.error("compaction for column_family {}/{} failed: unexpected error", _schema->ks_name(), _schema->cf_name());
-        }
-    });
 }
 
 void column_family::trigger_compaction() {
-    // Compaction task is triggered by signaling the semaphore waited on.
-    _compaction_sem.signal();
+    // Submitting compaction job to compaction manager.
+    _stats.pending_compactions++;
+    _compaction_manager.submit([this] () -> future<> {
+        _stats.pending_compactions--;
+        sstables::compaction_strategy strategy = _compaction_strategy;
+        return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
+            return cs.compact(*this).then([] {
+                return make_ready_future<>();
+            });
+        });
+    });
 }
 
 void column_family::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
@@ -661,6 +602,8 @@ database::database(const db::config& cfg)
 {
     bool durable = cfg.data_file_directories().size() > 0;
     db::system_keyspace::make(*this, durable);
+    // Start compaction manager with two tasks for handling compaction jobs.
+    _compaction_manager.start(2);
 }
 
 database::~database() {
@@ -847,9 +790,9 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     auto uuid = schema->id();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog);
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), *_commitlog, _compaction_manager);
     } else {
-       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog());
+       cf = make_lw_shared<column_family>(schema, std::move(cfg), column_family::no_commitlog(), _compaction_manager);
     }
 
     auto ks = _keyspaces.find(schema->ks_name());
@@ -1299,8 +1242,10 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 
 future<>
 database::stop() {
-    return parallel_for_each(_column_families, [this] (auto& val_pair) {
-        return val_pair.second->stop();
+    return _compaction_manager.stop().then([this] {
+        return parallel_for_each(_column_families, [this] (auto& val_pair) {
+            return val_pair.second->stop();
+        });
     });
 }
 

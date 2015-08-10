@@ -46,7 +46,7 @@
 #include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
-#include "utils/exponential_backoff_retry.hh"
+#include "utils/compaction_manager.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -116,9 +116,7 @@ private:
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;
     sstables::compaction_strategy _compaction_strategy;
-    future<> _compaction_done = make_ready_future<>();
-    semaphore _compaction_sem;
-    exponential_backoff_retry _compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
+    compaction_manager& _compaction_manager;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -150,8 +148,8 @@ public:
     using const_row_ptr = std::unique_ptr<const row>;
     memtable& active_memtable() { return *_memtables->back(); }
 public:
-    column_family(schema_ptr schema, config cfg, db::commitlog& cl);
-    column_family(schema_ptr schema, config cfg, no_commitlog);
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager&);
+    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }
@@ -358,6 +356,8 @@ class database {
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
     utils::UUID _version;
+    // compaction_manager object is referenced by all column families of a database.
+    compaction_manager _compaction_manager;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);

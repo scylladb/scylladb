@@ -36,8 +36,9 @@ static atomic_cell make_atomic_cell(bytes value) {
 template <typename Func>
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, Func func) {
-    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog());
-    return func(*cf).then([cf] {
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm);
+    return func(*cf).then([cf, cm] {
         return cf->stop();
     }).finally([cf] {});
 }
@@ -276,7 +277,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    return do_with(make_lw_shared<column_family>(s, cfg, column_family::no_commitlog()), [s] (auto& cf_ptr) mutable {
+    auto cm = make_lw_shared<compaction_manager>();
+    return do_with(make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm), [s, cm] (auto& cf_ptr) mutable {
         column_family& cf = *cf_ptr;
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
