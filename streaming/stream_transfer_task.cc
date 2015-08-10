@@ -92,13 +92,14 @@ void stream_transfer_task::complete(int sequence_number) {
         using shard_id = net::messaging_service::shard_id;
         auto from = utils::fb_utilities::get_broadcast_address();
         auto id = shard_id{session->peer, session->dst_cpu_id};
-        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this] (auto&& f) {
+        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
             try {
                 f.get();
                 sslog.debug("GOT STREAM_MUTATION_DONE Reply");
                 session->task_completed(*this);
             } catch (...) {
-                sslog.warn("ERROR STREAM_MUTATION_DONE Reply ");
+                sslog.error("stream_transfer_task: Fail to send REAM_MUTATION_DON to {}", id);
+                session->on_error();
             }
         });
     }
