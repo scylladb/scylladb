@@ -1722,3 +1722,25 @@ SEASTAR_TEST_CASE(test_select_distinct) {
     });
 }
 
+SEASTAR_TEST_CASE(test_batch_insert_statement) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
+            return e.execute_cql(R"(BEGIN BATCH
+insert into cf (p1, c1, r1) values ('key1', 1, 100);
+insert into cf (p1, c1, r1) values ('key2', 2, 200);
+APPLY BATCH;)"
+            ).discard_result();
+        }).then([&e] {
+            return e.execute_cql(R"(BEGIN BATCH
+update cf set r1 = 66 where p1 = 'key1' and c1 = 1;
+update cf set r1 = 33 where p1 = 'key2' and c1 = 2;
+APPLY BATCH;)"
+            ).discard_result();
+
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 66);
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key2")}, {2}, "r1", 33);
+        });
+    });
+}
