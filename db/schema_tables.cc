@@ -1199,7 +1199,7 @@ future<> save_system_keyspace_schema() {
             if (partition.second->empty()) {
                 throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", keyspace, table));
             }
-            return create_table_from_table_partition(proxy, partition.second);
+            return create_table_from_table_partition(proxy, std::move(partition.second));
         });
     }
 
@@ -1233,9 +1233,11 @@ future<> save_system_keyspace_schema() {
         create_table_from_table_row_and_column_rows(builder, table_row, serialized_columns.second);
     }
 
-    future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, const lw_shared_ptr<query::result_set>& partition)
+    future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, lw_shared_ptr<query::result_set>&& partition)
     {
-        return create_table_from_table_row(proxy, partition->row(0));
+        return do_with(std::move(partition), [&proxy] (auto& partition) {
+            return create_table_from_table_row(proxy, partition->row(0));
+        });
     }
 
     /**

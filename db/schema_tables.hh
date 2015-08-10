@@ -90,7 +90,7 @@ future<schema_ptr> create_table_from_table_row(service::storage_proxy& proxy, co
 
 void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
 
-future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, const lw_shared_ptr<query::result_set>& partition);
+future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, lw_shared_ptr<query::result_set>&& partition);
 
 std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                const sstring& keyspace,
