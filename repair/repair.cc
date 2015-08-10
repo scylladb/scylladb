@@ -136,19 +136,60 @@ static void repair_range(seastar::sharded<database>& db, sstring keyspace,
     auto neighbors = get_neighbors(db.local(), keyspace, range);
     logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
     for (auto peer : neighbors) {
+        // FIXME: think: if we have several neighbors, perhaps we need to
+        // request ranges from all of them and only later transfer ranges to
+        // all of them? Otherwise, we won't necessarily fully repair the
+        // other ndoes, just this one? What does Cassandra do here?
         sp.transfer_ranges(peer, peer, keyspace, {range}, cfs);
         sp.request_ranges(peer, peer, keyspace, {range}, cfs);
-        sp.execute(); // FIXME: use future return value, and handle errors
+        sp.execute().handle_exception([id] (auto ep) {
+            logger.error("repair session #{} stream failed: {}", id, ep);
+        });
     }
 }
+
+static std::vector<query::range<dht::token>> get_ranges_for_endpoint(
+        database& db, sstring keyspace, gms::inet_address ep) {
+    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
+    return rs.get_ranges(ep);
+}
+
+static std::vector<query::range<dht::token>> get_local_ranges(
+        database& db, sstring keyspace) {
+    return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
+}
+
 
 static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options) {
 
     logger.info("starting user-requested repair for keyspace {}", keyspace);
 
-    // FIXME: ranges and column families should be overriden by options, and these are defaults:
-    std::vector<query::range<dht::token>> ranges = {query::range<dht::token>::make_open_ended_both_sides()};
+    // If the "ranges" option is not explicitly specified, we repair all the
+    // local ranges (the token ranges for which this node holds a replica of).
+    // Each of these ranges may have a different set of replicas, so the
+    // repair of each range is performed separately with repair_range().
+    std::vector<query::range<dht::token>> ranges;
+    // FIXME: if the "ranges" options exists, use that instead of
+    // get_local_ranges() below. Also, translate the following Origin code:
+
+#if 0
+         if (option.isPrimaryRange())
+         {
+             // when repairing only primary range, neither dataCenters nor hosts can be set
+             if (option.getDataCenters().isEmpty() && option.getHosts().isEmpty())
+                 option.getRanges().addAll(getPrimaryRanges(keyspace));
+                 // except dataCenters only contain local DC (i.e. -local)
+             else if (option.getDataCenters().size() == 1 && option.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
+                 option.getRanges().addAll(getPrimaryRangesWithinDC(keyspace));
+             else
+                 throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
+         }
+         else
+#endif
+    ranges = get_local_ranges(db.local(), keyspace);
+
+    // FIXME: let the cfs be overriden by an option
     std::vector<sstring> cfs = list_column_families(db.local(), keyspace);
 
     for (auto range : ranges) {

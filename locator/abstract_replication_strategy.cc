@@ -73,4 +73,22 @@ abstract_replication_strategy::get_cached_endpoints() {
     return _cached_endpoints;
 }
 
+std::vector<range<token>>
+abstract_replication_strategy::get_ranges(inet_address ep) {
+    std::vector<range<token>> ret;
+    auto prev_tok = _token_metadata.sorted_tokens().back();
+    for (auto tok : _token_metadata.sorted_tokens()) {
+        for (inet_address a : calculate_natural_endpoints(tok)) {
+            if (a == ep) {
+                ret.emplace_back(
+                        range<token>::bound(prev_tok, false),
+                        range<token>::bound(tok, true));
+                break;
+            }
+        }
+        prev_tok = tok;
+    }
+    return ret;
+}
+
 } // namespace locator
