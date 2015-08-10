@@ -343,8 +343,24 @@ public:
             if (_file_pos == 0) {
                 overhead += descriptor_header_size;
             }
-            auto k = std::max(align_up(s + overhead, alignment), default_size);
-            _buffer = _segment_manager->acquire_buffer(k);
+
+            auto a = align_up(s + overhead, alignment);
+            auto k = std::max(a, default_size);
+
+            for (;;) {
+                try {
+                    _buffer = _segment_manager->acquire_buffer(k);
+                    break;
+                } catch (std::bad_alloc&) {
+                    logger.error("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
+                    if (k > a) {
+                        k = std::max(a, k / 2);
+                        logger.debug("Trying reduced size: {} k", k / 1024);
+                        continue;
+                    }
+                    throw;
+                }
+            }
             _buf_pos = overhead;
             auto * p = reinterpret_cast<uint32_t *>(_buffer.get_write());
             std::fill(p, p + overhead, 0);
