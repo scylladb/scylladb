@@ -36,8 +36,13 @@ struct snitch_ptr;
 typedef gms::inet_address inet_address;
 
 struct i_endpoint_snitch {
+private:
     template <typename... A>
-    static future<> create_snitch(const sstring& snitch_name, A... a);
+    static future<> init_snitch_obj(
+        distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a);
+public:
+    template <typename... A>
+    static future<> create_snitch(const sstring& snitch_name, A&&... a);
 
     static future<> stop_snitch();
 
@@ -172,24 +177,28 @@ private:
 };
 
 /**
- * Creates the distributed i_endpoint_snitch::snitch_instane object
+ * Initializes the distributed<snitch_ptr> object
  *
- * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
+ * @note The local snitch objects will remain not start()ed.
  *
- * @return ready future when the distributed object is ready.
+ * @param snitch_obj distributed<> object to initialize
+ * @param snitch_name name of the snitch class to create
+ * @param a snitch constructor arguments
+ *
+ * @return ready future when the snitch has been successfully created
  */
 template <typename... A>
-future<> i_endpoint_snitch::create_snitch(
-    const sstring& snitch_name, A... a) {
+future<> i_endpoint_snitch::init_snitch_obj(
+    distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a) {
 
     // First, create the snitch_ptr objects...
-    return snitch_instance().start().then(
-        [snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
+    return snitch_obj.start().then(
+        [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
         // ...then, create the snitches...
-        return snitch_instance().invoke_on_all(
+        return snitch_obj.invoke_on_all(
             [snitch_name, a] (snitch_ptr& local_inst) {
             try {
-                auto s(std::move(apply([snitch_name] (A... a) {
+                auto s(std::move(apply([snitch_name] (A&&... a) {
                     return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
                 }, std::move(a))));
 
@@ -200,27 +209,43 @@ future<> i_endpoint_snitch::create_snitch(
             } catch (...) {
                 throw;
             }
-            
-            return make_ready_future<>();
-        }).then([] {
-            // ...and finally - start them.
-            return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
-                return local_inst.start();
-            }).then_wrapped([] (auto&& f) {
-                try {
-                    f.get();
-                    return make_ready_future<>();
-                } catch (...) {
-                    auto eptr = std::current_exception();
 
-                    return stop_snitch().then([eptr] () {
-                        std::rethrow_exception(eptr);
-                    });
-                }
-            });
+            return make_ready_future<>();
         });
     });
 }
+/**
+ * Creates the distributed i_endpoint_snitch::snitch_instane object
+ *
+ * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
+ *
+ * @return ready future when the distributed object is ready.
+ */
+template <typename... A>
+future<> i_endpoint_snitch::create_snitch(
+    const sstring& snitch_name, A&&... a) {
+
+    // First, create and "start" the distributed snitch object...
+    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([] {
+        // ...and then start each local snitch.
+        return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+            return local_inst.start();
+        }).then_wrapped([] (auto&& f) {
+            try {
+                f.get();
+                return make_ready_future<>();
+            } catch (...) {
+                auto eptr = std::current_exception();
+
+                return stop_snitch().then([eptr] () {
+                    std::rethrow_exception(eptr);
+                });
+            }
+        });
+    });
+}
+
+
 
 class snitch_base : public i_endpoint_snitch {
 public:
