@@ -546,19 +546,17 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
     }
     for (auto& cf : cfs) {
         std::vector<mutation_reader> readers;
-        std::vector<shared_ptr<query::range<ring_position>>> prs;
         auto cf_id = cf->schema()->id();
         for (auto& range : ranges) {
-            auto pr = make_shared<query::range<ring_position>>(query::to_partition_range(range));
-            prs.push_back(pr);
-            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, *pr);
+            auto pr = query::to_partition_range(range);
+            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, pr);
             readers.push_back(std::move(mr));
         }
         // Store this mutation_reader so we can send mutaions later
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        stream_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys, repaired_at);
     }
     if (!stream_details.empty()) {
         add_transfer_files(std::move(stream_details));
