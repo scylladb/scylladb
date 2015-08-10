@@ -57,14 +57,12 @@ void stream_transfer_task::start() {
         auto& msg = x.second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
-        do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
-            return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
-                auto fm = make_lw_shared<const frozen_mutation>(m);
-                sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-                return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
-                    sslog.debug("GOT STREAM_MUTATION Reply");
-                    return stop_iteration::no;
-                });
+        consume(msg.detail.mr, [this, seq, id] (mutation&& m) {
+            auto fm = make_lw_shared<const frozen_mutation>(m);
+            sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
+            return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
+                sslog.debug("GOT STREAM_MUTATION Reply");
+                return stop_iteration::no;
             });
         }).then([this, seq] {
            this->complete(seq);
