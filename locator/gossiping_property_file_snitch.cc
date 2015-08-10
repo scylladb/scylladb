@@ -69,10 +69,15 @@ future<> gossiping_property_file_snitch::start() {
 
         io_cpu_id() = _file_reader_cpu_id;
 
-        _file_reader.arm(0s);
+        return read_property_file().then([this] {
+            _file_reader.arm(reload_property_file_period());
+            set_snitch_ready();
+            return make_ready_future<>();
+        });
     }
 
-    return _snitch_is_ready.get_future();
+    set_snitch_ready();
+    return make_ready_future<>();
 }
 
 void gossiping_property_file_snitch::periodic_reader_callback() {
@@ -87,13 +92,6 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
-
-            if (_state == snitch_state::initializing) {
-                i_endpoint_snitch::snitch_instance().invoke_on_all(
-                        [] (snitch_ptr& local_s) {
-                    local_s->set_snitch_ready();
-                });
-            }
         } catch (...) {
             this->err("Exception has been thrown when parsing the property "
                       "file.");
@@ -146,8 +144,6 @@ future<> gossiping_property_file_snitch::read_property_file() {
             f.get();
             return make_ready_future<>();
         } catch (...) {
-            auto eptr = std::current_exception();
-
             //
             // In case of an error:
             //    - Halt if in the constructor.
@@ -156,21 +152,7 @@ future<> gossiping_property_file_snitch::read_property_file() {
             if (_state == snitch_state::initializing) {
                 this->err("Failed to parse a properties file ({}). "
                           "Halting...", _fname);
-                //
-                // Mark all instances on other shards as ready and set the local
-                // instance into an exceptional state.
-                // This is needed to release the "invoke_on_all() in a
-                // create_snitch() waiting for all instances to become ready.
-                //
-                return i_endpoint_snitch::snitch_instance().invoke_on_all(
-                        [this] (snitch_ptr& local_inst) {
-                    if (engine().cpu_id() != _file_reader_cpu_id) {
-                        local_inst->set_snitch_ready();
-                    }
-                }).then([this, eptr] () mutable {
-                    _snitch_is_ready.set_exception(eptr);
-                    std::rethrow_exception(eptr);
-                });
+                throw;
             } else {
                 this->warn("Failed to reload a properties file ({}). "
                            "Using previous values.", _fname);
