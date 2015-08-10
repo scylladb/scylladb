@@ -364,7 +364,7 @@ public:
             "If you not using vnodes or have num_tokens set it to 1 or unspecified (#num_tokens), you should always specify this parameter when setting up a production cluster for the first time and when adding capacity. For more information, see this parameter in the Cassandra 1.1 Node and Cluster Configuration documentation.\n" \
             "This parameter can be used with num_tokens (vnodes ) in special cases such as Restoring from a snapshot." \
     )   \
-    val(num_tokens, uint32_t, 1, Unused,                \
+    val(num_tokens, uint32_t, 1, Used,                \
             "Defines the number of tokens randomly assigned to this node on the ring when using virtual nodes (vnodes). The more tokens, relative to other nodes, the larger the proportion of data that the node stores. Generally all nodes should have the same number of tokens assuming equal hardware capability. The recommended value is 256. If unspecified (#num_tokens), Cassandra uses 1 (equivalent to #num_tokens : 1) for legacy compatibility and uses the initial_token setting.\n"    \
             "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"    \
             "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install."  \
