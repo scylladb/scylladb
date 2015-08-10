@@ -503,7 +503,8 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             } catch (...) {
                 logger.error("fail to update tokens for {}: {}", endpoint, std::current_exception());
             }
-        });
+            return make_ready_future<>();
+        }).get();
     }
     if (!local_tokens_to_remove.empty()) {
         // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
@@ -515,13 +516,13 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 subscriber->on_move(endpoint);
             }
-        });
+        }).get();
     } else {
         get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
                 subscriber->on_join_cluster(endpoint);
             }
-        });
+        }).get();
     }
 
     // PendingRangeCalculatorService.instance.update();
@@ -704,7 +705,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state);
         }
     }
-    replicate_to_all_cores();
+    replicate_to_all_cores().get();
 }
 
 
@@ -737,6 +738,7 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
 #endif
 }
 
+// Runs inside seastar::async context
 template <typename T>
 static void update_table(gms::inet_address endpoint, sstring col, T value) {
     db::system_keyspace::update_peer_info(endpoint, col, value).then_wrapped([col, endpoint] (auto&& f) {
@@ -745,9 +747,11 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
         } catch (...) {
             logger.error("fail to update {} for {}: {}", col, endpoint, std::current_exception());
         }
-    });
+        return make_ready_future<>();
+    }).get();
 }
 
+// Runs inside seastar::async context
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
     logger.debug("Update ep={}, state={}, value={}", endpoint, int(state), value.value);
     if (state == application_state::RELEASE_VERSION) {
@@ -773,6 +777,7 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
     }
 }
 
+// Runs inside seastar::async context
 void storage_service::update_peer_info(gms::inet_address endpoint) {
     using namespace gms;
     auto& gossiper = gms::get_local_gossiper();
@@ -826,7 +831,7 @@ future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
         gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
         gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
         set_mode(mode::NORMAL, false);
-        replicate_to_all_cores();
+        return replicate_to_all_cores();
     });
 }
 
@@ -968,12 +973,12 @@ future<> storage_service::init_server(int delay) {
 #endif
 }
 
-void storage_service::replicate_to_all_cores() {
+future<> storage_service::replicate_to_all_cores() {
     assert(engine().cpu_id() == 0);
     // FIXME: There is no back pressure. If the remote cores are slow, and
     // replication is called often, it will queue tasks to the semaphore
     // without end.
-    _replicate_task.wait().then([this] {
+    return _replicate_task.wait().then([this] {
         return _the_storage_service.invoke_on_all([tm = _token_metadata] (storage_service& local_ss) {
             if (engine().cpu_id() != 0) {
                 local_ss._token_metadata = tm;
@@ -986,6 +991,7 @@ void storage_service::replicate_to_all_cores() {
         } catch (...) {
             logger.error("Fail to replicate _token_metadata");
         }
+        return make_ready_future<>();
     });
 }
 
@@ -1037,6 +1043,7 @@ future<> storage_service::check_for_endpoint_collision() {
     });
 }
 
+// Runs inside seastar::async context
 void storage_service::remove_endpoint(inet_address endpoint) {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.remove_endpoint(endpoint);
@@ -1046,7 +1053,8 @@ void storage_service::remove_endpoint(inet_address endpoint) {
         } catch (...) {
             logger.error("fail to remove endpoint={}: {}", endpoint, std::current_exception());
         }
-    });
+        return make_ready_future<>();
+    }).get();
 }
 
 std::unordered_set<token> storage_service::prepare_replacement_info() {
