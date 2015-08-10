@@ -78,13 +78,14 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
-    void handle_ack_msg(shard_id id, gossip_digest_ack& ack_msg);
+    future<> handle_ack_msg(shard_id id, gossip_digest_ack ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<clk> _scheduled_gossip_task;
+    bool _enabled = false;
     sstring get_cluster_name() {
         // FIXME: DatabaseDescriptor.getClusterName()
         return "my_cluster_name";
@@ -305,16 +306,16 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    bool send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    future<bool> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
 
     /* Sends a Gossip message to a live member and returns true if the recipient was a seed */
-    bool do_gossip_to_live_member(gossip_digest_syn message);
+    future<bool> do_gossip_to_live_member(gossip_digest_syn message);
 
     /* Sends a Gossip message to an unreachable member */
-    void do_gossip_to_unreachable_member(gossip_digest_syn message);
+    future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
     /* Gossip to a seed for facilitating partition healing */
-    void do_gossip_to_seed(gossip_digest_syn prod);
+    future<> do_gossip_to_seed(gossip_digest_syn prod);
 
     void do_status_check();
 
@@ -365,7 +366,7 @@ public:
     bool is_alive(inet_address ep);
     bool is_dead_state(endpoint_state eps);
 
-    void apply_state_locally(std::map<inet_address, endpoint_state>& map);
+    future<> apply_state_locally(std::map<inet_address, endpoint_state>& map);
 
 private:
     void apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state);
