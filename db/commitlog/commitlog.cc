@@ -190,9 +190,16 @@ public:
     }
 
     std::vector<sstring> get_active_names() const;
+
+    using buffer_type = temporary_buffer<char>;
+
+    buffer_type acquire_buffer(size_t s);
+    void release_buffer(buffer_type&&);
+
 private:
     uint64_t _ids = 0;
     std::vector<sseg_ptr> _segments;
+    std::vector<buffer_type> _temp_buffers;
     timer<clock_type> _timer;
 };
 
@@ -213,7 +220,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     uint64_t _buf_pos = 0;
     bool _closed = false;
 
-    using buffer_type = temporary_buffer<char>;
+    using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
     using clock_type = segment_manager::clock_type;
     using time_point = segment_manager::time_point;
@@ -299,14 +306,11 @@ public:
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
                     _sync_time = clock_type::now();
-                    return _file.flush().then_wrapped([this, pos, me = std::move(me)](auto&& f) {
-                                _flush_pos = std::max(pos, _flush_pos);
-                                ++_segment_manager->totals.flush_count;
+                    return _file.flush().handle_exception([](auto ex) {
                                 try {
-                                    f.get();
+                                    std::rethrow_exception(ex);
                                     // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                                     // we fast-fail the whole commit.
-                                    return make_ready_future<sseg_ptr>(std::move(me));
                                 } catch (std::exception& e) {
                                     logger.error("Failed to flush commits to disk: {}", e.what());
                                     throw;
@@ -314,6 +318,10 @@ public:
                                     logger.error("Failed to flush commits to disk.");
                                     throw;
                                 }
+                            }).then([this, pos, me = std::move(me)]() {
+                                _flush_pos = std::max(pos, _flush_pos);
+                                ++_segment_manager->totals.flush_count;
+                                return make_ready_future<sseg_ptr>(std::move(me));
                             });
                 });
     }
@@ -336,9 +344,7 @@ public:
                 overhead += descriptor_header_size;
             }
             auto k = std::max(align_up(s + overhead, alignment), default_size);
-            auto a = ::memalign(alignment, k);
-            _buffer = buffer_type(reinterpret_cast<char *>(a), k,
-                    make_free_deleter(a));
+            _buffer = _segment_manager->acquire_buffer(k);
             _buf_pos = overhead;
             auto * p = reinterpret_cast<uint32_t *>(_buffer.get_write());
             std::fill(p, p + overhead, 0);
@@ -377,29 +383,29 @@ public:
         out.write(crc.checksum());
 
         // acquire read lock
-        return _dwrite.read_lock().then(
-                [this, size, off, buf = std::move(buf), me = std::move(me)]() mutable {
-                    auto p = buf.get();
-                    return _file.dma_write(off, p, size).then_wrapped([this, size, buf = std::move(buf), me = std::move(me)](auto&& f) mutable {
-                        try {
-                            size_t written = std::get<0>(f.get());
-                            assert(written == size); // we are not equipped to deal with partial writes.
-                            _segment_manager->totals.bytes_written += written;
-                            ++_segment_manager->totals.cycle_count;
-                            return make_ready_future<sseg_ptr>(std::move(me));
-                            // TODO: retry/ignore/fail/stop - optional behaviour in origin.
-                            // we fast-fail the whole commit.
-                        } catch (std::exception& e) {
-                            logger.error("Failed to persist commits to disk: {}", e.what());
-                            throw;
-                        } catch (...) {
-                            logger.error("Failed to persist commits to disk.");
-                            throw;
-                        }
-                    }).finally([me, this]() {
-                        _dwrite.read_unlock(); // release
-                    });
-                });
+        return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me = std::move(me)]() mutable {
+            auto p = buf.get();
+            return _file.dma_write(off, p, size).then_wrapped([this, size, me, buf = std::move(buf)](auto&& f) mutable {
+                try {
+                    _segment_manager->release_buffer(std::move(buf));
+                    size_t written = std::get<0>(f.get());
+                    assert(written == size); // we are not equipped to deal with partial writes.
+                    _segment_manager->totals.bytes_written += written;
+                    ++_segment_manager->totals.cycle_count;
+                    return make_ready_future<sseg_ptr>(std::move(me));
+                    // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                    // we fast-fail the whole commit.
+                } catch (std::exception& e) {
+                    logger.error("Failed to persist commits to disk: {}", e.what());
+                    throw;
+                } catch (...) {
+                    logger.error("Failed to persist commits to disk.");
+                    throw;
+                }
+            });
+        }).finally([me, this]() {
+            _dwrite.read_unlock(); // release
+        });
     }
     /**
      * Add a "mutation" to the segment.
@@ -719,6 +725,36 @@ std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
     }
     return res;
 }
+
+db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
+    auto i = _temp_buffers.begin();
+    auto e = _temp_buffers.end();
+
+    while (i != e) {
+        if (i->size() >= s) {
+            auto r = std::move(*i);
+            _temp_buffers.erase(i);
+            return r;
+        }
+        ++i;
+    }
+    auto a = ::memalign(segment::alignment, s);
+    return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
+}
+
+void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
+    _temp_buffers.emplace_back(std::move(b));
+    std::sort(_temp_buffers.begin(), _temp_buffers.end(), [](const buffer_type& b1, const buffer_type& b2) {
+        return b1.size() < b2.size();
+    });
+
+    constexpr const size_t max_temp_buffers = 4;
+
+    if (_temp_buffers.size() > max_temp_buffers) {
+        _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
+    }
+}
+
 /**
  * Add mutation.
  */
