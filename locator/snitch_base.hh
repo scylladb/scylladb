@@ -93,7 +93,10 @@ struct i_endpoint_snitch {
     virtual future<> stop() = 0;
 
     // noop by default
-    virtual future<> start() { return make_ready_future<>(); }
+    virtual future<> start() {
+        _state = snitch_state::running;
+        return make_ready_future<>();
+    }
 
     // noop by default
     virtual void set_my_dc(const sstring& new_dc) {};
@@ -136,7 +139,6 @@ protected:
 
 struct snitch_ptr {
     typedef std::unique_ptr<i_endpoint_snitch> ptr_type;
-        ;
     future<> stop() {
         if (_ptr) {
             return _ptr->stop();
@@ -157,10 +159,10 @@ struct snitch_ptr {
         return _ptr.get();
     }
 
-    ptr_type& operator=(ptr_type&& new_val) {
+    snitch_ptr& operator=(ptr_type&& new_val) {
         _ptr = std::move(new_val);
 
-        return _ptr;
+        return *this;
     }
 
     operator bool() const {
