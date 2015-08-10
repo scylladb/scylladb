@@ -739,6 +739,9 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
         ++i;
     }
     auto a = ::memalign(segment::alignment, s);
+    if (a == nullptr) {
+        throw std::bad_alloc();
+    }
     return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
 }
 
