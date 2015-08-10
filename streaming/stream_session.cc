@@ -250,9 +250,16 @@ future<> stream_session::initiate() {
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
     sslog.debug("SEND SENDSTREAM_INIT_MESSAGE to {}", id);
-    return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
-        sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
-        this->dst_cpu_id = dst_cpu_id;
+    return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then_wrapped([this, id] (auto&& f) {
+        try {
+            unsigned dst_cpu_id = f.get0();
+            sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
+            this->dst_cpu_id = dst_cpu_id;
+        } catch (...) {
+            sslog.error("Fail to send STREAM_INIT_MESSAGE to {}", id);
+            throw;
+        }
+        return make_ready_future<>();
     });
 }
 
