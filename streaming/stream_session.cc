@@ -275,12 +275,20 @@ future<> stream_session::on_initialization_complete() {
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
     sslog.debug("SEND PREPARE_MESSAGE to {}", id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->src_cpu_id, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
-        sslog.debug("GOT PREPARE_MESSAGE Reply");
-        for (auto& summary : msg.summaries) {
-            prepare_receiving(summary);
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from,
+        this->connecting, this->src_cpu_id, this->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
+        try {
+            auto msg = f.get0();
+            sslog.debug("GOT PREPARE_MESSAGE Reply");
+            for (auto& summary : msg.summaries) {
+                this->prepare_receiving(summary);
+            }
+            this->start_streaming_files();
+        } catch (...) {
+            sslog.error("Fail to send PREPARE_MESSAGE to {}", id);
+            throw;
         }
-        start_streaming_files();
+        return make_ready_future<>();
     });
 }
 
