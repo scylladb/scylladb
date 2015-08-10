@@ -75,10 +75,12 @@ using cf_id_type = utils::UUID;
  * indefinately.
  */
 class commitlog {
+public:
     class segment_manager;
     class segment;
     class descriptor;
 
+private:
     std::unique_ptr<segment_manager> _segment_manager;
 public:
     enum class sync_mode {

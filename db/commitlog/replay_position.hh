@@ -46,4 +46,6 @@ struct replay_position {
     }
 };
 
+std::ostream& operator<<(std::ostream& out, const replay_position& s);
+
 }

@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <malloc.h>
 #include <regex>
+#include <boost/range/adaptor/map.hpp>
 
 #include "core/align.hh"
 #include "core/reactor.hh"
@@ -39,6 +40,9 @@
 #include "db/config.hh"
 #include "utils/data_input.hh"
 #include "utils/crc.hh"
+#include "log.hh"
+
+static logging::logger logger("commitlog");
 
 class crc32_nbo {
     crc32 _c;
@@ -197,6 +201,7 @@ private:
  * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
  * files are initially allocated to a fixed size and can grow to accomidate a larger value if necessary.
  */
+
 class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     segment_manager* _segment_manager;
 
@@ -218,7 +223,13 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     std::unordered_map<cf_id_type, position_type> _cf_dirty;
     time_point _sync_time;
 
+    friend std::ostream& operator<<(std::ostream&, const segment&);
 public:
+    struct cf_mark {
+        const segment& s;
+    };
+    friend std::ostream& operator<<(std::ostream&, const cf_mark&);
+
     // The commit log entry overhead in bytes (int: length + int: head checksum + int: tail checksum)
     static constexpr size_t entry_overhead_size = 3 * sizeof(uint32_t);
     static constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
@@ -237,6 +248,7 @@ public:
         ++_segment_manager->totals.segments_created;
     }
     ~segment() {
+        logger.debug("Segment {} is no longer active and will be deleted now", *this);
         ++_segment_manager->totals.segments_destroyed;
         ::unlink(
                 (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
@@ -287,10 +299,21 @@ public:
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
                     _sync_time = clock_type::now();
-                    return _file.flush().then([this, pos, me = std::move(me)]() {
+                    return _file.flush().then_wrapped([this, pos, me = std::move(me)](auto&& f) {
                                 _flush_pos = std::max(pos, _flush_pos);
                                 ++_segment_manager->totals.flush_count;
-                                return make_ready_future<sseg_ptr>(std::move(me));
+                                try {
+                                    f.get();
+                                    // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                                    // we fast-fail the whole commit.
+                                    return make_ready_future<sseg_ptr>(std::move(me));
+                                } catch (std::exception& e) {
+                                    logger.error("Failed to flush commits to disk: {}", e.what());
+                                    throw;
+                                } catch (...) {
+                                    logger.error("Failed to flush commits to disk.");
+                                    throw;
+                                }
                             });
                 });
     }
@@ -357,14 +380,25 @@ public:
         return _dwrite.read_lock().then(
                 [this, size, off, buf = std::move(buf), me = std::move(me)]() mutable {
                     auto p = buf.get();
-                    return _file.dma_write(off, p, size).then([this, size, buf = std::move(buf), me = std::move(me)](size_t written) mutable {
-                                assert(written == size); // we are not equipped to deal with partial writes.
-                                _segment_manager->totals.bytes_written += written;
-                                ++_segment_manager->totals.cycle_count;
-                                return make_ready_future<sseg_ptr>(std::move(me));
-                            }).finally([me, this]() {
-                                _dwrite.read_unlock(); // release
-                            });
+                    return _file.dma_write(off, p, size).then_wrapped([this, size, buf = std::move(buf), me = std::move(me)](auto&& f) mutable {
+                        try {
+                            size_t written = std::get<0>(f.get());
+                            assert(written == size); // we are not equipped to deal with partial writes.
+                            _segment_manager->totals.bytes_written += written;
+                            ++_segment_manager->totals.cycle_count;
+                            return make_ready_future<sseg_ptr>(std::move(me));
+                            // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                            // we fast-fail the whole commit.
+                        } catch (std::exception& e) {
+                            logger.error("Failed to persist commits to disk: {}", e.what());
+                            throw;
+                        } catch (...) {
+                            logger.error("Failed to persist commits to disk.");
+                            throw;
+                        }
+                    }).finally([me, this]() {
+                        _dwrite.read_unlock(); // release
+                    });
                 });
     }
     /**
@@ -618,15 +652,33 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
  */
 void db::commitlog::segment_manager::discard_completed_segments(
         const cf_id_type& id, const replay_position& pos) {
+    logger.debug("discard completed log segments for {}, table {}", pos, id);
     for (auto&s : _segments) {
         s->mark_clean(id, pos);
     }
     discard_unused_segments();
 }
 
+std::ostream& db::operator<<(std::ostream& out, const db::commitlog::segment& s) {
+    return out << "commit log segment (" << s._desc.filename() << ")";
+}
+
+std::ostream& db::operator<<(std::ostream& out, const db::commitlog::segment::cf_mark& m) {
+    return out << (m.s._cf_dirty | boost::adaptors::map_keys);
+}
+
+std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
+    return out << "{" << p.id << ", " << p.pos << "}";
+}
+
 void db::commitlog::segment_manager::discard_unused_segments() {
     auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto& s) {
-        return s->is_unused();
+        if (s->is_unused()) {
+            logger.debug("{} is unused", *s);
+            return true;
+        }
+        logger.debug("Not safe to delete {}; dirty is {}", s, segment::cf_mark {*s});
+        return false;
     });
     if (i != _segments.end()) {
         _segments.erase(i, _segments.end());
