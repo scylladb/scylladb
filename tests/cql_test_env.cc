@@ -192,11 +192,13 @@ public:
     }
 };
 
-future<> init_once(distributed<database>& db) {
+future<> init_once(shared_ptr<distributed<database>> db) {
     static bool done = false;
     if (!done) {
         done = true;
-        return init_storage_service(db).then([] {
+        // FIXME: we leak db, since we're initializing the global storage_service with it.
+        new shared_ptr<distributed<database>>(db);
+        return init_storage_service(*db).then([] {
             return init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
         });
     } else {
@@ -207,7 +209,7 @@ future<> init_once(distributed<database>& db) {
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
         auto db = ::make_shared<distributed<database>>();
-        return init_once(*db).then([db] {
+        return init_once(db).then([db] {
             return seastar::async([db] {
                 auto cfg = make_lw_shared<db::config>();
                 cfg->data_file_directories() = {};
@@ -221,7 +223,11 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
                 qp->start(std::ref(proxy), std::ref(*db)).get();
 
                 auto& ss = service::get_local_storage_service();
-                ss.init_server().get();
+                static bool storage_service_started = false;
+                if (!storage_service_started) {
+                    storage_service_started = true;
+                    ss.init_server().get();
+                }
 
                 auto env = ::make_shared<in_memory_cql_env>(db, qp);
                 env->start().get();
