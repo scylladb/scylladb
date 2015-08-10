@@ -199,8 +199,10 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                 auto opts = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
                 qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, *opts).get();
                 sslog.debug("CREATE KEYSPACE = KS DONE");
+                sleep(std::chrono::seconds(3)).get();
                 qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, *opts).get();
                 sslog.debug("CREATE TABLE = TB DONE");
+                sleep(std::chrono::seconds(3)).get();
                 qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, *opts).get();
                 sslog.debug("INSERT VALUE DONE: 1");
                 qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, *opts).get();
@@ -250,9 +252,16 @@ future<> stream_session::initiate() {
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
     sslog.debug("SEND SENDSTREAM_INIT_MESSAGE to {}", id);
-    return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then([this] (unsigned dst_cpu_id) {
-        sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
-        this->dst_cpu_id = dst_cpu_id;
+    return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then_wrapped([this, id] (auto&& f) {
+        try {
+            unsigned dst_cpu_id = f.get0();
+            sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
+            this->dst_cpu_id = dst_cpu_id;
+        } catch (...) {
+            sslog.error("Fail to send STREAM_INIT_MESSAGE to {}", id);
+            throw;
+        }
+        return make_ready_future<>();
     });
 }
 
@@ -268,12 +277,20 @@ future<> stream_session::on_initialization_complete() {
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
     sslog.debug("SEND PREPARE_MESSAGE to {}", id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from, this->connecting, this->src_cpu_id, this->dst_cpu_id).then([this] (messages::prepare_message msg) {
-        sslog.debug("GOT PREPARE_MESSAGE Reply");
-        for (auto& summary : msg.summaries) {
-            prepare_receiving(summary);
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), from,
+        this->connecting, this->src_cpu_id, this->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
+        try {
+            auto msg = f.get0();
+            sslog.debug("GOT PREPARE_MESSAGE Reply");
+            for (auto& summary : msg.summaries) {
+                this->prepare_receiving(summary);
+            }
+            this->start_streaming_files();
+        } catch (...) {
+            sslog.error("Fail to send PREPARE_MESSAGE to {}", id);
+            throw;
         }
-        start_streaming_files();
+        return make_ready_future<>();
     });
 }
 
@@ -531,19 +548,17 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
     }
     for (auto& cf : cfs) {
         std::vector<mutation_reader> readers;
-        std::vector<shared_ptr<query::range<ring_position>>> prs;
         auto cf_id = cf->schema()->id();
         for (auto& range : ranges) {
-            auto pr = make_shared<query::range<ring_position>>(query::to_partition_range(range));
-            prs.push_back(pr);
-            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, *pr);
+            auto pr = query::to_partition_range(range);
+            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, pr);
             readers.push_back(std::move(mr));
         }
         // Store this mutation_reader so we can send mutaions later
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        stream_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys, repaired_at);
     }
     if (!stream_details.empty()) {
         add_transfer_files(std::move(stream_details));

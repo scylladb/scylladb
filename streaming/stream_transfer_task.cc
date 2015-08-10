@@ -57,17 +57,22 @@ void stream_transfer_task::start() {
         auto& msg = x.second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
-        do_with(std::move(id), [this, seq, &msg] (shard_id& id) {
-            return consume(msg.detail.mr, [this, seq, &id, &msg] (mutation&& m) {
-                auto fm = make_lw_shared<const frozen_mutation>(m);
-                sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-                return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
-                    sslog.debug("GOT STREAM_MUTATION Reply");
-                    return stop_iteration::no;
-                });
+        consume(msg.detail.mr, [this, seq, id] (mutation&& m) {
+            auto fm = make_lw_shared<const frozen_mutation>(m);
+            sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
+            return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
+                sslog.debug("GOT STREAM_MUTATION Reply");
+                return stop_iteration::no;
             });
-        }).then([this, seq] {
-           this->complete(seq);
+        }).then_wrapped([this, seq, id] (auto&& f){
+            // TODO: Add retry and timeout logic
+            try {
+                f.get();
+                this->complete(seq);
+            } catch (...) {
+                sslog.error("stream_transfer_task: Fail to send outgoing_file_message to {}", id);
+                this->session->on_error();
+            }
         });
     }
 }
@@ -87,13 +92,14 @@ void stream_transfer_task::complete(int sequence_number) {
         using shard_id = net::messaging_service::shard_id;
         auto from = utils::fb_utilities::get_broadcast_address();
         auto id = shard_id{session->peer, session->dst_cpu_id};
-        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this] (auto&& f) {
+        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
             try {
                 f.get();
                 sslog.debug("GOT STREAM_MUTATION_DONE Reply");
                 session->task_completed(*this);
             } catch (...) {
-                sslog.warn("ERROR STREAM_MUTATION_DONE Reply ");
+                sslog.error("stream_transfer_task: Fail to send REAM_MUTATION_DON to {}", id);
+                session->on_error();
             }
         });
     }

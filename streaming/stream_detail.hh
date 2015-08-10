@@ -31,15 +31,12 @@ namespace streaming {
 struct stream_detail {
     using UUID = utils::UUID;
     UUID cf_id;
-    std::vector<shared_ptr<query::range<dht::ring_position>>> prs;
     mutation_reader mr;
     int64_t estimated_keys;
     int64_t repaired_at;
     stream_detail() = default;
-    stream_detail(UUID cf_id_, std::vector<shared_ptr<query::range<dht::ring_position>>> prs_,
-                  mutation_reader mr_, long estimated_keys_, long repaired_at_)
+    stream_detail(UUID cf_id_, mutation_reader mr_, long estimated_keys_, long repaired_at_)
         : cf_id(std::move(cf_id_))
-        , prs(std::move(prs_))
         , mr(std::move(mr_))
         , estimated_keys(estimated_keys_)
         , repaired_at(repaired_at_) {
