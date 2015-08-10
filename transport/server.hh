@@ -24,6 +24,8 @@ class database;
 class cql_server {
     class event_notifier;
 
+    static constexpr int current_version = 3;
+
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
