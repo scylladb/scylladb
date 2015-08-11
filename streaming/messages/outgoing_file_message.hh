@@ -27,6 +27,7 @@
 #include "streaming/compress/compression_info.hh"
 #include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
+#include <seastar/core/semaphore.hh>
 
 namespace streaming {
 namespace messages {
@@ -42,6 +43,9 @@ public:
 
     file_message_header header;
     stream_detail detail;
+
+    size_t mutations_nr{0};
+    semaphore mutations_done{0};
 
     outgoing_file_message() = default;
     outgoing_file_message(int32_t sequence_number, stream_detail d, bool keep_ss_table_level)

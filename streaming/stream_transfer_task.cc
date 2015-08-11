@@ -23,6 +23,7 @@
 #include "streaming/stream_detail.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
+#include "streaming/stream_manager.hh"
 #include "streaming/messages/outgoing_file_message.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
@@ -57,13 +58,27 @@ void stream_transfer_task::start() {
         auto& msg = x.second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
-        consume(msg.detail.mr, [this, seq, id] (mutation&& m) {
+        consume(msg.detail.mr, [&msg, this, seq, id] (mutation&& m) {
+            msg.mutations_nr++;
             auto fm = make_lw_shared<const frozen_mutation>(m);
-            sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-            return session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then([this, fm] {
-                sslog.debug("GOT STREAM_MUTATION Reply");
+            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, id] {
+                sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
+                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, id, fm] (auto&& f) {
+                    try {
+                        f.get();
+                        sslog.debug("GOT STREAM_MUTATION Reply");
+                        msg.mutations_done.signal();
+                    } catch (...) {
+                        sslog.error("stream_transfer_task: Fail to send STREAM_MUTATION to {}", id);
+                        msg.mutations_done.broken();
+                    }
+                }).finally([] {
+                    get_local_stream_manager().mutation_send_limiter().signal();
+                });
                 return stop_iteration::no;
             });
+        }).then([&msg] {
+            return msg.mutations_done.wait(msg.mutations_nr);
         }).then_wrapped([this, seq, id] (auto&& f){
             // TODO: Add retry and timeout logic
             try {
