@@ -4,6 +4,7 @@
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/heap/binomial_heap.hpp>
+#include <stack>
 
 #include <seastar/core/memory.hh>
 #include <seastar/core/align.hh>
@@ -146,10 +147,16 @@ struct segment_descriptor {
 // Stores segment descriptors in a vector which is indexed using most significant
 // bits of segment address.
 class segment_pool {
+    static constexpr size_t emergency_reserve_max() { return 1; }
     std::vector<segment_descriptor> _segments;
     uintptr_t _segments_base; // The address of the first segment
     size_t _segments_in_use{};
     memory::memory_layout _layout;
+    size_t _current_emergeny_reserve_goal = emergency_reserve_max();
+    std::stack<std::unique_ptr<segment>> _emergency_reserve;
+private:
+    segment* allocate_or_fallback_to_reserve();
+    void free_or_restore_to_reserve(segment* seg);
 public:
     segment_pool();
     segment* new_segment();
@@ -159,6 +166,9 @@ public:
     void free_segment(segment*);
     void free_segment(segment*, segment_descriptor&);
     size_t segments_in_use() const;
+    size_t current_emergency_reserve_goal() const { return _current_emergeny_reserve_goal; }
+    void set_current_emergency_reserve_goal(size_t goal) { _current_emergeny_reserve_goal = goal; }
+    struct reservation_goal;
 };
 
 segment_descriptor&
@@ -190,8 +200,31 @@ segment_pool::containing_segment(void* obj) const {
 }
 
 segment*
+segment_pool::allocate_or_fallback_to_reserve() {
+    try {
+        return new segment;
+    } catch (std::bad_alloc&) {
+        if (_emergency_reserve.size() <= _current_emergeny_reserve_goal) {
+            throw;
+        }
+        auto s = std::move(_emergency_reserve.top());
+        _emergency_reserve.pop();
+        return s.release();
+    }
+}
+
+void
+segment_pool::free_or_restore_to_reserve(segment* seg) {
+    auto s = std::unique_ptr<segment>(seg);
+    if (_emergency_reserve.size() < emergency_reserve_max()) {
+        _emergency_reserve.push(std::move(s));
+    }
+    // will auto-free if push failed or if we didn't push at all
+}
+
+segment*
 segment_pool::new_segment() {
-    auto seg = new segment;
+    auto seg = allocate_or_fallback_to_reserve();
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
     desc._lsa_managed = true;
@@ -207,7 +240,7 @@ void segment_pool::free_segment(segment* seg) {
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) {
     logger.trace("Releasing segment {}", seg);
     desc._lsa_managed = false;
-    delete seg;
+    free_or_restore_to_reserve(seg);
     --_segments_in_use;
 }
 
@@ -216,6 +249,9 @@ segment_pool::segment_pool()
 {
     _segments_base = align_down(_layout.start, (uintptr_t)segment::size);
     _segments.resize((_layout.end - _segments_base) / segment::size);
+    for (size_t i = 0; i < _current_emergeny_reserve_goal; ++i) {
+        _emergency_reserve.push(std::make_unique<segment>());
+    }
 }
 
 #else
@@ -265,9 +301,27 @@ public:
         return seg;
     }
     size_t segments_in_use() const;
+    size_t current_emergency_reserve_goal() const { return 0; }
+    void set_current_emergency_reserve_goal(size_t goal) { }
+public:
+    class reservation_goal;
 };
 
 #endif
+
+// RAII wrapper to maintain segment_pool::current_emergency_reserve_goal()
+class segment_pool::reservation_goal {
+    segment_pool& _sp;
+    size_t _old_goal;
+public:
+    reservation_goal(segment_pool& sp, size_t goal)
+            : _sp(sp), _old_goal(_sp.current_emergency_reserve_goal()) {
+        _sp.set_current_emergency_reserve_goal(goal);
+    }
+    ~reservation_goal() {
+        _sp.set_current_emergency_reserve_goal(_old_goal);
+    }
+};
 
 size_t segment_pool::segments_in_use() const {
     return _segments_in_use;
@@ -833,6 +887,9 @@ size_t tracker::impl::reclaim(size_t bytes) {
 
     logger.debug("Compacting, {} segments in use ({} B), trying to release {} ({} B).",
         in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
+
+    // Allow dipping into reserves while compacting
+    segment_pool::reservation_goal(shard_segment_pool, 0);
 
     boost::range::make_heap(_regions, cmp);
 
