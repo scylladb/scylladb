@@ -248,7 +248,9 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         _my_rack = *new_rack;
         _prefer_local = new_prefer_local;
 
-        return i_endpoint_snitch::snitch_instance().invoke_on_all(
+        assert(_my_distributed);
+
+        return _my_distributed->invoke_on_all(
             [this] (snitch_ptr& local_s) {
 
             // Distribute the new values on all CPUs but the current one

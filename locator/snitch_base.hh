@@ -123,6 +123,11 @@ public:
 
     virtual sstring get_name() const = 0;
 
+    // should be called for production snitches before calling start()
+    virtual void set_my_distributed(distributed<snitch_ptr>* d)  {
+        //noop by default
+    }
+
 protected:
     static unsigned& io_cpu_id() {
         static unsigned id = 0;
@@ -196,12 +201,13 @@ future<> i_endpoint_snitch::init_snitch_obj(
         [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
         // ...then, create the snitches...
         return snitch_obj.invoke_on_all(
-            [snitch_name, a] (snitch_ptr& local_inst) {
+            [snitch_name, a, &snitch_obj] (snitch_ptr& local_inst) {
             try {
                 auto s(std::move(apply([snitch_name] (A&&... a) {
                     return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
                 }, std::move(a))));
 
+                s->set_my_distributed(&snitch_obj);
                 local_inst = std::move(s);
             } catch (no_such_class& e) {
                 snitch_logger.error("{}", e.what());
