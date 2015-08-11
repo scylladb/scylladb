@@ -207,8 +207,22 @@ public:
         _server._notifier->unregister_connection(this);
     }
     future<> process() {
-        return do_until([this] { return _read_buf.eof(); }, [this] { return process_request(); })
-        .finally([this] {
+        return do_until([this] {
+            return _read_buf.eof();
+        }, [this] {
+            return process_request();
+        }).then_wrapped([this] (future<> f) {
+            try {
+                f.get();
+                return make_ready_future<>();
+            } catch (const exceptions::cassandra_exception& ex) {
+                return write_error(0, ex.code(), ex.what());
+            } catch (std::exception& ex) {
+                return write_error(0, exceptions::exception_code::SERVER_ERROR, ex.what());
+            } catch (...) {
+                return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
+            }
+        }).finally([this] {
             return _pending_requests_gate.close().then([this] {
                 return std::move(_ready_to_respond);
             });
