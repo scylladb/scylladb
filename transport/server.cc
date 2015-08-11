@@ -633,7 +633,7 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) {
         break;
     }
     default:
-        abort();
+        throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", _version));
     }
     if (v3.version != _version) {
         throw exceptions::protocol_exception(sprint("Invalid message version. Got %d but previous messages on this connection had version %d", v3.version, _version));
