@@ -314,28 +314,21 @@ future<> storage_service::join_token_ring(int delay) {
     });
 }
 
-void storage_service::join_ring() {
-#if 0
-    if (!joined) {
+future<> storage_service::join_ring() {
+    if (!_joined) {
         logger.info("Joining ring by operator request");
-        try
-        {
-            joinTokenRing(0);
-        }
-        catch (ConfigurationException e)
-        {
-            throw new IOException(e.getMessage());
-        }
+        return join_token_ring(0);
     } else if (_is_survey_mode) {
-        set_tokens(SystemKeyspace.getSavedTokens());
-        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-        _is_survey_mode = false;
-        logger.info("Leaving write survey mode and joining ring at operator request");
-        assert _token_metadata.sortedTokens().size() > 0;
-
-        Auth.setup();
+        return set_tokens(db::system_keyspace::get_saved_tokens()).then([this] {
+            //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+            _is_survey_mode = false;
+            logger.info("Leaving write survey mode and joining ring at operator request");
+            assert(_token_metadata.sorted_tokens().size() > 0);
+            //Auth.setup();
+            return make_ready_future<>();
+        });
     }
-#endif
+    return make_ready_future<>();
 }
 
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {

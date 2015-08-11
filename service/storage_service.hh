@@ -371,7 +371,7 @@ private:
     future<> prepare_to_join();
     future<> join_token_ring(int delay);
 public:
-    void join_ring();
+    future<> join_ring();
     bool is_joined() {
         return _joined;
     }
