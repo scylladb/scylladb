@@ -1,28 +1,153 @@
-# Scylla storage config YAML 
+# Scylla storage config YAML
 
-# NOTE:
-#   See http://wiki.apache.org/cassandra/StorageConfiguration for
-#   full explanations of configuration directives
-# /NOTE
+#######################################
+# This file is split to two sections:
+# 1. Supported parameters
+# 2. Unsupported parameters: reserved for future use or backwards
+#    compatibility.
+# Scylla will only read and use the first segment
+#######################################
 
-# The name of the cluster. This is mainly used to prevent machines in
-# one logical cluster from joining another.
-cluster_name: 'Test Cluster'
+### Supported Parameters
 
 # This defines the number of tokens randomly assigned to this node on the ring
 # The more tokens, relative to other nodes, the larger the proportion of data
 # that this node will store. You probably want all nodes to have the same number
 # of tokens assuming they have equal hardware capability.
 #
-# If you leave this unspecified, Scylla will use the default of 1 token for legacy compatibility,
-# and will use the initial_token as described below.
-#
-# Specifying initial_token will override this setting on the node's initial start,
-# on subsequent starts, this setting will apply even if initial token is set.
-#
 # If you already have a cluster with 1 token per node, and wish to migrate to 
 # multiple tokens per node, see http://wiki.apache.org/cassandra/Operations
 num_tokens: 256
+
+# Directory where Scylla should store data on disk.
+# If not set, the default directory is $CASSANDRA_HOME/data/data.
+# data_file_directories:
+#     - /var/lib/scylla/data
+
+# commit log.  when running on magnetic HDD, this should be a
+# separate spindle than the data directories.
+# If not set, the default directory is $CASSANDRA_HOME/data/commitlog.
+# commitlog_directory: /var/lib/scylla/commitlog
+
+# commitlog_sync may be either "periodic" or "batch."
+#
+# When in batch mode, Scylla won't ack writes until the commit log
+# has been fsynced to disk.  It will wait
+# commitlog_sync_batch_window_in_ms milliseconds between fsyncs.
+# This window should be kept short because the writer threads will
+# be unable to do extra work while waiting.  (You may need to increase
+# concurrent_writes for the same reason.)
+#
+# commitlog_sync: batch
+# commitlog_sync_batch_window_in_ms: 2
+#
+# the other option is "periodic" where writes may be acked immediately
+# and the CommitLog is simply synced every commitlog_sync_period_in_ms
+# milliseconds.
+commitlog_sync: periodic
+commitlog_sync_period_in_ms: 10000
+
+# The size of the individual commitlog file segments.  A commitlog
+# segment may be archived, deleted, or recycled once all the data
+# in it (potentially from each columnfamily in the system) has been
+# flushed to sstables.
+#
+# The default size is 32, which is almost always fine, but if you are
+# archiving commitlog segments (see commitlog_archiving.properties),
+# then you probably want a finer granularity of archiving; 8 or 16 MB
+# is reasonable.
+commitlog_segment_size_in_mb: 32
+
+# seed_provider class_name is saved for future use.
+# seeds address are mandatory!
+seed_provider:
+    # Addresses of hosts that are deemed contact points. 
+    # Scylla nodes use this list of hosts to find each other and learn
+    # the topology of the ring.  You must change this if you are running
+    # multiple nodes!
+    - class_name: org.apache.cassandra.locator.SimpleSeedProvider
+      parameters:
+          # seeds is actually a comma-delimited list of addresses.
+          # Ex: "<ip1>,<ip2>,<ip3>"
+          - seeds: "127.0.0.1"
+
+# Address or interface to bind to and tell other Scylla nodes to connect to.
+# You _must_ change this if you want multiple nodes to be able to communicate!
+#
+# Setting listen_address to 0.0.0.0 is always wrong.
+listen_address: localhost
+
+# Address to broadcast to other Scylla nodes
+# Leaving this blank will set it to the same value as listen_address
+# broadcast_address: 1.2.3.4
+
+# port for the CQL native transport to listen for clients on
+# For security reasons, you should not expose this port to the internet.  Firewall it if needed.
+native_transport_port: 9042
+
+# Throttles all outbound streaming file transfers on this node to the
+# given total throughput in Mbps. This is necessary because Scylla does
+# mostly sequential IO when streaming data during bootstrap or repair, which
+# can lead to saturating the network connection and degrading rpc performance.
+# When unset, the default is 200 Mbps or 25 MB/s.
+# stream_throughput_outbound_megabits_per_sec: 200
+
+# How long the coordinator should wait for read operations to complete
+read_request_timeout_in_ms: 5000
+
+# How long the coordinator should wait for writes to complete
+write_request_timeout_in_ms: 2000
+
+# phi value that must be reached for a host to be marked down.
+# most users should never need to adjust this.
+# phi_convict_threshold: 8
+
+# Out of the box, Scylla provides
+#  - SimpleSnitch:
+#    Treats Strategy order as proximity. This can improve cache
+#    locality when disabling read repair.  Only appropriate for
+#    single-datacenter deployments.
+#  - GossipingPropertyFileSnitch
+#    This should be your go-to snitch for production use.  The rack
+#    and datacenter for the local node are defined in
+#    cassandra-rackdc.properties and propagated to other nodes via
+#    gossip.  If cassandra-topology.properties exists, it is used as a
+#    fallback, allowing migration from the PropertyFileSnitch.
+#  - PropertyFileSnitch:
+#    Proximity is determined by rack and data center, which are
+#    explicitly configured in cassandra-topology.properties.
+#  - Ec2Snitch:
+#    Appropriate for EC2 deployments in a single Region. Loads Region
+#    and Availability Zone information from the EC2 API. The Region is
+#    treated as the datacenter, and the Availability Zone as the rack.
+#    Only private IPs are used, so this will not work across multiple
+#    Regions.
+#  - Ec2MultiRegionSnitch:
+#    Uses public IPs as broadcast_address to allow cross-region
+#    connectivity.  (Thus, you should set seed addresses to the public
+#    IP as well.) You will need to open the storage_port or
+#    ssl_storage_port on the public IP firewall.  (For intra-Region
+#    traffic, Scylla will switch to the private IP after
+#    establishing a connection.)
+#  - RackInferringSnitch:
+#    Proximity is determined by rack and data center, which are
+#    assumed to correspond to the 3rd and 2nd octet of each node's IP
+#    address, respectively.  Unless this happens to match your
+#    deployment conventions, this is best used as an example of
+#    writing a custom Snitch class and is provided in that spirit.
+#
+# You can use a custom Snitch by setting this to the full class name
+# of the snitch, which will be assumed to be on your classpath.
+endpoint_snitch: SimpleSnitch
+
+
+###################################################
+## Not currently supported, reserved for future use
+###################################################
+
+# The name of the cluster. This is mainly used to prevent machines in
+# one logical cluster from joining another.
+cluster_name: 'Test Cluster'
 
 # initial_token allows you to specify tokens manually.  While you can use # it with
 # vnodes (num_tokens > 1, above) -- in which case you should provide a 
@@ -99,17 +224,6 @@ permissions_validity_in_ms: 2000
 #
 partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
-# Directories where Scylla should store data on disk.  Scylla
-# will spread data evenly across them, subject to the granularity of
-# the configured compaction strategy.
-# If not set, the default directory is $CASSANDRA_HOME/data/data.
-# data_file_directories:
-#     - /var/lib/scylla/data
-
-# commit log.  when running on magnetic HDD, this should be a
-# separate spindle than the data directories.
-# If not set, the default directory is $CASSANDRA_HOME/data/commitlog.
-# commitlog_directory: /var/lib/scylla/commitlog
 
 # policy for data disk failures:
 # die: shut down gossip and Thrift and kill the JVM for any fs errors or
@@ -225,47 +339,7 @@ counter_cache_save_period: 7200
 # If not set, the default directory is $CASSANDRA_HOME/data/saved_caches.
 # saved_caches_directory: /var/lib/scylla/saved_caches
 
-# commitlog_sync may be either "periodic" or "batch." 
-# 
-# When in batch mode, Scylla won't ack writes until the commit log
-# has been fsynced to disk.  It will wait
-# commitlog_sync_batch_window_in_ms milliseconds between fsyncs.
-# This window should be kept short because the writer threads will
-# be unable to do extra work while waiting.  (You may need to increase
-# concurrent_writes for the same reason.)
-#
-# commitlog_sync: batch
-# commitlog_sync_batch_window_in_ms: 2
-#
-# the other option is "periodic" where writes may be acked immediately
-# and the CommitLog is simply synced every commitlog_sync_period_in_ms
-# milliseconds. 
-commitlog_sync: periodic
-commitlog_sync_period_in_ms: 10000
 
-# The size of the individual commitlog file segments.  A commitlog
-# segment may be archived, deleted, or recycled once all the data
-# in it (potentially from each columnfamily in the system) has been
-# flushed to sstables.  
-#
-# The default size is 32, which is almost always fine, but if you are
-# archiving commitlog segments (see commitlog_archiving.properties),
-# then you probably want a finer granularity of archiving; 8 or 16 MB
-# is reasonable.
-commitlog_segment_size_in_mb: 32
-
-# any class that implements the SeedProvider interface and has a
-# constructor that takes a Map<String, String> of parameters will do.
-seed_provider:
-    # Addresses of hosts that are deemed contact points. 
-    # Scylla nodes use this list of hosts to find each other and learn
-    # the topology of the ring.  You must change this if you are running
-    # multiple nodes!
-    - class_name: org.apache.cassandra.locator.SimpleSeedProvider
-      parameters:
-          # seeds is actually a comma-delimited list of addresses.
-          # Ex: "<ip1>,<ip2>,<ip3>"
-          - seeds: "127.0.0.1"
 
 # For workloads with more data than can fit in memory, Scylla's
 # bottleneck will be reads that need to fetch data from
@@ -361,30 +435,8 @@ storage_port: 7000
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
 ssl_storage_port: 7001
 
-# Address or interface to bind to and tell other Scylla nodes to connect to.
-# You _must_ change this if you want multiple nodes to be able to communicate!
-#
-# Set listen_address OR listen_interface, not both. Interfaces must correspond
-# to a single address, IP aliasing is not supported.
-#
-# Leaving it blank leaves it up to InetAddress.getLocalHost(). This
-# will always do the Right Thing _if_ the node is properly configured
-# (hostname, name resolution, etc), and the Right Thing is to use the
-# address associated with the hostname (it might not be).
-#
-# Setting listen_address to 0.0.0.0 is always wrong.
-#
-# If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address
-# you can specify which should be chosen using listen_interface_prefer_ipv6. If false the first ipv4
-# address will be used. If true the first ipv6 address will be used. Defaults to false preferring
-# ipv4. If there is only one address it will be selected regardless of ipv4/ipv6.
-listen_address: localhost
 # listen_interface: eth0
 # listen_interface_prefer_ipv6: false
-
-# Address to broadcast to other Scylla nodes
-# Leaving this blank will set it to the same value as listen_address
-# broadcast_address: 1.2.3.4
 
 # Internode authentication backend, implementing IInternodeAuthenticator;
 # used to allow/disallow connections from peer nodes.
@@ -394,9 +446,7 @@ listen_address: localhost
 # Please note that the address on which the native transport is bound is the
 # same as the rpc_address. The port however is different and specified below.
 start_native_transport: true
-# port for the CQL native transport to listen for clients on
-# For security reasons, you should not expose this port to the internet.  Firewall it if needed.
-native_transport_port: 9042
+
 # The maximum threads for handling requests when the native transport is used.
 # This is similar to rpc_max_threads though the default differs slightly (and
 # there is no native_transport_min_threads, idle threads will always be stopped
@@ -583,26 +633,15 @@ compaction_large_partition_warning_threshold_mb: 100
 # between the sstables, reducing page cache churn and keeping hot rows hot
 sstable_preemptive_open_interval_in_mb: 50
 
-# Throttles all outbound streaming file transfers on this node to the
-# given total throughput in Mbps. This is necessary because Scylla does
-# mostly sequential IO when streaming data during bootstrap or repair, which
-# can lead to saturating the network connection and degrading rpc performance.
-# When unset, the default is 200 Mbps or 25 MB/s.
-# stream_throughput_outbound_megabits_per_sec: 200
-
 # Throttles all streaming file transfer between the datacenters,
 # this setting allows users to throttle inter dc stream throughput in addition
 # to throttling all network stream traffic as configured with
 # stream_throughput_outbound_megabits_per_sec
 # inter_dc_stream_throughput_outbound_megabits_per_sec:
 
-# How long the coordinator should wait for read operations to complete
-read_request_timeout_in_ms: 5000
 # How long the coordinator should wait for seq or index scans to complete
 range_request_timeout_in_ms: 10000
 # How long the coordinator should wait for writes to complete
-write_request_timeout_in_ms: 2000
-# How long the coordinator should wait for counter writes to complete
 counter_write_request_timeout_in_ms: 5000
 # How long a coordinator should continue to retry a CAS operation
 # that contends with other proposals for the same row
@@ -631,9 +670,6 @@ cross_node_timeout: false
 # Default value is 0, which never timeout streams.
 # streaming_socket_timeout_in_ms: 0
 
-# phi value that must be reached for a host to be marked down.
-# most users should never need to adjust this.
-# phi_convict_threshold: 8
 
 # endpoint_snitch -- Set this to a class that implements
 # IEndpointSnitch.  The snitch has two functions:
@@ -685,7 +721,6 @@ cross_node_timeout: false
 #
 # You can use a custom Snitch by setting this to the full class name
 # of the snitch, which will be assumed to be on your classpath.
-endpoint_snitch: SimpleSnitch
 
 # controls how often to perform the more expensive part of host score
 # calculation
