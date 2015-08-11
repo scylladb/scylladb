@@ -105,6 +105,25 @@ std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info();
 
 #if 0
+    public static KSMetaData definition()
+    {
+        Iterable<CFMetaData> tables =
+            Iterables.concat(LegacySchemaTables.All,
+                             Arrays.asList(BuiltIndexes,
+                                           Hints,
+                                           Batchlog,
+                                           Paxos,
+                                           Local,
+                                           Peers,
+                                           PeerEvents,
+                                           RangeXfers,
+                                           CompactionsInProgress,
+                                           CompactionHistory,
+                                           SSTableActivity));
+        return new KSMetaData(NAME, LocalStrategy.class, Collections.<String, String>emptyMap(), true, tables);
+    }
+
+    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
     private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
 #endif
 
@@ -342,7 +361,7 @@ enum class bootstrap_state {
     }
 #endif
 
-#if o
+#if 0
     /**
      * Return a map of stored tokens to IP addresses
      *
