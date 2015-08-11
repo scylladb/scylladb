@@ -1497,7 +1497,7 @@ public:
     {
         _timeout.set_callback([this] {
             _timedout = true;
-            _done_promise.set_exception(read_timeout_exception(_cl, response_count(), _targets_count, false /* FIXME */));
+            _done_promise.set_exception(read_timeout_exception(_cl, response_count(), _targets_count, _responses != 0));
             on_timeout();
         });
         _timeout.arm(timeout);
@@ -1519,7 +1519,7 @@ class digest_read_resolver : public abstract_read_resolver {
     std::vector<query::result_digest> _digest_results;
 
     virtual void on_timeout() override {
-        _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, false /* FIXME */));
+        _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_results.size() != 0));
         // we will not need them any more
         _data_results.clear();
         _digest_results.clear();
