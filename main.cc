@@ -15,6 +15,7 @@
 #include "service/migration_manager.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
+#include "db/batchlog_manager.hh"
 #include "utils/runtime.hh"
 #include "dns.hh"
 #include "log.hh"
@@ -135,6 +136,10 @@ int main(int ac, char** av) {
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });
+                });
+            }).then([&qp] {
+                return db::get_batchlog_manager().start(std::ref(qp)).then([] {
+                   engine().at_exit([] { return db::get_batchlog_manager().stop(); });
                 });
             }).then([&db] {
                 return parallel_for_each(db.local().get_config().data_file_directories(), [] (sstring datadir) {

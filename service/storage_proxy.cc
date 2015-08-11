@@ -38,6 +38,7 @@
 #include "core/future-util.hh"
 #include "db/read_repair_decision.hh"
 #include "db/config.hh"
+#include "db/batchlog_manager.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -97,6 +98,10 @@ protected:
     lw_shared_ptr<const frozen_mutation> _mutation;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
     size_t _pending_endpoints; // how many endpoints in bootstrap state there is
+    // added dead_endpoints as a memeber here as well. This to be able to carry the info across
+    // calls in helper methods in a convinient way. Since we hope this will be empty most of the time
+    // it should not be a huge burden. (flw)
+    std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     virtual size_t total_block_for() {
         // original comment from cassandra:
@@ -108,8 +113,15 @@ protected:
         signal();
     }
 public:
-    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
-        _ready(0), _cl(cl), _ks(ks), _mutation(std::move(mutation)), _targets(targets), _pending_endpoints(pending_endpoints) {}
+    abstract_write_response_handler(keyspace& ks, db::consistency_level cl,
+            lw_shared_ptr<const frozen_mutation> mutation,
+            std::unordered_set<gms::inet_address> targets,
+            size_t pending_endpoints = 0,
+            std::vector<gms::inet_address> dead_endpoints = {})
+            : _ready(0), _cl(cl), _ks(ks), _mutation(std::move(mutation)), _targets(
+                    std::move(targets)), _pending_endpoints(pending_endpoints), _dead_endpoints(
+                    std::move(dead_endpoints)) {
+    }
     virtual ~abstract_write_response_handler() {};
     void signal(size_t nr = 1) {
         _cl_acks += nr;
@@ -126,8 +138,11 @@ public:
     future<> wait() {
         return _ready.wait(total_block_for());
     }
-    const std::unordered_set<gms::inet_address>& get_targets() {
+    const std::unordered_set<gms::inet_address>& get_targets() const {
         return _targets;
+    }
+    const std::vector<gms::inet_address>& get_dead_endpoints() const {
+        return _dead_endpoints;
     }
     lw_shared_ptr<const frozen_mutation> get_mutation() {
         return _mutation;
@@ -142,14 +157,12 @@ class datacenter_write_response_handler : public abstract_write_response_handler
         }
     }
 public:
-    datacenter_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
-        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
+    using abstract_write_response_handler::abstract_write_response_handler;
 };
 
 class write_response_handler : public abstract_write_response_handler {
 public:
-    write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
-        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
+    using abstract_write_response_handler::abstract_write_response_handler;
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
@@ -165,8 +178,8 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         }
     }
 public:
-    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
-        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {
+    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
+        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
@@ -231,7 +244,7 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
         return *_response_handlers.find(id)->second.handler;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
@@ -242,12 +255,12 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     // for now make is simple
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else if (cl == db::consistency_level::EACH_QUORUM &&
                rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else {
-        h = std::make_unique<write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
+        h = std::make_unique<write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
 }
@@ -721,6 +734,56 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
 }
 
 /**
+ * Helper for create_write_response_handler, shared across mutate/mutate_atomically.
+ * Both methods do roughly the same thing, with the latter intermixing batch log ops
+ * in the logic.
+ * Since ordering is (maybe?) significant, we need to carry some info across from here
+ * to the hint method below (dead nodes).
+ */
+storage_proxy::response_id_type
+storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl) {
+    keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
+    auto& rs = ks.get_replication_strategy();
+    std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
+    std::vector<gms::inet_address> pending_endpoints = get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), ks);
+
+    auto all = boost::range::join(natural_endpoints, pending_endpoints);
+
+    if (std::find_if(all.begin(), all.end(), std::bind1st(std::mem_fn(&storage_proxy::cannot_hint), this)) != all.end()) {
+        // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
+        // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
+        // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
+        // a small number of nodes causing problems, so we should avoid shutting down writes completely to
+        // healthy nodes.  Any node with no hintsInProgress is considered healthy.
+        throw overloaded_exception(_total_hints_in_progress);
+    }
+
+    // filter live endpoints from dead ones
+    std::unordered_set<gms::inet_address> live_endpoints;
+    std::vector<gms::inet_address> dead_endpoints;
+    live_endpoints.reserve(all.size());
+    dead_endpoints.reserve(all.size());
+    std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
+            std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
+
+    db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
+
+    return create_write_response_handler(ks, cl, freeze(m), std::move(live_endpoints), pending_endpoints, dead_endpoints);
+}
+
+void
+storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level cl) {
+    auto& h = get_write_response_handler(id);
+
+    size_t hints = hint_to_dead_endpoints(h.get_mutation(), h.get_dead_endpoints());
+
+    if (cl == db::consistency_level::ANY) {
+        // for cl==ANY hints are counted towards consistency
+        h.signal(hints);
+    }
+}
+
+/**
  * Use this method to have these Mutations applied
  * across all replicas. This method will take care
  * of the possibility of a replica being down and hint
@@ -739,43 +802,12 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
     lc.start();
     for (auto& m : mutations) {
         try {
-            keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
-            auto& rs = ks.get_replication_strategy();
-            std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
-            std::vector<gms::inet_address> pending_endpoints = get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), ks);
-
-            auto all = boost::range::join(natural_endpoints, pending_endpoints);
-
-            if (std::find_if(all.begin(), all.end(), std::bind1st(std::mem_fn(&storage_proxy::cannot_hint), this)) != all.end()) {
-                // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
-                // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
-                // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
-                // a small number of nodes causing problems, so we should avoid shutting down writes completely to
-                // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-                throw overloaded_exception(_total_hints_in_progress);
-            }
-
-            // filter live endpoints from dead ones
-            std::unordered_set<gms::inet_address> live_endpoints;
-            std::vector<gms::inet_address> dead_endpoints;
-            live_endpoints.reserve(all.size());
-            dead_endpoints.reserve(all.size());
-            std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
-                    std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
-
-            db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
-
-            storage_proxy::response_id_type response_id = create_write_response_handler(ks, cl, freeze(m), std::move(live_endpoints), pending_endpoints);
+            storage_proxy::response_id_type response_id = create_write_response_handler(m, cl);
             // it is better to send first and hint afterwards to reduce latency
             // but request may complete before hint_to_dead_endpoints() is called and
             // response_id handler will be removed, so we will have to do hint with separate
             // frozen_mutation copy, or manage handler live time differently.
-            size_t hints = hint_to_dead_endpoints(get_write_response_handler(response_id).get_mutation(), dead_endpoints);
-
-            if (cl == db::consistency_level::ANY) {
-                // for cl==ANY hints are counted towards consistency
-                get_write_response_handler(response_id).signal(hints);
-            }
+            hint_to_dead_endpoints(response_id, cl);
 
             // call before send_to_live_endpoints() for the same reason as above
             auto f = response_wait(response_id);
@@ -843,55 +875,125 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  */
 future<>
 storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl) {
-    fail(unimplemented::cause::LWT);
-#if 0
-        Tracing.trace("Determining replicas for atomic batch");
-        long startTime = System.nanoTime();
 
-        List<WriteResponseHandlerWrapper> wrappers = new ArrayList<WriteResponseHandlerWrapper>(mutations.size());
-        String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
+    utils::latency_counter lc;
+    lc.start();
 
-        try
-        {
-            // add a handler for each mutation - includes checking availability, but doesn't initiate any writes, yet
-            for (Mutation mutation : mutations)
-            {
-                WriteResponseHandlerWrapper wrapper = wrapResponseHandler(mutation, consistency_level, WriteType.BATCH);
-                // exit early if we can't fulfill the CL at this time.
-                wrapper.handler.assureSufficientLiveNodes();
-                wrappers.add(wrapper);
+    class context {
+        storage_proxy & _p;
+        std::vector<mutation> _mutations;
+        db::consistency_level _cl;
+
+        semaphore _have_cl;
+        const gms::inet_address _local_addr;
+        const sstring _local_dc;
+
+        const utils::UUID _batch_uuid;
+        const std::unordered_set<gms::inet_address> _batchlog_endpoints;
+
+    public:
+        context(storage_proxy & p, std::vector<mutation>&& mutations,
+                db::consistency_level cl)
+                : _p(p), _mutations(std::move(mutations)), _cl(cl), _have_cl(0), _local_addr(
+                        utils::fb_utilities::get_broadcast_address()), _local_dc(
+                        locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
+                                _local_addr)), _batch_uuid(
+                        utils::UUID_gen::get_time_UUID()), _batchlog_endpoints(
+                        [this]() -> std::unordered_set<gms::inet_address> {
+                            auto topology = service::get_storage_service().local().get_token_metadata().get_topology();
+                            auto local_endpoints = topology.get_datacenter_racks().at(_local_dc); // note: origin copies, so do that here too...
+                            auto local_rack = locator::i_endpoint_snitch::get_local_snitch_ptr()->get_rack(_local_addr);
+                            auto chosen_endpoints = db::get_batchlog_manager().local().endpoint_filter(local_rack, local_endpoints);
+
+                            if (chosen_endpoints.empty()) {
+                                if (_cl == db::consistency_level::ANY) {
+                                    return {_local_addr};
+                                }
+                                throw exceptions::unavailable_exception(db::consistency_level::ONE, 1, 0);
+                            }
+                            return chosen_endpoints;
+                        }()) {
+        }
+        future<> sync_write_to_batchlog() {
+            auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
+            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
+            response_id_type response_id = _p.register_response_handler(std::move(h));
+
+            auto f = _p.response_wait(response_id);
+            _p.send_to_live_endpoints(response_id, _local_dc);
+            return f.handle_exception([this, response_id](auto ex) {
+                _p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
+                //return make_exception_future(ex);
+                std::rethrow_exception(ex);
+            });
+        };
+        void async_remove_from_batchlog() {
+            // delete batch
+            auto schema = _p._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+            auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(_batch_uuid)});
+            auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
+            mutation m(key, schema);
+            m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
+
+            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
+            auto response_id = _p.register_response_handler(std::move(h));
+
+            auto f = _p.response_wait(response_id);
+            _p.send_to_live_endpoints(response_id, _local_dc);
+            f.handle_exception([&p = _p, response_id](std::exception_ptr ex) {
+                p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
+                std::rethrow_exception(ex);
+            });
+        };
+
+        future<> run() {
+            std::vector<response_id_type> ids;
+
+            ids.reserve(_mutations.size());
+            for (auto& m : _mutations) {
+                ids.emplace_back(_p.create_write_response_handler(m, _cl));
             }
 
-            // write to the batchlog
-            Collection<InetAddress> batchlogEndpoints = getBatchlogEndpoints(localDataCenter, consistency_level);
-            UUID batchUUID = UUIDGen.getTimeUUID();
-            syncWriteToBatchlog(mutations, batchlogEndpoints, batchUUID);
+            return sync_write_to_batchlog().then([this, ids = std::move(ids)] {
+                return parallel_for_each(ids.begin(), ids.end(), [this](auto response_id) {
+                    // it is better to send first and hint afterwards to reduce latency
+                    // but request may complete before hint_to_dead_endpoints() is called and
+                    // response_id handler will be removed, so we will have to do hint with separate
+                    // frozen_mutation copy, or manage handler live time differently.
+                    _p.hint_to_dead_endpoints(response_id, _cl);
+                    // call before send_to_live_endpoints() for the same reason as above
+                    auto f = _p.response_wait(response_id);
+                    _p.send_to_live_endpoints(response_id, _local_dc);
+                    return f.handle_exception([this, response_id](std::exception_ptr p) {
+                        _p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
+                        try {
+                            std::rethrow_exception(p);
+                        } catch (mutation_write_timeout_error& ex) {
+                            logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.to_block_for);
+                            throw;
+                        }
+                    });
+                });
+            }).finally(std::bind(&context::async_remove_from_batchlog, this));
+        }
+    };
+    try {
+        auto ctxt = make_lw_shared<context>(*this, std::move(mutations), cl);
 
-            // now actually perform the writes and wait for them to complete
-            syncWriteBatchedMutations(wrappers, localDataCenter);
-
-            // remove the batchlog entries asynchronously
-            asyncRemoveFromBatchlog(batchlogEndpoints, batchUUID);
-        }
-        catch (UnavailableException e)
-        {
-            writeMetrics.unavailables.mark();
-            ClientRequestMetrics.writeUnavailables.inc();
-            Tracing.trace("Unavailable");
-            throw e;
-        }
-        catch (WriteTimeoutException e)
-        {
-            writeMetrics.timeouts.mark();
-            ClientRequestMetrics.writeTimeouts.inc();
-            Tracing.trace("Write timeout; received {} of {} required replies", e.received, e.blockFor);
-            throw e;
-        }
-        finally
-        {
-            writeMetrics.addNano(System.nanoTime() - startTime);
-        }
-#endif
+        return ctxt->run().finally([this, lc, ctxt]() mutable {
+            _stats.write.mark(lc.stop().latency_in_nano());
+        });
+    } catch (no_such_keyspace& ex) {
+        return make_exception_future<>(std::current_exception());
+    } catch (exceptions::unavailable_exception& ex) {
+        _stats.write_unavailables++;
+        logger.trace("Unavailable");
+        return make_exception_future<>(std::current_exception());
+    } catch (overloaded_exception& ex) {
+        _stats.write_unavailables++;
+        logger.trace("Overloaded");
+        return make_exception_future<>(std::current_exception());
+    }
 }
 
 #if 0
