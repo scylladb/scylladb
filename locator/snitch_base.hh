@@ -98,6 +98,17 @@ public:
     virtual future<> stop() = 0;
 
     // noop by default
+    virtual future<> pause_io() {
+        _state = snitch_state::io_paused;
+        return make_ready_future<>();
+    };
+
+    // noop by default
+    virtual void resume_io() {
+        _state = snitch_state::running;
+    };
+
+    // noop by default
     virtual future<> start() {
         _state = snitch_state::running;
         return make_ready_future<>();
@@ -140,6 +151,8 @@ protected:
     enum class snitch_state {
         initializing,
         running,
+        io_pausing,
+        io_paused,
         stopping,
         stopped
     } _state = snitch_state::initializing;

@@ -54,6 +54,8 @@ public:
     virtual void gossiper_starting() override;
     virtual future<> stop() override;
     virtual future<> start() override;
+    virtual future<> pause_io() override;
+    virtual void resume_io() override;
 
     gossiping_property_file_snitch(
         const sstring& fname = snitch_properties_filename,
@@ -130,6 +132,9 @@ private:
      * Indicate that the snitch has stopped its I/O.
      */
     void set_stopped();
+
+    future<> stop_io();
+    void start_io();
 
 private:
     sstring _fname;

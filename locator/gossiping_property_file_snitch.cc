@@ -49,13 +49,14 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(
     const sstring& fname, unsigned io_cpu_id)
-: _fname(fname), _file_reader_cpu_id(io_cpu_id) {
-
-    _state = snitch_state::initializing;
-}
+: _fname(fname), _file_reader_cpu_id(io_cpu_id) {}
 
 future<> gossiping_property_file_snitch::start() {
     using namespace std::chrono_literals;
+
+    _state = snitch_state::initializing;
+
+    reset_io_state();
 
     // Run a timer only on specific CPU
     if (engine().cpu_id() == _file_reader_cpu_id) {
@@ -70,7 +71,7 @@ future<> gossiping_property_file_snitch::start() {
         io_cpu_id() = _file_reader_cpu_id;
 
         return read_property_file().then([this] {
-            _file_reader.arm(reload_property_file_period());
+            start_io();
             set_snitch_ready();
             return make_ready_future<>();
         });
@@ -97,7 +98,7 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
                       "file.");
         }
 
-        if (_state == snitch_state::stopping) {
+        if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
             this->set_stopped();
         } else if (_state != snitch_state::stopped) {
             _file_reader.arm(reload_property_file_period());
@@ -276,17 +277,16 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 }
 
 void gossiping_property_file_snitch::set_stopped() {
-    _state = snitch_state::stopped;
-    _snitch_is_stopped.set_value();
-}
-
-future<> gossiping_property_file_snitch::stop() {
-    if (_state == snitch_state::stopped) {
-        return make_ready_future<>();
+    if (_state == snitch_state::stopping) {
+        _state = snitch_state::stopped;
+    } else {
+        _state = snitch_state::io_paused;
     }
 
-    _state = snitch_state::stopping;
+    _io_is_stopped.set_value();
+}
 
+future<> gossiping_property_file_snitch::stop_io() {
     if (engine().cpu_id() == _file_reader_cpu_id) {
         _file_reader.cancel();
 
@@ -298,7 +298,40 @@ future<> gossiping_property_file_snitch::stop() {
         set_stopped();
     }
 
-    return _snitch_is_stopped.get_future();
+    return _io_is_stopped.get_future();
+}
+
+void gossiping_property_file_snitch::resume_io() {
+    reset_io_state();
+    start_io();
+    set_snitch_ready();
+}
+
+void gossiping_property_file_snitch::start_io() {
+    // Run a timer only on specific CPU
+    if (engine().cpu_id() == _file_reader_cpu_id) {
+        _file_reader.arm(reload_property_file_period());
+    }
+}
+
+future<> gossiping_property_file_snitch::stop() {
+    if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
+        return make_ready_future<>();
+    }
+
+    _state = snitch_state::stopping;
+
+    return stop_io();
+}
+
+future<> gossiping_property_file_snitch::pause_io() {
+    if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
+        return make_ready_future<>();
+    }
+
+    _state = snitch_state::io_pausing;
+
+    return stop_io();
 }
 
 void gossiping_property_file_snitch::reload_gossiper_state()
