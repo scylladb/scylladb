@@ -151,7 +151,7 @@ private:
     // (this is the common case), do this immediately. Otherwise, remember
     // what we have in the buffer, and remember to continue later by using
     // a "prestate":
-    inline void read_16(temporary_buffer<char>& data, state next_state) {
+    inline void read_16(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint16_t)) {
             _u16 = consume_be<uint16_t>(data);
         } else {
@@ -160,9 +160,8 @@ private:
             data.trim(0);
             _prestate = prestate::READING_U16;
         }
-        _state = next_state;
     }
-    inline void read_32(temporary_buffer<char>& data, state next_state) {
+    inline void read_32(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint32_t)) {
             _u32 = consume_be<uint32_t>(data);
         } else {
@@ -171,9 +170,8 @@ private:
             data.trim(0);
             _prestate = prestate::READING_U32;
         }
-        _state = next_state;
     }
-    inline void read_64(temporary_buffer<char>& data, state next_state) {
+    inline void read_64(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint64_t)) {
             _u64 = consume_be<uint64_t>(data);
         } else {
@@ -182,9 +180,8 @@ private:
             data.trim(0);
             _prestate = prestate::READING_U64;
         }
-        _state = next_state;
     }
-    inline void read_bytes(temporary_buffer<char>& data, uint32_t len, temporary_buffer<char>& where, state next_state) {
+    inline void read_bytes(temporary_buffer<char>& data, uint32_t len, temporary_buffer<char>& where) {
         if (data.size() >=  len) {
             where = data.share(0, len);
             data.trim_front(len);
@@ -197,7 +194,6 @@ private:
             data.trim(0);
             _prestate = prestate::READING_BYTES;
         }
-        _state = next_state;
     }
 
 public:
@@ -285,11 +281,13 @@ public:
             switch (_state) {
             case state::ROW_START:
                 // read 2-byte key length into _u16
-                read_16(data, state::ROW_KEY_BYTES);
+                read_16(data);
+                _state = state::ROW_KEY_BYTES;
                 break;
             case state::ROW_KEY_BYTES:
                 // After previously reading 16-bit length, read key's bytes.
-                read_bytes(data, _u16, _key, state::DELETION_TIME);
+                read_bytes(data, _u16, _key);
+                _state = state::DELETION_TIME;
                 break;
             case state::DELETION_TIME:
                 if (data.size() >= sizeof(uint32_t) + sizeof(uint64_t)) {
@@ -304,11 +302,13 @@ public:
                     _key.release();
                     _state = state::ATOM_START;
                 } else {
-                    read_32(data, state::DELETION_TIME_2);
+                    read_32(data);
+                    _state = state::DELETION_TIME_2;
                 }
                 break;
             case state::DELETION_TIME_2:
-                read_64(data, state::DELETION_TIME_3);
+                read_64(data);
+                _state = state::DELETION_TIME_3;
                 break;
             case state::DELETION_TIME_3: {
                 deletion_time del;
@@ -356,7 +356,8 @@ public:
                 }
                 break;
             case state::ATOM_NAME_BYTES:
-                read_bytes(data, _u16, _key, state::ATOM_MASK);
+                read_bytes(data, _u16, _key);
+                _state = state::ATOM_MASK;
                 break;
             case state::ATOM_MASK: {
                 auto mask = consume_be<uint8_t>(data);
@@ -392,12 +393,14 @@ public:
                     _expiration = consume_be<uint32_t>(data);
                     _state = state::CELL;
                 } else {
-                    read_32(data, state::EXPIRING_CELL_2);
+                    read_32(data);
+                    _state = state::EXPIRING_CELL_2;
                 }
                 break;
             case state::EXPIRING_CELL_2:
                 _ttl = _u32;
-                read_32(data, state::EXPIRING_CELL_3);
+                read_32(data);
+                _state = state::EXPIRING_CELL_3;
                 break;
             case state::EXPIRING_CELL_3:
                 _expiration = _u32;
@@ -409,11 +412,13 @@ public:
                     _u32 = consume_be<uint32_t>(data);
                     _state = state::CELL_VALUE_BYTES;
                 } else {
-                    read_64(data, state::CELL_2);
+                    read_64(data);
+                    _state = state::CELL_2;
                 }
                 break;
             case state::CELL_2:
-                read_32(data, state::CELL_VALUE_BYTES);
+                read_32(data);
+                _state = state::CELL_VALUE_BYTES;
                 break;
             case state::CELL_VALUE_BYTES:
                 // TODO: use read_bytes(data, _u32, _key, state::ATOM_START), but need to know if it was successful to decide on next state and on running consumer
@@ -472,17 +477,21 @@ public:
                 _state = state::ATOM_START;
                 break;
             case state::RANGE_TOMBSTONE:
-                read_16(data, state::RANGE_TOMBSTONE_2);
+                read_16(data);
+                _state = state::RANGE_TOMBSTONE_2;
                 break;
             case state::RANGE_TOMBSTONE_2:
                 // read the end column into _val.
-                read_bytes(data, _u16, _val, state::RANGE_TOMBSTONE_3);
+                read_bytes(data, _u16, _val);
+                _state = state::RANGE_TOMBSTONE_3;
                 break;
             case state::RANGE_TOMBSTONE_3:
-                read_32(data, state::RANGE_TOMBSTONE_4);
+                read_32(data);
+                _state = state::RANGE_TOMBSTONE_4;
                 break;
             case state::RANGE_TOMBSTONE_4:
-                read_64(data, state::RANGE_TOMBSTONE_5);
+                read_64(data);
+                _state = state::RANGE_TOMBSTONE_5;
                 break;
             case state::RANGE_TOMBSTONE_5:
             {
