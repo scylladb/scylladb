@@ -147,44 +147,52 @@ public:
     }
 
 private:
+    enum class read_status { ready, waiting };
     // Read a 16-bit integer into _u16. If the whole thing is in the buffer
     // (this is the common case), do this immediately. Otherwise, remember
     // what we have in the buffer, and remember to continue later by using
     // a "prestate":
-    inline void read_16(temporary_buffer<char>& data) {
+    inline read_status read_16(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint16_t)) {
             _u16 = consume_be<uint16_t>(data);
+            return read_status::ready;
         } else {
             std::copy(data.begin(), data.end(), _read_int.bytes);
             _pos = data.size();
             data.trim(0);
             _prestate = prestate::READING_U16;
+            return read_status::waiting;
         }
     }
-    inline void read_32(temporary_buffer<char>& data) {
+    inline read_status read_32(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint32_t)) {
             _u32 = consume_be<uint32_t>(data);
+            return read_status::ready;
         } else {
             std::copy(data.begin(), data.end(), _read_int.bytes);
             _pos = data.size();
             data.trim(0);
             _prestate = prestate::READING_U32;
+            return read_status::waiting;
         }
     }
-    inline void read_64(temporary_buffer<char>& data) {
+    inline read_status read_64(temporary_buffer<char>& data) {
         if (data.size() >= sizeof(uint64_t)) {
             _u64 = consume_be<uint64_t>(data);
+            return read_status::ready;
         } else {
             std::copy(data.begin(), data.end(), _read_int.bytes);
             _pos = data.size();
             data.trim(0);
             _prestate = prestate::READING_U64;
+            return read_status::waiting;
         }
     }
-    inline void read_bytes(temporary_buffer<char>& data, uint32_t len, temporary_buffer<char>& where) {
+    inline read_status read_bytes(temporary_buffer<char>& data, uint32_t len, temporary_buffer<char>& where) {
         if (data.size() >=  len) {
             where = data.share(0, len);
             data.trim_front(len);
+            return read_status::ready;
         } else {
             // copy what we have so far, read the rest later
             _read_bytes = temporary_buffer<char>(len);
@@ -193,6 +201,7 @@ private:
             _pos = data.size();
             data.trim(0);
             _prestate = prestate::READING_BYTES;
+            return read_status::waiting;
         }
     }
 
@@ -322,9 +331,7 @@ public:
                 break;
             }
             case state::ATOM_START:
-                // TODO: use read_16() here too. have read_16 return true if read now.
-                if (data.size() >= sizeof(uint16_t)) {
-                    _u16 = consume_be<uint16_t>(data);
+                if (read_16(data) == read_status::ready) {
                     if (_u16 == 0) {
                         // end of row marker
                         _state = state::ROW_START;
@@ -336,10 +343,6 @@ public:
                         _state = state::ATOM_NAME_BYTES;
                     }
                 } else {
-                    std::copy(data.begin(), data.end(), _read_int.bytes);
-                    _pos = data.size();
-                    data.trim(0);
-                    _prestate = prestate::READING_U16;
                     _state = state::ATOM_START_2;
                 }
                 break;
@@ -421,12 +424,10 @@ public:
                 _state = state::CELL_VALUE_BYTES;
                 break;
             case state::CELL_VALUE_BYTES:
-                // TODO: use read_bytes(data, _u32, _key, state::ATOM_START), but need to know if it was successful to decide on next state and on running consumer
-                if (data.size() >= _u32) {
+                if (read_bytes(data, _u32, _val) == read_status::ready) {
                     // If the whole string is in our buffer, great, we don't
-                    // need to copy, and can skip the CELL_VALUE_BYTES_2 state
-                    _val = data.share(0, _u32);
-                    data.trim_front(_u32);
+                    // need to copy, and can skip the CELL_VALUE_BYTES_2 state.
+                    //
                     // finally pass it to the consumer:
                     if (_deleted) {
                         if (_val.size() != 4) {
@@ -446,14 +447,6 @@ public:
                     _val.release();
                     _state = state::ATOM_START;
                 } else {
-                    // copy what we have so far, read the rest later
-                    _read_bytes = temporary_buffer<char>(_u32);
-                    std::copy(data.begin(), data.end(),
-                            _read_bytes.get_write());
-                    _read_bytes_where = &_val;
-                    _pos = data.size();
-                    data.trim(0);
-                    _prestate = prestate::READING_BYTES;
                     _state = state::CELL_VALUE_BYTES_2;
                 }
                 break;
