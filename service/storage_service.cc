@@ -160,7 +160,6 @@ future<> storage_service::prepare_to_join() {
 future<> storage_service::join_token_ring(int delay) {
     return seastar::async([this, delay] {
     _joined = true;
-#if 0
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -170,7 +169,8 @@ future<> storage_service::join_token_ring(int delay) {
     //
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-    Set<InetAddress> current = new HashSet<>();
+    std::unordered_set<inet_address> current;
+#if 0
     logger.debug("Bootstrap variables: {} {} {} {}",
                  DatabaseDescriptor.isAutoBootstrap(),
                  SystemKeyspace.bootstrapInProgress(),
@@ -240,12 +240,12 @@ future<> storage_service::join_token_ring(int delay) {
                 for (auto token : _bootstrap_tokens) {
                     auto existing = _token_metadata.get_endpoint(token);
                     if (existing) {
-#if 0
-                        long nanoDelay = delay * 1000000L;
-                        if (Gossiper.instance.getEndpointStateForEndpoint(existing).getUpdateTimestamp() > (System.nanoTime() - nanoDelay))
-                            throw new UnsupportedOperationException("Cannot replace a live node... ");
-                        current.add(existing);
-#endif
+                        auto& gossiper = gms::get_local_gossiper();
+                        auto eps = gossiper.get_endpoint_state_for_endpoint(*existing);
+                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
+                            throw std::runtime_error("Cannot replace a live node...");
+                        }
+                        current.insert(*existing);
                     } else {
                         throw std::runtime_error(sprint("Cannot replace token %s which does not exist!", token));
                     }
