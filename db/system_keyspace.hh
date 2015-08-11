@@ -343,6 +343,7 @@ enum class bootstrap_state {
         executeInternal(String.format(req, LOCAL, LOCAL), tokensAsSet(tokens));
         forceBlockingFlush(LOCAL);
     }
+#endif
 
     /**
      * Convenience method to update the list of tokens in the local system keyspace.
@@ -351,15 +352,9 @@ enum class bootstrap_state {
      * @param rmTokens tokens to remove
      * @return the collection of persisted tokens
      */
-    public static synchronized Collection<Token> updateLocalTokens(Collection<Token> addTokens, Collection<Token> rmTokens)
-    {
-        Collection<Token> tokens = getSavedTokens();
-        tokens.removeAll(rmTokens);
-        tokens.addAll(addTokens);
-        updateTokens(tokens);
-        return tokens;
-    }
-#endif
+    future<std::unordered_set<dht::token>> update_local_tokens(
+        const std::unordered_set<dht::token>& add_tokens,
+        const std::unordered_set<dht::token>& rm_tokens);
 
 #if 0
     /**

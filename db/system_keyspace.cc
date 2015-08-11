@@ -545,6 +545,21 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
     });
 }
 
+future<std::unordered_set<dht::token>> update_local_tokens(
+    const std::unordered_set<dht::token>& add_tokens,
+    const std::unordered_set<dht::token>& rm_tokens) {
+    auto tokens = get_saved_tokens();
+    for (auto& x : rm_tokens) {
+        tokens.erase(x);
+    }
+    for (auto& x : add_tokens) {
+        tokens.insert(x);
+    }
+    return update_tokens(tokens).then([tokens] {
+        return tokens;
+    });
+}
+
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
     return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
