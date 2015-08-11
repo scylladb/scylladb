@@ -58,6 +58,11 @@ std::experimental::optional<inet_address> get_replace_address() {
     return {};
 }
 
+std::unordered_set<sstring> get_initial_tokens() {
+    // FIXME: DatabaseDescriptor.getInitialTokens();
+    return std::unordered_set<sstring>();
+}
+
 bool get_property_join_ring() {
     // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
     return true;
@@ -257,37 +262,30 @@ future<> storage_service::join_token_ring(int delay) {
         // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
-        _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
-        logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-#if 0
-        _bootstrap_tokens = SystemKeyspace.getSavedTokens();
-        if (_bootstrap_tokens.isEmpty())
-        {
-            Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
-            if (initialTokens.size() < 1)
-            {
-                _bootstrap_tokens = BootStrapper.getRandomTokens(_token_metadata, DatabaseDescriptor.getNumTokens());
-                if (DatabaseDescriptor.getNumTokens() == 1)
+        _bootstrap_tokens = db::system_keyspace::get_saved_tokens();
+        if (_bootstrap_tokens.empty()) {
+            auto initial_tokens = get_initial_tokens();
+            if (initial_tokens.size() < 1) {
+                _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
+                if (num_tokens == 1) {
                     logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
-                else
+                } else {
                     logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-            }
-            else
-            {
-                _bootstrap_tokens = new ArrayList<Token>(initialTokens.size());
-                for (String token : initialTokens)
-                    _bootstrap_tokens.add(getPartitioner().getTokenFactory().fromString(token));
+                }
+            } else {
+                for (auto token : initial_tokens) {
+                    // FIXME: token from string
+                    // _bootstrap_tokens.insert(getPartitioner().getTokenFactory().fromString(token));
+                }
                 logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
-        }
-        else
-        {
-            if (_bootstrap_tokens.size() != DatabaseDescriptor.getNumTokens())
-                throw new ConfigurationException("Cannot change the number of tokens from " + _bootstrap_tokens.size() + " to " + DatabaseDescriptor.getNumTokens());
-            else
+        } else {
+            if (_bootstrap_tokens.size() != num_tokens) {
+                throw std::runtime_error(sprint("Cannot change the number of tokens from %ld to %ld", _bootstrap_tokens.size(), num_tokens));
+            } else {
                 logger.info("Using saved tokens {}", _bootstrap_tokens);
+            }
         }
-#endif
     }
     set_tokens(_bootstrap_tokens).get();
 #if 0
