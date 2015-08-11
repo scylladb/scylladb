@@ -456,14 +456,9 @@ load_dc_rack_info();
             throw new ConfigurationException("Saved cluster name " + savedClusterName + " != configured name " + DatabaseDescriptor.getClusterName());
     }
 
-    public static Collection<Token> getSavedTokens()
-    {
-        String req = "SELECT tokens FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-        return result.isEmpty() || !result.one().has("tokens")
-             ? Collections.<Token>emptyList()
-             : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
-    }
+#endif
+    std::unordered_set<dht::token> get_saved_tokens();
+#if 0
 
     public static int incrementAndGetGeneration()
     {

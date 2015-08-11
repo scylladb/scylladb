@@ -910,15 +910,17 @@ future<> check_health() {
     });
 }
 
+std::unordered_set<dht::token> get_saved_tokens() {
 #if 0
-    public static Collection<Token> getSavedTokens()
-    {
-        String req = "SELECT tokens FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-        return result.isEmpty() || !result.one().has("tokens")
-             ? Collections.<Token>emptyList()
-             : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
-    }
+    String req = "SELECT tokens FROM system.%s WHERE key='%s'";
+    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+    return result.isEmpty() || !result.one().has("tokens")
+         ? Collections.<Token>emptyList()
+         : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
+#endif
+    return std::unordered_set<dht::token>();
+}
+#if 0
 
     public static int incrementAndGetGeneration()
     {
