@@ -495,7 +495,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }).get();
     }
     if (!local_tokens_to_remove.empty()) {
-        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
+        db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
     if (is_moving) {
