@@ -105,16 +105,16 @@ std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info();
 
 #if 0
-
     private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
+#endif
 
-    public enum BootstrapState
-    {
-        NEEDS_BOOTSTRAP,
-        COMPLETED,
-        IN_PROGRESS
-    }
+enum class bootstrap_state {
+    NEEDS_BOOTSTRAP,
+    COMPLETED,
+    IN_PROGRESS
+};
 
+#if 0
     private static DecoratedKey decorate(ByteBuffer key)
     {
         return StorageService.getPartitioner().decorateKey(key);
@@ -496,35 +496,14 @@ load_dc_rack_info();
 
         return generation;
     }
+#endif
 
-    public static BootstrapState getBootstrapState()
-    {
-        String req = "SELECT bootstrapped FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+bool bootstrap_complete();
+bool bootstrap_in_progress();
+bootstrap_state get_bootstrap_state();
+future<> set_bootstrap_state(bootstrap_state state);
 
-        if (result.isEmpty() || !result.one().has("bootstrapped"))
-            return BootstrapState.NEEDS_BOOTSTRAP;
-
-        return BootstrapState.valueOf(result.one().getString("bootstrapped"));
-    }
-
-    public static boolean bootstrapComplete()
-    {
-        return getBootstrapState() == BootstrapState.COMPLETED;
-    }
-
-    public static boolean bootstrapInProgress()
-    {
-        return getBootstrapState() == BootstrapState.IN_PROGRESS;
-    }
-
-    public static void setBootstrapState(BootstrapState state)
-    {
-        String req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), state.name());
-        forceBlockingFlush(LOCAL);
-    }
-
+#if 0
     public static boolean isIndexBuilt(String keyspaceName, String indexName)
     {
         ColumnFamilyStore cfs = Keyspace.open(NAME).getColumnFamilyStore(BUILT_INDEXES);

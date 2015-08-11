@@ -958,37 +958,38 @@ std::unordered_set<dht::token> get_saved_tokens() {
 
         return generation;
     }
-
-    public static BootstrapState getBootstrapState()
-    {
-        String req = "SELECT bootstrapped FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-
-        if (result.isEmpty() || !result.one().has("bootstrapped"))
-            return BootstrapState.NEEDS_BOOTSTRAP;
-
-        return BootstrapState.valueOf(result.one().getString("bootstrapped"));
-    }
-
-    public static boolean bootstrapComplete()
-    {
-        return getBootstrapState() == BootstrapState.COMPLETED;
-    }
-
-    public static boolean bootstrapInProgress()
-    {
-        return getBootstrapState() == BootstrapState.IN_PROGRESS;
-    }
 #endif
 
+bool bootstrap_complete() {
+    return get_bootstrap_state() == bootstrap_state::COMPLETED;
+}
+
+bool bootstrap_in_progress() {
+    return get_bootstrap_state() == bootstrap_state::IN_PROGRESS;
+}
+
+bootstrap_state get_bootstrap_state() {
 #if 0
+    String req = "SELECT bootstrapped FROM system.%s WHERE key='%s'";
+    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+
+    if (result.isEmpty() || !result.one().has("bootstrapped"))
+        return BootstrapState.NEEDS_BOOTSTRAP;
+
+    return BootstrapState.valueOf(result.one().getString("bootstrapped"));
+#endif
+    return bootstrap_state::NEEDS_BOOTSTRAP;
+}
+
 future<> set_bootstrap_state(bootstrap_state state) {
+#if 0
     sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', '%s')";
     return execute_cql(req, LOCAL, LOCAL, state.name()).discard_result().then([] {
         return force_blocking_flush(LOCAL);
     });
-}
 #endif
+    return make_ready_future<>();
+}
 
 #if 0
 
