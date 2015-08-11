@@ -37,12 +37,6 @@ struct cql_frame_error : std::exception {
     }
 };
 
-struct bad_cql_protocol_version : std::exception {
-    const char* what() const throw () override {
-        return "bad cql binary protocol version";
-    }
-};
-
 struct [[gnu::packed]] cql_binary_frame_v1 {
     uint8_t  version;
     uint8_t  flags;
@@ -642,7 +636,8 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) {
         abort();
     }
     if (v3.version != _version) {
-        throw bad_cql_protocol_version();
+        throw exceptions::protocol_exception(sprint("Invalid message version. Got %d but previous messages on this connection had version %d", v3.version, _version));
+
     }
     return v3;
 }
