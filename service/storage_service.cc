@@ -478,10 +478,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-#if 0
-        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-#endif
+        auto replace_addr = get_replace_address();
+        if (is_replacing() && replace_addr && *replace_addr == ep) {
+            gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+        }
     }
     logger.debug("ep={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
