@@ -299,26 +299,17 @@ public:
                 _state = state::DELETION_TIME;
                 break;
             case state::DELETION_TIME:
-                if (data.size() >= sizeof(uint32_t) + sizeof(uint64_t)) {
-                    // If we can read the entire deletion time at once, we can
-                    // skip the DELETION_TIME_2 and DELETION_TIME_3 states.
-                    deletion_time del;
-                    del.local_deletion_time = consume_be<uint32_t>(data);
-                    del.marked_for_delete_at = consume_be<uint64_t>(data);
-                    _consumer.consume_row_start(to_bytes_view(_key), del);
-                    // after calling the consume function, we can release the
-                    // buffers we held for it.
-                    _key.release();
-                    _state = state::ATOM_START;
-                } else {
-                    read_32(data);
+                if (read_32(data) != read_status::ready) {
                     _state = state::DELETION_TIME_2;
+                    break;
                 }
-                break;
+                // fallthrough
             case state::DELETION_TIME_2:
-                read_64(data);
-                _state = state::DELETION_TIME_3;
-                break;
+                if (read_64(data) != read_status::ready) {
+                    _state = state::DELETION_TIME_3;
+                    break;
+                }
+                // fallthrough
             case state::DELETION_TIME_3: {
                 deletion_time del;
                 del.local_deletion_time = _u32;
@@ -391,34 +382,32 @@ public:
                 break;
             }
             case state::EXPIRING_CELL:
-                if (data.size() >= sizeof(uint32_t) + sizeof(uint32_t)) {
-                    _ttl = consume_be<uint32_t>(data);
-                    _expiration = consume_be<uint32_t>(data);
-                    _state = state::CELL;
-                } else {
-                    read_32(data);
+                if (read_32(data) != read_status::ready) {
                     _state = state::EXPIRING_CELL_2;
+                    break;
                 }
-                break;
+                // fallthrough
             case state::EXPIRING_CELL_2:
                 _ttl = _u32;
-                read_32(data);
-                _state = state::EXPIRING_CELL_3;
-                break;
+                if (read_32(data) != read_status::ready) {
+                    _state = state::EXPIRING_CELL_3;
+                    break;
+                }
+                // fallthrough
             case state::EXPIRING_CELL_3:
                 _expiration = _u32;
                 _state = state::CELL;
                 break;
-            case state::CELL:
-                if (data.size() >= sizeof(uint64_t) + sizeof(uint32_t)) {
-                    _u64 = consume_be<uint64_t>(data);
-                    _u32 = consume_be<uint32_t>(data);
+            case state::CELL: {
+                auto status = read_64(data);
+                _state = state::CELL_2;
+                // Try to read both values in the same loop if possible
+                if (status == read_status::ready) {
+                    read_32(data);
                     _state = state::CELL_VALUE_BYTES;
-                } else {
-                    read_64(data);
-                    _state = state::CELL_2;
                 }
                 break;
+            }
             case state::CELL_2:
                 read_32(data);
                 _state = state::CELL_VALUE_BYTES;
