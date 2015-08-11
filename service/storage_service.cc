@@ -699,8 +699,8 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 
 void storage_service::on_remove(gms::inet_address endpoint) {
     logger.debug("on_remove endpoint={}", endpoint);
+    _token_metadata.remove_endpoint(endpoint);
 #if 0
-    _token_metadata.removeEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
 #endif
 }
