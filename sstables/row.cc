@@ -187,7 +187,7 @@ private:
             data.trim_front(len);
         } else {
             // copy what we have so far, read the rest later
-            _read_bytes = temporary_buffer<char>(_u16);
+            _read_bytes = temporary_buffer<char>(len);
             std::copy(data.begin(), data.end(),_read_bytes.get_write());
             _read_bytes_where = &where;
             _pos = data.size();
