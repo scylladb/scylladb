@@ -287,30 +287,28 @@ future<> storage_service::join_token_ring(int delay) {
             }
         }
     }
-    set_tokens(_bootstrap_tokens).get();
 #if 0
     // if we don't have system_traces keyspace at this point, then create it manually
     if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
+#endif
 
-    if (!_is_survey_mode)
-    {
+    if (!_is_survey_mode) {
         // start participating in the ring.
-        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-        set_tokens(_bootstrap_tokens);
+        //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+        set_tokens(_bootstrap_tokens).get();
         // remove the existing info about the replaced node.
-        if (!current.isEmpty())
-            for (InetAddress existing : current)
-                Gossiper.instance.replacedEndpoint(existing);
-        assert _token_metadata.sortedTokens().size() > 0;
-
-        Auth.setup();
-    }
-    else
-    {
+        if (!current.empty()) {
+            auto& gossiper = gms::get_local_gossiper();
+            for (auto existing : current) {
+                gossiper.replaced_endpoint(existing);
+            }
+        }
+        assert(_token_metadata.sorted_tokens().size() > 0);
+        //Auth.setup();
+    } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
-#endif
     });
 }
 
