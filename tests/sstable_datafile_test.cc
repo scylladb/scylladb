@@ -17,6 +17,7 @@
 #include "sstable_test.hh"
 #include "core/seastar.hh"
 #include "core/do_with.hh"
+#include "utils/compaction_manager.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -1006,6 +1007,25 @@ static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
 
 }
 
+SEASTAR_TEST_CASE(compaction_manager_test) {
+    auto counter = make_lw_shared<int>(0);
+    auto cm = make_lw_shared<compaction_manager>();
+    cm->start(2); // starting two task handlers.
+
+    for (auto i = 0; i < 10; i++) {
+        cm->submit([counter] () -> future<> {
+            (*counter)++;
+            return make_ready_future<>();
+        });
+    }
+    // wait for all submitted jobs to finish.
+    return sleep(std::chrono::milliseconds(100)).then([cm, counter] {
+        return cm->stop().then([cm, counter] {
+            BOOST_REQUIRE(*counter == 10);
+            return make_ready_future<>();
+        });
+    });
+}
 
 SEASTAR_TEST_CASE(compact) {
     constexpr int generation = 17;
