@@ -188,7 +188,9 @@ std::ostream& operator<<(std::ostream& os, const shard_id& x) {
 }
 
 size_t shard_id::hash::operator()(const shard_id& id) const {
-    return std::hash<uint32_t>()(id.cpu_id) + std::hash<uint32_t>()(id.addr.raw_addr());
+    // Ignore the cpu id for now since we do not really support
+    // shard to shard connections
+    return std::hash<uint32_t>()(id.addr.raw_addr());
 }
 
 messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client)
