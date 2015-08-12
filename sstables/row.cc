@@ -5,13 +5,6 @@
 #include "sstables.hh"
 #include "consumer.hh"
 
-template<typename T>
-static inline T consume_be(temporary_buffer<char>& p) {
-    T i = net::ntoh(*unaligned_cast<const T*>(p.get()));
-    p.trim_front(sizeof(T));
-    return i;
-}
-
 namespace sstables {
 
 // data_consume_rows_context remembers the context that an ongoing
