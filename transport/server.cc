@@ -29,6 +29,8 @@
 #include <cassert>
 #include <string>
 
+namespace transport {
+
 static logging::logger logger("cql_server");
 
 struct cql_frame_error : std::exception {
@@ -93,8 +95,8 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     }
 }
 
-sstring to_string(const transport::event::topology_change::change_type t) {
-    using type = transport::event::topology_change::change_type;
+sstring to_string(const event::topology_change::change_type t) {
+    using type = event::topology_change::change_type;
     switch (t) {
     case type::NEW_NODE:     return "NEW_NODE";
     case type::REMOVED_NODE: return "REMOVED_NODE";
@@ -103,8 +105,8 @@ sstring to_string(const transport::event::topology_change::change_type t) {
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::status_change::status_type t) {
-    using type = transport::event::status_change::status_type;
+sstring to_string(const event::status_change::status_type t) {
+    using type = event::status_change::status_type;
     switch (t) {
     case type::UP:   return "NEW_NODE";
     case type::DOWN: return "REMOVED_NODE";
@@ -112,32 +114,32 @@ sstring to_string(const transport::event::status_change::status_type t) {
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::schema_change::change_type t) {
+sstring to_string(const event::schema_change::change_type t) {
     switch (t) {
-    case transport::event::schema_change::change_type::CREATED: return "CREATED";
-    case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
-    case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
+    case event::schema_change::change_type::CREATED: return "CREATED";
+    case event::schema_change::change_type::UPDATED: return "UPDATED";
+    case event::schema_change::change_type::DROPPED: return "DROPPED";
     }
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::schema_change::target_type t) {
+sstring to_string(const event::schema_change::target_type t) {
     switch (t) {
-    case transport::event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
-    case transport::event::schema_change::target_type::TABLE:    return "TABLE";
-    case transport::event::schema_change::target_type::TYPE:     return "TYPE";
+    case event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
+    case event::schema_change::target_type::TABLE:    return "TABLE";
+    case event::schema_change::target_type::TYPE:     return "TYPE";
     }
     throw std::invalid_argument("unknown target type");
 }
 
-transport::event::event_type parse_event_type(const sstring& value)
+event::event_type parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
-        return transport::event::event_type::TOPOLOGY_CHANGE;
+        return event::event_type::TOPOLOGY_CHANGE;
     } else if (value == "STATUS_CHANGE") {
-        return transport::event::event_type::STATUS_CHANGE;
+        return event::event_type::STATUS_CHANGE;
     } else if (value == "SCHEMA_CHANGE") {
-        return transport::event::event_type::SCHEMA_CHANGE;
+        return event::event_type::SCHEMA_CHANGE;
     } else {
         throw exceptions::protocol_exception(sprint("Invalid value '%s' for Event.Type", value));
     }
@@ -603,7 +605,7 @@ future<> cql_server::connection::write_supported(int16_t stream)
     return write_response(response);
 }
 
-class cql_server::fmt_visitor : public transport::messages::result_message::visitor {
+class cql_server::fmt_visitor : public messages::result_message::visitor {
 private:
     uint8_t _version;
     shared_ptr<cql_server::response> _response;
@@ -613,16 +615,16 @@ public:
         , _response{response}
     { }
 
-    virtual void visit(const transport::messages::result_message::void_message&) override {
+    virtual void visit(const messages::result_message::void_message&) override {
         _response->write_int(0x0001);
     }
 
-    virtual void visit(const transport::messages::result_message::set_keyspace& m) override {
+    virtual void visit(const messages::result_message::set_keyspace& m) override {
         _response->write_int(0x0003);
         _response->write_string(m.get_keyspace());
     }
 
-    virtual void visit(const transport::messages::result_message::prepared& m) override {
+    virtual void visit(const messages::result_message::prepared& m) override {
         auto prepared = m.get_prepared();
         _response->write_int(0x0004);
         _response->write_short_bytes(m.get_id());
@@ -637,16 +639,16 @@ public:
         }
     }
 
-    virtual void visit(const transport::messages::result_message::schema_change& m) override {
+    virtual void visit(const messages::result_message::schema_change& m) override {
         auto change = m.get_change();
         switch (change->type) {
-        case transport::event::event_type::SCHEMA_CHANGE: {
-            auto sc = static_pointer_cast<transport::event::schema_change>(change);
+        case event::event_type::SCHEMA_CHANGE: {
+            auto sc = static_pointer_cast<event::schema_change>(change);
             _response->write_int(0x0005);
             _response->write_string(to_string(sc->change));
             _response->write_string(to_string(sc->target));
             _response->write_string(sc->keyspace);
-            if (sc->target != transport::event::schema_change::target_type::KEYSPACE) {
+            if (sc->target != event::schema_change::target_type::KEYSPACE) {
                 _response->write_string(sc->table_or_type_or_function.value());
             }
             break;
@@ -656,7 +658,7 @@ public:
         }
     }
 
-    virtual void visit(const transport::messages::result_message::rows& m) override {
+    virtual void visit(const messages::result_message::rows& m) override {
         _response->write_int(0x0002);
         auto& rs = m.rs();
         _response->write(rs.get_metadata());
@@ -669,7 +671,7 @@ public:
     }
 };
 
-future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)
+future<> cql_server::connection::write_result(int16_t stream, shared_ptr<messages::result_message> msg)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
     fmt_visitor fmt{_version, response};
@@ -677,7 +679,7 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
     return write_response(response);
 }
 
-future<> cql_server::connection::write_topology_change_event(const transport::event::topology_change& event)
+future<> cql_server::connection::write_topology_change_event(const event::topology_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("TOPOLOGY_CHANGE");
@@ -686,7 +688,7 @@ future<> cql_server::connection::write_topology_change_event(const transport::ev
     return write_response(response);
 }
 
-future<> cql_server::connection::write_status_change_event(const transport::event::status_change& event)
+future<> cql_server::connection::write_status_change_event(const event::status_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("STATUS_CHANGE");
@@ -695,14 +697,14 @@ future<> cql_server::connection::write_status_change_event(const transport::even
     return write_response(response);
 }
 
-future<> cql_server::connection::write_schema_change_event(const transport::event::schema_change& event)
+future<> cql_server::connection::write_schema_change_event(const event::schema_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("SCHEMA_CHANGE");
     response->write_string(to_string(event.change));
     response->write_string(to_string(event.target));
     response->write_string(event.keyspace);
-    if (event.target != transport::event::schema_change::target_type::KEYSPACE) {
+    if (event.target != event::schema_change::target_type::KEYSPACE) {
         response->write_string(*(event.table_or_type_or_function));
     }
     return write_response(response);
@@ -1259,4 +1261,6 @@ void cql_server::response::write(const cql3::metadata& m) {
         write_string(name->name->text());
         type_codec::encode(*this, name->type);
     };
+}
+
 }

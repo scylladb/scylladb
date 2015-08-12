@@ -4,6 +4,8 @@
 
 #include "transport/server.hh"
 
+namespace transport {
+
 static logging::logger logger("event_notifier");
 
 cql_server::event_notifier::event_notifier(uint16_t port)
@@ -11,16 +13,16 @@ cql_server::event_notifier::event_notifier(uint16_t port)
 {
 }
 
-void cql_server::event_notifier::register_event(transport::event::event_type et, cql_server::connection* conn)
+void cql_server::event_notifier::register_event(event::event_type et, cql_server::connection* conn)
 {
     switch (et) {
-    case transport::event::event_type::TOPOLOGY_CHANGE:
+    case event::event_type::TOPOLOGY_CHANGE:
         _topology_change_listeners.emplace(conn);
         break;
-    case transport::event::event_type::STATUS_CHANGE:
+    case event::event_type::STATUS_CHANGE:
         _status_change_listeners.emplace(conn);
         break;
-    case transport::event::event_type::SCHEMA_CHANGE:
+    case event::event_type::SCHEMA_CHANGE:
         _schema_change_listeners.emplace(conn);
         break;
     }
@@ -214,4 +216,4 @@ void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
     }
 }
 
-
+}

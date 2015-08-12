@@ -179,12 +179,12 @@ int main(int ac, char** av) {
                 return dns::gethostbyname(rpc_address);
             }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port] (dns::hostent e) {
                 auto ip = e.addresses[0].in.s_addr;
-                auto cserver = new distributed<cql_server>;
+                auto cserver = new distributed<transport::cql_server>;
                 cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
                     engine().at_exit([server] {
                         return server->stop();
                     });
-                    server->invoke_on_all(&cql_server::listen, ipv4_addr{ip, cql_port});
+                    server->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, cql_port});
                 }).then([rpc_address, cql_port] {
                     print("CQL server listening on %s:%s ...\n", rpc_address, cql_port);
                 });

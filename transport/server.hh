@@ -20,6 +20,8 @@ class registrations;
 
 class database;
 
+namespace transport {
+
 struct [[gnu::packed]] cql_binary_frame_v1 {
     uint8_t  version;
     uint8_t  flags;
@@ -189,3 +191,5 @@ private:
 
     friend event_notifier;
 };
+
+}
