@@ -23,63 +23,6 @@
 #include <ftw.h>
 #include <unistd.h>
 
-class test_setup {
-    file _f;
-    std::function<future<> (directory_entry de)> _walker;
-    subscription<directory_entry> _listing;
-    static sstring path;
-
-public:
-    test_setup(file f)
-            : _f(std::move(f))
-            , _listing(_f.list_directory([this] (directory_entry de) { return _remove(de); })) {
-    }
-    ~test_setup() {
-        _f.close().finally([save = _f] {});
-    }
-protected:
-    future<> _create_directory(sstring name) {
-        return engine().make_directory(name);
-    }
-
-    future<> _remove(directory_entry de) {
-        if (de.type == directory_entry_type::regular) {
-            return engine().remove_file(path + "/" + de.name);
-        }
-        return make_ready_future<>();
-    }
-    future<> done() { return _listing.done(); }
-
-    static future<> empty_test_dir() {
-        return engine().open_directory(path).then([] (file f) {
-            auto l = make_lw_shared<test_setup>(std::move(f));
-            return l->done().then([l] { });
-        });
-    }
-    static future<> create_empty_test_dir() {
-        return engine().make_directory(path).then_wrapped([] (future<> f) {
-            try {
-                f.get();
-            // it's fine if the directory exists, just shut down the exceptional future message
-            } catch (std::exception& e) {}
-            return empty_test_dir();
-        });
-    }
-public:
-    static future<> do_with_test_directory(std::function<future<> ()>&& fut);
-};
-sstring test_setup::path = "tests/sstables/tests-temporary";
-
-future<> test_setup::do_with_test_directory(std::function<future<> ()>&& fut) {
-    return test_setup::create_empty_test_dir().then([fut = std::move(fut)] () mutable {
-            return fut();
-    }).finally([] {
-        return test_setup::empty_test_dir().then([] {
-            return engine().remove_file(path);
-        });
-    });
-}
-
 using namespace sstables;
 
 static sstring some_keyspace("ks");

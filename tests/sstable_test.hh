@@ -411,4 +411,74 @@ inline void match_collection_element(const std::pair<bytes, atomic_cell>& elemen
         BOOST_REQUIRE(element.second.value() == *expected_serialized_value);
     }
 }
+
+class test_setup {
+    file _f;
+    std::function<future<> (directory_entry de)> _walker;
+    sstring _path;
+    subscription<directory_entry> _listing;
+
+    static sstring& path() {
+        static sstring _p = "tests/sstables/tests-temporary";
+        return _p;
+    };
+
+public:
+    test_setup(file f, sstring path)
+            : _f(std::move(f))
+            , _path(path)
+            , _listing(_f.list_directory([this] (directory_entry de) { return _remove(de); })) {
+    }
+    ~test_setup() {
+        _f.close().finally([save = _f] {});
+    }
+protected:
+    future<> _create_directory(sstring name) {
+        return engine().make_directory(name);
+    }
+
+    future<> _remove(directory_entry de) {
+        sstring t = _path + "/" + de.name;
+        return engine().file_type(t).then([t] (std::experimental::optional<directory_entry_type> det) {
+            auto f = make_ready_future<>();
+
+            if (!det) {
+                throw std::runtime_error("Can't determine file type\n");
+            } else if (det == directory_entry_type::directory) {
+                f = empty_test_dir(t);
+            }
+            return f.then([t] {
+                return engine().remove_file(t);
+            });
+        });
+    }
+    future<> done() { return _listing.done(); }
+
+    static future<> empty_test_dir(sstring p = path()) {
+        return engine().open_directory(p).then([p] (file f) {
+            auto l = make_lw_shared<test_setup>(std::move(f), p);
+            return l->done().then([l] { });
+        });
+    }
+public:
+    static future<> create_empty_test_dir(sstring p = path()) {
+        return engine().make_directory(p).then_wrapped([p] (future<> f) {
+            try {
+                f.get();
+            // it's fine if the directory exists, just shut down the exceptional future message
+            } catch (std::exception& e) {}
+            return empty_test_dir(p);
+        });
+    }
+
+    static future<> do_with_test_directory(std::function<future<> ()>&& fut, sstring p = path()) {
+        return test_setup::create_empty_test_dir(p).then([fut = std::move(fut), p] () mutable {
+            return fut();
+        }).finally([p] {
+            return test_setup::empty_test_dir(p).then([p] {
+                return engine().remove_file(p);
+            });
+        });
+    }
+};
 }

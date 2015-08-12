@@ -71,20 +71,15 @@ sstring murmur3_partitioner::to_sstring(const token& t) const {
     return ::to_sstring(long_token(t));
 }
 
-bool murmur3_partitioner::is_equal(const token& t1, const token& t2) {
+int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
+    long l1 = long_token(t1);
+    long l2 = long_token(t2);
 
-    auto l1 = long_token(t1);
-    auto l2 = long_token(t2);
-
-    return l1 == l2;
-}
-
-bool murmur3_partitioner::is_less(const token& t1, const token& t2) {
-
-    auto l1 = long_token(t1);
-    auto l2 = long_token(t2);
-
-    return l1 < l2;
+    if (l1 == l2) {
+        return 0;
+    } else {
+        return l1 < l2 ? -1 : 1;
+    }
 }
 
 token murmur3_partitioner::midpoint(const token& t1, const token& t2) const {
