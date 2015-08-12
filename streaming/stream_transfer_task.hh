@@ -46,6 +46,7 @@ private:
     long total_size;
 public:
     using UUID = utils::UUID;
+    stream_transfer_task(stream_transfer_task&&) = default;
     stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id);
     ~stream_transfer_task();
 
