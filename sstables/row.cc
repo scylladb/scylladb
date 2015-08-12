@@ -3,6 +3,7 @@
  */
 
 #include "sstables.hh"
+#include "consumer.hh"
 
 template<typename T>
 static inline T consume_be(temporary_buffer<char>& p) {
