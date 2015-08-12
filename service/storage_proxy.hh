@@ -30,6 +30,7 @@
 #include "query-result-set.hh"
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
+#include "db/write_type.hh"
 #include "utils/histogram.hh"
 
 namespace service {
@@ -74,8 +75,8 @@ private:
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
-    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl);
+    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
+    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
     future<> send_to_live_endpoints(response_id_type response_id,  sstring local_data_center);
     template<typename Range>
     size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);

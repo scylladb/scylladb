@@ -62,13 +62,6 @@ distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
 
-struct mutation_write_timeout_error : public cassandra_exception {
-    size_t to_block_for;
-    size_t received;
-    mutation_write_timeout_error(size_t tbf, size_t acks) :
-        cassandra_exception(exception_code::WRITE_TIMEOUT, sprint("Mutation write timeout: waited for %lu got %lu acks", tbf, acks)) , to_block_for(tbf), received(acks) {}
-};
-
 struct overloaded_exception : public cassandra_exception {
     overloaded_exception(size_t c) :
         cassandra_exception(exception_code::OVERLOADED, sprint("Too many in flight hints: %lu", c)) {}
@@ -95,6 +88,7 @@ protected:
     semaphore _ready; // available when cl is achieved
     db::consistency_level _cl;
     keyspace& _ks;
+    db::write_type _type;
     lw_shared_ptr<const frozen_mutation> _mutation;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
     size_t _pending_endpoints; // how many endpoints in bootstrap state there is
@@ -113,12 +107,12 @@ protected:
         signal();
     }
 public:
-    abstract_write_response_handler(keyspace& ks, db::consistency_level cl,
+    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type,
             lw_shared_ptr<const frozen_mutation> mutation,
             std::unordered_set<gms::inet_address> targets,
             size_t pending_endpoints = 0,
             std::vector<gms::inet_address> dead_endpoints = {})
-            : _ready(0), _cl(cl), _ks(ks), _mutation(std::move(mutation)), _targets(
+            : _ready(0), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(
                     std::move(targets)), _pending_endpoints(pending_endpoints), _dead_endpoints(
                     std::move(dead_endpoints)) {
     }
@@ -178,8 +172,8 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         }
     }
 public:
-    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
-        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
+    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
+        abstract_write_response_handler(ks, cl, type, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
@@ -210,7 +204,7 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
 
         if (left_for_cl > 0) {
             // timeout happened before cl was achieved, throw exception
-            e.handler->_ready.broken(mutation_write_timeout_error(block_for, e.handler->_cl_acks));
+            e.handler->_ready.broken(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, block_for, e.handler->_type));
         } else {
             remove_response_handler(id);
         }
@@ -244,7 +238,7 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
         return *_response_handlers.find(id)->second.handler;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
@@ -255,12 +249,11 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     // for now make is simple
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
-    } else if (cl == db::consistency_level::EACH_QUORUM &&
-               rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+    } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
+        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else {
-        h = std::make_unique<write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
 }
@@ -741,7 +734,7 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
  * to the hint method below (dead nodes).
  */
 storage_proxy::response_id_type
-storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl) {
+storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type) {
     keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
@@ -768,7 +761,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
 
-    return create_write_response_handler(ks, cl, freeze(m), std::move(live_endpoints), pending_endpoints, dead_endpoints);
+    return create_write_response_handler(ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, dead_endpoints);
 }
 
 void
@@ -798,11 +791,13 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
     auto local_addr = utils::fb_utilities::get_broadcast_address();
     auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
     sstring local_dc = snitch_ptr->get_datacenter(local_addr);
+    auto type = mutations.size() == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
     utils::latency_counter lc;
     lc.start();
+
     for (auto& m : mutations) {
         try {
-            storage_proxy::response_id_type response_id = create_write_response_handler(m, cl);
+            storage_proxy::response_id_type response_id = create_write_response_handler(m, cl, type);
             // it is better to send first and hint afterwards to reduce latency
             // but request may complete before hint_to_dead_endpoints() is called and
             // response_id handler will be removed, so we will have to do hint with separate
@@ -817,9 +812,9 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
                     f.get();
                     have_cl->signal();
                     return;
-                } catch(mutation_write_timeout_error& ex) {
+                } catch(mutation_write_timeout_exception& ex) {
                     // timeout
-                    logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.to_block_for);
+                    logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
                     _stats.write_timeouts++;
                     have_cl->broken(ex);
                 } catch(...) {
@@ -916,7 +911,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         }
         future<> sync_write_to_batchlog() {
             auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
-            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
+            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, db::write_type::BATCH_LOG, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
             response_id_type response_id = _p.register_response_handler(std::move(h));
 
             auto f = _p.response_wait(response_id);
@@ -935,7 +930,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             mutation m(key, schema);
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
 
-            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
+            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, db::write_type::BATCH_LOG, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
             auto response_id = _p.register_response_handler(std::move(h));
 
             auto f = _p.response_wait(response_id);
@@ -951,7 +946,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 
             ids.reserve(_mutations.size());
             for (auto& m : _mutations) {
-                ids.emplace_back(_p.create_write_response_handler(m, _cl));
+                ids.emplace_back(_p.create_write_response_handler(m, _cl, db::write_type::BATCH));
             }
 
             return sync_write_to_batchlog().then([this, ids = std::move(ids)] {
@@ -968,8 +963,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                         _p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
                         try {
                             std::rethrow_exception(p);
-                        } catch (mutation_write_timeout_error& ex) {
-                            logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.to_block_for);
+                        } catch (mutation_write_timeout_exception& ex) {
+                            logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
                             throw;
                         }
                     });

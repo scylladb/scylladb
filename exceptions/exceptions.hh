@@ -25,6 +25,7 @@
 #pragma once
 
 #include "db/consistency_level_type.hh"
+#include "db/write_type.hh"
 #include <stdexcept>
 #include "core/sstring.hh"
 #include "core/print.hh"
@@ -110,6 +111,14 @@ public:
     read_timeout_exception(db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present)
         : request_timeout_exception{exception_code::READ_TIMEOUT, consistency, received, block_for}
         , data_present{data_present}
+    { }
+};
+
+struct mutation_write_timeout_exception : public request_timeout_exception {
+    db::write_type type;
+    mutation_write_timeout_exception(db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) :
+        request_timeout_exception(exception_code::WRITE_TIMEOUT, consistency, received, block_for)
+        , type{std::move(type)}
     { }
 };
 

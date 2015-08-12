@@ -14,6 +14,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "db/consistency_level.hh"
+#include "db/write_type.hh"
 #include "core/future-util.hh"
 #include "core/reactor.hh"
 #include "utils/UUID.hh"
@@ -347,6 +348,8 @@ future<> cql_server::connection::process_request_one(temporary_buffer<char> buf,
             return write_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive);
         } catch (const exceptions::read_timeout_exception& ex) {
             return write_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present);
+        } catch (const exceptions::mutation_write_timeout_exception& ex) {
+            return write_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type);
         } catch (const exceptions::already_exists_exception& ex) {
             return write_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name);
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
@@ -559,6 +562,18 @@ future<> cql_server::connection::write_read_timeout_error(int16_t stream, except
     response->write_int(received);
     response->write_int(blockfor);
     response->write_byte(data_present);
+    return write_response(response);
+}
+
+future<> cql_server::connection::write_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
+    response->write_int(static_cast<int32_t>(err));
+    response->write_string(msg);
+    response->write_consistency(cl);
+    response->write_int(received);
+    response->write_int(blockfor);
+    response->write_string(sprint("%s", type));
     return write_response(response);
 }
 
