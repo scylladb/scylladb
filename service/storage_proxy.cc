@@ -62,11 +62,6 @@ distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
 
-struct overloaded_exception : public cassandra_exception {
-    overloaded_exception(size_t c) :
-        cassandra_exception(exception_code::OVERLOADED, sprint("Too many in flight hints: %lu", c)) {}
-};
-
 static inline bool is_me(gms::inet_address from) {
     return from == utils::fb_utilities::get_broadcast_address();
 }

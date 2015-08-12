@@ -122,6 +122,11 @@ struct mutation_write_timeout_exception : public request_timeout_exception {
     { }
 };
 
+struct overloaded_exception : public cassandra_exception {
+    overloaded_exception(size_t c) :
+        cassandra_exception(exception_code::OVERLOADED, sprint("Too many in flight hints: %lu", c)) {}
+};
+
 class request_validation_exception : public cassandra_exception {
 public:
     using cassandra_exception::cassandra_exception;
