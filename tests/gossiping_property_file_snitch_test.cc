@@ -34,7 +34,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
                 if (!exp_result) {
                     BOOST_ERROR("Failed to catch an error in a malformed "
                                 "configuration file");
-                    return make_ready_future<>();
+                    return i_endpoint_snitch::stop_snitch();
                 }
                 auto cpu0_dc = make_lw_shared<sstring>();
                 auto cpu0_rack = make_lw_shared<sstring>();
