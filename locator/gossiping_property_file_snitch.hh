@@ -59,6 +59,10 @@ public:
         const sstring& fname = snitch_properties_filename,
         unsigned io_cpu_id = 0);
 
+    virtual sstring get_name() const override {
+        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    }
+
 private:
     static logging::logger& logger() {
         return i_endpoint_snitch::snitch_logger;
@@ -126,10 +130,6 @@ private:
      * Indicate that the snitch has stopped its I/O.
      */
     void set_stopped();
-
-    virtual sstring get_name() const {
-        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
-    }
 
 private:
     sstring _fname;
