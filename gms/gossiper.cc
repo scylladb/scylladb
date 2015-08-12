@@ -198,7 +198,6 @@ future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
 
 void gossiper::init_messaging_service_handler() {
     ms().register_echo([] {
-        // TODO: Use time_point instead of long for timing.
         return smp::submit_to(0, [] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at();
