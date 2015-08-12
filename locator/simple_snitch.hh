@@ -77,7 +77,7 @@ struct simple_snitch : public snitch_base {
         return make_ready_future<>();
     }
 
-    virtual sstring get_name() const {
+    virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.SimpleSnitch";
     }
 };

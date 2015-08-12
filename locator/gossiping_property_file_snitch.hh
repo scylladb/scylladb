@@ -54,10 +54,16 @@ public:
     virtual void gossiper_starting() override;
     virtual future<> stop() override;
     virtual future<> start() override;
+    virtual future<> pause_io() override;
+    virtual void resume_io() override;
 
     gossiping_property_file_snitch(
         const sstring& fname = snitch_properties_filename,
         unsigned io_cpu_id = 0);
+
+    virtual sstring get_name() const override {
+        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    }
 
 private:
     static logging::logger& logger() {
@@ -127,9 +133,8 @@ private:
      */
     void set_stopped();
 
-    virtual sstring get_name() const {
-        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
-    }
+    future<> stop_io();
+    void start_io();
 
 private:
     sstring _fname;

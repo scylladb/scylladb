@@ -63,6 +63,18 @@ public:
                                  default_dc);
     }
 
+    virtual void set_my_distributed(distributed<snitch_ptr>* d) override {
+        _my_distributed = d;
+    }
+
+    void reset_io_state() {
+        //
+        // Reset the promise to allow repeating
+        // start()+stop()/pause_io()+resume_io() call sequences.
+        //
+        _io_is_stopped = promise<>();
+    }
+
 private:
     sstring get_endpoint_info(inet_address endpoint, gms::application_state key,
                               const sstring& default_val) {
@@ -105,7 +117,8 @@ private:
     }
 
 protected:
-    promise<> _snitch_is_stopped;
+    promise<> _io_is_stopped;
     std::experimental::optional<addr2dc_rack_map> _saved_endpoints;
+    distributed<snitch_ptr>* _my_distributed = nullptr;
 };
 } // namespace locator

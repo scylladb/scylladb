@@ -49,13 +49,14 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(
     const sstring& fname, unsigned io_cpu_id)
-: _fname(fname), _file_reader_cpu_id(io_cpu_id) {
-
-    _state = snitch_state::initializing;
-}
+: _fname(fname), _file_reader_cpu_id(io_cpu_id) {}
 
 future<> gossiping_property_file_snitch::start() {
     using namespace std::chrono_literals;
+
+    _state = snitch_state::initializing;
+
+    reset_io_state();
 
     // Run a timer only on specific CPU
     if (engine().cpu_id() == _file_reader_cpu_id) {
@@ -69,10 +70,15 @@ future<> gossiping_property_file_snitch::start() {
 
         io_cpu_id() = _file_reader_cpu_id;
 
-        _file_reader.arm(0s);
+        return read_property_file().then([this] {
+            start_io();
+            set_snitch_ready();
+            return make_ready_future<>();
+        });
     }
 
-    return _snitch_is_ready.get_future();
+    set_snitch_ready();
+    return make_ready_future<>();
 }
 
 void gossiping_property_file_snitch::periodic_reader_callback() {
@@ -87,19 +93,12 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
-
-            if (_state == snitch_state::initializing) {
-                i_endpoint_snitch::snitch_instance().invoke_on_all(
-                        [] (snitch_ptr& local_s) {
-                    local_s->set_snitch_ready();
-                });
-            }
         } catch (...) {
             this->err("Exception has been thrown when parsing the property "
                       "file.");
         }
 
-        if (_state == snitch_state::stopping) {
+        if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
             this->set_stopped();
         } else if (_state != snitch_state::stopped) {
             _file_reader.arm(reload_property_file_period());
@@ -146,8 +145,6 @@ future<> gossiping_property_file_snitch::read_property_file() {
             f.get();
             return make_ready_future<>();
         } catch (...) {
-            auto eptr = std::current_exception();
-
             //
             // In case of an error:
             //    - Halt if in the constructor.
@@ -156,21 +153,7 @@ future<> gossiping_property_file_snitch::read_property_file() {
             if (_state == snitch_state::initializing) {
                 this->err("Failed to parse a properties file ({}). "
                           "Halting...", _fname);
-                //
-                // Mark all instances on other shards as ready and set the local
-                // instance into an exceptional state.
-                // This is needed to release the "invoke_on_all() in a
-                // create_snitch() waiting for all instances to become ready.
-                //
-                return i_endpoint_snitch::snitch_instance().invoke_on_all(
-                        [this] (snitch_ptr& local_inst) {
-                    if (engine().cpu_id() != _file_reader_cpu_id) {
-                        local_inst->set_snitch_ready();
-                    }
-                }).then([this, eptr] () mutable {
-                    _snitch_is_ready.set_exception(eptr);
-                    std::rethrow_exception(eptr);
-                });
+                throw;
             } else {
                 this->warn("Failed to reload a properties file ({}). "
                            "Using previous values.", _fname);
@@ -266,7 +249,9 @@ future<> gossiping_property_file_snitch::reload_configuration() {
         _my_rack = *new_rack;
         _prefer_local = new_prefer_local;
 
-        return i_endpoint_snitch::snitch_instance().invoke_on_all(
+        assert(_my_distributed);
+
+        return _my_distributed->invoke_on_all(
             [this] (snitch_ptr& local_s) {
 
             // Distribute the new values on all CPUs but the current one
@@ -292,17 +277,16 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 }
 
 void gossiping_property_file_snitch::set_stopped() {
-    _state = snitch_state::stopped;
-    _snitch_is_stopped.set_value();
-}
-
-future<> gossiping_property_file_snitch::stop() {
-    if (_state == snitch_state::stopped) {
-        return make_ready_future<>();
+    if (_state == snitch_state::stopping) {
+        _state = snitch_state::stopped;
+    } else {
+        _state = snitch_state::io_paused;
     }
 
-    _state = snitch_state::stopping;
+    _io_is_stopped.set_value();
+}
 
+future<> gossiping_property_file_snitch::stop_io() {
     if (engine().cpu_id() == _file_reader_cpu_id) {
         _file_reader.cancel();
 
@@ -314,7 +298,40 @@ future<> gossiping_property_file_snitch::stop() {
         set_stopped();
     }
 
-    return _snitch_is_stopped.get_future();
+    return _io_is_stopped.get_future();
+}
+
+void gossiping_property_file_snitch::resume_io() {
+    reset_io_state();
+    start_io();
+    set_snitch_ready();
+}
+
+void gossiping_property_file_snitch::start_io() {
+    // Run a timer only on specific CPU
+    if (engine().cpu_id() == _file_reader_cpu_id) {
+        _file_reader.arm(reload_property_file_period());
+    }
+}
+
+future<> gossiping_property_file_snitch::stop() {
+    if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
+        return make_ready_future<>();
+    }
+
+    _state = snitch_state::stopping;
+
+    return stop_io();
+}
+
+future<> gossiping_property_file_snitch::pause_io() {
+    if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
+        return make_ready_future<>();
+    }
+
+    _state = snitch_state::io_pausing;
+
+    return stop_io();
 }
 
 void gossiping_property_file_snitch::reload_gossiper_state()

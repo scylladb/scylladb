@@ -26,6 +26,7 @@
 
 #include "gms/inet_address.hh"
 #include "core/shared_ptr.hh"
+#include "core/thread.hh"
 #include "core/distributed.hh"
 #include "utils/class_registrator.hh"
 
@@ -36,8 +37,16 @@ struct snitch_ptr;
 typedef gms::inet_address inet_address;
 
 struct i_endpoint_snitch {
+private:
     template <typename... A>
-    static future<> create_snitch(const sstring& snitch_name, A... a);
+    static future<> init_snitch_obj(
+        distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a);
+public:
+    template <typename... A>
+    static future<> create_snitch(const sstring& snitch_name, A&&... a);
+
+    template <typename... A>
+    static future<> reset_snitch(const sstring& snitch_name, A&&... a);
 
     static future<> stop_snitch();
 
@@ -93,7 +102,21 @@ struct i_endpoint_snitch {
     virtual future<> stop() = 0;
 
     // noop by default
-    virtual future<> start() { return make_ready_future<>(); }
+    virtual future<> pause_io() {
+        _state = snitch_state::io_paused;
+        return make_ready_future<>();
+    };
+
+    // noop by default
+    virtual void resume_io() {
+        _state = snitch_state::running;
+    };
+
+    // noop by default
+    virtual future<> start() {
+        _state = snitch_state::running;
+        return make_ready_future<>();
+    }
 
     // noop by default
     virtual void set_my_dc(const sstring& new_dc) {};
@@ -111,10 +134,14 @@ struct i_endpoint_snitch {
 
     void set_snitch_ready() {
         _state = snitch_state::running;
-        _snitch_is_ready.set_value();
     }
 
     virtual sstring get_name() const = 0;
+
+    // should be called for production snitches before calling start()
+    virtual void set_my_distributed(distributed<snitch_ptr>* d)  {
+        //noop by default
+    }
 
 protected:
     static unsigned& io_cpu_id() {
@@ -125,10 +152,11 @@ protected:
 protected:
     static logging::logger snitch_logger;
 
-    promise<> _snitch_is_ready;
     enum class snitch_state {
         initializing,
         running,
+        io_pausing,
+        io_paused,
         stopping,
         stopped
     } _state = snitch_state::initializing;
@@ -136,7 +164,6 @@ protected:
 
 struct snitch_ptr {
     typedef std::unique_ptr<i_endpoint_snitch> ptr_type;
-        ;
     future<> stop() {
         if (_ptr) {
             return _ptr->stop();
@@ -157,10 +184,16 @@ struct snitch_ptr {
         return _ptr.get();
     }
 
-    ptr_type& operator=(ptr_type&& new_val) {
+    snitch_ptr& operator=(ptr_type&& new_val) {
         _ptr = std::move(new_val);
 
-        return _ptr;
+        return *this;
+    }
+
+    snitch_ptr& operator=(snitch_ptr&& new_val) {
+        _ptr = std::move(new_val._ptr);
+
+        return *this;
     }
 
     operator bool() const {
@@ -172,6 +205,45 @@ private:
 };
 
 /**
+ * Initializes the distributed<snitch_ptr> object
+ *
+ * @note The local snitch objects will remain not start()ed.
+ *
+ * @param snitch_obj distributed<> object to initialize
+ * @param snitch_name name of the snitch class to create
+ * @param a snitch constructor arguments
+ *
+ * @return ready future when the snitch has been successfully created
+ */
+template <typename... A>
+future<> i_endpoint_snitch::init_snitch_obj(
+    distributed<snitch_ptr>& snitch_obj, const sstring& snitch_name, A&&... a) {
+
+    // First, create the snitch_ptr objects...
+    return snitch_obj.start().then(
+        [&snitch_obj, snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
+        // ...then, create the snitches...
+        return snitch_obj.invoke_on_all(
+            [snitch_name, a, &snitch_obj] (snitch_ptr& local_inst) {
+            try {
+                auto s(std::move(apply([snitch_name] (A&&... a) {
+                    return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
+                }, std::move(a))));
+
+                s->set_my_distributed(&snitch_obj);
+                local_inst = std::move(s);
+            } catch (no_such_class& e) {
+                snitch_logger.error("{}", e.what());
+                throw;
+            } catch (...) {
+                throw;
+            }
+
+            return make_ready_future<>();
+        });
+    });
+}
+/**
  * Creates the distributed i_endpoint_snitch::snitch_instane object
  *
  * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
@@ -180,45 +252,114 @@ private:
  */
 template <typename... A>
 future<> i_endpoint_snitch::create_snitch(
-    const sstring& snitch_name, A... a) {
+    const sstring& snitch_name, A&&... a) {
 
-    // First, create the snitch_ptr objects...
-    return snitch_instance().start().then(
-        [snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
-        // ...then, create the snitches...
-        return snitch_instance().invoke_on_all(
-            [snitch_name, a] (snitch_ptr& local_inst) {
+    // First, create and "start" the distributed snitch object...
+    return init_snitch_obj(snitch_instance(), snitch_name, std::forward<A>(a)...).then([] {
+        // ...and then start each local snitch.
+        return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+            return local_inst.start();
+        }).then_wrapped([] (auto&& f) {
             try {
-                auto s(std::move(apply([snitch_name] (A... a) {
-                    return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
-                }, std::move(a))));
-
-                local_inst = std::move(s);
-            } catch (no_such_class& e) {
-                snitch_logger.error("{}", e.what());
-                throw;
+                f.get();
+                return make_ready_future<>();
             } catch (...) {
-                throw;
-            }
-            
-            return make_ready_future<>();
-        }).then([] {
-            // ...and finally - start them.
-            return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
-                return local_inst.start();
-            }).then_wrapped([] (auto&& f) {
-                try {
-                    f.get();
-                    return make_ready_future<>();
-                } catch (...) {
-                    auto eptr = std::current_exception();
+                auto eptr = std::current_exception();
 
-                    return stop_snitch().then([eptr] () {
-                        std::rethrow_exception(eptr);
-                    });
-                }
-            });
+                return stop_snitch().then([eptr] () {
+                    std::rethrow_exception(eptr);
+                });
+            }
         });
+    });
+}
+
+/**
+ * Resets the global snitch instance with the new value
+ *
+ * @param snitch_name Name of a new snitch
+ * @param A optional parameters for a new snitch constructor
+ *
+ * @return ready future when the transition is complete
+ *
+ * The flow goes as follows:
+ *  1) Create a new distributed<snitch_ptr> and initialize it with the new
+ *     snitch.
+ *  2) Start the new snitches above - this will initialize the snitches objects
+ *     and will make them ready to be used.
+ *  3) Stop() the current global per-shard snitch objects.
+ *  4) Pause the per-shard snitch objects from (1) - this will stop the async
+ *     I/O parts of the snitches if any.
+ *  5) Assign the per-shard snitch_ptr's from new distributed from (1) to the
+ *     global one and update the distributed<> pointer in the new snitch
+ *     instances.
+ *  6) Start the new snitches.
+ *  7) Stop() the temporary distributed<snitch_ptr> from (1).
+ */
+template <typename... A>
+future<> i_endpoint_snitch::reset_snitch(
+    const sstring& snitch_name, A&&... a) {
+    return seastar::async(
+            [snitch_name, a = std::make_tuple(std::forward<A>(a)...)] {
+
+        // (1) create a new snitch
+        distributed<snitch_ptr> tmp_snitch;
+        try {
+            apply([snitch_name,&tmp_snitch](A&& ... a) {
+                return init_snitch_obj(tmp_snitch, snitch_name, std::forward<A>(a)...);
+            }, std::move(a)).get();
+
+            // (2) start the local instances of the new snitch
+            tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
+                return local_inst.start();
+            }).get();
+        } catch (...) {
+            tmp_snitch.stop().get();
+            throw;
+        }
+
+        // If we've got here then we may not fail
+
+        // (3) stop the current snitch instances on all CPUs
+        snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
+            // stop the instance on an I/O CPU first
+            return s->stop();
+        }).get();
+        snitch_instance().invoke_on_all([] (snitch_ptr& s) {
+            return s->stop();
+        }).get();
+
+        //
+        // (4) If we've got here - the new snitch has been successfully created
+        // and initialized. We may pause its I/O it now and start moving
+        // pointers...
+        //
+        tmp_snitch.invoke_on(io_cpu_id(), [] (snitch_ptr& local_inst) {
+            // pause the instance on an I/O CPU first
+            return local_inst->pause_io();
+        }).get();
+        tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
+            return local_inst->pause_io();
+        }).get();
+
+        //
+        // (5) move the pointers - this would ensure the atomicity on a
+        // per-shard level (since users are holding snitch_ptr objects only)
+        //
+        tmp_snitch.invoke_on_all([] (snitch_ptr& local_inst) {
+            local_inst->set_my_distributed(&snitch_instance());
+            snitch_instance().local() = std::move(local_inst);
+
+            return make_ready_future<>();
+        }).get();
+
+        // (6) re-start I/O on the new snitches
+        snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+            local_inst->resume_io();
+        }).get();
+
+        // (7) stop the temporary from (1)
+        tmp_snitch.stop().get();
     });
 }
 
