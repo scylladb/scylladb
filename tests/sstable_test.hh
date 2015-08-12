@@ -438,10 +438,19 @@ protected:
     }
 
     future<> _remove(directory_entry de) {
-        if (de.type == directory_entry_type::regular) {
-            return engine().remove_file(path() + "/" + de.name);
-        }
-        return make_ready_future<>();
+        sstring t = _path + "/" + de.name;
+        return engine().file_type(t).then([t] (std::experimental::optional<directory_entry_type> det) {
+            auto f = make_ready_future<>();
+
+            if (!det) {
+                throw std::runtime_error("Can't determine file type\n");
+            } else if (det == directory_entry_type::directory) {
+                f = empty_test_dir(t);
+            }
+            return f.then([t] {
+                return engine().remove_file(t);
+            });
+        });
     }
     future<> done() { return _listing.done(); }
 
