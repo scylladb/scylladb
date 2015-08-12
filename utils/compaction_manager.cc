@@ -25,9 +25,10 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 if (!task->current_compaction_job) {
                     task->current_compaction_job = _compaction_jobs.front();
                     _compaction_jobs.pop();
+                    _stats.pending_tasks--;
                 }
 
-                return task->current_compaction_job().then([task] {
+                return task->current_compaction_job().then([this, task] {
                     // If compaction completed successfully, let's reset
                     // sleep time of compaction_retry.
                     task->compaction_retry.reset();
@@ -35,6 +36,8 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     // current_compaction_job is made empty if compaction
                     // succeeded, meaning no retry is needed.
                     task->current_compaction_job = nullptr;
+
+                    _stats.completed_tasks++;
                 });
             });
         }).then_wrapped([task] (future<> f) {
@@ -127,5 +130,6 @@ void compaction_manager::submit(std::function<future<> ()> compaction_job) {
         return i->compaction_sem.current() < j->compaction_sem.current();
     });
     _compaction_jobs.push(compaction_job);
+    _stats.pending_tasks++;
     (*result)->compaction_sem.signal();
 }

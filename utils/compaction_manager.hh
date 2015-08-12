@@ -19,6 +19,12 @@
 // For each compaction job handler, there will be one fiber that will check for
 // jobs, and if any, run it. FIFO ordering is implemented here.
 class compaction_manager {
+public:
+    struct stats {
+        int64_t pending_tasks = 0;
+        int64_t completed_tasks = 0;
+    };
+private:
     struct task {
         future<> compaction_done = make_ready_future<>();
         semaphore compaction_sem = semaphore(0);
@@ -27,6 +33,7 @@ class compaction_manager {
         // Compaction job being currently executed.
         std::function<future<> ()> current_compaction_job;
     };
+
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::vector<lw_shared_ptr<task>> _tasks;
 
@@ -35,6 +42,8 @@ class compaction_manager {
 
     // Used to assert that compaction_manager was explicitly stopped, if started.
     bool _stopped = true;
+
+    stats _stats;
 private:
     void task_start(lw_shared_ptr<task>& task);
 
@@ -52,5 +61,9 @@ public:
 
     // Submit compaction job to a fiber with the lowest amount of pending jobs.
     void submit(std::function<future<> ()> compaction_job);
+
+    const stats& get_stats() const {
+        return _stats;
+    }
 };
 
