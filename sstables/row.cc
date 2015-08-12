@@ -58,11 +58,11 @@ private:
     // action when finishing to read a primitive type via a prestate, in
     // the rare case that a primitive type crossed a buffer). Such
     // non-consuming states need to run even if the data buffer is empty.
-    static bool non_consuming(state s, prestate ps) {
-        return (((s == state::DELETION_TIME_3)
-                || (s == state::CELL_VALUE_BYTES_2)
-                || (s == state::ATOM_START_2)
-                || (s == state::EXPIRING_CELL_3)) && (ps == prestate::NONE));
+    bool non_consuming() const {
+        return (((_state == state::DELETION_TIME_3)
+                || (_state == state::CELL_VALUE_BYTES_2)
+                || (_state == state::ATOM_START_2)
+                || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
     // state for non-NONE prestates
     uint32_t _pos;
@@ -230,7 +230,7 @@ public:
             return row_consumer::proceed::yes;
         }
 #endif
-        while (data || non_consuming(_state, _prestate)) {
+        while (data || non_consuming()) {
             if (_prestate != prestate::NONE) {
                 // We're in the middle of reading a basic type, which crossed
                 // an input buffer. Resume that read before continuing to
