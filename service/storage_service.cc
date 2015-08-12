@@ -58,6 +58,11 @@ std::experimental::optional<inet_address> get_replace_address() {
     return {};
 }
 
+std::unordered_set<sstring> get_initial_tokens() {
+    // FIXME: DatabaseDescriptor.getInitialTokens();
+    return std::unordered_set<sstring>();
+}
+
 bool get_property_join_ring() {
     // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
     return true;
@@ -155,7 +160,6 @@ future<> storage_service::prepare_to_join() {
 future<> storage_service::join_token_ring(int delay) {
     return seastar::async([this, delay] {
     _joined = true;
-#if 0
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
@@ -165,7 +169,8 @@ future<> storage_service::join_token_ring(int delay) {
     //
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-    Set<InetAddress> current = new HashSet<>();
+    std::unordered_set<inet_address> current;
+#if 0
     logger.debug("Bootstrap variables: {} {} {} {}",
                  DatabaseDescriptor.isAutoBootstrap(),
                  SystemKeyspace.bootstrapInProgress(),
@@ -235,12 +240,12 @@ future<> storage_service::join_token_ring(int delay) {
                 for (auto token : _bootstrap_tokens) {
                     auto existing = _token_metadata.get_endpoint(token);
                     if (existing) {
-#if 0
-                        long nanoDelay = delay * 1000000L;
-                        if (Gossiper.instance.getEndpointStateForEndpoint(existing).getUpdateTimestamp() > (System.nanoTime() - nanoDelay))
-                            throw new UnsupportedOperationException("Cannot replace a live node... ");
-                        current.add(existing);
-#endif
+                        auto& gossiper = gms::get_local_gossiper();
+                        auto eps = gossiper.get_endpoint_state_for_endpoint(*existing);
+                        if (eps && eps->get_update_timestamp() > gms::gossiper::clk::now() - std::chrono::milliseconds(delay)) {
+                            throw std::runtime_error("Cannot replace a live node...");
+                        }
+                        current.insert(*existing);
                     } else {
                         throw std::runtime_error(sprint("Cannot replace token %s which does not exist!", token));
                     }
@@ -257,87 +262,71 @@ future<> storage_service::join_token_ring(int delay) {
         // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
-        _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
-        logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-#if 0
-        _bootstrap_tokens = SystemKeyspace.getSavedTokens();
-        if (_bootstrap_tokens.isEmpty())
-        {
-            Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
-            if (initialTokens.size() < 1)
-            {
-                _bootstrap_tokens = BootStrapper.getRandomTokens(_token_metadata, DatabaseDescriptor.getNumTokens());
-                if (DatabaseDescriptor.getNumTokens() == 1)
+        _bootstrap_tokens = db::system_keyspace::get_saved_tokens();
+        if (_bootstrap_tokens.empty()) {
+            auto initial_tokens = get_initial_tokens();
+            if (initial_tokens.size() < 1) {
+                _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
+                if (num_tokens == 1) {
                     logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
-                else
+                } else {
                     logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
-            }
-            else
-            {
-                _bootstrap_tokens = new ArrayList<Token>(initialTokens.size());
-                for (String token : initialTokens)
-                    _bootstrap_tokens.add(getPartitioner().getTokenFactory().fromString(token));
+                }
+            } else {
+                for (auto token : initial_tokens) {
+                    // FIXME: token from string
+                    // _bootstrap_tokens.insert(getPartitioner().getTokenFactory().fromString(token));
+                }
                 logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
-        }
-        else
-        {
-            if (_bootstrap_tokens.size() != DatabaseDescriptor.getNumTokens())
-                throw new ConfigurationException("Cannot change the number of tokens from " + _bootstrap_tokens.size() + " to " + DatabaseDescriptor.getNumTokens());
-            else
+        } else {
+            if (_bootstrap_tokens.size() != num_tokens) {
+                throw std::runtime_error(sprint("Cannot change the number of tokens from %ld to %ld", _bootstrap_tokens.size(), num_tokens));
+            } else {
                 logger.info("Using saved tokens {}", _bootstrap_tokens);
+            }
         }
-#endif
     }
-    set_tokens(_bootstrap_tokens).get();
 #if 0
     // if we don't have system_traces keyspace at this point, then create it manually
     if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
+#endif
 
-    if (!_is_survey_mode)
-    {
+    if (!_is_survey_mode) {
         // start participating in the ring.
-        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-        set_tokens(_bootstrap_tokens);
+        //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+        set_tokens(_bootstrap_tokens).get();
         // remove the existing info about the replaced node.
-        if (!current.isEmpty())
-            for (InetAddress existing : current)
-                Gossiper.instance.replacedEndpoint(existing);
-        assert _token_metadata.sortedTokens().size() > 0;
-
-        Auth.setup();
-    }
-    else
-    {
+        if (!current.empty()) {
+            auto& gossiper = gms::get_local_gossiper();
+            for (auto existing : current) {
+                gossiper.replaced_endpoint(existing);
+            }
+        }
+        assert(_token_metadata.sorted_tokens().size() > 0);
+        //Auth.setup();
+    } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
-#endif
     });
 }
 
-void storage_service::join_ring() {
-#if 0
-    if (!joined) {
+future<> storage_service::join_ring() {
+    if (!_joined) {
         logger.info("Joining ring by operator request");
-        try
-        {
-            joinTokenRing(0);
-        }
-        catch (ConfigurationException e)
-        {
-            throw new IOException(e.getMessage());
-        }
+        return join_token_ring(0);
     } else if (_is_survey_mode) {
-        set_tokens(SystemKeyspace.getSavedTokens());
-        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-        _is_survey_mode = false;
-        logger.info("Leaving write survey mode and joining ring at operator request");
-        assert _token_metadata.sortedTokens().size() > 0;
-
-        Auth.setup();
+        return set_tokens(db::system_keyspace::get_saved_tokens()).then([this] {
+            //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+            _is_survey_mode = false;
+            logger.info("Leaving write survey mode and joining ring at operator request");
+            assert(_token_metadata.sorted_tokens().size() > 0);
+            //Auth.setup();
+            return make_ready_future<>();
+        });
     }
-#endif
+    return make_ready_future<>();
 }
 
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
@@ -489,10 +478,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-#if 0
-        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-#endif
+        auto replace_addr = get_replace_address();
+        if (is_replacing() && replace_addr && *replace_addr == ep) {
+            gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+        }
     }
     logger.debug("ep={} tokens_to_update_in_system_keyspace = {}", endpoint, tokens_to_update_in_system_keyspace);
     if (!tokens_to_update_in_system_keyspace.empty()) {
@@ -506,7 +495,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }).get();
     }
     if (!local_tokens_to_remove.empty()) {
-        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), local_tokens_to_remove);
+        db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
     if (is_moving) {
@@ -710,8 +699,8 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 
 void storage_service::on_remove(gms::inet_address endpoint) {
     logger.debug("on_remove endpoint={}", endpoint);
+    _token_metadata.remove_endpoint(endpoint);
 #if 0
-    _token_metadata.removeEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
 #endif
 }

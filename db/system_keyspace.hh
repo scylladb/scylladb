@@ -105,16 +105,35 @@ std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info();
 
 #if 0
-
-    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
-
-    public enum BootstrapState
+    public static KSMetaData definition()
     {
-        NEEDS_BOOTSTRAP,
-        COMPLETED,
-        IN_PROGRESS
+        Iterable<CFMetaData> tables =
+            Iterables.concat(LegacySchemaTables.All,
+                             Arrays.asList(BuiltIndexes,
+                                           Hints,
+                                           Batchlog,
+                                           Paxos,
+                                           Local,
+                                           Peers,
+                                           PeerEvents,
+                                           RangeXfers,
+                                           CompactionsInProgress,
+                                           CompactionHistory,
+                                           SSTableActivity));
+        return new KSMetaData(NAME, LocalStrategy.class, Collections.<String, String>emptyMap(), true, tables);
     }
 
+    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
+    private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
+#endif
+
+enum class bootstrap_state {
+    NEEDS_BOOTSTRAP,
+    COMPLETED,
+    IN_PROGRESS
+};
+
+#if 0
     private static DecoratedKey decorate(ByteBuffer key)
     {
         return StorageService.getPartitioner().decorateKey(key);
@@ -324,6 +343,7 @@ load_dc_rack_info();
         executeInternal(String.format(req, LOCAL, LOCAL), tokensAsSet(tokens));
         forceBlockingFlush(LOCAL);
     }
+#endif
 
     /**
      * Convenience method to update the list of tokens in the local system keyspace.
@@ -332,17 +352,11 @@ load_dc_rack_info();
      * @param rmTokens tokens to remove
      * @return the collection of persisted tokens
      */
-    public static synchronized Collection<Token> updateLocalTokens(Collection<Token> addTokens, Collection<Token> rmTokens)
-    {
-        Collection<Token> tokens = getSavedTokens();
-        tokens.removeAll(rmTokens);
-        tokens.addAll(addTokens);
-        updateTokens(tokens);
-        return tokens;
-    }
-#endif
+    future<std::unordered_set<dht::token>> update_local_tokens(
+        const std::unordered_set<dht::token>& add_tokens,
+        const std::unordered_set<dht::token>& rm_tokens);
 
-#if o
+#if 0
     /**
      * Return a map of stored tokens to IP addresses
      *
@@ -456,14 +470,9 @@ load_dc_rack_info();
             throw new ConfigurationException("Saved cluster name " + savedClusterName + " != configured name " + DatabaseDescriptor.getClusterName());
     }
 
-    public static Collection<Token> getSavedTokens()
-    {
-        String req = "SELECT tokens FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-        return result.isEmpty() || !result.one().has("tokens")
-             ? Collections.<Token>emptyList()
-             : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
-    }
+#endif
+    std::unordered_set<dht::token> get_saved_tokens();
+#if 0
 
     public static int incrementAndGetGeneration()
     {
@@ -501,35 +510,14 @@ load_dc_rack_info();
 
         return generation;
     }
+#endif
 
-    public static BootstrapState getBootstrapState()
-    {
-        String req = "SELECT bootstrapped FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+bool bootstrap_complete();
+bool bootstrap_in_progress();
+bootstrap_state get_bootstrap_state();
+future<> set_bootstrap_state(bootstrap_state state);
 
-        if (result.isEmpty() || !result.one().has("bootstrapped"))
-            return BootstrapState.NEEDS_BOOTSTRAP;
-
-        return BootstrapState.valueOf(result.one().getString("bootstrapped"));
-    }
-
-    public static boolean bootstrapComplete()
-    {
-        return getBootstrapState() == BootstrapState.COMPLETED;
-    }
-
-    public static boolean bootstrapInProgress()
-    {
-        return getBootstrapState() == BootstrapState.IN_PROGRESS;
-    }
-
-    public static void setBootstrapState(BootstrapState state)
-    {
-        String req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), state.name());
-        forceBlockingFlush(LOCAL);
-    }
-
+#if 0
     public static boolean isIndexBuilt(String keyspaceName, String indexName)
     {
         ColumnFamilyStore cfs = Keyspace.open(NAME).getColumnFamilyStore(BUILT_INDEXES);
