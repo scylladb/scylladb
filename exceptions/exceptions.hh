@@ -70,14 +70,14 @@ public:
     sstring get_message() const { return what(); }
 };
 
-class protocol_exception : public exceptions::cassandra_exception {
+class protocol_exception : public cassandra_exception {
 public:
     protocol_exception(sstring msg)
         : exceptions::cassandra_exception{exceptions::exception_code::PROTOCOL_ERROR, std::move(msg)}
     { }
 };
 
-struct unavailable_exception : exceptions::cassandra_exception {
+struct unavailable_exception : cassandra_exception {
     db::consistency_level consistency;
     int32_t required;
     int32_t alive;
