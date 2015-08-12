@@ -142,7 +142,7 @@ static void repair_range(seastar::sharded<database>& db, sstring keyspace,
         // other ndoes, just this one? What does Cassandra do here?
         sp.transfer_ranges(peer, peer, keyspace, {range}, cfs);
         sp.request_ranges(peer, peer, keyspace, {range}, cfs);
-        sp.execute().handle_exception([id] (auto ep) {
+        sp.execute().discard_result().handle_exception([id] (auto ep) {
             logger.error("repair session #{} stream failed: {}", id, ep);
         });
     }
