@@ -92,6 +92,7 @@ token minimum_token();
 token maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
+int tri_compare(const token& t1, const token& t2);
 inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
 inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
 inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
@@ -232,16 +233,25 @@ public:
     virtual unsigned shard_of(const token& t) const = 0;
 protected:
     /**
+     * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
+     */
+    virtual int tri_compare(const token& t1, const token& t2);
+    /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
      */
-    virtual bool is_equal(const token& t1, const token& t2);
+    bool is_equal(const token& t1, const token& t2) {
+        return tri_compare(t1, t2) == 0;
+    }
     /**
      * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
      */
-    virtual bool is_less(const token& t1, const token& t2);
+    bool is_less(const token& t1, const token& t2) {
+        return tri_compare(t1, t2) < 0;
+    }
 
     friend bool operator==(const token& t1, const token& t2);
     friend bool operator<(const token& t1, const token& t2);
+    friend int tri_compare(const token& t1, const token& t2);
 };
 
 //

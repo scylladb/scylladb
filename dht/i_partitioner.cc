@@ -94,35 +94,28 @@ static inline unsigned char get_byte(bytes_view b, size_t off) {
     }
 }
 
-bool i_partitioner::is_equal(const token& t1, const token& t2) {
-
-    size_t sz = std::max(t1._data.size(), t2._data.size());
-
-    for (size_t i = 0; i < sz; i++) {
-        auto b1 = get_byte(t1._data, i);
-        auto b2 = get_byte(t2._data, i);
-        if (b1 != b2) {
-            return false;
-        }
-    }
-    return true;
-
-}
-
-bool i_partitioner::is_less(const token& t1, const token& t2) {
-
+int i_partitioner::tri_compare(const token& t1, const token& t2) {
     size_t sz = std::max(t1._data.size(), t2._data.size());
 
     for (size_t i = 0; i < sz; i++) {
         auto b1 = get_byte(t1._data, i);
         auto b2 = get_byte(t2._data, i);
         if (b1 < b2) {
-            return true;
+            return -1;
         } else if (b1 > b2) {
-            return false;
+            return 1;
         }
     }
-    return false;
+    return 0;
+}
+
+int tri_compare(const token& t1, const token& t2) {
+    if (t1._kind == t2._kind) {
+        return global_partitioner().tri_compare(t1, t2);
+    } else if (t1._kind < t2._kind) {
+        return -1;
+    }
+    return 1;
 }
 
 bool operator==(const token& t1, const token& t2)
@@ -188,19 +181,20 @@ decorated_key::equal(const schema& s, const decorated_key& other) const {
 
 int
 decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
-    if (_token == other._token) {
-        return _key.legacy_tri_compare(s, other._key);
+    auto r = dht::tri_compare(_token, other._token);
+    if (r != 0) {
+        return r;
     } else {
-        return _token < other._token ? -1 : 1;
+        return _key.legacy_tri_compare(s, other._key);
     }
 }
 
 int
 decorated_key::tri_compare(const schema& s, const ring_position& other) const {
-    if (_token != other.token()) {
-        return _token < other.token() ? -1 : 1;
-    }
-    if (other.has_key()) {
+    auto r = dht::tri_compare(_token, other.token());
+    if (r != 0) {
+        return r;
+    } else if (other.has_key()) {
         return _key.legacy_tri_compare(s, *other.key());
     }
     return -other.relation_to_keys();
