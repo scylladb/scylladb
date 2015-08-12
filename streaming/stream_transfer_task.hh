@@ -87,14 +87,16 @@ public:
         return files;
     }
 
-    messages::outgoing_file_message create_message_for_retry(int sequence_number) {
+    messages::outgoing_file_message& create_message_for_retry(int sequence_number) {
 #if 0
         // remove previous time out task to be rescheduled later
         ScheduledFuture future = timeoutTasks.remove(sequenceNumber);
         if (future != null)
             future.cancel(false);
 #endif
-        return files[sequence_number];
+        auto it = files.find(sequence_number);
+        assert(it != files.end());
+        return it->second;
     }
 
 #if 0
