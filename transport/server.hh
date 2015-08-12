@@ -2,8 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
-#ifndef CQL_SERVER_HH
-#define CQL_SERVER_HH
+#pragma once
 
 #include "core/reactor.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -190,5 +189,3 @@ private:
 
     friend event_notifier;
 };
-
-#endif
