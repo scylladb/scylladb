@@ -29,37 +29,13 @@
 #include <cassert>
 #include <string>
 
+namespace transport {
+
 static logging::logger logger("cql_server");
 
 struct cql_frame_error : std::exception {
     const char* what() const throw () override {
         return "bad cql binary frame";
-    }
-};
-
-struct [[gnu::packed]] cql_binary_frame_v1 {
-    uint8_t  version;
-    uint8_t  flags;
-    uint8_t  stream;
-    uint8_t  opcode;
-    net::packed<uint32_t> length;
-
-    template <typename Adjuster>
-    void adjust_endianness(Adjuster a) {
-        return a(length);
-    }
-};
-
-struct [[gnu::packed]] cql_binary_frame_v3 {
-    uint8_t  version;
-    uint8_t  flags;
-    net::packed<uint16_t> stream;
-    uint8_t  opcode;
-    net::packed<uint32_t> length;
-
-    template <typename Adjuster>
-    void adjust_endianness(Adjuster a) {
-        return a(stream, length);
     }
 };
 
@@ -119,8 +95,8 @@ inline int16_t consistency_to_wire(db::consistency_level c)
     }
 }
 
-sstring to_string(const transport::event::topology_change::change_type t) {
-    using type = transport::event::topology_change::change_type;
+sstring to_string(const event::topology_change::change_type t) {
+    using type = event::topology_change::change_type;
     switch (t) {
     case type::NEW_NODE:     return "NEW_NODE";
     case type::REMOVED_NODE: return "REMOVED_NODE";
@@ -129,8 +105,8 @@ sstring to_string(const transport::event::topology_change::change_type t) {
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::status_change::status_type t) {
-    using type = transport::event::status_change::status_type;
+sstring to_string(const event::status_change::status_type t) {
+    using type = event::status_change::status_type;
     switch (t) {
     case type::UP:   return "NEW_NODE";
     case type::DOWN: return "REMOVED_NODE";
@@ -138,362 +114,34 @@ sstring to_string(const transport::event::status_change::status_type t) {
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::schema_change::change_type t) {
+sstring to_string(const event::schema_change::change_type t) {
     switch (t) {
-    case transport::event::schema_change::change_type::CREATED: return "CREATED";
-    case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
-    case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
+    case event::schema_change::change_type::CREATED: return "CREATED";
+    case event::schema_change::change_type::UPDATED: return "UPDATED";
+    case event::schema_change::change_type::DROPPED: return "DROPPED";
     }
     throw std::invalid_argument("unknown change type");
 }
 
-sstring to_string(const transport::event::schema_change::target_type t) {
+sstring to_string(const event::schema_change::target_type t) {
     switch (t) {
-    case transport::event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
-    case transport::event::schema_change::target_type::TABLE:    return "TABLE";
-    case transport::event::schema_change::target_type::TYPE:     return "TYPE";
+    case event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
+    case event::schema_change::target_type::TABLE:    return "TABLE";
+    case event::schema_change::target_type::TYPE:     return "TYPE";
     }
     throw std::invalid_argument("unknown target type");
 }
 
-transport::event::event_type parse_event_type(const sstring& value)
+event::event_type parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
-        return transport::event::event_type::TOPOLOGY_CHANGE;
+        return event::event_type::TOPOLOGY_CHANGE;
     } else if (value == "STATUS_CHANGE") {
-        return transport::event::event_type::STATUS_CHANGE;
+        return event::event_type::STATUS_CHANGE;
     } else if (value == "SCHEMA_CHANGE") {
-        return transport::event::event_type::SCHEMA_CHANGE;
+        return event::event_type::SCHEMA_CHANGE;
     } else {
         throw exceptions::protocol_exception(sprint("Invalid value '%s' for Event.Type", value));
-    }
-}
-
-struct cql_query_state {
-    service::query_state query_state;
-    std::unique_ptr<cql3::query_options> options;
-
-    cql_query_state(service::client_state& client_state)
-        : query_state(client_state)
-    { }
-};
-
-class cql_server::connection {
-    cql_server& _server;
-    connected_socket _fd;
-    input_stream<char> _read_buf;
-    output_stream<char> _write_buf;
-    seastar::gate _pending_requests_gate;
-    future<> _ready_to_respond = make_ready_future<>();
-    uint8_t _version = 0;
-    serialization_format _serialization_format = serialization_format::use_16_bit();
-    service::client_state _client_state;
-    std::unordered_map<uint16_t, cql_query_state> _query_states;
-public:
-    connection(cql_server& server, connected_socket&& fd, socket_address addr)
-        : _server(server)
-        , _fd(std::move(fd))
-        , _read_buf(_fd.input())
-        , _write_buf(_fd.output())
-        , _client_state(service::client_state::for_external_calls())
-    { }
-    ~connection() {
-        _server._notifier->unregister_connection(this);
-    }
-    future<> process() {
-        return do_until([this] {
-            return _read_buf.eof();
-        }, [this] {
-            return process_request();
-        }).then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch (const exceptions::cassandra_exception& ex) {
-                return write_error(0, ex.code(), ex.what());
-            } catch (std::exception& ex) {
-                return write_error(0, exceptions::exception_code::SERVER_ERROR, ex.what());
-            } catch (...) {
-                return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
-            }
-        }).finally([this] {
-            return _pending_requests_gate.close().then([this] {
-                return std::move(_ready_to_respond);
-            });
-        });
-    }
-    future<> process_request();
-private:
-
-    future<> process_request_one(temporary_buffer<char> buf,
-                                 uint8_t op,
-                                 uint16_t stream);
-    unsigned frame_size() const;
-    cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
-    future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
-    future<> process_startup(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_auth_response(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_options(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_query(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_prepare(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_execute(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_register(uint16_t stream, temporary_buffer<char> buf);
-
-    future<> write_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
-    future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
-    future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
-    future<> write_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
-    future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
-    future<> write_ready(int16_t stream);
-    future<> write_supported(int16_t stream);
-    future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
-    future<> write_topology_change_event(const transport::event::topology_change& event);
-    future<> write_status_change_event(const transport::event::status_change& event);
-    future<> write_schema_change_event(const transport::event::schema_change& event);
-    future<> write_response(shared_ptr<cql_server::response> response);
-
-    void check_room(temporary_buffer<char>& buf, size_t n) {
-        if (buf.size() < n) {
-            throw exceptions::protocol_exception("truncated frame");
-        }
-    }
-
-    void validate_utf8(sstring_view s) {
-        try {
-            boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
-        } catch (const boost::locale::conv::conversion_error& ex) {
-            throw exceptions::protocol_exception("Cannot decode string as UTF8");
-        }
-    }
-
-    int8_t read_byte(temporary_buffer<char>& buf);
-    int32_t read_int(temporary_buffer<char>& buf);
-    int64_t read_long(temporary_buffer<char>& buf);
-    int16_t read_short(temporary_buffer<char>& buf);
-    uint16_t read_unsigned_short(temporary_buffer<char>& buf);
-    sstring read_string(temporary_buffer<char>& buf);
-    bytes read_short_bytes(temporary_buffer<char>& buf);
-    bytes_opt read_value(temporary_buffer<char>& buf);
-    sstring_view read_long_string_view(temporary_buffer<char>& buf);
-    void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_opt>& values);
-    void read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings);
-    void read_value_list(temporary_buffer<char>& buf, std::vector<bytes_opt>& values);
-    db::consistency_level read_consistency(temporary_buffer<char>& buf);
-    std::unordered_map<sstring, sstring> read_string_map(temporary_buffer<char>& buf);
-    std::unique_ptr<cql3::query_options> read_options(temporary_buffer<char>& buf);
-
-    cql_query_state& get_query_state(uint16_t stream);
-    void init_serialization_format();
-
-    friend event_notifier;
-};
-
-cql_server::event_notifier::event_notifier(uint16_t port)
-    : _port{port}
-{
-}
-
-void cql_server::event_notifier::register_event(transport::event::event_type et, cql_server::connection* conn)
-{
-    switch (et) {
-    case transport::event::event_type::TOPOLOGY_CHANGE:
-        _topology_change_listeners.emplace(conn);
-        break;
-    case transport::event::event_type::STATUS_CHANGE:
-        _status_change_listeners.emplace(conn);
-        break;
-    case transport::event::event_type::SCHEMA_CHANGE:
-        _schema_change_listeners.emplace(conn);
-        break;
-    }
-}
-
-void cql_server::event_notifier::unregister_connection(cql_server::connection* conn)
-{
-    _topology_change_listeners.erase(conn);
-    _status_change_listeners.erase(conn);
-    _schema_change_listeners.erase(conn);
-}
-
-void cql_server::event_notifier::on_create_keyspace(const sstring& ks_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::CREATED,
-            ks_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_create_column_family(const sstring& ks_name, const sstring& cf_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::CREATED,
-            event::schema_change::target_type::TABLE,
-            ks_name,
-            cf_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_create_user_type(const sstring& ks_name, const sstring& type_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::CREATED,
-            event::schema_change::target_type::TYPE,
-            ks_name,
-            type_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_create_function(const sstring& ks_name, const sstring& function_name)
-{
-    logger.warn("{} event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name)
-{
-    logger.warn("{} event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::UPDATED,
-            ks_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TABLE,
-            ks_name,
-            cf_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_update_user_type(const sstring& ks_name, const sstring& type_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::UPDATED,
-            event::schema_change::target_type::TYPE,
-            ks_name,
-            type_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_update_function(const sstring& ks_name, const sstring& function_name)
-{
-    logger.warn("%s event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name)
-{
-    logger.warn("%s event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_drop_keyspace(const sstring& ks_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::DROPPED,
-            ks_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_drop_column_family(const sstring& ks_name, const sstring& cf_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::DROPPED,
-            event::schema_change::target_type::TABLE,
-            ks_name,
-            cf_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_drop_user_type(const sstring& ks_name, const sstring& type_name)
-{
-    for (auto&& conn : _schema_change_listeners) {
-        using namespace transport;
-        conn->write_schema_change_event(event::schema_change{
-            event::schema_change::change_type::DROPPED,
-            event::schema_change::target_type::TYPE,
-            ks_name,
-            type_name
-        });
-    }
-}
-
-void cql_server::event_notifier::on_drop_function(const sstring& ks_name, const sstring& function_name)
-{
-    logger.warn("%s event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name)
-{
-    logger.warn("%s event ignored", __func__);
-}
-
-void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _topology_change_listeners) {
-        using namespace transport;
-        conn->write_topology_change_event(event::topology_change::new_node(endpoint, _port));
-    }
-}
-
-void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _topology_change_listeners) {
-        using namespace transport;
-        conn->write_topology_change_event(event::topology_change::removed_node(endpoint, _port));
-    }
-}
-
-void cql_server::event_notifier::on_move(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _topology_change_listeners) {
-        using namespace transport;
-        conn->write_topology_change_event(event::topology_change::moved_node(endpoint, _port));
-    }
-}
-
-void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _status_change_listeners) {
-        using namespace transport;
-        conn->write_status_change_event(event::status_change::node_up(endpoint, _port));
-    }
-}
-
-void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
-{
-    for (auto&& conn : _status_change_listeners) {
-        using namespace transport;
-        conn->write_status_change_event(event::status_change::node_down(endpoint, _port));
     }
 }
 
@@ -713,6 +361,43 @@ future<> cql_server::connection::process_request_one(temporary_buffer<char> buf,
     });
 }
 
+cql_server::connection::connection(cql_server& server, connected_socket&& fd, socket_address addr)
+    : _server(server)
+    , _fd(std::move(fd))
+    , _read_buf(_fd.input())
+    , _write_buf(_fd.output())
+    , _client_state(service::client_state::for_external_calls())
+{ }
+
+cql_server::connection::~connection()
+{
+    _server._notifier->unregister_connection(this);
+}
+
+future<> cql_server::connection::process()
+{
+    return do_until([this] {
+        return _read_buf.eof();
+    }, [this] {
+        return process_request();
+    }).then_wrapped([this] (future<> f) {
+        try {
+            f.get();
+            return make_ready_future<>();
+        } catch (const exceptions::cassandra_exception& ex) {
+            return write_error(0, ex.code(), ex.what());
+        } catch (std::exception& ex) {
+            return write_error(0, exceptions::exception_code::SERVER_ERROR, ex.what());
+        } catch (...) {
+            return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
+        }
+    }).finally([this] {
+        return _pending_requests_gate.close().then([this] {
+            return std::move(_ready_to_respond);
+        });
+    });
+}
+
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
@@ -920,7 +605,7 @@ future<> cql_server::connection::write_supported(int16_t stream)
     return write_response(response);
 }
 
-class cql_server::fmt_visitor : public transport::messages::result_message::visitor {
+class cql_server::fmt_visitor : public messages::result_message::visitor {
 private:
     uint8_t _version;
     shared_ptr<cql_server::response> _response;
@@ -930,16 +615,16 @@ public:
         , _response{response}
     { }
 
-    virtual void visit(const transport::messages::result_message::void_message&) override {
+    virtual void visit(const messages::result_message::void_message&) override {
         _response->write_int(0x0001);
     }
 
-    virtual void visit(const transport::messages::result_message::set_keyspace& m) override {
+    virtual void visit(const messages::result_message::set_keyspace& m) override {
         _response->write_int(0x0003);
         _response->write_string(m.get_keyspace());
     }
 
-    virtual void visit(const transport::messages::result_message::prepared& m) override {
+    virtual void visit(const messages::result_message::prepared& m) override {
         auto prepared = m.get_prepared();
         _response->write_int(0x0004);
         _response->write_short_bytes(m.get_id());
@@ -954,16 +639,16 @@ public:
         }
     }
 
-    virtual void visit(const transport::messages::result_message::schema_change& m) override {
+    virtual void visit(const messages::result_message::schema_change& m) override {
         auto change = m.get_change();
         switch (change->type) {
-        case transport::event::event_type::SCHEMA_CHANGE: {
-            auto sc = static_pointer_cast<transport::event::schema_change>(change);
+        case event::event_type::SCHEMA_CHANGE: {
+            auto sc = static_pointer_cast<event::schema_change>(change);
             _response->write_int(0x0005);
             _response->write_string(to_string(sc->change));
             _response->write_string(to_string(sc->target));
             _response->write_string(sc->keyspace);
-            if (sc->target != transport::event::schema_change::target_type::KEYSPACE) {
+            if (sc->target != event::schema_change::target_type::KEYSPACE) {
                 _response->write_string(sc->table_or_type_or_function.value());
             }
             break;
@@ -973,7 +658,7 @@ public:
         }
     }
 
-    virtual void visit(const transport::messages::result_message::rows& m) override {
+    virtual void visit(const messages::result_message::rows& m) override {
         _response->write_int(0x0002);
         auto& rs = m.rs();
         _response->write(rs.get_metadata());
@@ -986,7 +671,7 @@ public:
     }
 };
 
-future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)
+future<> cql_server::connection::write_result(int16_t stream, shared_ptr<messages::result_message> msg)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
     fmt_visitor fmt{_version, response};
@@ -994,7 +679,7 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
     return write_response(response);
 }
 
-future<> cql_server::connection::write_topology_change_event(const transport::event::topology_change& event)
+future<> cql_server::connection::write_topology_change_event(const event::topology_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("TOPOLOGY_CHANGE");
@@ -1003,7 +688,7 @@ future<> cql_server::connection::write_topology_change_event(const transport::ev
     return write_response(response);
 }
 
-future<> cql_server::connection::write_status_change_event(const transport::event::status_change& event)
+future<> cql_server::connection::write_status_change_event(const event::status_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("STATUS_CHANGE");
@@ -1012,14 +697,14 @@ future<> cql_server::connection::write_status_change_event(const transport::even
     return write_response(response);
 }
 
-future<> cql_server::connection::write_schema_change_event(const transport::event::schema_change& event)
+future<> cql_server::connection::write_schema_change_event(const event::schema_change& event)
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("SCHEMA_CHANGE");
     response->write_string(to_string(event.change));
     response->write_string(to_string(event.target));
     response->write_string(event.keyspace);
-    if (event.target != transport::event::schema_change::target_type::KEYSPACE) {
+    if (event.target != event::schema_change::target_type::KEYSPACE) {
         response->write_string(*(event.table_or_type_or_function));
     }
     return write_response(response);
@@ -1034,6 +719,22 @@ future<> cql_server::connection::write_response(shared_ptr<cql_server::response>
         });
     });
     return make_ready_future<>();
+}
+
+void cql_server::connection::check_room(temporary_buffer<char>& buf, size_t n)
+{
+    if (buf.size() < n) {
+        throw exceptions::protocol_exception("truncated frame");
+    }
+}
+
+void cql_server::connection::validate_utf8(sstring_view s)
+{
+    try {
+        boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
+    } catch (const boost::locale::conv::conversion_error& ex) {
+        throw exceptions::protocol_exception("Cannot decode string as UTF8");
+    }
 }
 
 int8_t cql_server::connection::read_byte(temporary_buffer<char>& buf)
@@ -1560,4 +1261,6 @@ void cql_server::response::write(const cql3::metadata& m) {
         write_string(name->name->text());
         type_codec::encode(*this, name->type);
     };
+}
+
 }
