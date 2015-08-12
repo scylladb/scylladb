@@ -415,6 +415,7 @@ inline void match_collection_element(const std::pair<bytes, atomic_cell>& elemen
 class test_setup {
     file _f;
     std::function<future<> (directory_entry de)> _walker;
+    sstring _path;
     subscription<directory_entry> _listing;
 
     static sstring& path() {
@@ -423,8 +424,9 @@ class test_setup {
     };
 
 public:
-    test_setup(file f)
+    test_setup(file f, sstring path)
             : _f(std::move(f))
+            , _path(path)
             , _listing(_f.list_directory([this] (directory_entry de) { return _remove(de); })) {
     }
     ~test_setup() {
@@ -443,29 +445,29 @@ protected:
     }
     future<> done() { return _listing.done(); }
 
-    static future<> empty_test_dir() {
-        return engine().open_directory(path()).then([] (file f) {
-            auto l = make_lw_shared<test_setup>(std::move(f));
+    static future<> empty_test_dir(sstring p = path()) {
+        return engine().open_directory(p).then([p] (file f) {
+            auto l = make_lw_shared<test_setup>(std::move(f), p);
             return l->done().then([l] { });
         });
     }
 public:
-    static future<> create_empty_test_dir() {
-        return engine().make_directory(path()).then_wrapped([] (future<> f) {
+    static future<> create_empty_test_dir(sstring p = path()) {
+        return engine().make_directory(p).then_wrapped([p] (future<> f) {
             try {
                 f.get();
             // it's fine if the directory exists, just shut down the exceptional future message
             } catch (std::exception& e) {}
-            return empty_test_dir();
+            return empty_test_dir(p);
         });
     }
 
-    static future<> do_with_test_directory(std::function<future<> ()>&& fut) {
-        return test_setup::create_empty_test_dir().then([fut = std::move(fut)] () mutable {
-                return fut();
-        }).finally([] {
-            return test_setup::empty_test_dir().then([] {
-                return engine().remove_file(path());
+    static future<> do_with_test_directory(std::function<future<> ()>&& fut, sstring p = path()) {
+        return test_setup::create_empty_test_dir(p).then([fut = std::move(fut), p] () mutable {
+            return fut();
+        }).finally([p] {
+            return test_setup::empty_test_dir(p).then([p] {
+                return engine().remove_file(p);
             });
         });
     }
