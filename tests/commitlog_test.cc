@@ -369,6 +369,8 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
     });
 }
 
+#ifndef DEFAULT_ALLOCATOR
+
 SEASTAR_TEST_CASE(test_allocation_failure){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = (std::numeric_limits<size_t>::max() >> 24) / (1024 * 1024);
@@ -391,4 +393,6 @@ SEASTAR_TEST_CASE(test_allocation_failure){
                     });
         });
 }
+
+#endif
 
