@@ -208,7 +208,10 @@ void gossiper::init_messaging_service_handler() {
         smp::submit_to(0, [from] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at();
-            // TODO: Implement processing of incoming SHUTDOWN message
+            if (!gossiper.is_enabled()) {
+                logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
+                return;
+            }
             get_local_failure_detector().force_conviction(from);
         }).handle_exception([] (auto ep) {
             logger.error("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
