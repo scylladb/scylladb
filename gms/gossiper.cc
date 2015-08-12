@@ -198,7 +198,6 @@ future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
 
 void gossiper::init_messaging_service_handler() {
     ms().register_echo([] {
-        // TODO: Use time_point instead of long for timing.
         return smp::submit_to(0, [] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at();
@@ -209,9 +208,14 @@ void gossiper::init_messaging_service_handler() {
         smp::submit_to(0, [from] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at();
-            // TODO: Implement processing of incoming SHUTDOWN message
+            if (!gossiper.is_enabled()) {
+                logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
+                return;
+            }
             get_local_failure_detector().force_conviction(from);
-        }).discard_result();
+        }).handle_exception([] (auto ep) {
+            logger.error("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
+        });
         return messaging_service::no_wait();
     });
     ms().register_gossip_digest_syn([] (gossip_digest_syn syn_msg) {
@@ -228,7 +232,9 @@ void gossiper::init_messaging_service_handler() {
             /* Notify the Failure Detector */
             gossiper.notify_failure_detector(remote_ep_state_map);
             return gossiper.apply_state_locally(remote_ep_state_map);
-        }).discard_result();
+        }).handle_exception([] (auto ep) {
+            logger.error("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
+        });
         return messaging_service::no_wait();
     });
 }
