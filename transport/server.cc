@@ -190,38 +190,9 @@ class cql_server::connection {
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
 public:
-    connection(cql_server& server, connected_socket&& fd, socket_address addr)
-        : _server(server)
-        , _fd(std::move(fd))
-        , _read_buf(_fd.input())
-        , _write_buf(_fd.output())
-        , _client_state(service::client_state::for_external_calls())
-    { }
-    ~connection() {
-        _server._notifier->unregister_connection(this);
-    }
-    future<> process() {
-        return do_until([this] {
-            return _read_buf.eof();
-        }, [this] {
-            return process_request();
-        }).then_wrapped([this] (future<> f) {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch (const exceptions::cassandra_exception& ex) {
-                return write_error(0, ex.code(), ex.what());
-            } catch (std::exception& ex) {
-                return write_error(0, exceptions::exception_code::SERVER_ERROR, ex.what());
-            } catch (...) {
-                return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
-            }
-        }).finally([this] {
-            return _pending_requests_gate.close().then([this] {
-                return std::move(_ready_to_respond);
-            });
-        });
-    }
+    connection(cql_server& server, connected_socket&& fd, socket_address addr);
+    ~connection();
+    future<> process();
     future<> process_request();
 private:
 
@@ -253,20 +224,8 @@ private:
     future<> write_schema_change_event(const transport::event::schema_change& event);
     future<> write_response(shared_ptr<cql_server::response> response);
 
-    void check_room(temporary_buffer<char>& buf, size_t n) {
-        if (buf.size() < n) {
-            throw exceptions::protocol_exception("truncated frame");
-        }
-    }
-
-    void validate_utf8(sstring_view s) {
-        try {
-            boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
-        } catch (const boost::locale::conv::conversion_error& ex) {
-            throw exceptions::protocol_exception("Cannot decode string as UTF8");
-        }
-    }
-
+    void check_room(temporary_buffer<char>& buf, size_t n);
+    void validate_utf8(sstring_view s);
     int8_t read_byte(temporary_buffer<char>& buf);
     int32_t read_int(temporary_buffer<char>& buf);
     int64_t read_long(temporary_buffer<char>& buf);
@@ -713,6 +672,43 @@ future<> cql_server::connection::process_request_one(temporary_buffer<char> buf,
     });
 }
 
+cql_server::connection::connection(cql_server& server, connected_socket&& fd, socket_address addr)
+    : _server(server)
+    , _fd(std::move(fd))
+    , _read_buf(_fd.input())
+    , _write_buf(_fd.output())
+    , _client_state(service::client_state::for_external_calls())
+{ }
+
+cql_server::connection::~connection()
+{
+    _server._notifier->unregister_connection(this);
+}
+
+future<> cql_server::connection::process()
+{
+    return do_until([this] {
+        return _read_buf.eof();
+    }, [this] {
+        return process_request();
+    }).then_wrapped([this] (future<> f) {
+        try {
+            f.get();
+            return make_ready_future<>();
+        } catch (const exceptions::cassandra_exception& ex) {
+            return write_error(0, ex.code(), ex.what());
+        } catch (std::exception& ex) {
+            return write_error(0, exceptions::exception_code::SERVER_ERROR, ex.what());
+        } catch (...) {
+            return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
+        }
+    }).finally([this] {
+        return _pending_requests_gate.close().then([this] {
+            return std::move(_ready_to_respond);
+        });
+    });
+}
+
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
@@ -1034,6 +1030,22 @@ future<> cql_server::connection::write_response(shared_ptr<cql_server::response>
         });
     });
     return make_ready_future<>();
+}
+
+void cql_server::connection::check_room(temporary_buffer<char>& buf, size_t n)
+{
+    if (buf.size() < n) {
+        throw exceptions::protocol_exception("truncated frame");
+    }
+}
+
+void cql_server::connection::validate_utf8(sstring_view s)
+{
+    try {
+        boost::locale::conv::utf_to_utf<char>(s.begin(), s.end(), boost::locale::conv::stop);
+    } catch (const boost::locale::conv::conversion_error& ex) {
+        throw exceptions::protocol_exception("Cannot decode string as UTF8");
+    }
 }
 
 int8_t cql_server::connection::read_byte(temporary_buffer<char>& buf)
