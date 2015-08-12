@@ -113,8 +113,11 @@ public:
     db::consistency_level get_consistency() const {
         return _consistency;
     }
-    const std::vector<bytes_opt>& get_values() const {
-        return _values;
+    const bytes_opt& get_value_at(size_t idx) const {
+        return _values.at(idx);
+    }
+    size_t get_values_count() const {
+        return _values.size();
     }
     bool skip_metadata() const {
         return _skip_metadata;
