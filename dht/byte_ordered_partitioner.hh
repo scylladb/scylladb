@@ -40,6 +40,14 @@ public:
             return to_hex(t._data);
         }
     }
+    virtual dht::token from_sstring(const sstring& t) const override {
+        if (t.empty()) {
+            return minimum_token();
+        } else {
+            auto data = from_hex(t);
+            return token(token::kind::key, bytes(data.begin(), data.end()));
+        }
+    }
     virtual unsigned shard_of(const token& t) const override;
 };
 

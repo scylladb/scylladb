@@ -6,6 +6,7 @@
 #include "utils/murmur_hash.hh"
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
+#include <boost/lexical_cast.hpp>
 
 namespace dht {
 
@@ -79,6 +80,15 @@ sstring murmur3_partitioner::to_sstring(const token& t) const {
         lt = long_token(t);
     }
     return ::to_sstring(lt);
+}
+
+dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
+    auto lp = boost::lexical_cast<long>(t);
+    if (lp == std::numeric_limits<long>::min()) {
+        return minimum_token();
+    } else {
+        return get_token(uint64_t(lp));
+    }
 }
 
 int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
