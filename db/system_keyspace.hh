@@ -353,8 +353,8 @@ enum class bootstrap_state {
      * @return the collection of persisted tokens
      */
     future<std::unordered_set<dht::token>> update_local_tokens(
-        const std::unordered_set<dht::token>& add_tokens,
-        const std::unordered_set<dht::token>& rm_tokens);
+        const std::unordered_set<dht::token> add_tokens,
+        const std::unordered_set<dht::token> rm_tokens);
 
 #if 0
     /**
@@ -471,7 +471,7 @@ enum class bootstrap_state {
     }
 
 #endif
-    std::unordered_set<dht::token> get_saved_tokens();
+    future<std::unordered_set<dht::token>> get_saved_tokens();
 #if 0
 
     public static int incrementAndGetGeneration()

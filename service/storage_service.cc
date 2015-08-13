@@ -262,7 +262,7 @@ future<> storage_service::join_token_ring(int delay) {
         // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
-        _bootstrap_tokens = db::system_keyspace::get_saved_tokens();
+        _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
             auto initial_tokens = get_initial_tokens();
             if (initial_tokens.size() < 1) {
@@ -317,13 +317,15 @@ future<> storage_service::join_ring() {
         logger.info("Joining ring by operator request");
         return join_token_ring(0);
     } else if (_is_survey_mode) {
-        return set_tokens(db::system_keyspace::get_saved_tokens()).then([this] {
-            //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            _is_survey_mode = false;
-            logger.info("Leaving write survey mode and joining ring at operator request");
-            assert(_token_metadata.sorted_tokens().size() > 0);
-            //Auth.setup();
-            return make_ready_future<>();
+        return db::system_keyspace::get_saved_tokens().then([this] (auto tokens) {
+            return this->set_tokens(std::move(tokens)).then([this] {
+                //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+                _is_survey_mode = false;
+                logger.info("Leaving write survey mode and joining ring at operator request");
+                assert(_token_metadata.sorted_tokens().size() > 0);
+                //Auth.setup();
+                return make_ready_future<>();
+            });
         });
     }
     return make_ready_future<>();

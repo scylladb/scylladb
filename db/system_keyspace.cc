@@ -546,17 +546,18 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
 }
 
 future<std::unordered_set<dht::token>> update_local_tokens(
-    const std::unordered_set<dht::token>& add_tokens,
-    const std::unordered_set<dht::token>& rm_tokens) {
-    auto tokens = get_saved_tokens();
-    for (auto& x : rm_tokens) {
-        tokens.erase(x);
-    }
-    for (auto& x : add_tokens) {
-        tokens.insert(x);
-    }
-    return update_tokens(tokens).then([tokens] {
-        return tokens;
+    const std::unordered_set<dht::token> add_tokens,
+    const std::unordered_set<dht::token> rm_tokens) {
+    return get_saved_tokens().then([add_tokens = std::move(add_tokens), rm_tokens = std::move(rm_tokens)] (auto tokens) {
+        for (auto& x : rm_tokens) {
+            tokens.erase(x);
+        }
+        for (auto& x : add_tokens) {
+            tokens.insert(x);
+        }
+        return update_tokens(tokens).then([tokens] {
+            return tokens;
+        });
     });
 }
 
@@ -679,7 +680,7 @@ future<> check_health() {
     });
 }
 
-std::unordered_set<dht::token> get_saved_tokens() {
+future<std::unordered_set<dht::token>> get_saved_tokens() {
 #if 0
     String req = "SELECT tokens FROM system.%s WHERE key='%s'";
     UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
@@ -687,7 +688,7 @@ std::unordered_set<dht::token> get_saved_tokens() {
          ? Collections.<Token>emptyList()
          : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
 #endif
-    return std::unordered_set<dht::token>();
+    return make_ready_future<std::unordered_set<dht::token>>();
 }
 
 bool bootstrap_complete() {
