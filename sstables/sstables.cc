@@ -679,7 +679,9 @@ future<> sstable::read_toc() {
 }
 
 void sstable::write_toc() {
-    auto file_path = filename(sstable::component_type::TOC);
+    // Create TOC file with the string 'tmp-' prepended to it, meaning TOC
+    // is a temporary file.
+    auto file_path = temporary_filename(sstable::component_type::TOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
@@ -695,6 +697,16 @@ void sstable::write_toc() {
     }
     w.flush().get();
     w.close().get();
+
+    file dir_f = engine().open_directory(_dir).get0();
+    // Guarantee that every component of this sstable reached the disk.
+    dir_f.flush().get();
+    // Rename TOC because it's no longer temporary.
+    engine().rename_file(file_path, filename(sstable::component_type::TOC)).get();
+    // Guarantee that the changes above reached the disk.
+    dir_f.flush().get();
+    dir_f.close().get();
+    // If this point was reached, sstable should be safe in disk.
 }
 
 void write_crc(const sstring file_path, checksum& c) {
@@ -1368,8 +1380,12 @@ const sstring sstable::filename(component_type f) {
     return filename(_dir, _ks, _cf, _version, _generation, _format, f);
 }
 
+const sstring sstable::temporary_filename(component_type f) {
+    return filename(_dir, _ks, _cf, _version, _generation, _format, f, true);
+}
+
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
-                                format_types format, component_type component) {
+                                format_types format, component_type component, bool temporary) {
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
@@ -1380,7 +1396,11 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
         }
     };
 
-    return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+    if (temporary) {
+        return dir + "/tmp-" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+    } else {
+        return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+    }
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {

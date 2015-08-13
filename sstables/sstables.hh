@@ -167,7 +167,7 @@ public:
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
-                                  format_types format, component_type component);
+                                  format_types format, component_type component, bool temporary = false);
 
     future<> load();
 
@@ -281,6 +281,7 @@ private:
     const bool has_component(component_type f);
 
     const sstring filename(component_type f);
+    const sstring temporary_filename(component_type f);
 
     template <sstable::component_type Type, typename T>
     future<> read_simple(T& comp);
