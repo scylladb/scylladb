@@ -530,6 +530,16 @@ set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens
     return tset;
 }
 
+std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens) {
+    std::unordered_set<dht::token> tset;
+    for (auto& t: tokens) {
+        auto str = boost::any_cast<sstring>(t);
+        assert(str == dht::global_partitioner().to_sstring(dht::global_partitioner().from_sstring(str)));
+        tset.insert(dht::global_partitioner().from_sstring(str));
+    }
+    return tset;
+}
+
 /**
  * Record tokens being used by another node
  */
@@ -681,14 +691,19 @@ future<> check_health() {
 }
 
 future<std::unordered_set<dht::token>> get_saved_tokens() {
-#if 0
-    String req = "SELECT tokens FROM system.%s WHERE key='%s'";
-    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-    return result.isEmpty() || !result.one().has("tokens")
-         ? Collections.<Token>emptyList()
-         : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
-#endif
-    return make_ready_future<std::unordered_set<dht::token>>();
+    sstring req = "SELECT tokens FROM system.%s WHERE key = ?";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (auto msg) {
+        if (msg->empty() || !msg->one().has("tokens")) {
+            return make_ready_future<std::unordered_set<dht::token>>();
+        }
+
+        auto blob = msg->one().get_blob("tokens");
+        auto cdef = local()->get_column_definition("tokens");
+        auto deserialized = cdef->type->deserialize(blob);
+        auto tokens = boost::any_cast<set_type_impl::native_type>(deserialized);
+
+        return make_ready_future<std::unordered_set<dht::token>>(decode_tokens(tokens));
+    });
 }
 
 bool bootstrap_complete() {
