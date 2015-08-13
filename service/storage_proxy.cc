@@ -2389,12 +2389,12 @@ class mutation_result_merger {
         }
     };
 
-    uint32_t _limit;
+    query::read_command& _cmd;
     schema_ptr _schema;
     std::vector<partition_run> _runs;
 public:
-    mutation_result_merger(uint32_t limit, schema_ptr schema)
-        : _limit(limit)
+    mutation_result_merger(query::read_command& cmd, schema_ptr schema)
+        : _cmd(cmd)
         , _schema(std::move(schema))
     { }
 
@@ -2424,9 +2424,20 @@ public:
             boost::range::pop_heap(_runs, cmp);
             partition_run& next = _runs.back();
             const partition& p = next.current();
-            partitions.push_back(p);
-            row_count += p._row_count;
-            if (row_count >= _limit) {
+            unsigned limit_left = _cmd.row_limit - row_count;
+            if (p._row_count > limit_left) {
+                // no space for all rows in the mutation
+                // unfreeze -> trim -> freeze
+                mutation m = p.mut().unfreeze(_schema);
+                static const std::vector<query::clustering_range> all(1, query::clustering_range::make_open_ended_both_sides());
+                auto rc = m.partition().compact_for_query(*_schema, _cmd.timestamp, all, limit_left);
+                partitions.push_back(partition(rc, freeze(m)));
+                row_count += rc;
+            } else {
+                partitions.push_back(p);
+                row_count += p._row_count;
+            }
+            if (row_count >= _cmd.row_limit) {
                 break;
             }
             next.advance();
@@ -2452,7 +2463,7 @@ storage_proxy::query_mutations_locally(lw_shared_ptr<query::read_command> cmd, c
         });
     } else {
         auto schema = _db.local().find_schema(cmd->cf_id);
-        return _db.map_reduce(mutation_result_merger{cmd->row_limit, schema}, [cmd, &pr] (database& db) {
+        return _db.map_reduce(mutation_result_merger{*cmd, schema}, [cmd, &pr] (database& db) {
             return db.query_mutations(*cmd, pr).then([] (reconcilable_result&& result) {
                 return make_foreign(make_lw_shared(std::move(result)));
             });
