@@ -415,26 +415,20 @@ struct local_cache {
 static distributed<local_cache> _local_cache;
 
 static future<> build_dc_rack_info() {
-    return _local_cache.start().then([] {
-        engine().at_exit([] {
-            return _local_cache.stop();
-        });
+    return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        return do_for_each(*msg, [] (auto& row) {
+            // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
+            net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
+            if (!row.has("data_center") || !row.has("rack")) {
+                return make_ready_future<>();
+            }
+            gms::inet_address gms_addr(std::move(peer));
+            sstring dc = row.template get_as<sstring>("data_center");
+            sstring rack = row.template get_as<sstring>("rack");
 
-        return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-            return do_for_each(*msg, [] (auto& row) {
-                // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
-                net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
-                if (!row.has("data_center") || !row.has("rack")) {
-                    return make_ready_future<>();
-                }
-                gms::inet_address gms_addr(std::move(peer));
-                sstring dc = row.template get_as<sstring>("data_center");
-                sstring rack = row.template get_as<sstring>("rack");
-
-                locator::endpoint_dc_rack  element = { dc, rack };
-                return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
-                    lc._cached_dc_rack_info.emplace(gms_addr, element);
-                });
+            locator::endpoint_dc_rack  element = { dc, rack };
+            return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
+                lc._cached_dc_rack_info.emplace(gms_addr, element);
             });
         });
     });
@@ -446,6 +440,12 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     assert(!new_ctx);
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
+    }).then([] {
+        return _local_cache.start().then([] {
+            engine().at_exit([] {
+                return _local_cache.stop();
+            });
+        });
     }).then([] {
         return build_dc_rack_info();
     }).then([] {
