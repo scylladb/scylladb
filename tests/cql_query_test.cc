@@ -1591,7 +1591,6 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
             assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(2)},
                 {int32_type->decompose(5)},
-                {int32_type->decompose(2)},
             });
             return e.execute_cql("select r1 from tmcr where p1 = 0 and (c1, c2) in ((0, 1), (1, 0), (0, 1));");
         }).then([&e] (auto msg) {
@@ -1600,8 +1599,6 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
                 {int32_type->decompose(3)},
                 {int32_type->decompose(4)},
                 {int32_type->decompose(5)},
-                {int32_type->decompose(2)},
-                {int32_type->decompose(3)},
             });
             return e.execute_cql("select r1 from tmcr where p1 = 0 and (c1, c2, c3) >= (1, 0, 1);");
         }).then([&e] (auto msg) {

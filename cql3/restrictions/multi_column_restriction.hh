@@ -214,6 +214,8 @@ public:
             }
             keys.emplace_back(clustering_key_prefix::from_optional_exploded(*_schema, components));
         }
+        std::sort(keys.begin(), keys.end(), clustering_key_prefix::less_compare(*_schema));
+        keys.erase(std::unique(keys.begin(), keys.end(), clustering_key_prefix::equality(*_schema)), keys.end());
         return keys;
     }
 
@@ -227,6 +229,14 @@ public:
             auto prefix = clustering_key_prefix::from_optional_exploded(*_schema, components);
             bounds.emplace_back(bounds_range_type::make_singular(prefix));
         }
+        auto less_cmp = clustering_key_prefix::less_compare(*_schema);
+        std::sort(bounds.begin(), bounds.end(), [&] (bounds_range_type& x, bounds_range_type& y) {
+            return less_cmp(x.start()->value(), y.start()->value());
+        });
+        auto eq_cmp = clustering_key_prefix::equality(*_schema);
+        bounds.erase(std::unique(bounds.begin(), bounds.end(), [&] (bounds_range_type& x, bounds_range_type& y) {
+            return eq_cmp(x.start()->value(), y.start()->value());
+        }), bounds.end());
         return bounds;
     }
 
