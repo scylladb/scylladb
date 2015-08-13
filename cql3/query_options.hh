@@ -53,6 +53,7 @@ private:
     const db::consistency_level _consistency;
     const std::experimental::optional<std::vector<sstring>> _names;
     std::vector<bytes_opt> _values;
+    std::vector<bytes_view_opt> _value_views;
     const bool _skip_metadata;
     const specific_options _options;
     const int32_t _protocol_version; // transient
@@ -62,6 +63,14 @@ public:
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring>> names,
                            std::vector<bytes_opt> values,
+                           std::vector<bytes_view_opt> value_views,
+                           bool skip_metadata,
+                           specific_options options,
+                           int32_t protocol_version,
+                           serialization_format sf);
+    explicit query_options(db::consistency_level consistency,
+                           std::experimental::optional<std::vector<sstring>> names,
+                           std::vector<bytes_view_opt> value_views,
                            bool skip_metadata,
                            specific_options options,
                            int32_t protocol_version,
@@ -74,7 +83,7 @@ public:
     explicit query_options(std::vector<bytes_opt> values);
 
     db::consistency_level get_consistency() const;
-    const bytes_opt& get_value_at(size_t idx) const;
+    bytes_view_opt get_value_at(size_t idx) const;
     size_t get_values_count() const;
     bool skip_metadata() const;
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */

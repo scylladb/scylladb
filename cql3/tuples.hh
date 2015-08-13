@@ -372,7 +372,7 @@ public:
         { }
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            auto value = options.get_value_at(_bind_index);
+            const auto& value = options.get_value_at(_bind_index);
             if (!value) {
                 return nullptr;
             } else {
@@ -394,7 +394,7 @@ public:
         }
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            auto value = options.get_value_at(_bind_index);
+            const auto& value = options.get_value_at(_bind_index);
             if (!value) {
                 return nullptr;
             } else {

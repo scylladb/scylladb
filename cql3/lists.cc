@@ -190,7 +190,7 @@ lists::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
-    const bytes_opt& value = options.get_value_at(_bind_index);
+    const auto& value = options.get_value_at(_bind_index);
     auto ltype = static_pointer_cast<const list_type_impl>(_receiver->type);
     if (!value) {
         return nullptr;

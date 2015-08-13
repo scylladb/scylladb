@@ -35,6 +35,7 @@ thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, st
 query_options::query_options(db::consistency_level consistency,
                              std::experimental::optional<std::vector<sstring>> names,
                              std::vector<bytes_opt> values,
+                             std::vector<bytes_view_opt> value_views,
                              bool skip_metadata,
                              specific_options options,
                              int32_t protocol_version,
@@ -42,10 +43,31 @@ query_options::query_options(db::consistency_level consistency,
     : _consistency(consistency)
     , _names(std::move(names))
     , _values(std::move(values))
+    , _value_views(std::move(value_views))
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
     , _protocol_version(protocol_version)
     , _serialization_format(sf)
+{
+}
+
+query_options::query_options(db::consistency_level consistency,
+                             std::experimental::optional<std::vector<sstring>> names,
+                             std::vector<bytes_view_opt> value_views,
+                             bool skip_metadata,
+                             specific_options options,
+                             int32_t protocol_version,
+                             serialization_format sf)
+    : query_options(
+          consistency,
+          std::move(names),
+          {},
+          std::move(value_views),
+          skip_metadata,
+          std::move(options),
+          protocol_version,
+          sf
+      )
 {
 }
 
@@ -54,12 +76,20 @@ query_options::query_options(std::vector<bytes_opt> values)
           db::consistency_level::ONE,
           {},
           std::move(values),
+          {},
           false,
           query_options::specific_options::DEFAULT,
           version::native_protocol(),
           serialization_format::use_32_bit()
       )
 {
+    for (auto&& value : _values) {
+        if (value) {
+            _value_views.emplace_back(bytes_view{*value});
+        } else {
+            _value_views.emplace_back(std::experimental::nullopt);
+        }
+    }
 }
 
 db::consistency_level query_options::get_consistency() const
@@ -67,14 +97,14 @@ db::consistency_level query_options::get_consistency() const
     return _consistency;
 }
 
-const bytes_opt& query_options::get_value_at(size_t idx) const
+bytes_view_opt query_options::get_value_at(size_t idx) const
 {
-    return _values.at(idx);
+    return _value_views.at(idx);
 }
 
 size_t query_options::get_values_count() const
 {
-    return _values.size();
+    return _value_views.size();
 }
 
 bool query_options::skip_metadata() const

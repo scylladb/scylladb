@@ -154,11 +154,12 @@ public:
 
         virtual bytes_opt bind_and_get(const query_options& options) override {
             try {
-                auto value = options.get_value_at(_bind_index);
+                const auto& value = options.get_value_at(_bind_index);
                 if (value) {
-                    _receiver->type->validate(value.value());
+                    _receiver->type->validate(*value);
+                    return to_bytes(*value);
                 }
-                return value;
+                return std::experimental::nullopt;
             } catch (const marshal_exception& e) {
                 throw exceptions::invalid_request_exception(e.what());
             }
