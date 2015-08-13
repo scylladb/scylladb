@@ -231,7 +231,7 @@ struct serializer {
         out.write(v.begin(), v.size());
     }
     template <typename Input>
-    void read(Input& in, rpc::type<sstring>) const {
+    sstring read(Input& in, rpc::type<sstring>) const {
         auto sz = read(in, rpc::type<uint32_t>());
         sstring v(sstring::initialized_later(), sz);
         in.read(v.begin(), sz);
