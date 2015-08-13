@@ -99,6 +99,11 @@ public:
                         _restrictions->next_column(new_column)->name_as_text(), new_column.name_as_text()));
                 }
             }
+
+            if (_in && _schema->position(new_column) > _schema->position(last_column)) {
+                throw exceptions::invalid_request_exception(sprint("Clustering column \"%s\" cannot be restricted by an IN relation",
+                    new_column.name_as_text()));
+            }
         }
 
         _slice |= restriction->is_slice();
