@@ -327,7 +327,31 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 template<>
 std::vector<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
-    return compute_bounds(options);
+    auto bounds = compute_bounds(options);
+    auto less_cmp = clustering_key_prefix::less_compare(*_schema);
+    std::sort(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
+        if (!x.start() && !y.start()) {
+            return false;
+        }
+        if (!x.start()) {
+            return true;
+        }
+        if (!y.start()) {
+            return false;
+        }
+        return less_cmp(x.start()->value(), y.start()->value());
+    });
+    auto eq_cmp = clustering_key_prefix::equality(*_schema);
+    bounds.erase(std::unique(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
+        if (!x.start() && !y.start()) {
+            return true;
+        }
+        if (!x.start() || !y.start()) {
+            return false;
+        }
+        return eq_cmp(x.start()->value(), y.start()->value());
+    }), bounds.end());
+    return bounds;
 }
 
 }
