@@ -58,7 +58,7 @@ class storage_proxy;
 namespace sstables {
 
 class sstable;
-
+class entry_descriptor;
 }
 
 namespace db {
@@ -208,7 +208,7 @@ private:
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
     future<bool> for_all_partitions(Func&& func) const;
-    future<> probe_file(sstring sstdir, sstring fname);
+    future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
     void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:

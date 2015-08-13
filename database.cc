@@ -317,7 +317,7 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
-future<> column_family::probe_file(sstring sstdir, sstring fname) {
+future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
 
     using namespace sstables;
 
@@ -327,7 +327,7 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     // opposed to, say verifying _sstables.count() to be zero is more robust
     // against parallel loading of the directory contents.
     if (comps.component != sstable::component_type::TOC) {
-        return make_ready_future<>();
+        return make_ready_future<entry_descriptor>(std::move(comps));
     }
 
     // Make sure new sstables don't overwrite this one.
@@ -339,7 +339,7 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     return std::move(fut).then([this, sst = std::move(sst)] () mutable {
         add_sstable(std::move(*sst));
         return make_ready_future<>();
-    }).then_wrapped([fname] (future<> f) {
+    }).then_wrapped([fname, comps = std::move(comps)] (future<> f) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
@@ -349,7 +349,7 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
             dblog.error("Unrecognized error while processing {}: Refusing to boot", fname);
             throw;
         }
-        return make_ready_future<>();
+        return make_ready_future<entry_descriptor>(std::move(comps));
     });
 }
 
@@ -588,10 +588,43 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() {
 }
 
 future<> column_family::populate(sstring sstdir) {
+    // We can catch most errors when we try to load an sstable. But if the TOC
+    // file is the one missing, we won't try to load the sstable at all. This
+    // case is still an invalid case, but it is way easier for us to treat it
+    // by waiting for all files to be loaded, and then checking if we saw a
+    // file during scan_dir, without its corresponding TOC.
+    enum class status {
+        has_some_file,
+        has_toc_file,
+    };
 
-    return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
+    auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
+    return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir, verifier] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-        return probe_file(sstdir, de.name);
+        return probe_file(sstdir, de.name).then([verifier] (auto entry) {
+            if (verifier->count(entry.generation)) {
+                if (verifier->at(entry.generation) == status::has_toc_file) {
+                    if (entry.component == sstables::sstable::component_type::TOC) {
+                        throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed");
+                    }
+                } else if (entry.component == sstables::sstable::component_type::TOC) {
+                    verifier->at(entry.generation) = status::has_toc_file;
+                }
+            } else {
+                if (entry.component == sstables::sstable::component_type::TOC) {
+                    verifier->emplace(entry.generation, status::has_toc_file);
+                } else {
+                    verifier->emplace(entry.generation, status::has_some_file);
+                }
+            }
+        });
+    }).then([verifier, sstdir] {
+        return parallel_for_each(*verifier, [sstdir = std::move(sstdir)] (auto v) {
+            if (v.second != status::has_toc_file) {
+                throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
+            }
+            return make_ready_future<>();
+        });
     });
 }
 
