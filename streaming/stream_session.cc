@@ -258,7 +258,7 @@ future<> stream_session::initiate() {
             sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
             this->dst_cpu_id = dst_cpu_id;
         } catch (...) {
-            sslog.error("Fail to send STREAM_INIT_MESSAGE to {}", id);
+            sslog.error("Fail to send STREAM_INIT_MESSAGE to {}: {}", id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
@@ -287,7 +287,7 @@ future<> stream_session::on_initialization_complete() {
             }
             this->start_streaming_files();
         } catch (...) {
-            sslog.error("Fail to send PREPARE_MESSAGE to {}", id);
+            sslog.error("Fail to send PREPARE_MESSAGE to {}, {}", id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
@@ -461,7 +461,7 @@ future<> stream_session::send_complete_message() {
             sslog.debug("GOT COMPLETE_MESSAGE Reply");
             return make_ready_future<>();
         } catch (...) {
-            sslog.warn("ERROR COMPLETE_MESSAGE Reply");
+            sslog.warn("ERROR COMPLETE_MESSAGE Reply: {}", std::current_exception());
             return make_ready_future<>();
         }
     });
@@ -532,7 +532,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
                 auto& x = db.find_column_family(keyspace, cf_name);
                 stores.push_back(&x);
             } catch (no_such_column_family) {
-                sslog.warn("stream_session: {}.{} does not exist\n", keyspace, cf_name);
+                sslog.warn("stream_session: {}.{} does not exist: {}\n", keyspace, cf_name, std::current_exception());
                 continue;
             }
         }

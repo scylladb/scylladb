@@ -69,7 +69,7 @@ void stream_transfer_task::start() {
                         sslog.debug("GOT STREAM_MUTATION Reply");
                         msg.mutations_done.signal();
                     } catch (...) {
-                        sslog.error("stream_transfer_task: Fail to send STREAM_MUTATION to {}", id);
+                        sslog.error("stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", id, std::current_exception());
                         msg.mutations_done.broken();
                     }
                 }).finally([] {
@@ -85,7 +85,7 @@ void stream_transfer_task::start() {
                 f.get();
                 this->complete(seq);
             } catch (...) {
-                sslog.error("stream_transfer_task: Fail to send outgoing_file_message to {}", id);
+                sslog.error("stream_transfer_task: Fail to send outgoing_file_message to {}: {}", id, std::current_exception());
                 this->session->on_error();
             }
         });
@@ -113,7 +113,7 @@ void stream_transfer_task::complete(int sequence_number) {
                 sslog.debug("GOT STREAM_MUTATION_DONE Reply");
                 session->task_completed(*this);
             } catch (...) {
-                sslog.error("stream_transfer_task: Fail to send REAM_MUTATION_DON to {}", id);
+                sslog.error("stream_transfer_task: Fail to send REAM_MUTATION_DON to {}: {}", id, std::current_exception());
                 session->on_error();
             }
         });
