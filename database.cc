@@ -343,7 +343,11 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
-            dblog.error("Skipping malformed sstable {}: {}", fname, e.what());
+            dblog.error("malformed sstable {}: {}. Refusing to boot", fname, e.what());
+            throw;
+        } catch(...) {
+            dblog.error("Unrecognized error while processing {}: Refusing to boot", fname);
+            throw;
         }
         return make_ready_future<>();
     });
