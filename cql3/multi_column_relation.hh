@@ -138,7 +138,7 @@ protected:
         std::transform(rs.begin(), rs.end(), col_specs.begin(), [] (auto cs) {
             return cs->column_specification;
         });
-        if (_in_values.empty()) {
+        if (_in_marker) {
             auto t = to_term(col_specs, get_value(), db, schema->ks_name(), bound_names);
             auto as_abstract_marker = static_pointer_cast<abstract_marker>(t);
             return ::make_shared<restrictions::multi_column_restriction::IN_with_marker>(schema, rs, as_abstract_marker);

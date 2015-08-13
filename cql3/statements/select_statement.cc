@@ -114,10 +114,12 @@ select_statement::make_partition_slice(const query_options& options) {
             std::move(static_columns), {}, _opts);
     }
 
+    auto bounds = _restrictions->get_clustering_bounds(options);
     if (_is_reversed) {
         _opts.set(query::partition_slice::option::reversed);
+        std::reverse(bounds.begin(), bounds.end());
     }
-    return query::partition_slice(_restrictions->get_clustering_bounds(options),
+    return query::partition_slice(std::move(bounds),
         std::move(static_columns), std::move(regular_columns), _opts);
 }
 

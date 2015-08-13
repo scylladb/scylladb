@@ -1591,7 +1591,6 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
             assert_that(msg).is_rows().with_rows({
                 {int32_type->decompose(2)},
                 {int32_type->decompose(5)},
-                {int32_type->decompose(2)},
             });
             return e.execute_cql("select r1 from tmcr where p1 = 0 and (c1, c2) in ((0, 1), (1, 0), (0, 1));");
         }).then([&e] (auto msg) {
@@ -1600,8 +1599,6 @@ SEASTAR_TEST_CASE(test_multi_column_restrictions) {
                 {int32_type->decompose(3)},
                 {int32_type->decompose(4)},
                 {int32_type->decompose(5)},
-                {int32_type->decompose(2)},
-                {int32_type->decompose(3)},
             });
             return e.execute_cql("select r1 from tmcr where p1 = 0 and (c1, c2, c3) >= (1, 0, 1);");
         }).then([&e] (auto msg) {
@@ -1741,6 +1738,54 @@ APPLY BATCH;)"
             return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 66);
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key2")}, {2}, "r1", 33);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_in_restriction) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table tir (p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
+            e.require_table_exists("ks", "tir");
+            return e.execute_cql("insert into tir (p1, c1, r1) values (0, 0, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tir (p1, c1, r1) values (1, 0, 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tir (p1, c1, r1) values (1, 1, 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tir (p1, c1, r1) values (1, 2, 3);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tir (p1, c1, r1) values (2, 3, 4);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from tir where p1 in ();");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(0);
+            return e.execute_cql("select r1 from tir where p1 in (2, 0, 2, 1);");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(4)},
+                {int32_type->decompose(0)},
+                {int32_type->decompose(4)},
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
+                {int32_type->decompose(3)},
+            });
+            return e.execute_cql("select r1 from tir where p1 = 1 and c1 in ();");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_size(0);
+            return e.execute_cql("select r1 from tir where p1 = 1 and c1 in (2, 0, 2, 1);");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1)},
+                {int32_type->decompose(2)},
+                {int32_type->decompose(3)},
+            });
+            return e.execute_cql("select r1 from tir where p1 = 1 and c1 in (2, 0, 2, 1) order by c1 desc;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(3)},
+                {int32_type->decompose(2)},
+                {int32_type->decompose(1)},
+            });
         });
     });
 }

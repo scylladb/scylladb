@@ -99,6 +99,11 @@ public:
                         _restrictions->next_column(new_column)->name_as_text(), new_column.name_as_text()));
                 }
             }
+
+            if (_in && _schema->position(new_column) > _schema->position(last_column)) {
+                throw exceptions::invalid_request_exception(sprint("Clustering column \"%s\" cannot be restricted by an IN relation",
+                    new_column.name_as_text()));
+            }
         }
 
         _slice |= restriction->is_slice();
@@ -327,7 +332,31 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 template<>
 std::vector<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
-    return compute_bounds(options);
+    auto bounds = compute_bounds(options);
+    auto less_cmp = clustering_key_prefix::less_compare(*_schema);
+    std::sort(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
+        if (!x.start() && !y.start()) {
+            return false;
+        }
+        if (!x.start()) {
+            return true;
+        }
+        if (!y.start()) {
+            return false;
+        }
+        return less_cmp(x.start()->value(), y.start()->value());
+    });
+    auto eq_cmp = clustering_key_prefix::equality(*_schema);
+    bounds.erase(std::unique(bounds.begin(), bounds.end(), [&] (query::clustering_range& x, query::clustering_range& y) {
+        if (!x.start() && !y.start()) {
+            return true;
+        }
+        if (!x.start() || !y.start()) {
+            return false;
+        }
+        return eq_cmp(x.start()->value(), y.start()->value());
+    }), bounds.end());
+    return bounds;
 }
 
 }
