@@ -43,6 +43,7 @@
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
+#include <core/enum.hh>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -728,13 +729,16 @@ bootstrap_state get_bootstrap_state() {
 }
 
 future<> set_bootstrap_state(bootstrap_state state) {
-#if 0
-    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', '%s')";
-    return execute_cql(req, LOCAL, LOCAL, state.name()).discard_result().then([] {
+    static sstring state_name = std::unordered_map<bootstrap_state, sstring, enum_hash<bootstrap_state>>({
+        { bootstrap_state::NEEDS_BOOTSTRAP, "NEEDS_BOOTSTRAP" },
+        { bootstrap_state::COMPLETED, "COMPLETED" },
+        { bootstrap_state::IN_PROGRESS, "IN_PROGRESS" }
+    }).at(state);
+
+    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), state_name).discard_result().then([] {
         return force_blocking_flush(LOCAL);
     });
-#endif
-    return make_ready_future<>();
 }
 
 std::vector<schema_ptr> all_tables() {
