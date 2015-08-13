@@ -1233,8 +1233,9 @@ future<> gossiper::do_shadow_round() {
                 std::vector<gossip_digest> digests;
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
                 auto id = get_shard_id(seed);
+                auto sem = make_shared<semaphore>(0);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id, sem] (auto&& f) {
                     try {
                         auto ack_msg = f.get0();
                         logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
@@ -1243,12 +1244,18 @@ future<> gossiper::do_shadow_round() {
                         logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
                     }
                     return make_ready_future<>();
+                }).finally([sem] {
+                    sem->signal();
+                });
+                sem->wait(std::chrono::seconds(1)).handle_exception([id] (auto ep) {
+                    logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 }).get();
             }
             if (clk::now() > t + storage_service_ring_delay()) {
-                throw std::runtime_error(sprint("Unable to gossip with any seeds"));
+                throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
+                logger.trace("Sleep 1 second and retry ...");
                 sleep(std::chrono::seconds(1)).get();
             }
         }
