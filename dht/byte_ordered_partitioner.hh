@@ -34,7 +34,11 @@ public:
     }
     virtual token midpoint(const token& t1, const token& t2) const;
     virtual sstring to_sstring(const dht::token& t) const override {
-        return to_hex(t._data);
+        if (t._kind == dht::token::kind::before_all_keys) {
+            return sstring();
+        } else {
+            return to_hex(t._data);
+        }
     }
     virtual unsigned shard_of(const token& t) const override;
 };
