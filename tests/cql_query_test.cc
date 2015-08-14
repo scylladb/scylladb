@@ -543,17 +543,17 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
             auto rows = dynamic_pointer_cast<transport::messages::result_message::rows>(msg);
             BOOST_REQUIRE(rows);
             std::vector<bytes> keys;
-            std::vector<bytes> tokens;
+            std::vector<int64_t> tokens;
             for (auto&& row : rows->rs().rows()) {
                 BOOST_REQUIRE(row[0]);
                 BOOST_REQUIRE(row[1]);
                 keys.push_back(*row[0]);
-                tokens.push_back(*row[1]);
+                tokens.push_back(boost::any_cast<int64_t>(long_type->deserialize(*row[1])));
             }
             BOOST_REQUIRE(keys.size() == 5);
 
             return now().then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) > 0x%s;", to_hex(tokens[1]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) > %d;", tokens[1])).then([keys](auto msg) {
                     assert_that(msg).is_rows().with_rows({
                         {keys[2]},
                         {keys[3]},
@@ -561,7 +561,7 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
                     });
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) >= 0x%s;", to_hex(tokens[1]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) >= %ld;", tokens[1])).then([keys](auto msg) {
                     assert_that(msg).is_rows().with_rows({
                         {keys[1]},
                         {keys[2]},
@@ -570,15 +570,15 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
                     });
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) > 0x%s and token(k) < 0x%s;",
-                        to_hex(tokens[1]), to_hex(tokens[4]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) > %ld and token(k) < %ld;",
+                        tokens[1], tokens[4])).then([keys](auto msg) {
                     assert_that(msg).is_rows().with_rows({
                         {keys[2]},
                         {keys[3]},
                     });
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) < 0x%s;", to_hex(tokens[3]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) < %ld;", tokens[3])).then([keys](auto msg) {
                     assert_that(msg).is_rows().with_rows({
                         {keys[0]},
                         {keys[1]},
@@ -586,17 +586,17 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
                     });
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) = 0x%s;", to_hex(tokens[3]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) = %ld;", tokens[3])).then([keys](auto msg) {
                     assert_that(msg).is_rows().with_rows({
                         {keys[3]}
                     });
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) < 0x%s and token(k) > 0x%s;", to_hex(tokens[3]), to_hex(tokens[3]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) < %ld and token(k) > %ld;", tokens[3], tokens[3])).then([keys](auto msg) {
                     assert_that(msg).is_rows().is_empty();
                 });
             }).then([keys, tokens, &e] {
-                return e.execute_cql(sprint("select k from cf where token(k) >= 0x%s and token(k) <= 0x%s;", to_hex(tokens[4]), to_hex(tokens[2]))).then([keys](auto msg) {
+                return e.execute_cql(sprint("select k from cf where token(k) >= %ld and token(k) <= %ld;", tokens[4], tokens[2])).then([keys](auto msg) {
                     assert_that(msg).is_rows().is_empty();
                 });
             });
