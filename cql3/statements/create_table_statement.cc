@@ -26,6 +26,8 @@
 #include <inttypes.h>
 #include <regex>
 
+#include <boost/range/adaptor/map.hpp>
+
 #include "cql3/statements/create_table_statement.hh"
 
 #include "schema_builder.hh"
@@ -256,21 +258,20 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         }
     }
 
-#if 0
-    if (!staticColumns.isEmpty())
-    {
+    if (!_static_columns.empty()) {
         // Only CQL3 tables can have static columns
-        if (useCompactStorage)
-            throw new InvalidRequestException("Static columns are not supported in COMPACT STORAGE tables");
+        if (_use_compact_storage) {
+            throw exceptions::invalid_request_exception("Static columns are not supported in COMPACT STORAGE tables");
+        }
         // Static columns only make sense if we have at least one clustering column. Otherwise everything is static anyway
-        if (columnAliases.isEmpty())
-            throw new InvalidRequestException("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+        if (_column_aliases.empty()) {
+            throw exceptions::invalid_request_exception("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
+        }
     }
 
-    if (useCompactStorage && !stmt.columnAliases.isEmpty())
-    {
-        if (stmt.columns.isEmpty())
-        {
+    if (_use_compact_storage && !stmt->_column_aliases.empty()) {
+        if (stmt->_columns.empty()) {
+#if 0
             // The only value we'll insert will be the empty one, so the default validator don't matter
             stmt.defaultValidator = BytesType.instance;
             // We need to distinguish between
@@ -278,32 +279,33 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
             //   * I've defined my table with only a PK (and the column value will be empty)
             // So, we use an empty valueAlias (rather than null) for the second case
             stmt.valueAlias = ByteBufferUtil.EMPTY_BYTE_BUFFER;
-        }
-        else
-        {
-            if (stmt.columns.size() > 1)
-                throw new InvalidRequestException(String.format("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: %s)", StringUtils.join(stmt.columns.keySet(), ", ")));
-
+#endif
+        } else {
+            if (stmt->_columns.size() > 1) {
+                throw exceptions::invalid_request_exception(sprint("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: %s)",
+                    ::join( ", ", stmt->_columns | boost::adaptors::map_keys)));
+            }
+#if 0
             Map.Entry<ColumnIdentifier, AbstractType> lastEntry = stmt.columns.entrySet().iterator().next();
             stmt.defaultValidator = lastEntry.getValue();
             stmt.valueAlias = lastEntry.getKey().bytes;
             stmt.columns.remove(lastEntry.getKey());
+#endif
         }
-    }
-    else
-    {
+    } else {
         // For compact, we are in the "static" case, so we need at least one column defined. For non-compact however, having
         // just the PK is fine since we have CQL3 row marker.
-        if (useCompactStorage && stmt.columns.isEmpty())
-            throw new InvalidRequestException("COMPACT STORAGE with non-composite PRIMARY KEY require one column not part of the PRIMARY KEY, none given");
-
+        if (_use_compact_storage && stmt->_columns.empty()) {
+            throw exceptions::invalid_request_exception("COMPACT STORAGE with non-composite PRIMARY KEY require one column not part of the PRIMARY KEY, none given");
+        }
+#if 0
         // There is no way to insert/access a column that is not defined for non-compact storage, so
         // the actual validator don't matter much (except that we want to recognize counter CF as limitation apply to them).
         stmt.defaultValidator = !stmt.columns.isEmpty() && (stmt.columns.values().iterator().next() instanceof CounterColumnType)
             ? CounterColumnType.instance
             : BytesType.instance;
-    }
 #endif
+    }
 
     // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
     if (!_defined_ordering.empty()) {
