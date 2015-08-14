@@ -60,8 +60,12 @@ private:
     std::experimental::optional<std::vector<query_options>> _batch_options;
 public:
     explicit query_options(db::consistency_level consistency,
-            std::experimental::optional<std::vector<sstring>> names, std::vector<bytes_opt> values,
-            bool skip_metadata, specific_options options, int32_t protocol_version, serialization_format sf);
+                           std::experimental::optional<std::vector<sstring>> names,
+                           std::vector<bytes_opt> values,
+                           bool skip_metadata,
+                           specific_options options,
+                           int32_t protocol_version,
+                           serialization_format sf);
 
     // It can't be const because of prepare()
     static thread_local query_options DEFAULT;
