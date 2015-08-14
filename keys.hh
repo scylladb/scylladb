@@ -514,9 +514,7 @@ public:
         }
         assert(s.is_dense());
         auto components = prefix.components();
-        while (components.size() < s.clustering_key_size()) {
-            components.emplace_back(bytes());
-        }
+        components.resize(s.clustering_key_size());
         return from_exploded(s, std::move(components));
     }
 
