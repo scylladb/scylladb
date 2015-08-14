@@ -185,7 +185,15 @@ protected:
 };
 
 ::shared_ptr<selection> selection::wildcard(schema_ptr schema) {
-    return simple_selection::make(schema, column_definition::vectorize(schema->all_columns_in_select_order()), true);
+    std::vector<const column_definition*> cds;
+    auto& columns = schema->all_columns_in_select_order();
+    cds.reserve(columns.size());
+    for (auto& c : columns) {
+        if (!c.is_compact_value() || !c.name().empty()) {
+            cds.emplace_back(&c);
+        }
+    }
+    return simple_selection::make(schema, std::move(cds), true);
 }
 
 ::shared_ptr<selection> selection::for_columns(schema_ptr schema, std::vector<const column_definition*> columns) {
