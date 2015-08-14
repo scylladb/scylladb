@@ -231,6 +231,13 @@ public:
      * Calculates the shard that handles a particular token.
      */
     virtual unsigned shard_of(const token& t) const = 0;
+
+    /**
+     * @return bytes that represent the token as required by get_token_validator().
+     */
+    virtual bytes token_to_bytes(const token& t) const {
+        return bytes(t._data.begin(), t._data.end());
+    }
 protected:
     /**
      * @return < 0 if if t1's _data array is less, t2's. 0 if they are equal, and > 0 otherwise. _kind comparison should be done separately.
