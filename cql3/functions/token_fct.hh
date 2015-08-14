@@ -39,8 +39,7 @@ private:
 public:
     token_fct(schema_ptr s)
             : native_scalar_function("token",
-                    // TODO: /*dht::global_partitioner().get_token_validator()*/
-                    bytes_type,
+                    dht::global_partitioner().get_token_validator(),
                     s->partition_key_type()->types())
                     , _schema(s) {
     }
@@ -50,10 +49,7 @@ public:
         auto view = partition_key_view::from_bytes(std::move(buf));
         auto tok = dht::global_partitioner().get_token(*_schema, view);
         warn(unimplemented::cause::VALIDATION);
-        return { bytes(tok._data.begin(), tok._data.end()) }
-                // TODO:
-                //{ dht::global_partitioner().get_token_validator()->decompose(tok) }
-                ;
+        return dht::global_partitioner().token_to_bytes(tok);
     }
 };
 
