@@ -177,6 +177,7 @@ public:
             } else {
                 if (_v.empty()) {
                     if (AllowPrefixes == allow_prefixes::yes) {
+                        _types_left = 0;
                         _v = bytes_view(nullptr, 0);
                         return;
                     } else {
@@ -196,7 +197,7 @@ public:
         iterator(const compound_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
             read_current();
         }
-        iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
+        iterator(end_iterator_tag, const bytes_view& v) : _types_left(0), _v(nullptr, 0) {}
         iterator& operator++() {
             read_current();
             return *this;
@@ -208,8 +209,8 @@ public:
         }
         const value_type& operator*() const { return _current; }
         const value_type* operator->() const { return &_current; }
-        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
-        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
+        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin() || _types_left != i._types_left; }
+        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin() && _types_left == i._types_left; }
     };
     iterator begin(const bytes_view& v) const {
         return iterator(*this, v);
