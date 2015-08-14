@@ -60,8 +60,7 @@ std::vector<::shared_ptr<cql3::column_specification>> cql3::token_relation::to_r
     //auto* c = column_defs.front();
     return {::make_shared<column_specification>(schema->ks_name(), schema->cf_name(),
                 ::make_shared<column_identifier>("partition key token", true),
-                 // TODO: dht::global_partitioner().get_token_validator()
-                 bytes_type)};
+                dht::global_partitioner().get_token_validator())};
 }
 
 ::shared_ptr<cql3::restrictions::restriction> cql3::token_relation::new_EQ_restriction(
