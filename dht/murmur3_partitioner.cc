@@ -103,7 +103,7 @@ murmur3_partitioner::describe_ownership(const std::vector<token>& sorted_tokens)
 
 data_type
 murmur3_partitioner::get_token_validator() {
-    abort();
+    return long_type;
 }
 
 unsigned
