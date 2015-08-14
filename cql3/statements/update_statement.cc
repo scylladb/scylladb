@@ -33,29 +33,22 @@ namespace statements {
 
 void update_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (s->is_dense()) {
-        throw std::runtime_error("Dense tables not supported yet");
-#if 0
-            if (prefix.isEmpty())
-                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfm.clusteringColumns().get(0)));
+        if (!prefix) {
+            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", *s->clustering_key_columns().begin()));
+        }
 
-            // An empty name for the compact value is what we use to recognize the case where there is not column
-            // outside the PK, see CreateStatement.
-            if (!cfm.compactValueColumn().name.bytes.hasRemaining())
-            {
-                // There is no column outside the PK. So no operation could have passed through validation
-                assert updates.isEmpty();
-                new Constants.Setter(cfm.compactValueColumn(), EMPTY).execute(key, cf, prefix, params);
+        // An empty name for the compact value is what we use to recognize the case where there is not column
+        // outside the PK, see CreateStatement.
+        if (s->compact_column().name().empty()) {
+            // There is no column outside the PK. So no operation could have passed through validation
+            assert(_column_operations.empty());
+            constants::setter(s->compact_column(), make_shared(constants::value(bytes()))).execute(m, prefix, params);
+        } else {
+            // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
+            if (_column_operations.empty()) {
+                throw exceptions::invalid_request_exception(sprint("Column %s is mandatory for this COMPACT STORAGE table", s->compact_column().name_as_text()));
             }
-            else
-            {
-                // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
-                if (updates.isEmpty())
-                    throw new InvalidRequestException(String.format("Column %s is mandatory for this COMPACT STORAGE table", cfm.compactValueColumn().name));
-
-                for (Operation update : updates)
-                    update.execute(key, cf, prefix, params);
-            }
-#endif
+        }
     } else {
         // If there are static columns, there also must be clustering columns, in which
         // case empty prefix can only refer to the static row.
