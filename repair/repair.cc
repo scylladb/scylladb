@@ -116,8 +116,44 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 }
 
 // Each repair_start() call returns a unique integer which the user can later
-// use to follow the status of this repair.
+// use to follow the status of this repair with the repair_status() function.
 static std::atomic<int> next_repair_command {0};
+
+// The repair_tracker tracks ongoing repair operations and their progress.
+// A repair which has already finished successfully is dropped from this
+// table, but a failed repair will remain in the table forever so it can
+// be queried about more than once (FIXME: reconsider this. But note that
+// failed repairs should be rare anwyay).
+// This object is not thread safe, and must be used by only one cpu.
+static class {
+private:
+    // Note that there are no "SUCCESSFUL" entries in the "status" map:
+    // Successfully-finished repairs are those with id < next_repair_command
+    // but aren't listed as running or failed the status map.
+    std::unordered_map<int, repair_status> status;
+public:
+    void start(int id) {
+        status[id] = repair_status::RUNNING;
+    }
+    void done(int id, bool succeeded) {
+        if (succeeded) {
+            status.erase(id);
+        } else {
+            status[id] = repair_status::FAILED;
+        }
+    }
+    repair_status get(int id) {
+        if (id >= next_repair_command.load(std::memory_order_relaxed)) {
+            throw std::runtime_error(sprint("unknown repair id %d", id));
+        }
+        auto it = status.find(id);
+        if (it == status.end()) {
+            return repair_status::SUCCESSFUL;
+        } else {
+            return it->second;
+        }
+    }
+} repair_tracker;
 
 // repair_start() can run on any cpu; It runs on cpu0 the function
 // do_repair_start(). The benefit of always running that function on the same
@@ -128,9 +164,9 @@ static std::atomic<int> next_repair_command {0};
 // Repair a single range. Comparable to RepairSession in Origin
 // In Origin, this is composed of several "repair jobs", each with one cf,
 // but our streaming already works for several cfs.
-static void repair_range(seastar::sharded<database>& db, sstring keyspace,
+static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
         query::range<dht::token> range, std::vector<sstring> cfs) {
-    auto sp = streaming::stream_plan("repair");
+    auto sp = make_lw_shared<streaming::stream_plan>("repair");
     auto id = utils::UUID_gen::get_time_UUID();
 
     auto neighbors = get_neighbors(db.local(), keyspace, range);
@@ -140,12 +176,15 @@ static void repair_range(seastar::sharded<database>& db, sstring keyspace,
         // request ranges from all of them and only later transfer ranges to
         // all of them? Otherwise, we won't necessarily fully repair the
         // other ndoes, just this one? What does Cassandra do here?
-        sp.transfer_ranges(peer, peer, keyspace, {range}, cfs);
-        sp.request_ranges(peer, peer, keyspace, {range}, cfs);
-        sp.execute().discard_result().handle_exception([id] (auto ep) {
-            logger.error("repair session #{} stream failed: {}", id, ep);
-        });
+        sp->transfer_ranges(peer, peer, keyspace, {range}, cfs);
+        sp->request_ranges(peer, peer, keyspace, {range}, cfs);
     }
+    return sp->execute().discard_result().then([sp, id] {
+        logger.info("repair session #{} successful", id);
+    }).handle_exception([id] (auto ep) {
+        logger.error("repair session #{} stream failed: {}", id, ep);
+        return make_exception_future(std::runtime_error("repair_range failed"));
+    });
 }
 
 static std::vector<query::range<dht::token>> get_ranges_for_endpoint(
@@ -161,9 +200,11 @@ static std::vector<query::range<dht::token>> get_local_ranges(
 
 
 static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options) {
+        std::unordered_map<sstring, sstring> options, int id) {
 
     logger.info("starting user-requested repair for keyspace {}", keyspace);
+
+    repair_tracker.start(id);
 
     // If the "ranges" option is not explicitly specified, we repair all the
     // local ranges (the token ranges for which this node holds a replica of).
@@ -192,16 +233,47 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // FIXME: let the cfs be overriden by an option
     std::vector<sstring> cfs = list_column_families(db.local(), keyspace);
 
+#if 1
+    // repair all the ranges in parallel
+    auto done = make_lw_shared<semaphore>(0);
+    auto success = make_lw_shared<bool>(true);
     for (auto range : ranges) {
-        repair_range(db, keyspace, range, cfs);
+        repair_range(db, keyspace, range, cfs).
+                handle_exception([success] (std::exception_ptr eptr)
+                        { *success = false; }).
+                finally([done] { done->signal(); });
     }
+    done->wait(ranges.size()).then([done, id, success] {
+        logger.info("repair {} complete, success={}", id, success);
+        repair_tracker.done(id, *success);
+    });
+#else
+    // repair all the ranges in sequence
+    do_with(std::move(ranges), [&db, keyspace, cfs, id] (auto& ranges) {
+        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, cfs, id] (auto&& range) {
+            return repair_range(db, keyspace, range, cfs);
+        }).then([id] {
+            logger.info("repair {} completed sucessfully", id);
+            repair_tracker.done(id, true);
+        }).handle_exception([id] (std::exception_ptr eptr) {
+            logger.info("repair {} failed", id);
+            repair_tracker.done(id, false);
+        });
+    });
+#endif
 }
 
 int repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options) {
     int i = next_repair_command++;
-    db.invoke_on(0, [&db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
-        do_repair_start(db, std::move(keyspace), std::move(options));
+    db.invoke_on(0, [i, &db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
+        do_repair_start(db, std::move(keyspace), std::move(options), i);
     }); // Note we ignore the value of this future
     return i;
+}
+
+future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {
+    return db.invoke_on(0, [id] (database& localdb) {
+        return repair_tracker.get(id);
+    });
 }

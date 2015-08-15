@@ -229,10 +229,30 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = req->param["keyspace"];
+        // FIXME: the "id" and "options" parameters are mutually exclusive,
+        // and lead to different operations. It would have made sense to make
+        // these separate requests (with a different method and/or url).
         auto options = req->get_query_param("options");
-        // FIXME: "id" is only needed in a request for information about
-        // a previously-started repare. In that case, "options" is not needed.
         auto id = req->get_query_param("id");
+
+        if (!id.empty()) {
+            return repair_get_status(ctx.db, boost::lexical_cast<int>(id))
+                    .then_wrapped([] (future<repair_status>&& fut) {
+                        try {
+                            repair_status s = fut.get0();
+                            sstring ret;
+                            switch(s) {
+                            case repair_status::RUNNING: ret="RUNNING"; break;
+                            case repair_status::SUCCESSFUL: ret="SUCCESSFUL"; break;
+                            case repair_status::FAILED: ret="FAILED"; break;
+                            }
+                            return make_ready_future<json::json_return_type>(ret);
+                        } catch(std::runtime_error& e) {
+                            throw httpd::bad_param_exception(e.what());
+                        }
+                    });
+        }
+
         // Currently, we get all the repair options encoded in a single
         // "options" option, and split it to a map using the "," and ":"
         // delimiters. TODO: consider if it doesn't make more sense to just

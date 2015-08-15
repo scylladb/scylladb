@@ -27,3 +27,11 @@ public:
 // operation.
 int repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options);
+
+// TODO: Have repair_progress contains a percentage progress estimator
+// instead of just "RUNNING".
+enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
+
+// repair_get_status() returns a future because it needs to run code on a
+// different CPU (cpu 0) and that might be a deferring operation.
+future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
