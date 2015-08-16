@@ -195,7 +195,7 @@ cql_server::setup_collectd() {
         scollectd::add_polled_metric(
             scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
                     "current_connections", "current"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, _connects)),
+            scollectd::make_typed(scollectd::data_type::GAUGE, _connections)),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
                     "total_requests", "requests_served"),
