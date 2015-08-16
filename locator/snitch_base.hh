@@ -233,7 +233,7 @@ future<> i_endpoint_snitch::init_snitch_obj(
                 s->set_my_distributed(&snitch_obj);
                 local_inst = std::move(s);
             } catch (no_such_class& e) {
-                snitch_logger.error("{}", e.what());
+                snitch_logger.error("Can't create snitch {}: not supported", snitch_name);
                 throw;
             } catch (...) {
                 throw;
