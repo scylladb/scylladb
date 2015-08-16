@@ -183,13 +183,13 @@ public:
             , "die", "stop_paranoid", "stop", "best_effort", "ignore"   \
     )   \
     val(endpoint_snitch, sstring, "org.apache.cassandra.locator.SimpleSnitch", Used,  \
-            "Set to a class that implements the IEndpointSnitch. Cassandra uses snitches for locating nodes and routing requests.\n"    \
-            "\tSimpleSnitch                 Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n"    \
-            "\tGossipingPropertyFileSnitch  Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n"    \
-            "\tPropertyFileSnitch           Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n"    \
-            "\tEc2Snitch                    For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n"    \
-            "\tEc2MultiRegionSnitch         Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Cassandra switches to the private IP after establishing a connection.\n"    \
-            "\tRackInferringSnitch          Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n" \
+            "Set to a class that implements the IEndpointSnitch. Cassandra uses snitches for locating nodes and routing requests.\n\n"    \
+            "\tSimpleSnitch: Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n\n"    \
+            "\tGossipingPropertyFileSnitch: Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n\n"    \
+            /*"\tPropertyFileSnitch: Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n\n"    */\
+            /*"\tEc2Snitch: For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n\n"    */\
+            /*"\tEc2MultiRegionSnitch: Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Cassandra switches to the private IP after establishing a connection.\n\n"    */\
+            "\tRackInferringSnitch: Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n" \
             "\n"    \
             "Related information: Snitches\n"    \
     )                                                   \
