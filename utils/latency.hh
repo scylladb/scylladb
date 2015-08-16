@@ -22,6 +22,10 @@ public:
         _start = now();
     }
 
+    bool is_start() const {
+        // if start is not set it is still zero
+        return _start.time_since_epoch().count();
+    }
     latency_counter& stop() {
         _stop = now();
         return *this;

@@ -111,11 +111,11 @@ inline double pow2(double a) {
 
 inline httpd::utils_json::histogram add_histogram(httpd::utils_json::histogram res,
         const utils::ihistogram& val) {
-    if (val.count == 0) {
-        return res;
-    }
     if (!res.count._set) {
         res = val;
+        return res;
+    }
+    if (val.count == 0) {
         return res;
     }
     if (res.min() > val.min) {
