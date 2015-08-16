@@ -4,6 +4,7 @@
 
 #include "cache_service.hh"
 #include "api/api-doc/cache_service.json.hh"
+#include "column_family.hh"
 
 namespace api {
 using namespace json;
@@ -139,34 +140,43 @@ void set_cache_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cs::get_row_capacity.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_capacity.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().get_cache_tracker().region().occupancy().used_space();
+        }, std::plus<uint64_t>());
     });
 
-    cs::get_row_hits.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_hits.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().hits;
+        }, std::plus<int64_t>());
     });
 
-    cs::get_row_requests.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_requests.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().hits + cf.get_row_cache().stats().misses;
+        }, std::plus<int64_t>());
     });
 
-    cs::get_row_hit_rate.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_hit_rate.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, ratio_holder(), [](const column_family& cf) {
+            return ratio_holder(cf.get_row_cache().stats().hits + cf.get_row_cache().stats().misses,
+                    cf.get_row_cache().stats().hits);
+        }, std::plus<ratio_holder>());
     });
 
-    cs::get_row_size.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        // In origin row size is the weighted size.
+        // We currently do not support weights, so we use num entries instead
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().num_entries();
+        }, std::plus<uint64_t>());
     });
 
-    cs::get_row_entries.set(r, [] (std::unique_ptr<request> req) {
-        // TBD
-        return make_ready_future<json::json_return_type>(0);
+    cs::get_row_entries.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().num_entries();
+        }, std::plus<uint64_t>());
     });
 
     cs::get_counter_capacity.set(r, [] (std::unique_ptr<request> req) {
