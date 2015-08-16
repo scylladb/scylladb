@@ -75,8 +75,8 @@ using segment_heap = boost::heap::binomial_heap<
     segment*, boost::heap::compare<segment_occupancy_descending_less_compare>>;
 
 struct segment {
-    using size_type = uint16_t;
-    static constexpr int size_shift = 15; // 32K
+    static constexpr int size_shift = 18; // 256K; see #151, #152
+    using size_type = std::conditional_t<(size_shift < 16), uint16_t, uint32_t>;
     static constexpr size_t size = 1 << size_shift;
 
     uint8_t data[size];
