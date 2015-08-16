@@ -42,13 +42,11 @@ struct streaming_histogram {
     // maximum bin size for this histogram
     uint32_t max_bin_size;
 
-    streaming_histogram() {}
-
     /**
      * Creates a new histogram with max bin size of maxBinSize
      * @param maxBinSize maximum number of bins this histogram can have
      */
-    streaming_histogram(int max_bin_size_p) {
+    streaming_histogram(int max_bin_size_p = 0) {
         max_bin_size = max_bin_size_p;
     }
 

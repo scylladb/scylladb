@@ -45,6 +45,26 @@
                "description":"A sample containing the last n elements"
             }
          }
+      },
+      "estimated_histogram":{
+         "id":"estimated_histogram",
+         "description":"An estimated histogram values",
+         "properties":{
+            "buckets":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"The histogram buckets"
+            },
+            "bucket_offsets":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"The series of values to which the counts in `buckets` correspond"
+            }
+         }
       }
    }
 }

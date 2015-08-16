@@ -143,15 +143,16 @@ struct column_stats {
 
     bool has_legacy_counter_shards;
 
-    column_stats() {
-        column_count = 0;
-        start_offset = 0;
-        row_size = 0;
-        min_timestamp = min_long_tracker(std::numeric_limits<uint64_t>::min());
-        max_timestamp = max_long_tracker(std::numeric_limits<uint64_t>::max());
-        max_local_deletion_time = max_int_tracker(std::numeric_limits<int>::max());
-        tombstone_histogram = streaming_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
-        has_legacy_counter_shards = false;
+    column_stats() :
+        column_count(0),
+        start_offset(0),
+        row_size(0),
+        min_timestamp(min_long_tracker(std::numeric_limits<uint64_t>::min())),
+        max_timestamp(max_long_tracker(std::numeric_limits<uint64_t>::max())),
+        max_local_deletion_time(max_int_tracker(std::numeric_limits<int>::max())),
+        tombstone_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE),
+        has_legacy_counter_shards(false)
+        {
     }
 
     void reset() {
@@ -174,20 +175,6 @@ class metadata_collector {
 public:
     static constexpr double NO_COMPRESSION_RATIO = -1.0;
 
-    static estimated_histogram default_column_count_histogram() {
-        // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
-        return estimated_histogram(114);
-    }
-
-    static estimated_histogram default_row_size_histogram() {
-        // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
-        return estimated_histogram(150);
-    }
-
-    static streaming_histogram default_tombstone_drop_time_histogram() {
-        return streaming_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
-    }
-
     static replay_position replay_position_none() {
         // Cassandra says the following about replay position none:
         // NONE is used for SSTables that are streamed from other nodes and thus have no relationship
@@ -202,8 +189,10 @@ public:
         return hll::HyperLogLog();
     }
 private:
-    estimated_histogram _estimated_row_size = default_row_size_histogram();
-    estimated_histogram _estimated_column_count = default_column_count_histogram();
+    // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
+    estimated_histogram _estimated_row_size{150};
+    // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
+    estimated_histogram _estimated_column_count{114};
     replay_position _replay_position = replay_position_none();
     uint64_t _min_timestamp = std::numeric_limits<uint64_t>::max();
     uint64_t _max_timestamp = std::numeric_limits<uint64_t>::min();
@@ -211,7 +200,7 @@ private:
     int _max_local_deletion_time = std::numeric_limits<int>::min();
     double _compression_ratio = NO_COMPRESSION_RATIO;
     std::set<int> _ancestors;
-    streaming_histogram _estimated_tombstone_drop_time = default_tombstone_drop_time_histogram();
+    streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
     std::vector<bytes> _min_column_names;
     std::vector<bytes> _max_column_names;

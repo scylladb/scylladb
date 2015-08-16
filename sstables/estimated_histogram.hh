@@ -43,20 +43,17 @@ struct estimated_histogram {
      *
      * Each bucket represents values from (previous bucket offset, current offset].
      */
-    std::vector<uint64_t> bucket_offsets;
+    std::vector<int64_t> bucket_offsets;
 
     // buckets is one element longer than bucketOffsets -- the last element is values greater than the last offset
-    std::vector<uint64_t> buckets;
+    std::vector<int64_t> buckets;
 
-    estimated_histogram() {
-        estimated_histogram(90);
-    }
+    estimated_histogram(int bucket_count = 90) {
 
-    estimated_histogram(int bucket_count) {
         new_offsets(bucket_count);
-        buckets.resize(bucket_offsets.size() + 1);
-        std::fill(buckets.begin(), buckets.end(), 0);
+        buckets.resize(bucket_offsets.size() + 1, 0);
     }
+
     // FIXME: convert Java code below.
 #if 0
     public EstimatedHistogram(long[] offsets, long[] bucketData)
@@ -69,10 +66,13 @@ struct estimated_histogram {
 private:
     void new_offsets(int size) {
         bucket_offsets.resize(size);
-        uint64_t last = 1;
+        if (size == 0) {
+            return;
+        }
+        int64_t last = 1;
         bucket_offsets[0] = last;
         for (int i = 1; i < size; i++) {
-            uint64_t next = round(last * 1.2);
+            int64_t next = round(last * 1.2);
             if (next == last) {
                 next++;
             }
@@ -84,16 +84,25 @@ public:
     /**
      * @return the histogram values corresponding to each bucket index
      */
-    std::vector<uint64_t>& get_bucket_offsets()
-    {
+    const std::vector<int64_t>& get_bucket_offsets() const {
         return bucket_offsets;
     }
 
     /**
+     * @return the histogram buckets
+     */
+    const std::vector<int64_t>& get_buckets() const {
+        return buckets;
+    }
+
+    void clear() {
+        buckets.resize(buckets.size(), 0);
+    }
+    /**
      * Increments the count of the bucket closest to n, rounding UP.
      * @param n
      */
-    void add(uint64_t n) {
+    void add(int64_t n) {
         auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
         if (low == bucket_offsets.end()) {
             low--;
@@ -101,6 +110,53 @@ public:
         auto pos = low - bucket_offsets.begin();
         buckets.at(pos)++;
     }
+
+    /**
+     * @return the smallest value that could have been added to this histogram
+     */
+    int64_t min() const {
+        size_t i = 0;
+        for (auto b : buckets) {
+            if (b > 0) {
+                return i == 0 ? 0 : 1 + bucket_offsets[i - 1];
+            }
+            i++;
+        }
+        return 0;
+    }
+
+      /**
+       * @return the largest value that could have been added to this histogram.  If the histogram
+       * overflowed, returns INT64_MAX.
+       */
+      int64_t max() const {
+          int lastBucket = buckets.size() - 1;
+          if (buckets[lastBucket] > 0) {
+              return INT64_MAX;
+          }
+          for (int i = lastBucket - 1; i >= 0; i--) {
+              if (buckets[i] > 0)
+                  return bucket_offsets[i];
+          }
+          return 0;
+      }
+
+      /**
+       * merge a histogram to the current one.
+       */
+      estimated_histogram& merge(const estimated_histogram& b) {
+          if (bucket_offsets.size() < b.bucket_offsets.size()) {
+              new_offsets(b.bucket_offsets.size());
+              buckets.resize(b.bucket_offsets.size() + 1, 0);
+          }
+          size_t i = 0;
+          for (auto p: b.buckets) {
+              buckets[i++] += p;
+          }
+          return *this;
+      }
+
+      friend estimated_histogram merge(estimated_histogram a, const estimated_histogram& b);
 
     // FIXME: convert Java code below.
 #if 0
@@ -355,5 +411,9 @@ public:
     }
 #endif
 };
+
+inline estimated_histogram merge(estimated_histogram a, const estimated_histogram& b) {
+    return a.merge(b);
+}
 
 }
