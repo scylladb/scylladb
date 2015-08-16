@@ -158,4 +158,37 @@ inline int64_t min_int64(int64_t a, int64_t b) {
 inline int64_t max_int64(int64_t a, int64_t b) {
     return std::max(a,b);
 }
+
+/**
+ * A helper struct for ratio calculation
+ * It combine total and the sub set for the ratio and its
+ * to_json method return the ration sub/total
+ */
+struct ratio_holder : public json::jsonable {
+    double total = 0;
+    double sub = 0;
+    virtual std::string to_json() const {
+        if (total == 0) {
+            return "0";
+        }
+        return std::to_string(sub/total);
+    }
+    ratio_holder() = default;
+    ratio_holder& add(double _total, double _sub) {
+        total += _total;
+        sub += _sub;
+        return *this;
+    }
+    ratio_holder(double _total, double _sub) {
+        total = _total;
+        sub = _sub;
+    }
+    ratio_holder& operator+=(const ratio_holder& a) {
+        return add(a.total, a.sub);
+    }
+    friend ratio_holder operator+(ratio_holder a, const ratio_holder& b) {
+        return a += b;
+    }
+};
+
 }
