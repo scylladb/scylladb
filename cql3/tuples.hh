@@ -227,8 +227,10 @@ public:
     public:
         in_value(std::vector<std::vector<bytes_opt>> items) : _elements(items) { }
         in_value(std::vector<std::vector<bytes_view_opt>> items) {
+            _elements.reserve(items.size());
             for (auto&& tuple : items) {
                 std::vector<bytes_opt> elems;
+                elems.reserve(tuple.size());
                 for (auto&& e : tuple) {
                     elems.emplace_back(e ? bytes_opt(bytes(e->begin(), e->end())) : bytes_opt());
                 }
