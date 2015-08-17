@@ -46,6 +46,7 @@ private:
     long total_size;
 public:
     using UUID = utils::UUID;
+    stream_transfer_task(stream_transfer_task&&) = default;
     stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id);
     ~stream_transfer_task();
 
@@ -86,14 +87,16 @@ public:
         return files;
     }
 
-    messages::outgoing_file_message create_message_for_retry(int sequence_number) {
+    messages::outgoing_file_message& create_message_for_retry(int sequence_number) {
 #if 0
         // remove previous time out task to be rescheduled later
         ScheduledFuture future = timeoutTasks.remove(sequenceNumber);
         if (future != null)
             future.cancel(false);
 #endif
-        return files[sequence_number];
+        auto it = files.find(sequence_number);
+        assert(it != files.end());
+        return it->second;
     }
 
 #if 0
