@@ -193,7 +193,7 @@ sets::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {
-    auto value = options.get_values().at(_bind_index);
+    auto value = options.get_value_at(_bind_index);
     if (!value) {
         return nullptr;
     } else {

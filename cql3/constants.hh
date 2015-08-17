@@ -154,7 +154,7 @@ public:
 
         virtual bytes_opt bind_and_get(const query_options& options) override {
             try {
-                auto value = options.get_values().at(_bind_index);
+                auto value = options.get_value_at(_bind_index);
                 if (value) {
                     _receiver->type->validate(value.value());
                 }

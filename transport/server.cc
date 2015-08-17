@@ -517,7 +517,7 @@ future<> cql_server::connection::process_execute(uint16_t stream, temporary_buff
     auto& options = *q_state.options;
     options.prepare(prepared->bound_names);
     auto stmt = prepared->statement;
-    if (stmt->get_bound_terms() != options.get_values().size()) {
+    if (stmt->get_bound_terms() != options.get_values_count()) {
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
     return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream] (auto msg) {
