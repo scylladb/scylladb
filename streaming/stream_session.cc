@@ -88,6 +88,24 @@ void stream_session::init_messaging_service_handler() {
             }
         });
     });
+    ms().register_prepare_done_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [plan_id, from, connecting] () mutable {
+            sslog.debug("GOT PREPARE_DONE_MESSAGE: plan_id={}, from={}, connecting={}", plan_id, from, connecting);
+            auto f = get_stream_result_future(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                session->follower_start_sent();
+                return make_ready_future<>();
+            } else {
+                auto err = sprint("PREPARE_DONE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
+        });
+    });
     ms().register_stream_mutation([] (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
             if (sslog.is_enabled(logging::log_level::debug)) {
@@ -291,6 +309,11 @@ future<> stream_session::on_initialization_complete() {
             throw;
         }
         return make_ready_future<>();
+    }).then([this, id, from] {
+        sslog.debug("SEND PREPARE_DONE_MESSAGE to {}", id);
+        return ms().send_prepare_done_message(id, plan_id(), from, this->connecting, this->dst_cpu_id).handle_exception([id] (auto ep) {
+            sslog.error("Fail to send PREPARE_DONE_MESSAGE to {}, {}", id, ep);
+        });
     });
 }
 
@@ -351,12 +374,14 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
         }
     }
 
+    return make_ready_future<messages::prepare_message>(std::move(prepare));
+}
+
+void stream_session::follower_start_sent() {
     // if there are files to stream
     if (!maybe_completed()) {
-        start_streaming_files();
+        this->start_streaming_files();
     }
-
-    return make_ready_future<messages::prepare_message>(std::move(prepare));
 }
 
 void stream_session::file_sent(const messages::file_message_header& header) {

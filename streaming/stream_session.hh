@@ -320,6 +320,8 @@ public:
      */
     future<messages::prepare_message> prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
+    void follower_start_sent();
+
     /**
      * Call back after sending FileMessageHeader.
      *
