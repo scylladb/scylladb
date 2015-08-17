@@ -1374,3 +1374,34 @@ SEASTAR_TEST_CASE(datafile_generation_40) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_41) {
+    return test_setup::do_with_test_directory([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+        mutation m(key, s);
+
+        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        m.partition().apply_delete(*s, std::move(c_key), tomb);
+        mt->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("ks", "cf", "tests/sstables/tests-temporary", 41, la, big);
+        return sst->write_components(*mt).then([s, tomb] {
+            return reusable_sst("tests/sstables/tests-temporary", 41).then([s, tomb] (auto sstp) mutable {
+                return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
+                        auto& mp = mutation->partition();
+                        BOOST_REQUIRE(mp.clustered_rows().size() == 1);
+                        auto c_row = *(mp.clustered_rows().begin());
+                        BOOST_REQUIRE(c_row.row().deleted_at() == tomb);
+                    });
+                });
+            });
+        }).then([sst, mt] {});
+    });
+}

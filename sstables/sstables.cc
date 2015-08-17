@@ -1044,8 +1044,10 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
     if (schema.is_compound() && !schema.is_dense()) {
         write_row_marker(out, clustered_row, clustering_key);
     }
-    // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
-    assert(!clustered_row.row().deleted_at());
+    // Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
+    if (clustered_row.row().deleted_at()) {
+        write_range_tombstone(out, clustering_key, {}, clustered_row.row().deleted_at());
+    }
 
     // Write all cells of a partition's row.
     for (auto& value: clustered_row.row().cells()) {
