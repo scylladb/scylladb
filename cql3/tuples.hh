@@ -225,7 +225,7 @@ public:
     private:
         std::vector<std::vector<bytes_opt>> _elements;
     public:
-        in_value(std::vector<std::vector<bytes_opt>> items) : _elements(items) { }
+        in_value(std::vector<std::vector<bytes_opt>> items) : _elements(std::move(items)) { }
         in_value(std::vector<std::vector<bytes_view_opt>> items) {
             _elements.reserve(items.size());
             for (auto&& tuple : items) {
