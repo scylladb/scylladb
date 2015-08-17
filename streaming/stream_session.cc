@@ -473,13 +473,13 @@ bool stream_session::maybe_completed() {
                 });
             }
             close_session(stream_session_state::COMPLETE);
-            sslog.debug("session complete");
+            sslog.debug("[Stream #{}] WAIT_COMPLETE -> COMPLETE", plan_id());
         } else {
             // notify peer that this session is completed
             send_complete_message().then([this] {
                 _complete_sent = true;
                 set_state(stream_session_state::WAIT_COMPLETE);
-                sslog.debug("session wait complete");
+                sslog.debug("[Stream #{}] {} -> WAIT_COMPLETE", plan_id(), int(_state));
             });
         }
     }
