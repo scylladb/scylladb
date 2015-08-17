@@ -1913,7 +1913,10 @@ tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
 }
 
 tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
-        : tuple_type_impl(make_name(types), std::move(types)) {
+        : abstract_type(make_name(types)), _types(std::move(types)) {
+    for (auto& t : _types) {
+        t = t->freeze();
+    }
 }
 
 shared_ptr<tuple_type_impl>
