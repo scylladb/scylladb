@@ -390,6 +390,10 @@ public:
         return _commitlog.get();
     }
 
+    const compaction_manager& get_compaction_manager() const {
+        return _compaction_manager;
+    }
+
     future<> init_system_keyspace();
     future<> load_sstables(distributed<service::storage_proxy>& p); // after init_system_keyspace()
 
