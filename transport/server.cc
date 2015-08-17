@@ -1201,6 +1201,15 @@ public:
         if (type->is_reversed()) {
             fail(unimplemented::cause::REVERSED);
         }
+        if (type->is_tuple()) {
+            r.write_short(uint16_t(type_id::TUPLE));
+            auto ttype = static_pointer_cast<const tuple_type_impl>(type);
+            r.write_short(ttype->size());
+            for (auto&& t : ttype->all_types()) {
+                encode(r, t);
+            }
+            return;
+        }
         if (type->is_collection()) {
             auto&& ctype = static_cast<const collection_type_impl*>(type.get());
             if (&ctype->_kind == &collection_type_impl::kind::map) {
