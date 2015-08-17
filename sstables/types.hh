@@ -13,6 +13,7 @@
 #include "estimated_histogram.hh"
 #include "column_name_helper.hh"
 #include "sstables/key.hh"
+#include "db/commitlog/replay_position.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -108,21 +109,6 @@ struct summary_ka {
 };
 using summary = summary_ka;
 
-struct replay_position {
-    uint64_t segment;
-    uint32_t position;
-
-    replay_position() {}
-
-    replay_position(uint64_t seg, uint32_t pos) {
-        segment = seg;
-        position = pos;
-    }
-
-    template <typename Describer>
-    auto describe_type(Describer f) { return f(segment, position); }
-};
-
 struct metadata {
     virtual ~metadata() {}
 };
@@ -155,7 +141,7 @@ struct compaction_metadata : public metadata {
 struct ka_stats_metadata : public metadata {
     estimated_histogram estimated_row_size;
     estimated_histogram estimated_column_count;
-    replay_position position;
+    db::replay_position position;
     uint64_t min_timestamp;
     uint64_t max_timestamp;
     uint32_t max_local_deletion_time;
