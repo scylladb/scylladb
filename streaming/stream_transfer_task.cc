@@ -111,7 +111,7 @@ void stream_transfer_task::complete(int sequence_number) {
             try {
                 f.get();
                 sslog.debug("GOT STREAM_MUTATION_DONE Reply");
-                session->task_completed(*this);
+                session->transfer_task_completed(this->cf_id);
             } catch (...) {
                 sslog.error("stream_transfer_task: Fail to send REAM_MUTATION_DON to {}: {}", id, std::current_exception());
                 session->on_error();

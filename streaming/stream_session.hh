@@ -375,10 +375,7 @@ public:
     session_info get_session_info();
 
     void receive_task_completed(UUID cf_id);
-
-    void task_completed(stream_receive_task& completed_task);
-
-    void task_completed(stream_transfer_task& completed_task);
+    void transfer_task_completed(UUID cf_id);
 
 public:
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}

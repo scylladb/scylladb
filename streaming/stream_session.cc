@@ -437,17 +437,13 @@ session_info stream_session::get_session_info() {
 
 void stream_session::receive_task_completed(UUID cf_id) {
     _receivers.erase(cf_id);
-    sslog.debug("receive_task_completed: cf_id={} done, {} {}", cf_id, _receivers.size(), _transfers.size());
+    sslog.debug("receive  task_completed: cf_id={} done, receivers.size={} transfers.size={}", cf_id, _receivers.size(), _transfers.size());
     maybe_completed();
 }
 
-void stream_session::task_completed(stream_receive_task& completed_task) {
-    _receivers.erase(completed_task.cf_id);
-    maybe_completed();
-}
-
-void stream_session::task_completed(stream_transfer_task& completed_task) {
-    _transfers.erase(completed_task.cf_id);
+void stream_session::transfer_task_completed(UUID cf_id) {
+    _transfers.erase(cf_id);
+    sslog.debug("transfer task_completed: cf_id={} done, receivers.size={} transfers.size={}", cf_id, _receivers.size(), _transfers.size());
     maybe_completed();
 }
 
