@@ -267,9 +267,7 @@ public:
 
         virtual sstring to_string() const override {
             std::vector<sstring> tuples(_elements.size());
-            std::transform(_elements.begin(), _elements.end(), tuples.begin(), [] (auto&& e) {
-                return tuple_to_string(e);
-            });
+            std::transform(_elements.begin(), _elements.end(), tuples.begin(), &tuples::tuple_to_string<bytes_opt>);
             return tuple_to_string(tuples);
         }
     };
