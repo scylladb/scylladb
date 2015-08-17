@@ -394,12 +394,6 @@ static bool always_include_default() {
     return def;
 };
 
-static sstring collection_name(const collection_type& t) {
-    sstring collection_str(_collection_str);
-    collection_str += "(00000000:" + t->name() + ")";
-    return collection_str;
-}
-
 static sstring compound_name(const schema& s) {
     sstring compound(_composite_str);
 
@@ -414,12 +408,16 @@ static sstring compound_name(const schema& s) {
     }
 
     if (s.has_collections()) {
+        compound += _collection_str;
+        compound += "(";
         for (auto& t: s.regular_columns()) {
             if (t.type->is_collection()) {
                 auto ct = static_pointer_cast<const collection_type_impl>(t.type);
-                compound += collection_name(ct) + ",";
+                compound += "00000000:" + ct->name() + ",";
             }
         }
+        compound.back() = ')';
+        compound += ",";
     }
     // last one will be a ',', just replace it.
     compound.back() = ')';
