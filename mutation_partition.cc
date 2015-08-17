@@ -489,6 +489,7 @@ mutation_partition::compact_for_query(
     uint32_t row_limit)
 {
     assert(row_limit > 0);
+    bool stop = false;
 
     // FIXME: drop GC'able tombstones
 
@@ -499,7 +500,7 @@ mutation_partition::compact_for_query(
 
     auto last = _rows.begin();
     for (auto&& row_range : row_ranges) {
-        if (row_count == row_limit) {
+        if (stop) {
             break;
         }
 
@@ -517,14 +518,18 @@ mutation_partition::compact_for_query(
 
             is_live |= row.marker().compact_and_expire(tomb, query_time);
 
-            ++last;
-
+            // when row_limit is reached, do not exit immediately,
+            // iterate to the next live_row instead to include trailing
+            // tombstones in the mutation. This is how Origin deals with
+            // https://issues.apache.org/jira/browse/CASSANDRA-8933
             if (is_live) {
-                ++row_count;
                 if (row_count == row_limit) {
+                    stop = true;
                     break;
                 }
+                ++row_count;
             }
+            ++last;
         }
     }
 
