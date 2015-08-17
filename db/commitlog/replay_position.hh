@@ -28,7 +28,7 @@
 namespace db {
 
 using segment_id_type = uint64_t;
-using position_type = uint64_t;
+using position_type = uint32_t;
 
 struct replay_position {
     segment_id_type id;
@@ -44,6 +44,9 @@ struct replay_position {
     bool operator==(const replay_position & r) const {
         return id == r.id && pos == r.pos;
     }
+
+    template <typename Describer>
+    auto describe_type(Describer f) { return f(id, pos); }
 };
 
 std::ostream& operator<<(std::ostream& out, const replay_position& s);
