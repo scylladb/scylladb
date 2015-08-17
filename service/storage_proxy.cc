@@ -1311,6 +1311,7 @@ class data_read_resolver : public abstract_read_resolver {
         version(gms::inet_address from_, partition par_) : from(std::move(from_)), par(std::move(par_)) {}
     };
 
+    uint32_t _max_live_count = 0;
     std::vector<reply> _data_results;
 private:
     virtual void on_timeout() override {
@@ -1327,11 +1328,15 @@ public:
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
         if (!_timedout) {
+            _max_live_count = std::max(result->row_count(), _max_live_count);
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
                 _done_promise.set_value();
             }
         }
+    }
+    uint32_t max_live_count() const {
+        return _max_live_count;
     }
     reconcilable_result resolve(schema_ptr schema) {
         assert(_data_results.size());
@@ -1402,6 +1407,7 @@ protected:
     using data_resolver_ptr = ::shared_ptr<data_read_resolver>;
 
     lw_shared_ptr<query::read_command> _cmd;
+    lw_shared_ptr<query::read_command> _retry_cmd;
     query::partition_range _partition_range;
     db::consistency_level _cl;
     size_t _block_for;
@@ -1415,12 +1421,12 @@ public:
     virtual ~abstract_read_executor() {};
 
 protected:
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(gms::inet_address ep) {
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
         if (is_me(ep)) {
-            return get_local_storage_proxy().query_mutations_locally(_cmd, _partition_range);
+            return get_local_storage_proxy().query_mutations_locally(cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_mutation_data(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](reconcilable_result&& result) {
+            return ms.send_read_mutation_data(net::messaging_service::shard_id{ep, 0}, *cmd, _partition_range).then([this](reconcilable_result&& result) {
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
         }
@@ -1443,9 +1449,9 @@ protected:
             return ms.send_read_digest(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
         }
     }
-    future<> make_mutation_data_requests(data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
-        return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_mutation_data_request(ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+    future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
+        return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver)] (gms::inet_address ep) {
+            return make_mutation_data_request(cmd, ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
                 try {
                     resolver->add_mutate_data(ep, f.get0());
                 } catch(...) {
@@ -1480,24 +1486,45 @@ protected:
         return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
                         _targets.size() > 1 ? make_digest_requests(resolver, _targets.begin() + 1, _targets.end()) : make_ready_future()).discard_result();
     }
-    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
+    uint32_t original_row_limit() const {
+        return _cmd->row_limit;
+    }
+    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        make_mutation_data_requests(data_resolver, _targets.begin(), _targets.end()).finally([exec]{});
+        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end()).finally([exec]{});
 
-        data_resolver->done().then_wrapped([exec, data_resolver] (future<> f) {
+        data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
             try {
                 f.get();
-                schema_ptr s = get_local_storage_proxy()._db.local().find_schema(exec->_cmd->cf_id);
+                schema_ptr s = get_local_storage_proxy()._db.local().find_schema(_cmd->cf_id);
                 auto rr = data_resolver->resolve(s); // reconciliation happens here
-                auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), exec->_cmd->slice)));
-                exec->_result_promise.set_value(std::move(result));
+
+                // We generate a retry if at least one node reply with count live columns but after merge we have less
+                // than the total number of column we are interested in (which may be < count on a retry).
+                // So in particular, if no host returned count live columns, we know it's not a short read.
+                if (data_resolver->max_live_count() < cmd->row_limit || rr.row_count() >= original_row_limit()) {
+                    auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), _cmd->slice)));
+                    _result_promise.set_value(std::move(result));
+                } else {
+                    _retry_cmd = make_lw_shared<query::read_command>(*cmd);
+                    // We asked t (= _cmd->row_limit) live columns and got l (=rr.row_count) ones.
+                    // From that, we can estimate that on this row, for x requested
+                    // columns, only l/t end up live after reconciliation. So for next
+                    // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
+                    _retry_cmd->row_limit = rr.row_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / rr.row_count()) + 1;
+                    reconciliate(cl, timeout, _retry_cmd);
+                }
             } catch(read_timeout_exception& ex) {
-                exec->_result_promise.set_exception(ex);
+                _result_promise.set_exception(ex);
             }
         });
     }
+    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
+        reconciliate(cl, timeout, _cmd);
+    }
+
 public:
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) {
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, _targets.size(), timeout);
