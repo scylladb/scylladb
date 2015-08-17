@@ -167,11 +167,19 @@ public:
     }
 
     future<> process(directory_entry de) {
-        if (de.type && de.type == directory_entry_type::regular) {
-            descriptor d(de.name);
-            _ids = std::max(_ids, d.id);
-        }
-        return make_ready_future<>();
+        auto entry_type = [this](const directory_entry & de) {
+            if (!de.type && !de.name.empty()) {
+                return engine().file_type(cfg.commit_log_location + "/" + de.name);
+            }
+            return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
+        };
+        return entry_type(de).then([de, this](auto type) {
+            if (type == directory_entry_type::regular) {
+                descriptor d(de.name);
+                _ids = std::max(_ids, d.id);
+            }
+            return make_ready_future<>();
+        });
     }
 
     future<> init();

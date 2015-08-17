@@ -69,15 +69,25 @@ static future<lw_shared_ptr<file_lister>> list_files(sstring path) {
     });
 }
 
+future<std::experimental::optional<directory_entry_type>> entry_type(const sstring & path, const directory_entry & de) {
+    if (!de.type && !de.name.empty()) {
+        return engine().file_type(path + "/" + de.name);
+    }
+    return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
+};
+
 static future<size_t> count_files(sstring path) {
-    return list_files(path).then([](auto l) {
-        size_t n = 0;
-        for (auto & de : l->contents()) {
-            if (de.type == directory_entry_type::regular) {
-                ++n;
-            }
-        }
-        return make_ready_future<size_t>(n);
+    return list_files(path).then([path](auto l) {
+        auto n = make_lw_shared<size_t>(0);
+        return parallel_for_each(l->contents(), [n, path](auto de) {
+           return entry_type(path, de).then([n](auto type) {
+              if (type == directory_entry_type::regular) {
+                  ++(*n);
+              }
+           });
+        }).then([n] {
+            return make_ready_future<size_t>(*n);
+        });
     });
 }
 
@@ -85,18 +95,20 @@ static future<size_t> count_files_with_size(sstring path) {
     return list_files(path).then([path](auto l) {
         auto n = make_lw_shared<size_t>(0);
         return parallel_for_each(l->contents().begin(), l->contents().end(), [n, path](directory_entry de) {
-            if (de.type == directory_entry_type::regular) {
-                return engine().open_file_dma(path + "/" + de.name, open_flags::ro).then([n](file f) {
-                    return do_with(std::move(f), [n] (auto& f) {
-                        return f.stat().then([n](struct stat s) {
-                            if (s.st_size > 0) {
-                                ++(*n);
-                            }
+            return entry_type(path, de).then([n, path, de](auto type) {
+                if (type == directory_entry_type::regular) {
+                    return engine().open_file_dma(path + "/" + de.name, open_flags::ro).then([n](file f) {
+                        return do_with(std::move(f), [n] (auto& f) {
+                            return f.stat().then([n](struct stat s) {
+                                if (s.st_size > 0) {
+                                    ++(*n);
+                                }
+                            });
                         });
                     });
-                });
-            }
-            return make_ready_future();
+                }
+                return make_ready_future();
+            });
         }).then([n]() {
            return make_ready_future<size_t>(*n);;
         });
