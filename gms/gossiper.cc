@@ -189,7 +189,7 @@ future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
                 f.get();
                 logger.trace("Got GossipDigestACK2 Reply");
             } catch (...) {
-                logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+                logger.warn("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
             }
             return make_ready_future<>();
         });
@@ -214,7 +214,7 @@ void gossiper::init_messaging_service_handler() {
             }
             get_local_failure_detector().force_conviction(from);
         }).handle_exception([] (auto ep) {
-            logger.error("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
+            logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
         return messaging_service::no_wait();
     });
@@ -233,7 +233,7 @@ void gossiper::init_messaging_service_handler() {
             gossiper.notify_failure_detector(remote_ep_state_map);
             return gossiper.apply_state_locally(remote_ep_state_map);
         }).handle_exception([] (auto ep) {
-            logger.error("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
+            logger.warn("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
         });
         return messaging_service::no_wait();
     });
@@ -388,7 +388,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
         try {
             f.get();
         } catch (...) {
-            logger.error("Fail to remove_endpoint={}: {}", endpoint, std::current_exception());
+            logger.warn("Fail to remove_endpoint={}: {}", endpoint, std::current_exception());
         }
     });
 }
@@ -980,7 +980,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
             logger.trace("Got EchoMessage Reply");
             *ok = true;
         } catch (...) {
-            logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
+            logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
         }
         return make_ready_future<>();
     }).get();
@@ -1022,7 +1022,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
         try {
             f.get();
         } catch (...) {
-            logger.error("Fail to mark_dead={}: {}", addr, std::current_exception());
+            logger.warn("Fail to mark_dead={}: {}", addr, std::current_exception());
         }
     });
 }
@@ -1320,7 +1320,7 @@ void gossiper::add_local_application_state(application_state state, versioned_va
         try {
             f.get();
         } catch (...) {
-            logger.error("Fail to apply application_state: {}", std::current_exception());
+            logger.warn("Fail to apply application_state: {}", std::current_exception());
         }
     });
 }
@@ -1347,7 +1347,7 @@ future<> gossiper::shutdown() {
                     f.get();
                     logger.trace("Got GossipShutdown Reply");
                 } catch (...) {
-                    logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+                    logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
                 }
             });
         }
@@ -1415,7 +1415,7 @@ bool gossiper::is_alive(inet_address ep) {
     if (eps) {
         return eps->is_alive();
     } else {
-        logger.error("unknown endpoint {}", ep);
+        logger.warn("unknown endpoint {}", ep);
         return false;
     }
 }
