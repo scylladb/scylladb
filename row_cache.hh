@@ -96,6 +96,7 @@ public:
     void insert(cache_entry&);
     allocation_strategy& allocator();
     logalloc::region& region();
+    const logalloc::region& region() const;
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -149,4 +150,10 @@ public:
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
     future<> update(memtable&, negative_mutation_reader underlying_negative);
+    auto num_entries() const {
+        return _partitions.size();
+    }
+    const cache_tracker& get_cache_tracker() const {
+        return _tracker;
+    }
 };
