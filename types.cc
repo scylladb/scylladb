@@ -2053,7 +2053,7 @@ tuple_type_impl::as_cql3_type() const {
 
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
-    return sprint("tuple<%s>", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
+    return sprint("org.apache.cassandra.db.marshal.TupleType(%s)", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
 sstring
