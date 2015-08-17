@@ -10,9 +10,11 @@
 #include "core/gate.hh"
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
-#include <queue>
+#include <deque>
 #include <vector>
 #include <functional>
+
+class column_family;
 
 // Compaction manager is a feature used to manage compaction jobs from multiple
 // column families pertaining to the same database.
@@ -30,15 +32,15 @@ private:
         semaphore compaction_sem = semaphore(0);
         seastar::gate compaction_gate;
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
-        // Compaction job being currently executed.
-        std::function<future<> ()> current_compaction_job;
+        // CF being currently compacted.
+        column_family* compacting_cf = nullptr;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::vector<lw_shared_ptr<task>> _tasks;
 
-    // Job queue shared among all tasks.
-    std::queue<std::function<future<> ()>> _compaction_jobs;
+    // Queue shared among all tasks containing all column families to be compacted.
+    std::deque<column_family*> _cfs_to_compact;
 
     // Used to assert that compaction_manager was explicitly stopped, if started.
     bool _stopped = true;
@@ -59,8 +61,12 @@ public:
     // Stop all fibers. Ongoing compactions will be waited.
     future<> stop();
 
-    // Submit compaction job to a fiber with the lowest amount of pending jobs.
-    void submit(std::function<future<> ()> compaction_job);
+    // Submit a column family to be compacted.
+    void submit(column_family* cf);
+
+    // Remove a column family from the compaction manager.
+    // Cancel requests on cf and wait for a possible ongoing compaction on cf.
+    future<> remove(column_family* cf);
 
     const stats& get_stats() const {
         return _stats;

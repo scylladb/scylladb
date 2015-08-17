@@ -8,6 +8,17 @@
 static auto la = sstables::sstable::version_types::la;
 static auto big = sstables::sstable::format_types::big;
 
+class column_family_test {
+    lw_shared_ptr<column_family> _cf;
+public:
+    column_family_test(lw_shared_ptr<column_family> cf) : _cf(cf) {}
+
+    void add_sstable(sstables::sstable&& sstable) {
+        auto generation = sstable.generation();
+        _cf->_sstables->emplace(generation, make_lw_shared(std::move(sstable)));
+    }
+};
+
 namespace sstables {
 
 using sstable_ptr = lw_shared_ptr<sstable>;

@@ -480,8 +480,10 @@ future<>
 column_family::stop() {
     seal_active_memtable();
 
-    return _in_flight_seals.close().then([this] {
-        return make_ready_future<>();
+    return _compaction_manager.remove(this).then([this] {
+        return _in_flight_seals.close().then([this] {
+            return make_ready_future<>();
+        });
     });
 }
 
@@ -564,14 +566,14 @@ void column_family::start_compaction() {
 void column_family::trigger_compaction() {
     // Submitting compaction job to compaction manager.
     _stats.pending_compactions++;
-    _compaction_manager.submit([this] () -> future<> {
-        _stats.pending_compactions--;
-        sstables::compaction_strategy strategy = _compaction_strategy;
-        return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
-            return cs.compact(*this).then([] {
-                return make_ready_future<>();
-            });
-        });
+    _compaction_manager.submit(this);
+}
+
+future<> column_family::run_compaction() {
+    _stats.pending_compactions--;
+    sstables::compaction_strategy strategy = _compaction_strategy;
+    return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
+        return cs.compact(*this);
     });
 }
 
