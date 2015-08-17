@@ -566,14 +566,12 @@ future<> db::commitlog::segment_manager::init() {
         // keep sub alive...
             auto h = make_lw_shared<helper>(this, std::move(dir));
             return h->done().then([this, h]() {
-                        return this->active_segment().then([this, h](auto) {
-                                    // nothing really. just keeping sub alive
-                                    if (cfg.mode != sync_mode::BATCH) {
-                                        _timer.set_callback(std::bind(&segment_manager::sync, this));
-                                        this->arm();
-                                    }
-                                });
-                    });
+                // nothing really. just keeping sub alive
+                if (cfg.mode != sync_mode::BATCH) {
+                    _timer.set_callback(std::bind(&segment_manager::sync, this));
+                    this->arm();
+                }
+            });
         });
 }
 
