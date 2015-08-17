@@ -151,8 +151,10 @@ public:
 
     segment_manager(config cfg)
             : cfg(cfg), max_size(
-                    std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1) * 1024
-                            * 1024), max_mutation_size(max_size >> 1)
+                    std::min<size_t>(std::numeric_limits<position_type>::max(),
+                            std::max<size_t>(cfg.commitlog_segment_size_in_mb,
+                                    1) * 1024 * 1024)), max_mutation_size(
+                    max_size >> 1)
     {
         assert(max_size > 0);
         if (cfg.commit_log_location.empty()) {
@@ -494,7 +496,7 @@ public:
     }
 
     position_type position() const {
-        return _file_pos + _buf_pos;
+        return position_type(_file_pos + _buf_pos);
     }
 
     size_t size_on_disk() const {
