@@ -1,7 +1,7 @@
 Name:           scylla-server
 Version:        0.00
 Release:        1%{?dist}
-Summary:        Scylla Server
+Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 Group:          Applications/Dataases
 
 License:        Proprietary
@@ -14,13 +14,16 @@ Requires:       libaio boost-program-options boost-system libstdc++ boost-test b
 # TODO: create our own bridge device for virtio
 Requires:       libvirt-daemon
 
+Conflicts:       cassandra21
+Provides:       cassandra21
+
 %description
 
 %prep
 %setup -q
 
 %build
-./configure.py --disable-xen --enable-dpdk
+./configure.py --disable-xen --enable-dpdk --mode=release
 make -C seastar/build/dpdk %{?_smp_mflags}
 ninja-build %{?_smp_mflags}
 
