@@ -1012,6 +1012,15 @@ SEASTAR_TEST_CASE(test_tuples) {
                 .with_rows({{
                      {tt->decompose(tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")}))},
                 }});
+            return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 tuple<int, bigint, text>)").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r1) values (1, (1, 2, 'abc'));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from cf2 where p1 = 1;");
+        }).then([&e, tt] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(int32_t(1)), tt->decompose(tuple_type_impl::native_type({int32_t(1), int64_t(2), sstring("abc")})) }
+            });
         });
     });
 }
