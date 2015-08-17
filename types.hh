@@ -303,6 +303,7 @@ public:
     virtual bool is_collection() const { return false; }
     virtual bool is_multi_cell() const { return false; }
     virtual bool is_reversed() const { return false; }
+    virtual bool is_tuple() const { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
@@ -1061,6 +1062,7 @@ public:
     virtual bool is_compatible_with(const abstract_type& previous) const override;
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual bool is_tuple() const override { return true; }
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);
