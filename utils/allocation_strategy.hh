@@ -99,25 +99,22 @@ public:
     }
 };
 
+extern standard_allocation_strategy standard_allocation_strategy_instance;
+
 inline
 standard_allocation_strategy& standard_allocator() {
-    static thread_local auto instance = new standard_allocation_strategy();
-    return *instance;
+    return standard_allocation_strategy_instance;
 }
 
 inline
 allocation_strategy*& current_allocation_strategy_ptr() {
-    static thread_local allocation_strategy* current = nullptr;
+    static thread_local allocation_strategy* current = &standard_allocation_strategy_instance;
     return current;
 }
 
 inline
 allocation_strategy& current_allocator() {
-    allocation_strategy* s = current_allocation_strategy_ptr();
-    if (!s) {
-        return standard_allocator();
-    }
-    return *s;
+    return *current_allocation_strategy_ptr();
 }
 
 template<typename T>

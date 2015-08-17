@@ -13,6 +13,8 @@
 #include "utils/logalloc.hh"
 #include "log.hh"
 
+standard_allocation_strategy standard_allocation_strategy_instance;
+
 namespace logalloc {
 
 struct segment;
