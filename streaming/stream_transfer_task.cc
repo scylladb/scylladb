@@ -53,11 +53,12 @@ void stream_transfer_task::start() {
     using shard_id = net::messaging_service::shard_id;
     using net::messaging_verb;
     sslog.debug("stream_transfer_task: {} outgoing_file_message to send", files.size());
-    for (auto& x : files) {
-        auto& seq = x.first;
-        auto& msg = x.second;
+    for (auto it = files.begin(); it != files.end();) {
+        auto seq = it->first;
+        auto& msg = it->second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
+        it++;
         consume(msg.detail.mr, [&msg, this, seq, id] (mutation&& m) {
             msg.mutations_nr++;
             auto fm = make_lw_shared<const frozen_mutation>(m);

@@ -508,8 +508,9 @@ void stream_session::start_streaming_files() {
 #endif
     set_state(stream_session_state::STREAMING);
     sslog.debug("{}: {} transfers to send", __func__, _transfers.size());
-    for (auto& x : _transfers) {
-        stream_transfer_task& task = x.second;
+    for (auto it = _transfers.begin(); it != _transfers.end();) {
+        stream_transfer_task& task = it->second;
+        it++;
         task.start();
     }
 }
