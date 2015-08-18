@@ -439,7 +439,7 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
-seastar_flags = []
+seastar_flags = ['--disable-xen']
 if args.dpdk:
     # fake dependencies on dpdk, so that it is built before anything else
     seastar_flags += ['--enable-dpdk']
