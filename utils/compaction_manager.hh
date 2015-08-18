@@ -48,8 +48,9 @@ private:
     stats _stats;
 private:
     void task_start(lw_shared_ptr<task>& task);
-
     future<> task_stop(lw_shared_ptr<task>& task);
+
+    void add_column_family(column_family* cf);
 public:
     compaction_manager();
     ~compaction_manager();

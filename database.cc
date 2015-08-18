@@ -607,6 +607,18 @@ void column_family::set_compaction_strategy(sstables::compaction_strategy_type s
     _compaction_strategy = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 }
 
+bool column_family::compaction_manager_queued() const {
+    return _compaction_manager_queued;
+}
+
+void column_family::set_compaction_manager_queued(bool compaction_manager_queued) {
+    _compaction_manager_queued = compaction_manager_queued;
+}
+
+bool column_family::pending_compactions() const {
+    return _stats.pending_compactions > 0;
+}
+
 size_t column_family::sstables_count() {
     return _sstables->size();
 }

@@ -121,6 +121,8 @@ private:
     db::commitlog* _commitlog;
     sstables::compaction_strategy _compaction_strategy;
     compaction_manager& _compaction_manager;
+    // Whether or not a cf is queued by its compaction manager.
+    bool _compaction_manager_queued = false;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -193,6 +195,10 @@ public:
     void trigger_compaction();
     future<> run_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
+    bool compaction_manager_queued() const;
+    void set_compaction_manager_queued(bool compaction_manager_queued);
+    bool pending_compactions() const;
+
     const stats& get_stats() const {
         return _stats;
     }
