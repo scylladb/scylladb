@@ -228,6 +228,7 @@ cql_server::listen(ipv4_addr addr) {
 void
 cql_server::do_accepts(int which) {
     _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
+        fd.set_nodelay(true);
         auto conn = make_shared<connection>(*this, std::move(fd), addr);
         ++_connects;
         ++_connections;
