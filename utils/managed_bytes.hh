@@ -91,14 +91,19 @@ public:
     }
 
     managed_bytes& operator=(managed_bytes&& o) {
-        this->~managed_bytes();
-        new (this) managed_bytes(std::move(o));
+        if (this != &o) {
+            this->~managed_bytes();
+            new (this) managed_bytes(std::move(o));
+        }
         return *this;
     }
 
     managed_bytes& operator=(const managed_bytes& o) {
-        this->~managed_bytes();
-        new (this) managed_bytes(o);
+        if (this != &o) {
+            // FIXME: not exception safe
+            this->~managed_bytes();
+            new (this) managed_bytes(o);
+        }
         return *this;
     }
 
