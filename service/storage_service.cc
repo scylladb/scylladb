@@ -556,15 +556,11 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_moving endpoint={}", endpoint);
+    assert(pieces.size() >= 2);
+    auto token = dht::global_partitioner().from_sstring(pieces[1]);
+    logger.debug("Node {} state moving, new token {}", endpoint, token);
 #if 0
-    assert pieces.length >= 2;
-    Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
-
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state moving, new token {}", endpoint, token);
-
     _token_metadata.addMovingEndpoint(token, endpoint);
-
     PendingRangeCalculatorService.instance.update();
 #endif
 }
