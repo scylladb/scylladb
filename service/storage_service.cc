@@ -79,9 +79,7 @@ bool get_property_load_ring_state() {
 }
 
 bool storage_service::should_bootstrap() {
-    // FIXME: Currently, we do boostrap if we are not a seed node.
-    // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-    return is_auto_bootstrap() && !get_seeds().count(get_broadcast_address());
+    return is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && !get_seeds().count(get_broadcast_address());
 }
 
 future<> storage_service::prepare_to_join() {
@@ -98,8 +96,9 @@ future<> storage_service::prepare_to_join() {
          throw std::runtime_error("Replace method removed; use cassandra.replace_address instead");
     }
     if (is_replacing()) {
-        // if (SystemKeyspace.bootstrapComplete())
-        //     throw new RuntimeException("Cannot replace address with a node that is already bootstrapped");
+        if (db::system_keyspace::bootstrap_complete()) {
+            throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
+        }
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
@@ -170,23 +169,20 @@ future<> storage_service::join_token_ring(int delay) {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     std::unordered_set<inet_address> current;
-#if 0
     logger.debug("Bootstrap variables: {} {} {} {}",
-                 DatabaseDescriptor.isAutoBootstrap(),
-                 SystemKeyspace.bootstrapInProgress(),
-                 SystemKeyspace.bootstrapComplete(),
-                 DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
-#endif
-    if (is_auto_bootstrap() && /* !SystemKeyspace.bootstrapComplete() && */ get_seeds().count(get_broadcast_address())) {
+                 is_auto_bootstrap(),
+                 db::system_keyspace::bootstrap_in_progress(),
+                 db::system_keyspace::bootstrap_complete(),
+                 get_seeds().count(get_broadcast_address()));
+    if (is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && get_seeds().count(get_broadcast_address())) {
         logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
-#if 0
-        if (SystemKeyspace.bootstrapInProgress())
+        if (db::system_keyspace::bootstrap_in_progress()) {
             logger.warn("Detected previous bootstrap failure; retrying");
-        else
-            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
-#endif
+        } else {
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+        }
         set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see all our peers
         for (int i = 0; i < delay; i += 1000) {
@@ -295,7 +291,7 @@ future<> storage_service::join_token_ring(int delay) {
 
     if (!_is_survey_mode) {
         // start participating in the ring.
-        //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         set_tokens(_bootstrap_tokens).get();
         // remove the existing info about the replaced node.
         if (!current.empty()) {
@@ -319,7 +315,7 @@ future<> storage_service::join_ring() {
     } else if (_is_survey_mode) {
         return db::system_keyspace::get_saved_tokens().then([this] (auto tokens) {
             return this->set_tokens(std::move(tokens)).then([this] {
-                //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
                 _is_survey_mode = false;
                 logger.info("Leaving write survey mode and joining ring at operator request");
                 assert(_token_metadata.sorted_tokens().size() > 0);
