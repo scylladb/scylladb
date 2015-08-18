@@ -348,12 +348,12 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                                     for (auto & de : l->contents()) {
                                         if (de.name == findme) {
                                             auto path = log->first.path + "/" + de.name;
-                                            return db::commitlog::read_log_file(path, [count2](temporary_buffer<char> buf) {
+                                            return db::commitlog::read_log_file(path, [count2](temporary_buffer<char> buf, db::replay_position rp) {
                                                         sstring str(buf.get(), buf.size());
                                                         BOOST_CHECK_EQUAL(str, "hej bubba cow");
                                                         (*count2)++;
                                                         return make_ready_future<>();
-                                                    }).then([log](subscription<temporary_buffer<char>> s) {
+                                                    }).then([log](auto s) {
                                                         auto ss = make_lw_shared(std::move(s));
                                                         return ss->done().then([ss] {});
                                                     });

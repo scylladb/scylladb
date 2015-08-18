@@ -184,10 +184,10 @@ public:
 
     const config& active_config() const;
 
-    typedef std::function<future<>(temporary_buffer<char>)> commit_load_reader_func;
+    typedef std::function<future<>(temporary_buffer<char>, replay_position)> commit_load_reader_func;
 
-    static subscription<temporary_buffer<char>> read_log_file(file, commit_load_reader_func);
-    static future<subscription<temporary_buffer<char>>> read_log_file(const sstring&, commit_load_reader_func);
+    static subscription<temporary_buffer<char>, replay_position> read_log_file(file, commit_load_reader_func);
+    static future<subscription<temporary_buffer<char>, replay_position>> read_log_file(const sstring&, commit_load_reader_func);
 private:
     commitlog(config);
 };
