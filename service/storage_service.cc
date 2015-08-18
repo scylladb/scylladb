@@ -517,29 +517,28 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
     logger.debug("handle_state_leaving endpoint={}", endpoint);
-#if 0
-    Collection<Token> tokens;
-    tokens = get_tokens_for(endpoint);
 
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+    auto tokens = get_tokens_for(endpoint);
+
+    logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
 
     // If the node is previously unknown or tokens do not match, update tokenmetadata to
     // have this node as 'normal' (it must have been using this token before the
     // leave). This way we'll get pending ranges right.
-    if (!_token_metadata.isMember(endpoint))
-    {
+    if (!_token_metadata.is_member(endpoint)) {
         logger.info("Node {} state jump to leaving", endpoint);
-        _token_metadata.updateNormalTokens(tokens, endpoint);
-    }
-    else if (!_token_metadata.getTokens(endpoint).containsAll(tokens))
-    {
-        logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-        _token_metadata.updateNormalTokens(tokens, endpoint);
+        _token_metadata.update_normal_tokens(tokens, endpoint);
+    } else {
+        auto tokens_ = _token_metadata.get_tokens(endpoint);
+        if (!std::includes(tokens_.begin(), tokens_.end(), tokens.begin(), tokens.end())) {
+            logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            _token_metadata.update_normal_tokens(tokens, endpoint);
+        }
     }
 
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
+#if 0
     _token_metadata.addLeavingEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
 #endif
