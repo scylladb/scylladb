@@ -160,6 +160,7 @@ thrift_server::listen(ipv4_addr addr) {
 void
 thrift_server::do_accepts(int which) {
     _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
+        fd.set_nodelay(true);
         auto conn = new connection(*this, std::move(fd), addr);
         conn->process().then_wrapped([this, conn] (future<> f) {
             delete conn;
