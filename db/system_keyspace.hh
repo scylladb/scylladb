@@ -364,25 +364,13 @@ enum class bootstrap_state {
      */
     future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
 
-#if 0
     /**
      * Return a map of store host_ids to IP addresses
      *
      */
-    public static Map<InetAddress, UUID> loadHostIds()
-    {
-        Map<InetAddress, UUID> hostIdMap = new HashMap<>();
-        for (UntypedResultSet.Row row : executeInternal("SELECT peer, host_id FROM system." + PEERS))
-        {
-            InetAddress peer = row.getInetAddress("peer");
-            if (row.has("host_id"))
-            {
-                hostIdMap.put(peer, row.getUUID("host_id"));
-            }
-        }
-        return hostIdMap;
-    }
+    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
+#if 0
     /**
      * Get preferred IP for given endpoint if it is known. Otherwise this returns given endpoint itself.
      *

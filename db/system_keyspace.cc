@@ -614,6 +614,22 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> lo
     return make_ready_future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
 }
 
+future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
+#if 0
+    Map<InetAddress, UUID> hostIdMap = new HashMap<>();
+    for (UntypedResultSet.Row row : executeInternal("SELECT peer, host_id FROM system." + PEERS))
+    {
+        InetAddress peer = row.getInetAddress("peer");
+        if (row.has("host_id"))
+        {
+            hostIdMap.put(peer, row.getUUID("host_id"));
+        }
+    }
+    return hostIdMap;
+#endif
+    return make_ready_future<std::unordered_map<gms::inet_address, utils::UUID>>();
+}
+
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
     return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
