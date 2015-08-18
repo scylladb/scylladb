@@ -567,54 +567,42 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_removing endpoint={}", endpoint);
-#if 0
-    assert (pieces.length > 0);
-
-    if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-    {
+    assert(pieces.size() > 0);
+    if (endpoint == get_broadcast_address()) {
         logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
-        try
-        {
-            drain();
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
+        try {
+            // drain();
+        } catch (...) {
+            logger.error("Fail to drain: {}", std::current_exception());
+            throw;
         }
         return;
     }
-    if (_token_metadata.isMember(endpoint))
-    {
-        String state = pieces[0];
-        Collection<Token> removeTokens = _token_metadata.getTokens(endpoint);
-
-        if (VersionedValue.REMOVED_TOKEN.equals(state))
-        {
-            excise(removeTokens, endpoint, extractExpireTime(pieces));
-        }
-        else if (VersionedValue.REMOVING_TOKEN.equals(state))
-        {
-            if (logger.isDebugEnabled())
-                logger.debug("Tokens {} removed manually (endpoint was {})", removeTokens, endpoint);
+    if (_token_metadata.is_member(endpoint)) {
+        auto state = pieces[0];
+        auto remove_tokens = _token_metadata.get_tokens(endpoint);
+        if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
+            // excise(removeTokens, endpoint, extractExpireTime(pieces));
+        } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
+#if 0
+            logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
 
             // Note that the endpoint is being removed
             _token_metadata.addLeavingEndpoint(endpoint);
             PendingRangeCalculatorService.instance.update();
-
             // find the endpoint coordinating this removal that we need to notify when we're done
             String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
             UUID hostId = UUID.fromString(coordinator[1]);
             // grab any data we are now responsible for and notify responsible node
             restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
-        }
-    }
-    else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
-    {
-        if (VersionedValue.REMOVED_TOKEN.equals(pieces[0]))
-            addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
-        removeEndpoint(endpoint);
-    }
 #endif
+        }
+    } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
+        if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
+            // addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
+        }
+        remove_endpoint(endpoint);
+    }
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
