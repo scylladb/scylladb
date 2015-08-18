@@ -440,7 +440,7 @@ private:
     void set_mode(mode m, bool log);
     void set_mode(mode m, sstring msg, bool log);
 public:
-    future<> bootstrap(std::unordered_set<token> tokens);
+    void bootstrap(std::unordered_set<token> tokens);
 
     bool is_bootstrap_mode() {
         return _is_bootstrap_mode;

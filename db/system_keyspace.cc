@@ -455,6 +455,14 @@ static future<> build_bootstrap_info() {
     });
 }
 
+future<> init_local_cache() {
+    return _local_cache.start().then([] {
+        engine().at_exit([] {
+            return _local_cache.stop();
+        });
+    });
+}
+
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     auto new_ctx = std::make_unique<query_context>(db, qp);
     qctx.swap(new_ctx);
@@ -462,11 +470,7 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
-        return _local_cache.start().then([] {
-            engine().at_exit([] {
-                return _local_cache.stop();
-            });
-        });
+        return init_local_cache();
     }).then([] {
         return build_dc_rack_info();
     }).then([] {
@@ -592,6 +596,38 @@ future<std::unordered_set<dht::token>> update_local_tokens(
             return tokens;
         });
     });
+}
+
+future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens() {
+    // FIXME
+#if 0
+    SetMultimap<InetAddress, Token> tokenMap = HashMultimap.create();
+    for (UntypedResultSet.Row row : executeInternal("SELECT peer, tokens FROM system." + PEERS))
+    {
+        InetAddress peer = row.getInetAddress("peer");
+        if (row.has("tokens"))
+            tokenMap.putAll(peer, deserializeTokens(row.getSet("tokens", UTF8Type.instance)));
+    }
+
+    return tokenMap;
+#endif
+    return make_ready_future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
+}
+
+future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
+#if 0
+    Map<InetAddress, UUID> hostIdMap = new HashMap<>();
+    for (UntypedResultSet.Row row : executeInternal("SELECT peer, host_id FROM system." + PEERS))
+    {
+        InetAddress peer = row.getInetAddress("peer");
+        if (row.has("host_id"))
+        {
+            hostIdMap.put(peer, row.getUUID("host_id"));
+        }
+    }
+    return hostIdMap;
+#endif
+    return make_ready_future<std::unordered_map<gms::inet_address, utils::UUID>>();
 }
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {

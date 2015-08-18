@@ -79,9 +79,7 @@ bool get_property_load_ring_state() {
 }
 
 bool storage_service::should_bootstrap() {
-    // FIXME: Currently, we do boostrap if we are not a seed node.
-    // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-    return is_auto_bootstrap() && !get_seeds().count(get_broadcast_address());
+    return is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && !get_seeds().count(get_broadcast_address());
 }
 
 future<> storage_service::prepare_to_join() {
@@ -98,8 +96,9 @@ future<> storage_service::prepare_to_join() {
          throw std::runtime_error("Replace method removed; use cassandra.replace_address instead");
     }
     if (is_replacing()) {
-        // if (SystemKeyspace.bootstrapComplete())
-        //     throw new RuntimeException("Cannot replace address with a node that is already bootstrapped");
+        if (db::system_keyspace::bootstrap_complete()) {
+            throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
+        }
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
@@ -170,23 +169,20 @@ future<> storage_service::join_token_ring(int delay) {
     // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
     // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
     std::unordered_set<inet_address> current;
-#if 0
     logger.debug("Bootstrap variables: {} {} {} {}",
-                 DatabaseDescriptor.isAutoBootstrap(),
-                 SystemKeyspace.bootstrapInProgress(),
-                 SystemKeyspace.bootstrapComplete(),
-                 DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
-#endif
-    if (is_auto_bootstrap() && /* !SystemKeyspace.bootstrapComplete() && */ get_seeds().count(get_broadcast_address())) {
+                 is_auto_bootstrap(),
+                 db::system_keyspace::bootstrap_in_progress(),
+                 db::system_keyspace::bootstrap_complete(),
+                 get_seeds().count(get_broadcast_address()));
+    if (is_auto_bootstrap() && !db::system_keyspace::bootstrap_complete() && get_seeds().count(get_broadcast_address())) {
         logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
     }
     if (should_bootstrap()) {
-#if 0
-        if (SystemKeyspace.bootstrapInProgress())
+        if (db::system_keyspace::bootstrap_in_progress()) {
             logger.warn("Detected previous bootstrap failure; retrying");
-        else
-            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
-#endif
+        } else {
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+        }
         set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see all our peers
         for (int i = 0; i < delay; i += 1000) {
@@ -257,7 +253,7 @@ future<> storage_service::join_token_ring(int delay) {
             ss << _bootstrap_tokens;
             set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
         }
-        bootstrap(_bootstrap_tokens).get();
+        bootstrap(_bootstrap_tokens);
         // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
         // assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
@@ -295,7 +291,7 @@ future<> storage_service::join_token_ring(int delay) {
 
     if (!_is_survey_mode) {
         // start participating in the ring.
-        //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
         set_tokens(_bootstrap_tokens).get();
         // remove the existing info about the replaced node.
         if (!current.empty()) {
@@ -319,7 +315,7 @@ future<> storage_service::join_ring() {
     } else if (_is_survey_mode) {
         return db::system_keyspace::get_saved_tokens().then([this] (auto tokens) {
             return this->set_tokens(std::move(tokens)).then([this] {
-                //SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
                 _is_survey_mode = false;
                 logger.info("Leaving write survey mode and joining ring at operator request");
                 assert(_token_metadata.sorted_tokens().size() > 0);
@@ -331,37 +327,32 @@ future<> storage_service::join_ring() {
     return make_ready_future<>();
 }
 
-future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
+// Runs inside seastar::async context
+void storage_service::bootstrap(std::unordered_set<token> tokens) {
     _is_bootstrap_mode = true;
     // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-    auto f = db::system_keyspace::update_tokens(tokens);
-    return f.then([this, tokens = std::move(tokens)] {
-        // FIXME: DatabaseDescriptor.isReplacing()
-        auto is_replacing = false;
-        auto sleep_time = std::chrono::milliseconds(1);
-        if (!is_replacing) {
-            // if not an existing token then bootstrap
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
-            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
-            sleep_time = std::chrono::milliseconds(RING_DELAY);
-            set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", RING_DELAY), true);
-        } else {
-            // Dont set any state for the node which is bootstrapping the existing token...
-            _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-            // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
+    db::system_keyspace::update_tokens(tokens).get();
+    auto& gossiper = gms::get_local_gossiper();
+    if (!is_replacing()) {
+        // if not an existing token then bootstrap
+        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
+        set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", RING_DELAY), true);
+        sleep(std::chrono::milliseconds(RING_DELAY)).get();
+    } else {
+        // Dont set any state for the node which is bootstrapping the existing token...
+        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+        auto replace_addr = get_replace_address();
+        if (replace_addr) {
+            db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
-        return sleep(sleep_time).then([this, tokens = std::move(tokens)] {
-            auto& gossiper = gms::get_local_gossiper();
-            if (!gossiper.seen_any_seed()) {
-                 throw std::runtime_error("Unable to contact any seeds!");
-            }
-            this->set_mode(mode::JOINING, "Starting to bootstrap...", true);
-            // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
-            logger.info("Bootstrap completed! for the tokens {}", tokens);
-            return make_ready_future<>();
-        });
-    });
+    }
+    if (!gossiper.seen_any_seed()) {
+         throw std::runtime_error("Unable to contact any seeds!");
+    }
+    set_mode(mode::JOINING, "Starting to bootstrap...", true);
+    // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
+    logger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
@@ -526,29 +517,28 @@ void storage_service::handle_state_normal(inet_address endpoint) {
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
     logger.debug("handle_state_leaving endpoint={}", endpoint);
-#if 0
-    Collection<Token> tokens;
-    tokens = get_tokens_for(endpoint);
 
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+    auto tokens = get_tokens_for(endpoint);
+
+    logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
 
     // If the node is previously unknown or tokens do not match, update tokenmetadata to
     // have this node as 'normal' (it must have been using this token before the
     // leave). This way we'll get pending ranges right.
-    if (!_token_metadata.isMember(endpoint))
-    {
+    if (!_token_metadata.is_member(endpoint)) {
         logger.info("Node {} state jump to leaving", endpoint);
-        _token_metadata.updateNormalTokens(tokens, endpoint);
-    }
-    else if (!_token_metadata.getTokens(endpoint).containsAll(tokens))
-    {
-        logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-        _token_metadata.updateNormalTokens(tokens, endpoint);
+        _token_metadata.update_normal_tokens(tokens, endpoint);
+    } else {
+        auto tokens_ = _token_metadata.get_tokens(endpoint);
+        if (!std::includes(tokens_.begin(), tokens_.end(), tokens.begin(), tokens.end())) {
+            logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            _token_metadata.update_normal_tokens(tokens, endpoint);
+        }
     }
 
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
+#if 0
     _token_metadata.addLeavingEndpoint(endpoint);
     PendingRangeCalculatorService.instance.update();
 #endif
@@ -556,83 +546,63 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_left endpoint={}", endpoint);
+    assert(pieces.size() >= 2);
+    auto tokens = get_tokens_for(endpoint);
+    logger.debug("Node {} state left, tokens {}", endpoint, tokens);
 #if 0
-    assert pieces.length >= 2;
-    Collection<Token> tokens;
-    tokens = get_tokens_for(endpoint);
-
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state left, tokens {}", endpoint, tokens);
-
-    excise(tokens, endpoint, extractExpireTime(pieces));
+     excise(tokens, endpoint, extractExpireTime(pieces));
 #endif
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_moving endpoint={}", endpoint);
+    assert(pieces.size() >= 2);
+    auto token = dht::global_partitioner().from_sstring(pieces[1]);
+    logger.debug("Node {} state moving, new token {}", endpoint, token);
 #if 0
-    assert pieces.length >= 2;
-    Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
-
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state moving, new token {}", endpoint, token);
-
     _token_metadata.addMovingEndpoint(token, endpoint);
-
     PendingRangeCalculatorService.instance.update();
 #endif
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_removing endpoint={}", endpoint);
-#if 0
-    assert (pieces.length > 0);
-
-    if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-    {
+    assert(pieces.size() > 0);
+    if (endpoint == get_broadcast_address()) {
         logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
-        try
-        {
-            drain();
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
+        try {
+            // drain();
+        } catch (...) {
+            logger.error("Fail to drain: {}", std::current_exception());
+            throw;
         }
         return;
     }
-    if (_token_metadata.isMember(endpoint))
-    {
-        String state = pieces[0];
-        Collection<Token> removeTokens = _token_metadata.getTokens(endpoint);
-
-        if (VersionedValue.REMOVED_TOKEN.equals(state))
-        {
-            excise(removeTokens, endpoint, extractExpireTime(pieces));
-        }
-        else if (VersionedValue.REMOVING_TOKEN.equals(state))
-        {
-            if (logger.isDebugEnabled())
-                logger.debug("Tokens {} removed manually (endpoint was {})", removeTokens, endpoint);
+    if (_token_metadata.is_member(endpoint)) {
+        auto state = pieces[0];
+        auto remove_tokens = _token_metadata.get_tokens(endpoint);
+        if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
+            // excise(removeTokens, endpoint, extractExpireTime(pieces));
+        } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
+#if 0
+            logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
 
             // Note that the endpoint is being removed
             _token_metadata.addLeavingEndpoint(endpoint);
             PendingRangeCalculatorService.instance.update();
-
             // find the endpoint coordinating this removal that we need to notify when we're done
             String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
             UUID hostId = UUID.fromString(coordinator[1]);
             // grab any data we are now responsible for and notify responsible node
             restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
-        }
-    }
-    else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
-    {
-        if (VersionedValue.REMOVED_TOKEN.equals(pieces[0]))
-            addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
-        removeEndpoint(endpoint);
-    }
 #endif
+        }
+    } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
+        if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
+            // addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
+        }
+        remove_endpoint(endpoint);
+    }
 }
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
@@ -836,131 +806,126 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 }
 
 future<> storage_service::init_server(int delay) {
+    return seastar::async([this, delay] {
+        auto& gossiper = gms::get_local_gossiper();
 #if 0
-    logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-    logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-    logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
+        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
+        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
+        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
 #endif
-    _initialized = true;
+        _initialized = true;
 #if 0
-    try
-    {
-        // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-        Class.forName("org.apache.cassandra.service.StorageProxy");
-        // also IndexSummaryManager, which is otherwise unreferenced
-        Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-    }
-    catch (ClassNotFoundException e)
-    {
-        throw new AssertionError(e);
-    }
-
-    if (Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true")))
-    {
-        logger.info("Loading persisted ring state");
-        Multimap<InetAddress, Token> loadedTokens = SystemKeyspace.loadTokens();
-        Map<InetAddress, UUID> loadedHostIds = SystemKeyspace.loadHostIds();
-        for (InetAddress ep : loadedTokens.keySet())
+        try
         {
-            if (ep.equals(FBUtilities.getBroadcastAddress()))
-            {
-                // entry has been mistakenly added, delete it
-                SystemKeyspace.removeEndpoint(ep);
-            }
-            else
-            {
-                _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
-                if (loadedHostIds.containsKey(ep))
-                    _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
-                Gossiper.instance.addSavedEndpoint(ep);
-            }
+            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
+            Class.forName("org.apache.cassandra.service.StorageProxy");
+            // also IndexSummaryManager, which is otherwise unreferenced
+            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
         }
-    }
-
-    // daemon threads, like our executors', continue to run while shutdown hooks are invoked
-    drainOnShutdown = new Thread(new WrappedRunnable()
-    {
-        @Override
-        public void runMayThrow() throws InterruptedException
+        catch (ClassNotFoundException e)
         {
-            ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-            ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-            if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
-                return; // drained already
+            throw new AssertionError(e);
+        }
+#endif
 
-            if (daemon != null)
-                shutdownClientServers();
-            ScheduledExecutors.optionalTasks.shutdown();
-            Gossiper.instance.stop();
-
-            // In-progress writes originating here could generate hints to be written, so shut down MessagingService
-            // before mutation stage, so we can get all the hints saved before shutting down
-            MessagingService.instance().shutdown();
-            counterMutationStage.shutdown();
-            mutationStage.shutdown();
-            counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-            mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-            StorageProxy.instance.verifyNoHintsInProgress();
-
-            List<Future<?>> flushes = new ArrayList<>();
-            for (Keyspace keyspace : Keyspace.all())
-            {
-                KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
-                if (!ksm.durableWrites)
-                {
-                    for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                        flushes.add(cfs.forceFlush());
+        if (get_property_load_ring_state()) {
+            logger.info("Loading persisted ring state");
+            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
+            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+            for (auto x : loaded_tokens) {
+                auto ep = x.first;
+                auto tokens = x.second;
+                if (ep == get_broadcast_address()) {
+                    // entry has been mistakenly added, delete it
+                    db::system_keyspace::remove_endpoint(ep).get();
+                } else {
+                    _token_metadata.update_normal_tokens(tokens, ep);
+                    if (loaded_host_ids.count(ep)) {
+                        _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
+                    }
+                    gossiper.add_saved_endpoint(ep);
                 }
             }
-            try
-            {
-                FBUtilities.waitOnFutures(flushes);
-            }
-            catch (Throwable t)
-            {
-                JVMStabilityInspector.inspectThrowable(t);
-                // don't let this stop us from shutting down the commitlog and other thread pools
-                logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
-            }
-
-            CommitLog.instance.shutdownBlocking();
-
-            // wait for miscellaneous tasks like sstable and commitlog segment deletion
-            ScheduledExecutors.nonPeriodicTasks.shutdown();
-            if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
         }
-    }, "StorageServiceShutdownHook");
-    Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-#endif
-    return prepare_to_join().then([this, delay] {
-        return join_token_ring(delay);
-    });
+
 #if 0
-    // Has to be called after the host id has potentially changed in prepareToJoin().
-    for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-        if (cfs.metadata.isCounter())
-            cfs.initCounterCache();
-
-    if (Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-    {
-        joinTokenRing(delay);
-    }
-    else
-    {
-        Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-        if (!tokens.isEmpty())
+        // daemon threads, like our executors', continue to run while shutdown hooks are invoked
+        drainOnShutdown = new Thread(new WrappedRunnable()
         {
-            _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-            // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-            List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-            states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
-            states.add(Pair.create(ApplicationState.STATUS, valueFactory.hibernate(true)));
-            Gossiper.instance.addLocalApplicationStates(states);
-        }
-        logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
-    }
+            @Override
+            public void runMayThrow() throws InterruptedException
+            {
+                ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
+                ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
+                if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
+                    return; // drained already
+
+                if (daemon != null)
+                    shutdownClientServers();
+                ScheduledExecutors.optionalTasks.shutdown();
+                Gossiper.instance.stop();
+
+                // In-progress writes originating here could generate hints to be written, so shut down MessagingService
+                // before mutation stage, so we can get all the hints saved before shutting down
+                MessagingService.instance().shutdown();
+                counterMutationStage.shutdown();
+                mutationStage.shutdown();
+                counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+                mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+                StorageProxy.instance.verifyNoHintsInProgress();
+
+                List<Future<?>> flushes = new ArrayList<>();
+                for (Keyspace keyspace : Keyspace.all())
+                {
+                    KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
+                    if (!ksm.durableWrites)
+                    {
+                        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+                            flushes.add(cfs.forceFlush());
+                    }
+                }
+                try
+                {
+                    FBUtilities.waitOnFutures(flushes);
+                }
+                catch (Throwable t)
+                {
+                    JVMStabilityInspector.inspectThrowable(t);
+                    // don't let this stop us from shutting down the commitlog and other thread pools
+                    logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
+                }
+
+                CommitLog.instance.shutdownBlocking();
+
+                // wait for miscellaneous tasks like sstable and commitlog segment deletion
+                ScheduledExecutors.nonPeriodicTasks.shutdown();
+                if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
+                    logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
+            }
+        }, "StorageServiceShutdownHook");
+        Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
+        prepare_to_join().get();
+#if 0
+        // Has to be called after the host id has potentially changed in prepareToJoin().
+        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
+            if (cfs.metadata.isCounter())
+                cfs.initCounterCache();
+#endif
+
+        if (get_property_join_ring()) {
+            join_token_ring(delay).get();
+        } else {
+            auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
+            if (!tokens.empty()) {
+                _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+                // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
+                gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+                gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true));
+            }
+            logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
+        }
+    });
 }
 
 future<> storage_service::replicate_to_all_cores() {

@@ -33,6 +33,7 @@
 #include "locator/token_metadata.hh"
 #include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
+#include <map>
 
 namespace service {
 
@@ -66,6 +67,7 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
+future<> init_local_cache();
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);
@@ -356,42 +358,19 @@ enum class bootstrap_state {
         const std::unordered_set<dht::token> add_tokens,
         const std::unordered_set<dht::token> rm_tokens);
 
-#if 0
     /**
      * Return a map of stored tokens to IP addresses
      *
      */
-    public static SetMultimap<InetAddress, Token> loadTokens()
-    {
-        SetMultimap<InetAddress, Token> tokenMap = HashMultimap.create();
-        for (UntypedResultSet.Row row : executeInternal("SELECT peer, tokens FROM system." + PEERS))
-        {
-            InetAddress peer = row.getInetAddress("peer");
-            if (row.has("tokens"))
-                tokenMap.putAll(peer, deserializeTokens(row.getSet("tokens", UTF8Type.instance)));
-        }
-
-        return tokenMap;
-    }
+    future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
 
     /**
      * Return a map of store host_ids to IP addresses
      *
      */
-    public static Map<InetAddress, UUID> loadHostIds()
-    {
-        Map<InetAddress, UUID> hostIdMap = new HashMap<>();
-        for (UntypedResultSet.Row row : executeInternal("SELECT peer, host_id FROM system." + PEERS))
-        {
-            InetAddress peer = row.getInetAddress("peer");
-            if (row.has("host_id"))
-            {
-                hostIdMap.put(peer, row.getUUID("host_id"));
-            }
-        }
-        return hostIdMap;
-    }
+    future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids();
 
+#if 0
     /**
      * Get preferred IP for given endpoint if it is known. Otherwise this returns given endpoint itself.
      *
