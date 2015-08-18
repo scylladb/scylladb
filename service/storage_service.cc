@@ -807,124 +807,124 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 
 future<> storage_service::init_server(int delay) {
     return seastar::async([this, delay] {
-    auto& gossiper = gms::get_local_gossiper();
+        auto& gossiper = gms::get_local_gossiper();
 #if 0
-    logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-    logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-    logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
+        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
+        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
+        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
 #endif
-    _initialized = true;
+        _initialized = true;
 #if 0
-    try
-    {
-        // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-        Class.forName("org.apache.cassandra.service.StorageProxy");
-        // also IndexSummaryManager, which is otherwise unreferenced
-        Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-    }
-    catch (ClassNotFoundException e)
-    {
-        throw new AssertionError(e);
-    }
-#endif
-
-    if (get_property_load_ring_state()) {
-        logger.info("Loading persisted ring state");
-        auto loaded_tokens = db::system_keyspace::load_tokens().get0();
-        auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
-        for (auto x : loaded_tokens) {
-            auto ep = x.first;
-            auto tokens = x.second;
-            if (ep == get_broadcast_address()) {
-                // entry has been mistakenly added, delete it
-                db::system_keyspace::remove_endpoint(ep).get();
-            } else {
-                _token_metadata.update_normal_tokens(tokens, ep);
-                if (loaded_host_ids.count(ep)) {
-                    _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
-                }
-                gossiper.add_saved_endpoint(ep);
-            }
-        }
-    }
-
-#if 0
-    // daemon threads, like our executors', continue to run while shutdown hooks are invoked
-    drainOnShutdown = new Thread(new WrappedRunnable()
-    {
-        @Override
-        public void runMayThrow() throws InterruptedException
+        try
         {
-            ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-            ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-            if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
-                return; // drained already
+            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
+            Class.forName("org.apache.cassandra.service.StorageProxy");
+            // also IndexSummaryManager, which is otherwise unreferenced
+            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
+        }
+        catch (ClassNotFoundException e)
+        {
+            throw new AssertionError(e);
+        }
+#endif
 
-            if (daemon != null)
-                shutdownClientServers();
-            ScheduledExecutors.optionalTasks.shutdown();
-            Gossiper.instance.stop();
-
-            // In-progress writes originating here could generate hints to be written, so shut down MessagingService
-            // before mutation stage, so we can get all the hints saved before shutting down
-            MessagingService.instance().shutdown();
-            counterMutationStage.shutdown();
-            mutationStage.shutdown();
-            counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-            mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-            StorageProxy.instance.verifyNoHintsInProgress();
-
-            List<Future<?>> flushes = new ArrayList<>();
-            for (Keyspace keyspace : Keyspace.all())
-            {
-                KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
-                if (!ksm.durableWrites)
-                {
-                    for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                        flushes.add(cfs.forceFlush());
+        if (get_property_load_ring_state()) {
+            logger.info("Loading persisted ring state");
+            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
+            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+            for (auto x : loaded_tokens) {
+                auto ep = x.first;
+                auto tokens = x.second;
+                if (ep == get_broadcast_address()) {
+                    // entry has been mistakenly added, delete it
+                    db::system_keyspace::remove_endpoint(ep).get();
+                } else {
+                    _token_metadata.update_normal_tokens(tokens, ep);
+                    if (loaded_host_ids.count(ep)) {
+                        _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
+                    }
+                    gossiper.add_saved_endpoint(ep);
                 }
             }
-            try
-            {
-                FBUtilities.waitOnFutures(flushes);
-            }
-            catch (Throwable t)
-            {
-                JVMStabilityInspector.inspectThrowable(t);
-                // don't let this stop us from shutting down the commitlog and other thread pools
-                logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
-            }
-
-            CommitLog.instance.shutdownBlocking();
-
-            // wait for miscellaneous tasks like sstable and commitlog segment deletion
-            ScheduledExecutors.nonPeriodicTasks.shutdown();
-            if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
         }
-    }, "StorageServiceShutdownHook");
-    Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-#endif
-    prepare_to_join().get();
+
 #if 0
-    // Has to be called after the host id has potentially changed in prepareToJoin().
-    for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-        if (cfs.metadata.isCounter())
-            cfs.initCounterCache();
+        // daemon threads, like our executors', continue to run while shutdown hooks are invoked
+        drainOnShutdown = new Thread(new WrappedRunnable()
+        {
+            @Override
+            public void runMayThrow() throws InterruptedException
+            {
+                ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
+                ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
+                if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
+                    return; // drained already
+
+                if (daemon != null)
+                    shutdownClientServers();
+                ScheduledExecutors.optionalTasks.shutdown();
+                Gossiper.instance.stop();
+
+                // In-progress writes originating here could generate hints to be written, so shut down MessagingService
+                // before mutation stage, so we can get all the hints saved before shutting down
+                MessagingService.instance().shutdown();
+                counterMutationStage.shutdown();
+                mutationStage.shutdown();
+                counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+                mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+                StorageProxy.instance.verifyNoHintsInProgress();
+
+                List<Future<?>> flushes = new ArrayList<>();
+                for (Keyspace keyspace : Keyspace.all())
+                {
+                    KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
+                    if (!ksm.durableWrites)
+                    {
+                        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+                            flushes.add(cfs.forceFlush());
+                    }
+                }
+                try
+                {
+                    FBUtilities.waitOnFutures(flushes);
+                }
+                catch (Throwable t)
+                {
+                    JVMStabilityInspector.inspectThrowable(t);
+                    // don't let this stop us from shutting down the commitlog and other thread pools
+                    logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
+                }
+
+                CommitLog.instance.shutdownBlocking();
+
+                // wait for miscellaneous tasks like sstable and commitlog segment deletion
+                ScheduledExecutors.nonPeriodicTasks.shutdown();
+                if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
+                    logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
+            }
+        }, "StorageServiceShutdownHook");
+        Runtime.getRuntime().addShutdownHook(drainOnShutdown);
+#endif
+        prepare_to_join().get();
+#if 0
+        // Has to be called after the host id has potentially changed in prepareToJoin().
+        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
+            if (cfs.metadata.isCounter())
+                cfs.initCounterCache();
 #endif
 
-    if (get_property_join_ring()) {
-        join_token_ring(delay).get();
-    } else {
-        auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
-        if (!tokens.empty()) {
-            _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-            // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
-            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true));
+        if (get_property_join_ring()) {
+            join_token_ring(delay).get();
+        } else {
+            auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
+            if (!tokens.empty()) {
+                _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+                // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
+                gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+                gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true));
+            }
+            logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
-        logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
-    }
     });
 }
 
