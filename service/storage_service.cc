@@ -927,32 +927,25 @@ future<> storage_service::init_server(int delay) {
     Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
     prepare_to_join().get();
-    join_token_ring(delay).get();
 #if 0
     // Has to be called after the host id has potentially changed in prepareToJoin().
     for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
         if (cfs.metadata.isCounter())
             cfs.initCounterCache();
+#endif
 
-    if (Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-    {
-        joinTokenRing(delay);
-    }
-    else
-    {
-        Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-        if (!tokens.isEmpty())
-        {
-            _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+    if (get_property_join_ring()) {
+        join_token_ring(delay).get();
+    } else {
+        auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
+        if (!tokens.empty()) {
+            _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
             // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-            List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-            states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
-            states.add(Pair.create(ApplicationState.STATUS, valueFactory.hibernate(true)));
-            Gossiper.instance.addLocalApplicationStates(states);
+            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.hibernate(true));
         }
         logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
     }
-#endif
     });
 }
 
