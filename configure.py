@@ -163,7 +163,7 @@ tests = urchin_tests
 
 all_artifacts = apps + tests
 
-arg_parser = argparse.ArgumentParser('Configure seastar')
+arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
                         const = '-static',
                         help = 'Static link (useful for running on hosts outside the build environment')
