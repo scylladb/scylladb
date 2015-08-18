@@ -546,15 +546,11 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("handle_state_left endpoint={}", endpoint);
+    assert(pieces.size() >= 2);
+    auto tokens = get_tokens_for(endpoint);
+    logger.debug("Node {} state left, tokens {}", endpoint, tokens);
 #if 0
-    assert pieces.length >= 2;
-    Collection<Token> tokens;
-    tokens = get_tokens_for(endpoint);
-
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state left, tokens {}", endpoint, tokens);
-
-    excise(tokens, endpoint, extractExpireTime(pieces));
+     excise(tokens, endpoint, extractExpireTime(pieces));
 #endif
 }
 
