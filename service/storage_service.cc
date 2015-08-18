@@ -827,6 +827,7 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 }
 
 future<> storage_service::init_server(int delay) {
+    return seastar::async([this, delay] {
 #if 0
     logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
     logger.info("Thrift API version: {}", cassandraConstants.VERSION);
@@ -924,9 +925,8 @@ future<> storage_service::init_server(int delay) {
     }, "StorageServiceShutdownHook");
     Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
-    return prepare_to_join().then([this, delay] {
-        return join_token_ring(delay);
-    });
+    prepare_to_join().get();
+    join_token_ring(delay).get();
 #if 0
     // Has to be called after the host id has potentially changed in prepareToJoin().
     for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -952,6 +952,7 @@ future<> storage_service::init_server(int delay) {
         logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
     }
 #endif
+    });
 }
 
 future<> storage_service::replicate_to_all_cores() {
