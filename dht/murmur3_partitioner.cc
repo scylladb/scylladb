@@ -6,6 +6,7 @@
 #include "utils/murmur_hash.hh"
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
+#include <boost/lexical_cast.hpp>
 
 namespace dht {
 
@@ -56,24 +57,43 @@ token murmur3_partitioner::get_random_token() {
     return get_token(rand);
 }
 
-inline long long_token(const token& t) {
+inline int64_t long_token(const token& t) {
 
-    if (t._data.size() != sizeof(long)) {
-        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(long), t._data.size()));
+    if (t._data.size() != sizeof(int64_t)) {
+        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), t._data.size()));
     }
 
     auto ptr = t._data.begin();
-    auto lp = unaligned_cast<const long *>(ptr);
+    auto lp = unaligned_cast<const int64_t *>(ptr);
     return net::ntoh(*lp);
 }
 
+// XXX: Technically, this should be inside long token. However, long_token is
+// used quite a lot in hot paths, so it is better to keep the branches of, if
+// we can. Most our comparators will check for _kind separately,
+// so this should be fine.
 sstring murmur3_partitioner::to_sstring(const token& t) const {
-    return ::to_sstring(long_token(t));
+    int64_t lt;
+    if (t._kind == dht::token::kind::before_all_keys) {
+        lt = std::numeric_limits<long>::min();
+    } else {
+        lt = long_token(t);
+    }
+    return ::to_sstring(lt);
+}
+
+dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
+    auto lp = boost::lexical_cast<long>(t);
+    if (lp == std::numeric_limits<long>::min()) {
+        return minimum_token();
+    } else {
+        return get_token(uint64_t(lp));
+    }
 }
 
 int murmur3_partitioner::tri_compare(const token& t1, const token& t2) {
-    long l1 = long_token(t1);
-    long l2 = long_token(t2);
+    auto l1 = long_token(t1);
+    auto l2 = long_token(t2);
 
     if (l1 == l2) {
         return 0;

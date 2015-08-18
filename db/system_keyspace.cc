@@ -43,6 +43,7 @@
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
+#include <core/enum.hh>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -408,6 +409,7 @@ future<> force_blocking_flush(sstring cfname);
 // updates are propagated correctly.
 struct local_cache {
     std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> _cached_dc_rack_info;
+    bootstrap_state _state;
     future<> stop() {
         return make_ready_future<>();
     }
@@ -415,27 +417,40 @@ struct local_cache {
 static distributed<local_cache> _local_cache;
 
 static future<> build_dc_rack_info() {
-    return _local_cache.start().then([] {
-        engine().at_exit([] {
-            return _local_cache.stop();
-        });
+    return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        return do_for_each(*msg, [] (auto& row) {
+            // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
+            net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
+            if (!row.has("data_center") || !row.has("rack")) {
+                return make_ready_future<>();
+            }
+            gms::inet_address gms_addr(std::move(peer));
+            sstring dc = row.template get_as<sstring>("data_center");
+            sstring rack = row.template get_as<sstring>("rack");
 
-        return execute_cql("SELECT peer, data_center, rack from system.%s", PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
-            return do_for_each(*msg, [] (auto& row) {
-                // Not ideal to assume ipv4 here, but currently this is what the cql types wraps.
-                net::ipv4_address peer = row.template get_as<net::ipv4_address>("peer");
-                if (!row.has("data_center") || !row.has("rack")) {
-                    return make_ready_future<>();
-                }
-                gms::inet_address gms_addr(std::move(peer));
-                sstring dc = row.template get_as<sstring>("data_center");
-                sstring rack = row.template get_as<sstring>("rack");
-
-                locator::endpoint_dc_rack  element = { dc, rack };
-                return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
-                    lc._cached_dc_rack_info.emplace(gms_addr, element);
-                });
+            locator::endpoint_dc_rack  element = { dc, rack };
+            return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
+                lc._cached_dc_rack_info.emplace(gms_addr, element);
             });
+        });
+    });
+}
+
+static future<> build_bootstrap_info() {
+    sstring req = "SELECT bootstrapped FROM system.%s WHERE key = ? ";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (auto msg) {
+        static auto state_map = std::unordered_map<sstring, bootstrap_state>({
+            { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
+            { "COMPLETED", bootstrap_state::COMPLETED },
+            { "IN_PROGRESS", bootstrap_state::IN_PROGRESS }
+        });
+        bootstrap_state state = bootstrap_state::NEEDS_BOOTSTRAP;
+
+        if (!msg->empty() && msg->one().has("bootstrapped")) {
+            state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
+        }
+        return _local_cache.invoke_on_all([state] (local_cache& lc) {
+            lc._state = state;
         });
     });
 }
@@ -447,7 +462,15 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
+        return _local_cache.start().then([] {
+            engine().at_exit([] {
+                return _local_cache.stop();
+            });
+        });
+    }).then([] {
         return build_dc_rack_info();
+    }).then([] {
+        return build_bootstrap_info();
     }).then([] {
         return check_health();
     }).then([] {
@@ -530,6 +553,16 @@ set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens
     return tset;
 }
 
+std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens) {
+    std::unordered_set<dht::token> tset;
+    for (auto& t: tokens) {
+        auto str = boost::any_cast<sstring>(t);
+        assert(str == dht::global_partitioner().to_sstring(dht::global_partitioner().from_sstring(str)));
+        tset.insert(dht::global_partitioner().from_sstring(str));
+    }
+    return tset;
+}
+
 /**
  * Record tokens being used by another node
  */
@@ -546,17 +579,18 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
 }
 
 future<std::unordered_set<dht::token>> update_local_tokens(
-    const std::unordered_set<dht::token>& add_tokens,
-    const std::unordered_set<dht::token>& rm_tokens) {
-    auto tokens = get_saved_tokens();
-    for (auto& x : rm_tokens) {
-        tokens.erase(x);
-    }
-    for (auto& x : add_tokens) {
-        tokens.insert(x);
-    }
-    return update_tokens(tokens).then([tokens] {
-        return tokens;
+    const std::unordered_set<dht::token> add_tokens,
+    const std::unordered_set<dht::token> rm_tokens) {
+    return get_saved_tokens().then([add_tokens = std::move(add_tokens), rm_tokens = std::move(rm_tokens)] (auto tokens) {
+        for (auto& x : rm_tokens) {
+            tokens.erase(x);
+        }
+        for (auto& x : add_tokens) {
+            tokens.insert(x);
+        }
+        return update_tokens(tokens).then([tokens] {
+            return tokens;
+        });
     });
 }
 
@@ -679,15 +713,20 @@ future<> check_health() {
     });
 }
 
-std::unordered_set<dht::token> get_saved_tokens() {
-#if 0
-    String req = "SELECT tokens FROM system.%s WHERE key='%s'";
-    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-    return result.isEmpty() || !result.one().has("tokens")
-         ? Collections.<Token>emptyList()
-         : deserializeTokens(result.one().getSet("tokens", UTF8Type.instance));
-#endif
-    return std::unordered_set<dht::token>();
+future<std::unordered_set<dht::token>> get_saved_tokens() {
+    sstring req = "SELECT tokens FROM system.%s WHERE key = ?";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (auto msg) {
+        if (msg->empty() || !msg->one().has("tokens")) {
+            return make_ready_future<std::unordered_set<dht::token>>();
+        }
+
+        auto blob = msg->one().get_blob("tokens");
+        auto cdef = local()->get_column_definition("tokens");
+        auto deserialized = cdef->type->deserialize(blob);
+        auto tokens = boost::any_cast<set_type_impl::native_type>(deserialized);
+
+        return make_ready_future<std::unordered_set<dht::token>>(decode_tokens(tokens));
+    });
 }
 
 bool bootstrap_complete() {
@@ -699,26 +738,24 @@ bool bootstrap_in_progress() {
 }
 
 bootstrap_state get_bootstrap_state() {
-#if 0
-    String req = "SELECT bootstrapped FROM system.%s WHERE key='%s'";
-    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-
-    if (result.isEmpty() || !result.one().has("bootstrapped"))
-        return BootstrapState.NEEDS_BOOTSTRAP;
-
-    return BootstrapState.valueOf(result.one().getString("bootstrapped"));
-#endif
-    return bootstrap_state::NEEDS_BOOTSTRAP;
+    return _local_cache.local()._state;
 }
 
 future<> set_bootstrap_state(bootstrap_state state) {
-#if 0
-    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', '%s')";
-    return execute_cql(req, LOCAL, LOCAL, state.name()).discard_result().then([] {
-        return force_blocking_flush(LOCAL);
+    static sstring state_name = std::unordered_map<bootstrap_state, sstring, enum_hash<bootstrap_state>>({
+        { bootstrap_state::NEEDS_BOOTSTRAP, "NEEDS_BOOTSTRAP" },
+        { bootstrap_state::COMPLETED, "COMPLETED" },
+        { bootstrap_state::IN_PROGRESS, "IN_PROGRESS" }
+    }).at(state);
+
+    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), state_name).discard_result().then([state] {
+        return force_blocking_flush(LOCAL).then([state] {
+            return _local_cache.invoke_on_all([state] (local_cache& lc) {
+                lc._state = state;
+            });
+        });
     });
-#endif
-    return make_ready_future<>();
 }
 
 std::vector<schema_ptr> all_tables() {

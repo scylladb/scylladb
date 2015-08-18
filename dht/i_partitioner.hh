@@ -198,6 +198,11 @@ public:
     virtual sstring to_sstring(const dht::token& t) const = 0;
 
     /**
+     * @return a token from its partitioner-specific string representation
+     */
+    virtual dht::token from_sstring(const sstring& t) const = 0;
+
+    /**
      * @return a randomly generated token
      */
     virtual token get_random_token() = 0;
