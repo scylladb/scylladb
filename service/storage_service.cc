@@ -332,10 +332,8 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     auto f = db::system_keyspace::update_tokens(tokens);
     return f.then([this, tokens = std::move(tokens)] {
-        // FIXME: DatabaseDescriptor.isReplacing()
-        auto is_replacing = false;
         auto sleep_time = std::chrono::milliseconds(1);
-        if (!is_replacing) {
+        if (!is_replacing()) {
             // if not an existing token then bootstrap
             auto& gossiper = gms::get_local_gossiper();
             gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
