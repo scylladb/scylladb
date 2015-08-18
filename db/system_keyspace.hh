@@ -66,6 +66,7 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
+future<> init_local_cache();
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 future<> update_schema_version(utils::UUID version);
 future<> update_tokens(std::unordered_set<dht::token> tokens);

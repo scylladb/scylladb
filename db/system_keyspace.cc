@@ -455,6 +455,14 @@ static future<> build_bootstrap_info() {
     });
 }
 
+future<> init_local_cache() {
+    return _local_cache.start().then([] {
+        engine().at_exit([] {
+            return _local_cache.stop();
+        });
+    });
+}
+
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     auto new_ctx = std::make_unique<query_context>(db, qp);
     qctx.swap(new_ctx);
@@ -462,11 +470,7 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
-        return _local_cache.start().then([] {
-            engine().at_exit([] {
-                return _local_cache.stop();
-            });
-        });
+        return init_local_cache();
     }).then([] {
         return build_dc_rack_info();
     }).then([] {
