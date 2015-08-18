@@ -74,57 +74,47 @@ db::commitlog::config::config(const db::config& cfg)
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
 {}
 
-class db::commitlog::descriptor {
-public:
-    static const std::string SEPARATOR;
-    static const std::string FILENAME_PREFIX;
-    static const std::string FILENAME_EXTENSION;
+db::commitlog::descriptor::descriptor(segment_id_type i, uint32_t v)
+        : id(i), ver(v) {
+}
 
-    descriptor(descriptor&&) = default;
-    descriptor(const descriptor&) = default;
-    // TODO : version management
-    descriptor(segment_id_type i, uint32_t v = 1)
-            : id(i), ver(v) {
-    }
-    descriptor(replay_position p)
-            : descriptor(p.id) {
-    }
-    descriptor(std::pair<uint64_t, uint32_t> p)
-            : descriptor(p.first, p.second) {
-    }
-    descriptor(sstring filename)
-            : descriptor([filename]() {
-                std::smatch m;
-                // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                    std::regex rx(FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
-                    std::string sfilename = filename;
-                    if (!std::regex_match(sfilename, m, rx)) {
-                        throw std::runtime_error("Cannot parse the version of the file: " + filename);
-                    }
-                    if (m[3].length() == 0) {
-                        // CMH. Can most likely ignore this
-                        throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
-                    }
+db::commitlog::descriptor::descriptor(replay_position p)
+        : descriptor(p.id) {
+}
 
-                    segment_id_type id = std::stoull(m[3].str().substr(1));
-                    uint32_t ver = std::stoul(m[2].str());
+db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p)
+        : descriptor(p.first, p.second) {
+}
 
-                    return std::make_pair(id, ver);
-                }()) {
-    }
+db::commitlog::descriptor::descriptor(sstring filename)
+        : descriptor([filename]() {
+            std::smatch m;
+            // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
+                std::regex rx(FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                std::string sfilename = filename;
+                if (!std::regex_match(sfilename, m, rx)) {
+                    throw std::runtime_error("Cannot parse the version of the file: " + filename);
+                }
+                if (m[3].length() == 0) {
+                    // CMH. Can most likely ignore this
+                    throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
+                }
 
-    sstring filename() const {
-        return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
-                + std::to_string(id) + FILENAME_EXTENSION;
-    }
+                segment_id_type id = std::stoull(m[3].str().substr(1));
+                uint32_t ver = std::stoul(m[2].str());
 
-    operator replay_position() const {
-        return replay_position(id);
-    }
+                return std::make_pair(id, ver);
+            }()) {
+}
 
-    const segment_id_type id;
-    const uint32_t ver;
-};
+sstring db::commitlog::descriptor::filename() const {
+    return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
+            + std::to_string(id) + FILENAME_EXTENSION;
+}
+
+db::commitlog::descriptor::operator db::replay_position() const {
+    return replay_position(id);
+}
 
 const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX(

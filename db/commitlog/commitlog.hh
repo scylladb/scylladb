@@ -78,7 +78,6 @@ class commitlog {
 public:
     class segment_manager;
     class segment;
-    class descriptor;
 
 private:
     std::unique_ptr<segment_manager> _segment_manager;
@@ -97,6 +96,27 @@ public:
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
 
         sync_mode mode = sync_mode::PERIODIC;
+    };
+
+    struct descriptor {
+    private:
+        descriptor(std::pair<uint64_t, uint32_t> p);
+    public:
+        static const std::string SEPARATOR;
+        static const std::string FILENAME_PREFIX;
+        static const std::string FILENAME_EXTENSION;
+
+        descriptor(descriptor&&) = default;
+        descriptor(const descriptor&) = default;
+        descriptor(segment_id_type i, uint32_t v = 1);
+        descriptor(replay_position p);
+        descriptor(sstring filename);
+
+        sstring filename() const;
+        operator replay_position() const;
+
+        const segment_id_type id;
+        const uint32_t ver;
     };
 
     commitlog(commitlog&&);
