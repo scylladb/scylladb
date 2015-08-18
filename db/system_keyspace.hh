@@ -33,6 +33,7 @@
 #include "locator/token_metadata.hh"
 #include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
+#include <map>
 
 namespace service {
 
@@ -357,24 +358,13 @@ enum class bootstrap_state {
         const std::unordered_set<dht::token> add_tokens,
         const std::unordered_set<dht::token> rm_tokens);
 
-#if 0
     /**
      * Return a map of stored tokens to IP addresses
      *
      */
-    public static SetMultimap<InetAddress, Token> loadTokens()
-    {
-        SetMultimap<InetAddress, Token> tokenMap = HashMultimap.create();
-        for (UntypedResultSet.Row row : executeInternal("SELECT peer, tokens FROM system." + PEERS))
-        {
-            InetAddress peer = row.getInetAddress("peer");
-            if (row.has("tokens"))
-                tokenMap.putAll(peer, deserializeTokens(row.getSet("tokens", UTF8Type.instance)));
-        }
+    future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens();
 
-        return tokenMap;
-    }
-
+#if 0
     /**
      * Return a map of store host_ids to IP addresses
      *

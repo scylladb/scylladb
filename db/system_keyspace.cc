@@ -598,6 +598,22 @@ future<std::unordered_set<dht::token>> update_local_tokens(
     });
 }
 
+future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens() {
+    // FIXME
+#if 0
+    SetMultimap<InetAddress, Token> tokenMap = HashMultimap.create();
+    for (UntypedResultSet.Row row : executeInternal("SELECT peer, tokens FROM system." + PEERS))
+    {
+        InetAddress peer = row.getInetAddress("peer");
+        if (row.has("tokens"))
+            tokenMap.putAll(peer, deserializeTokens(row.getSet("tokens", UTF8Type.instance)));
+    }
+
+    return tokenMap;
+#endif
+    return make_ready_future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
+}
+
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
     return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
