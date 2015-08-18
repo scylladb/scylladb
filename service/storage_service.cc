@@ -828,6 +828,7 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
 
 future<> storage_service::init_server(int delay) {
     return seastar::async([this, delay] {
+    auto& gossiper = gms::get_local_gossiper();
 #if 0
     logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
     logger.info("Thrift API version: {}", cassandraConstants.VERSION);
@@ -846,29 +847,29 @@ future<> storage_service::init_server(int delay) {
     {
         throw new AssertionError(e);
     }
+#endif
 
-    if (Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true")))
-    {
+    if (get_property_load_ring_state()) {
         logger.info("Loading persisted ring state");
-        Multimap<InetAddress, Token> loadedTokens = SystemKeyspace.loadTokens();
-        Map<InetAddress, UUID> loadedHostIds = SystemKeyspace.loadHostIds();
-        for (InetAddress ep : loadedTokens.keySet())
-        {
-            if (ep.equals(FBUtilities.getBroadcastAddress()))
-            {
+        auto loaded_tokens = db::system_keyspace::load_tokens().get0();
+        auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+        for (auto x : loaded_tokens) {
+            auto ep = x.first;
+            auto tokens = x.second;
+            if (ep == get_broadcast_address()) {
                 // entry has been mistakenly added, delete it
-                SystemKeyspace.removeEndpoint(ep);
-            }
-            else
-            {
-                _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
-                if (loadedHostIds.containsKey(ep))
-                    _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
-                Gossiper.instance.addSavedEndpoint(ep);
+                db::system_keyspace::remove_endpoint(ep).get();
+            } else {
+                _token_metadata.update_normal_tokens(tokens, ep);
+                if (loaded_host_ids.count(ep)) {
+                    _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
+                }
+                gossiper.add_saved_endpoint(ep);
             }
         }
     }
 
+#if 0
     // daemon threads, like our executors', continue to run while shutdown hooks are invoked
     drainOnShutdown = new Thread(new WrappedRunnable()
     {
