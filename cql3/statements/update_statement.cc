@@ -33,7 +33,7 @@ namespace statements {
 
 void update_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (s->is_dense()) {
-        if (!prefix) {
+        if (!prefix || (prefix.size() == 1 && prefix.components().front().empty())) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", *s->clustering_key_columns().begin()));
         }
 
