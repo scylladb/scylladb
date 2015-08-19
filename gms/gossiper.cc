@@ -398,34 +398,34 @@ void gossiper::do_status_check() {
 
     auto now = this->now();
 
-    for (auto& entry : endpoint_state_map) {
-        const inet_address& endpoint = entry.first;
+    for (auto it = endpoint_state_map.begin(); it != endpoint_state_map.end();) {
+        auto endpoint = it->first;
+        auto& ep_state = it->second;
+        it++;
+
+        bool is_alive = ep_state.is_alive();
         if (endpoint == get_broadcast_address()) {
             continue;
         }
 
         get_local_failure_detector().interpret(endpoint);
 
-        auto it = endpoint_state_map.find(endpoint);
-        if (it != endpoint_state_map.end()) {
-            endpoint_state& ep_state = it->second;
-            // check if this is a fat client. fat clients are removed automatically from
-            // gossip after FatClientTimeout.  Do not remove dead states here.
-            if (is_gossip_only_member(endpoint)
-                && !_just_removed_endpoints.count(endpoint)
-                && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
-                logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
-                remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-                evict_from_membershipg(endpoint); // can get rid of the state immediately
-            }
+        // check if this is a fat client. fat clients are removed automatically from
+        // gossip after FatClientTimeout.  Do not remove dead states here.
+        if (is_gossip_only_member(endpoint)
+            && !_just_removed_endpoints.count(endpoint)
+            && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
+            logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
+            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            evict_from_membershipg(endpoint); // can get rid of the state immediately
+        }
 
-            // check for dead state removal
-            auto expire_time = get_expire_time_for_endpoint(endpoint);
-            if (!ep_state.is_alive() && (now > expire_time)
-                 && (!service::get_local_storage_service().get_token_metadata().is_member(endpoint))) {
-                logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-                evict_from_membershipg(endpoint);
-            }
+        // check for dead state removal
+        auto expire_time = get_expire_time_for_endpoint(endpoint);
+        if (!is_alive && (now > expire_time)
+             && (!service::get_local_storage_service().get_token_metadata().is_member(endpoint))) {
+            logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
+            evict_from_membershipg(endpoint);
         }
     }
 
