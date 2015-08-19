@@ -172,7 +172,7 @@ shared_ptr<terminal>
 sets::delayed_value::bind(const query_options& options) {
     std::set<bytes, serialized_compare> buffers(_comparator);
     for (auto&& t : _elements) {
-        bytes_opt b = t->bind_and_get(options);
+        auto b = t->bind_and_get(options);
 
         if (!b) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");

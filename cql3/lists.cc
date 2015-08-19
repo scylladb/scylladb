@@ -170,7 +170,7 @@ lists::delayed_value::bind(const query_options& options) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
-        bytes_opt bo = t->bind_and_get(options);
+        auto bo = t->bind_and_get(options);
 
         if (!bo) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -244,8 +244,8 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 
     auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
 
-    bytes_opt index = _idx->bind_and_get(params._options);
-    bytes_opt value = _t->bind_and_get(params._options);
+    auto index = _idx->bind_and_get(params._options);
+    auto value = _t->bind_and_get(params._options);
 
     if (!index) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");

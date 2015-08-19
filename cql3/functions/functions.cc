@@ -287,7 +287,7 @@ function_call::bind_and_get(const query_options& options) {
     for (auto&& t : _terms) {
         // For now, we don't allow nulls as argument as no existing function needs it and it
         // simplify things.
-        bytes_opt val = t->bind_and_get(options);
+        auto val = t->bind_and_get(options);
         if (!val) {
             throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
         }
