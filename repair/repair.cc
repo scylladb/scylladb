@@ -130,24 +130,24 @@ private:
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
     // Successfully-finished repairs are those with id < next_repair_command
     // but aren't listed as running or failed the status map.
-    std::unordered_map<int, repair_status> status;
+    std::unordered_map<int, repair_status> _status;
 public:
     void start(int id) {
-        status[id] = repair_status::RUNNING;
+        _status[id] = repair_status::RUNNING;
     }
     void done(int id, bool succeeded) {
         if (succeeded) {
-            status.erase(id);
+            _status.erase(id);
         } else {
-            status[id] = repair_status::FAILED;
+            _status[id] = repair_status::FAILED;
         }
     }
     repair_status get(int id) {
         if (id >= next_repair_command.load(std::memory_order_relaxed)) {
             throw std::runtime_error(sprint("unknown repair id %d", id));
         }
-        auto it = status.find(id);
-        if (it == status.end()) {
+        auto it = _status.find(id);
+        if (it == _status.end()) {
             return repair_status::SUCCESSFUL;
         } else {
             return it->second;
