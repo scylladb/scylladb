@@ -955,6 +955,8 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
+    cfg.max_memtable_size = _config.max_memtable_size;
+
     return cfg;
 }
 
@@ -1222,12 +1224,18 @@ database::make_keyspace_config(const keyspace_metadata& ksm) const {
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
         cfg.enable_cache = _cfg->enable_cache();
+        auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
+        if (!memtable_total_space) {
+            memtable_total_space = memory::stats().total_memory() / 2;
+        }
+        cfg.max_memtable_size = memtable_total_space * _cfg->memtable_cleanup_threshold();
     } else {
         cfg.datadir = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
+        cfg.max_memtable_size = std::numeric_limits<size_t>::max();
     }
     return cfg;
 }

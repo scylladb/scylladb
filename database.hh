@@ -308,6 +308,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
         bool enable_cache = true;
+        size_t max_memtable_size = 5'000'000;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
