@@ -189,7 +189,7 @@ future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
                 f.get();
                 logger.trace("Got GossipDigestACK2 Reply");
             } catch (...) {
-                logger.error("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
+                logger.warn("Fail to send GossipDigestACK2 to {}: {}", id, std::current_exception());
             }
             return make_ready_future<>();
         });
@@ -214,7 +214,7 @@ void gossiper::init_messaging_service_handler() {
             }
             get_local_failure_detector().force_conviction(from);
         }).handle_exception([] (auto ep) {
-            logger.error("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
+            logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
         return messaging_service::no_wait();
     });
@@ -233,7 +233,7 @@ void gossiper::init_messaging_service_handler() {
             gossiper.notify_failure_detector(remote_ep_state_map);
             return gossiper.apply_state_locally(remote_ep_state_map);
         }).handle_exception([] (auto ep) {
-            logger.error("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
+            logger.warn("Fail to handle GOSSIP_DIGEST_ACK: {}", ep);
         });
         return messaging_service::no_wait();
     });
@@ -365,67 +365,61 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& m
     });
 }
 
+// Runs inside seastar::async context
 void gossiper::remove_endpoint(inet_address endpoint) {
-    seastar::async([this, endpoint] {
-        // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-        for (auto& subscriber : _subscribers) {
-            subscriber->on_remove(endpoint);
-        }
+    // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
+    for (auto& subscriber : _subscribers) {
+        subscriber->on_remove(endpoint);
+    }
 
-        if(_seeds.count(endpoint)) {
-            build_seeds_list();
-            _seeds.erase(endpoint);
-            // logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
-        }
+    if(_seeds.count(endpoint)) {
+        build_seeds_list();
+        _seeds.erase(endpoint);
+        // logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
+    }
 
-        _live_endpoints.erase(endpoint);
-        _unreachable_endpoints.erase(endpoint);
-        // do not remove endpointState until the quarantine expires
-        get_local_failure_detector().remove(endpoint);
-        quarantine_endpoint(endpoint);
-        logger.debug("removing endpoint {}", endpoint);
-    }).then_wrapped([endpoint] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            logger.error("Fail to remove_endpoint={}: {}", endpoint, std::current_exception());
-        }
-    });
+    _live_endpoints.erase(endpoint);
+    _unreachable_endpoints.erase(endpoint);
+    // do not remove endpointState until the quarantine expires
+    get_local_failure_detector().remove(endpoint);
+    quarantine_endpoint(endpoint);
+    logger.debug("removing endpoint {}", endpoint);
 }
 
+// Runs inside seastar::async context
 void gossiper::do_status_check() {
     logger.trace("Performing status check ...");
 
     auto now = this->now();
 
-    for (auto& entry : endpoint_state_map) {
-        const inet_address& endpoint = entry.first;
+    for (auto it = endpoint_state_map.begin(); it != endpoint_state_map.end();) {
+        auto endpoint = it->first;
+        auto& ep_state = it->second;
+        it++;
+
+        bool is_alive = ep_state.is_alive();
         if (endpoint == get_broadcast_address()) {
             continue;
         }
 
         get_local_failure_detector().interpret(endpoint);
 
-        auto it = endpoint_state_map.find(endpoint);
-        if (it != endpoint_state_map.end()) {
-            endpoint_state& ep_state = it->second;
-            // check if this is a fat client. fat clients are removed automatically from
-            // gossip after FatClientTimeout.  Do not remove dead states here.
-            if (is_gossip_only_member(endpoint)
-                && !_just_removed_endpoints.count(endpoint)
-                && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
-                logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
-                remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-                evict_from_membershipg(endpoint); // can get rid of the state immediately
-            }
+        // check if this is a fat client. fat clients are removed automatically from
+        // gossip after FatClientTimeout.  Do not remove dead states here.
+        if (is_gossip_only_member(endpoint)
+            && !_just_removed_endpoints.count(endpoint)
+            && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
+            logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
+            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            evict_from_membership(endpoint); // can get rid of the state immediately
+        }
 
-            // check for dead state removal
-            auto expire_time = get_expire_time_for_endpoint(endpoint);
-            if (!ep_state.is_alive() && (now > expire_time)
-                 && (!service::get_local_storage_service().get_token_metadata().is_member(endpoint))) {
-                logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-                evict_from_membershipg(endpoint);
-            }
+        // check for dead state removal
+        auto expire_time = get_expire_time_for_endpoint(endpoint);
+        if (!is_alive && (now > expire_time)
+             && (!service::get_local_storage_service().get_token_metadata().is_member(endpoint))) {
+            logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
+            evict_from_membership(endpoint);
         }
     }
 
@@ -638,7 +632,7 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) {
     return max_version;
 }
 
-void gossiper::evict_from_membershipg(inet_address endpoint) {
+void gossiper::evict_from_membership(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
     endpoint_state_map.erase(endpoint);
     _expire_time_endpoint_map.erase(endpoint);
@@ -660,9 +654,10 @@ void gossiper::replacement_quarantine(inet_address endpoint) {
     quarantine_endpoint(endpoint, now() + quarantine_delay());
 }
 
+// Runs inside seastar::async context
 void gossiper::replaced_endpoint(inet_address endpoint) {
     remove_endpoint(endpoint);
-    evict_from_membershipg(endpoint);
+    evict_from_membership(endpoint);
     replacement_quarantine(endpoint);
 }
 
@@ -980,7 +975,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
             logger.trace("Got EchoMessage Reply");
             *ok = true;
         } catch (...) {
-            logger.error("Fail to send EchoMessage to {}: {}", id, std::current_exception());
+            logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
         }
         return make_ready_future<>();
     }).get();
@@ -1022,7 +1017,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
         try {
             f.get();
         } catch (...) {
-            logger.error("Fail to mark_dead={}: {}", addr, std::current_exception());
+            logger.warn("Fail to mark_dead={}: {}", addr, std::current_exception());
         }
     });
 }
@@ -1233,8 +1228,9 @@ future<> gossiper::do_shadow_round() {
                 std::vector<gossip_digest> digests;
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
                 auto id = get_shard_id(seed);
+                auto sem = make_shared<semaphore>(0);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
+                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id, sem] (auto&& f) {
                     try {
                         auto ack_msg = f.get0();
                         logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
@@ -1243,12 +1239,18 @@ future<> gossiper::do_shadow_round() {
                         logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
                     }
                     return make_ready_future<>();
+                }).finally([sem] {
+                    sem->signal();
+                });
+                sem->wait(std::chrono::seconds(1)).handle_exception([id] (auto ep) {
+                    logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 }).get();
             }
             if (clk::now() > t + storage_service_ring_delay()) {
-                throw std::runtime_error(sprint("Unable to gossip with any seeds"));
+                throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
+                logger.trace("Sleep 1 second and retry ...");
                 sleep(std::chrono::seconds(1)).get();
             }
         }
@@ -1313,7 +1315,7 @@ void gossiper::add_local_application_state(application_state state, versioned_va
         try {
             f.get();
         } catch (...) {
-            logger.error("Fail to apply application_state: {}", std::current_exception());
+            logger.warn("Fail to apply application_state: {}", std::current_exception());
         }
     });
 }
@@ -1340,7 +1342,7 @@ future<> gossiper::shutdown() {
                     f.get();
                     logger.trace("Got GossipShutdown Reply");
                 } catch (...) {
-                    logger.error("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+                    logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
                 }
             });
         }
@@ -1408,7 +1410,7 @@ bool gossiper::is_alive(inet_address ep) {
     if (eps) {
         return eps->is_alive();
     } else {
-        logger.error("unknown endpoint {}", ep);
+        logger.warn("unknown endpoint {}", ep);
         return false;
     }
 }
