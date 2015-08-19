@@ -382,7 +382,7 @@ segment::heap_handle() {
 // Per-segment metadata is kept in a separate array, managed by segment_pool
 // object.
 //
-class region::impl : public allocation_strategy {
+class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
     static constexpr size_t max_managed_object_size = segment::size * 0.1;
 
@@ -584,13 +584,13 @@ private:
         return id.fetch_add(1);
     }
 public:
-    impl()
+    region_impl()
         : _id(next_id())
     {
         tracker_instance._impl->register_region(this);
     }
 
-    virtual ~impl() {
+    virtual ~region_impl() {
         tracker_instance._impl->unregister_region(this);
 
         assert(_segments.empty());
@@ -600,8 +600,8 @@ public:
         }
     }
 
-    impl(impl&&) = delete;
-    impl(const impl&) = delete;
+    region_impl(region_impl&&) = delete;
+    region_impl(const region_impl&) = delete;
 
     bool empty() const {
         return occupancy().used_space() == 0;
@@ -673,7 +673,7 @@ public:
 
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
-    void merge(region::impl& other) {
+    void merge(region_impl& other) {
         if (_active && _active->is_empty()) {
             shard_segment_pool.free_segment(_active);
             _active = nullptr;
@@ -817,7 +817,7 @@ occupancy_stats tracker::impl::occupancy() const {
 void tracker::impl::full_compaction() {
     logger.debug("Full compaction on all regions, {}", occupancy());
 
-    for (region::impl* r : _regions) {
+    for (region_impl* r : _regions) {
         if (r->is_compactible()) {
             r->full_compaction();
         }

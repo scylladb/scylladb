@@ -12,6 +12,7 @@
 namespace logalloc {
 
 struct occupancy_stats;
+class region_impl;
 
 using eviction_fn = std::function<void()>;
 
@@ -23,6 +24,7 @@ private:
     std::unique_ptr<impl> _impl;
     memory::reclaimer _reclaimer;
     friend class region;
+    friend class region_impl;
 public:
     tracker();
     ~tracker();
@@ -123,7 +125,7 @@ public:
 //
 class region {
 public:
-    class impl;
+    using impl = region_impl;
 private:
     std::unique_ptr<impl> _impl;
 public:
