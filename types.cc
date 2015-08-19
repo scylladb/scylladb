@@ -1943,7 +1943,7 @@ tuple_type_impl::serialized_size(const boost::any& value) const {
     if (value.empty()) {
         return size;
     }
-    auto&& v = boost::any_cast<const native_type&>(value);
+    auto& v = boost::any_cast<const native_type&>(value);
     auto find_serialized_size = [] (auto&& t_v) {
         const data_type& t = boost::get<0>(t_v);
         const boost::any& v = boost::get<1>(t_v);
@@ -1957,7 +1957,7 @@ tuple_type_impl::serialize(const boost::any& value, bytes::iterator& out) const 
     if (value.empty()) {
         return;
     }
-    auto&& v = boost::any_cast<const native_type&>(value);
+    auto& v = boost::any_cast<const native_type&>(value);
     auto do_serialize = [&out] (auto&& t_v) {
         const data_type& t = boost::get<0>(t_v);
         const boost::any& v = boost::get<1>(t_v);
