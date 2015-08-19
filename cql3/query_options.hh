@@ -54,6 +54,7 @@ private:
     const std::experimental::optional<std::vector<sstring>> _names;
     std::vector<bytes_opt> _values;
     std::vector<bytes_view_opt> _value_views;
+    mutable std::vector<std::vector<int8_t>> _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
     const int32_t _protocol_version; // transient
@@ -84,6 +85,7 @@ public:
 
     db::consistency_level get_consistency() const;
     bytes_view_opt get_value_at(size_t idx) const;
+    bytes_view_opt make_temporary(bytes_opt value) const;
     size_t get_values_count() const;
     bool skip_metadata() const;
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */

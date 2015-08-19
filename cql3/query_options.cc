@@ -107,6 +107,16 @@ size_t query_options::get_values_count() const
     return _value_views.size();
 }
 
+bytes_view_opt query_options::make_temporary(bytes_opt value) const
+{
+    if (value) {
+        _temporaries.emplace_back(value->begin(), value->end());
+        auto& temporary = _temporaries.back();
+        return bytes_view{temporary.data(), temporary.size()};
+    }
+    return std::experimental::nullopt;
+}
+
 bool query_options::skip_metadata() const
 {
     return _skip_metadata;
