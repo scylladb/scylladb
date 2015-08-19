@@ -382,7 +382,7 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
 void column_family::add_memtable() {
     // allow in-progress reads to continue using old list
     _memtables = make_lw_shared(memtable_list(*_memtables));
-    _memtables->emplace_back(make_lw_shared<memtable>(_schema));
+    _memtables->emplace_back(make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group));
 }
 
 future<>
@@ -956,6 +956,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
+    cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
 
     return cfg;
 }
@@ -1215,7 +1216,7 @@ future<> database::apply(const frozen_mutation& m) {
 }
 
 keyspace::config
-database::make_keyspace_config(const keyspace_metadata& ksm) const {
+database::make_keyspace_config(const keyspace_metadata& ksm) {
     // FIXME support multiple directories
     keyspace::config cfg;
     if (_cfg->data_file_directories().size() > 0) {
@@ -1237,6 +1238,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) const {
         cfg.enable_cache = false;
         cfg.max_memtable_size = std::numeric_limits<size_t>::max();
     }
+    cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     return cfg;
 }
 

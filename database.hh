@@ -89,6 +89,7 @@ public:
         bool enable_cache = true;
         bool enable_commitlog = true;
         size_t max_memtable_size = 5'000'000;
+        logalloc::region_group* dirty_memory_region_group = nullptr;
     };
     struct no_commitlog {};
     struct stats {
@@ -309,6 +310,7 @@ public:
         bool enable_disk_writes = true;
         bool enable_cache = true;
         size_t max_memtable_size = 5'000'000;
+        logalloc::region_group* dirty_memory_region_group = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -365,6 +367,7 @@ class database {
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
+    logalloc::region_group _dirty_memory_region_group;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
@@ -441,7 +444,7 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(const query::read_command& cmd, const query::partition_range& range);
     future<> apply(const frozen_mutation&);
-    keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
+    keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
