@@ -862,14 +862,14 @@ const db::commitlog::config& db::commitlog::active_config() const {
 }
 
 future<subscription<temporary_buffer<char>, db::replay_position>>
-db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next) {
-    return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next)](file f) {
-       return read_log_file(std::move(f), std::move(next));
+db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
+    return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next), off](file f) {
+       return read_log_file(std::move(f), std::move(next), off);
     });
 }
 
 subscription<temporary_buffer<char>, db::replay_position>
-db::commitlog::read_log_file(file f, commit_load_reader_func next) {
+db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type off) {
     struct work {
         file f;
         stream<temporary_buffer<char>, replay_position> s;
@@ -878,111 +878,154 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next) {
         uint64_t id = 0;
         size_t pos = 0;
         size_t next = 0;
+        size_t start_off = 0;
+        size_t skip_to = 0;
         bool eof = false;
         bool header = true;
-        work(file f) : f(f), fin(make_file_input_stream(f)) {}
+
+        work(file f, position_type o = 0)
+                : f(f), fin(make_file_input_stream(f)), start_off(o) {
+        }
+        work(work&&) = default;
+
+        bool advance(const temporary_buffer<char>& buf) {
+            pos += buf.size();
+            if (buf.size() == 0) {
+                eof = true;
+            }
+            return !eof;
+        }
+        bool end_of_file() const {
+            return eof;
+        }
+        bool end_of_chunk() const {
+            return eof || next == pos;
+        }
+        future<> skip(size_t bytes) {
+            skip_to = pos + bytes;
+            return do_until([this] { return pos == skip_to || eof; }, [this, bytes] {
+                auto s = std::min<size_t>(4096, skip_to - pos);
+                // should eof be an error here?
+                return fin.read_exactly(s).then([this](auto buf) {
+                    this->advance(buf);
+                });
+            });
+        }
+        future<> read_header() {
+            return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
+                advance(buf);
+                // Will throw if we got eof
+                data_input in(buf);
+                auto ver = in.read<uint32_t>();
+                auto id = in.read<uint64_t>();
+                auto checksum = in.read<uint32_t>();
+
+                crc32_nbo crc;
+                crc.process(ver);
+                crc.process<int32_t>(id & 0xffffffff);
+                crc.process<int32_t>(id >> 32);
+
+                auto cs = crc.checksum();
+                if (cs != checksum) {
+                    throw std::runtime_error("Checksum error in file header");
+                }
+
+                this->id = id;
+                this->next = 0;
+
+                if (start_off > pos) {
+                    return skip(start_off - pos);
+                }
+                return make_ready_future<>();
+            });
+        }
+        future<> read_chunk() {
+            return fin.read_exactly(segment::segment_overhead_size).then([this](temporary_buffer<char> buf) {
+                auto start = pos;
+
+                if (!advance(buf)) {
+                    return make_ready_future<>();
+                }
+
+                data_input in(buf);
+                auto next = in.read<uint32_t>();
+                auto checksum = in.read<uint32_t>();
+
+                crc32_nbo crc;
+                crc.process<int32_t>(id & 0xffffffff);
+                crc.process<int32_t>(id >> 32);
+                crc.process<uint32_t>(start);
+
+                auto cs = crc.checksum();
+                if (cs != checksum) {
+                    throw std::runtime_error("Checksum error in chunk header");
+                }
+
+                this->next = next;
+
+                return do_until(std::bind(&work::end_of_chunk, this), std::bind(&work::read_entry, this));
+            });
+        }
+        future<> read_entry() {
+            static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
+            return fin.read_exactly(entry_header_size).then([this](temporary_buffer<char> buf) {
+                replay_position rp(id, position_type(pos));
+
+                if (!advance(buf)) {
+                    return make_ready_future<>();
+                }
+
+                data_input in(buf);
+
+                auto size = in.read<uint32_t>();
+                auto checksum = in.read<uint32_t>();
+
+                if (size == 0) {
+                    // special urchin case: zero padding due to dma blocks
+                    auto slack = next - pos;
+                    return skip(slack);
+                }
+
+                if (size < 3 * sizeof(uint32_t)) {
+                    throw std::runtime_error("Invalid entry size");
+                }
+
+                return fin.read_exactly(size - entry_header_size).then([this, size, checksum, rp](temporary_buffer<char> buf) {
+                    advance(buf);
+
+                    data_input in(buf);
+
+                    auto data_size = size - segment::entry_overhead_size;
+                    in.skip(data_size);
+                    auto checksum = in.read<uint32_t>();
+
+                    crc32_nbo crc;
+                    crc.process(size);
+                    crc.process_bytes(buf.get(), data_size);
+
+                    if (crc.checksum() != checksum) {
+                        throw std::runtime_error("Checksum error in data entry");
+                    }
+
+                    return s.produce(buf.share(0, data_size), rp);
+                });
+            });
+        }
+        future<> read_file() {
+            return read_header().then(
+                    [this] {
+                        return do_until(std::bind(&work::end_of_file, this), std::bind(&work::read_chunk, this));
+                    });
+        }
     };
 
-    auto w = make_lw_shared<work>(std::move(f));
-
+    auto w = make_lw_shared<work>(std::move(f), off);
     auto ret = w->s.listen(std::move(next));
 
-    w->s.started().then([w] {
-        return w->fin.read_exactly(segment::descriptor_header_size).then([w](temporary_buffer<char> buf) {
-           // Will throw if we got eof
-           data_input in(buf);
-           auto ver = in.read<uint32_t>();
-           auto id = in.read<uint64_t>();
-           auto checksum = in.read<uint32_t>();
+    w->s.started().then(std::bind(&work::read_file, w.get())).finally([w] {
+        w->s.close();
+    });
 
-           crc32_nbo crc;
-           crc.process(ver);
-           crc.process<int32_t>(id & 0xffffffff);
-           crc.process<int32_t>(id >> 32);
-
-           auto cs = crc.checksum();
-           if (cs != checksum) {
-               throw std::runtime_error("Checksum error in file header");
-           }
-
-           w->id = id;
-           w->next = 0;
-           w->pos = buf.size();
-
-           auto eofcond = [w] { return w->eof; };
-           return do_until(eofcond, [w] {
-               assert(w->pos == w->next || w->next == 0);
-               return w->fin.read_exactly(segment::segment_overhead_size).then([w](temporary_buffer<char> buf) {
-                   if (buf.size() == 0) {
-                       w->eof = true;
-                       return make_ready_future<>();
-                   }
-
-                   data_input in(buf);
-                   auto next = in.read<uint32_t>();
-                   auto checksum = in.read<uint32_t>();
-
-                   crc32_nbo crc;
-                   crc.process<int32_t>(w->id & 0xffffffff);
-                   crc.process<int32_t>(w->id >> 32);
-                   crc.process<uint32_t>(w->pos);
-
-                   auto cs = crc.checksum();
-                   if (cs != checksum) {
-                       throw std::runtime_error("Checksum error in chunk header");
-                   }
-
-                   w->pos += 8;
-                   w->next = next;
-
-                   auto eoccond = [w] { return w->pos == w->next; };
-                   return do_until(eoccond, [w] {
-                       static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
-                       return w->fin.read_exactly(entry_header_size).then([w](temporary_buffer<char> buf) {
-                           data_input in(buf);
-
-                           auto size = in.read<uint32_t>();
-                           auto checksum = in.read<uint32_t>();
-
-                           if (size == 0) {
-                               // special urchin case: zero padding due to dma blocks
-                               auto slack = w->next - entry_header_size - w->pos;
-                               return w->fin.read_exactly(slack).then([w, slack](temporary_buffer<char> buf) {
-                                   // should eof be an error here?
-                                   w->pos += slack + entry_header_size;
-                               });
-                           }
-                           if (size < 3 * sizeof(uint32_t)) {
-                               throw std::runtime_error("Invalid entry size");
-                           }
-                           return w->fin.read_exactly(size - entry_header_size).then([w, size, checksum](temporary_buffer<char> buf) {
-                               data_input in(buf);
-
-                               auto data_size = size - segment::entry_overhead_size;
-                               in.skip(data_size);
-                               auto checksum = in.read<uint32_t>();
-
-                               crc32_nbo crc;
-                               crc.process(size);
-                               crc.process_bytes(buf.get(), data_size);
-
-                               if (crc.checksum() != checksum) {
-                                   throw std::runtime_error("Checksum error in data entry");
-                               }
-
-                               replay_position rp(w->id, position_type(w->pos));
-
-                               w->pos += size;
-                               return w->s.produce(buf.share(0, data_size), rp);
-                           });
-                       });
-                   });
-               });
-           });
-        });
-    }).then([w] {
-        return w->s.close();
-    }).finally([w] {}); // keep w alive for last close
     return ret;
 }
 
