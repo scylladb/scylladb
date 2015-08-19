@@ -643,6 +643,18 @@ database::database(const db::config& cfg)
     db::system_keyspace::make(*this, durable);
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
+    setup_collectd();
+}
+
+void
+database::setup_collectd() {
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return _dirty_memory_region_group.memory_used();
+    })));
 }
 
 database::~database() {

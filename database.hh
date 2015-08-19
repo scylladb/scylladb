@@ -368,6 +368,7 @@ class database {
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
     logalloc::region_group _dirty_memory_region_group;
+    std::vector<scollectd::registration> _collectd;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
@@ -380,7 +381,7 @@ private:
     void add_keyspace(sstring name, keyspace k);
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable);
-
+    void setup_collectd();
 public:
     static utils::UUID empty_version;
 
