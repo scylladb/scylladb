@@ -147,31 +147,33 @@ void row_cache::populate(const mutation& m) {
 
 future<> row_cache::update(memtable& m, negative_mutation_reader underlying_negative) {
     _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
-    with_allocator(_tracker.allocator(), [this, &m, underlying_negative = std::move(underlying_negative)] {
-        auto i = m.partitions.begin();
-        const schema& s = *m.schema();
-        while (i != m.partitions.end()) {
-            partition_entry& mem_e = *i;
-            // FIXME: Optimize knowing we lookup in-order.
-            auto cache_i = _partitions.lower_bound(mem_e.key(), cache_entry::compare(_schema));
-            // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
-            // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
-            //        search it.
-            if (cache_i != _partitions.end() && cache_i->key().equal(s, mem_e.key())) {
-                cache_entry& entry = *cache_i;
-                _tracker.touch(entry);
-                entry.partition().apply(s, std::move(mem_e.partition()));
-            } else if (underlying_negative(mem_e.key().key()) == negative_mutation_reader_result::definitely_doesnt_exists) {
-                cache_entry* entry = current_allocator().construct<cache_entry>(mem_e.key(), mem_e.partition());
-                _tracker.insert(*entry);
-                _partitions.insert(cache_i, *entry);
+    return repeat([this, &m, underlying_negative = std::move(underlying_negative)] () mutable {
+        return with_allocator(_tracker.allocator(), [this, &m, &underlying_negative] () {
+            unsigned quota = 30;
+            auto i = m.partitions.begin();
+            const schema& s = *m.schema();
+            while (i != m.partitions.end() && quota-- != 0) {
+                partition_entry& mem_e = *i;
+                // FIXME: Optimize knowing we lookup in-order.
+                auto cache_i = _partitions.lower_bound(mem_e.key(), cache_entry::compare(_schema));
+                // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
+                // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
+                //        search it.
+                if (cache_i != _partitions.end() && cache_i->key().equal(s, mem_e.key())) {
+                    cache_entry& entry = *cache_i;
+                    _tracker.touch(entry);
+                    entry.partition().apply(s, std::move(mem_e.partition()));
+                } else if (underlying_negative(mem_e.key().key()) == negative_mutation_reader_result::definitely_doesnt_exists) {
+                    cache_entry* entry = current_allocator().construct<cache_entry>(mem_e.key(), mem_e.partition());
+                    _tracker.insert(*entry);
+                    _partitions.insert(cache_i, *entry);
+                }
+                i = m.partitions.erase(i);
+                current_allocator().destroy(&mem_e);
             }
-            i = m.partitions.erase(i);
-            current_allocator().destroy(&mem_e);
-        }
+            return make_ready_future<stop_iteration>(m.partitions.empty() ? stop_iteration::yes : stop_iteration::no);
+        });
     });
-    // FIXME: yield voluntarily every now and then to cap latency.
-    return make_ready_future<>();
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_tracker& tracker)
