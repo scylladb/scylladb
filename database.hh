@@ -88,6 +88,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
         bool enable_commitlog = true;
+        size_t max_memtable_size = 5'000'000;
     };
     struct no_commitlog {};
     struct stats {
@@ -475,8 +476,10 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
 inline
 void
 column_family::seal_on_overflow() {
-    // FIXME: something better
-    if (++_mutation_count == 100000) {
+    ++_mutation_count;
+    if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
+        // FIXME: if sparse, do some in-memory compaction first
+        // FIXME: maybe merge with other in-memory memtables
         _mutation_count = 0;
         seal_active_memtable();
     }
