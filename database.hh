@@ -125,7 +125,8 @@ private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
-    future<> flush_memtable_to_sstable(uint64_t gen, lw_shared_ptr<memtable> memt);
+    future<> flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
+    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
 private:

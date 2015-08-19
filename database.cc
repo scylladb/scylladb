@@ -16,6 +16,7 @@
 #include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
 #include "core/seastar.hh"
+#include <seastar/core/sleep.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -33,6 +34,8 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
+
+using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
@@ -417,19 +420,19 @@ column_family::seal_active_memtable() {
     );
     _highest_flushed_rp = old->replay_position();
 
-    // FIXME: better way of ensuring we don't attemt to
-    //        overwrite an existing table.
-    auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
-
-    return seastar::with_gate(_in_flight_seals, [gen, old, this] {
-        return flush_memtable_to_sstable(gen, old);
+    return seastar::with_gate(_in_flight_seals, [old, this] {
+        return flush_memtable_to_sstable(old);
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
 }
 
-future<>
-column_family::flush_memtable_to_sstable(uint64_t gen, lw_shared_ptr<memtable> old) {
+future<stop_iteration>
+column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
+    // FIXME: better way of ensuring we don't attemt to
+    //        overwrite an existing table.
+    auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+
     sstables::sstable newtab = sstables::sstable(_schema->ks_name(), _schema->cf_name(),
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
@@ -466,11 +469,24 @@ column_family::flush_memtable_to_sstable(uint64_t gen, lw_shared_ptr<memtable> o
                 _memtables->erase(boost::range::find(*_memtables, old));
                 dblog.debug("Memtable replaced");
                 trigger_compaction();
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
             } catch (std::exception& e) {
                 dblog.error("failed to write sstable: {}", e.what());
             } catch (...) {
                 dblog.error("failed to write sstable: unknown error");
             }
+            return sleep(10s).then([] {
+                return make_ready_future<stop_iteration>(stop_iteration::no);
+            });
+        });
+    });
+}
+
+future<>
+column_family::flush_memtable_to_sstable(lw_shared_ptr<memtable> memt) {
+    return repeat([this, memt] {
+        return seastar::with_gate(_in_flight_seals, [memt, this] {
+            return try_flush_memtable_to_sstable(memt);
         });
     });
 }
