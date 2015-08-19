@@ -15,7 +15,7 @@ git submodule update
 Installing required packages:
 
 ```
-sudo yum install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool libasan libubsan
+sudo yum install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool antlr3-C++-devel libasan libubsan
 ```
 
 ### Building urchin on Ubuntu 14.04
