@@ -53,7 +53,7 @@ public:
         bytes_opt _bytes;
         value(bytes_opt bytes_) : _bytes(std::move(bytes_)) {}
         virtual bytes_opt get(const query_options& options) override { return _bytes; }
-        virtual bytes_opt bind_and_get(const query_options& options) override { return _bytes; }
+        virtual bytes_view_opt bind_and_get(const query_options& options) override { return as_bytes_view_opt(_bytes); }
         virtual sstring to_string() const override { return to_hex(*_bytes); }
     };
 
@@ -152,12 +152,12 @@ public:
             assert(!_receiver->type->is_collection());
         }
 
-        virtual bytes_opt bind_and_get(const query_options& options) override {
+        virtual bytes_view_opt bind_and_get(const query_options& options) override {
             try {
-                const auto& value = options.get_value_at(_bind_index);
+                auto value = options.get_value_at(_bind_index);
                 if (value) {
                     _receiver->type->validate(*value);
-                    return to_bytes(*value);
+                    return *value;
                 }
                 return std::experimental::nullopt;
             } catch (const marshal_exception& e) {
@@ -170,7 +170,7 @@ public:
             if (!bytes) {
                 return ::shared_ptr<terminal>{};
             }
-            return ::make_shared<constants::value>(std::move(bytes));
+            return ::make_shared<constants::value>(std::move(to_bytes_opt(*bytes)));
         }
     };
 

@@ -183,7 +183,7 @@ lists::delayed_value::bind(const query_options& options) {
                     bo->size()));
         }
 
-        buffers.push_back(std::move(*bo));
+        buffers.push_back(std::move(to_bytes(*bo)));
     }
     return ::make_shared<value>(buffers);
 }

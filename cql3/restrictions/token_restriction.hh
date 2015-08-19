@@ -143,7 +143,7 @@ public:
     }
 
     std::vector<bytes_opt> values(const query_options& options) const override {
-        return { _value->bind_and_get(options) };
+        return { to_bytes_opt(_value->bind_and_get(options)) };
     }
 
     sstring to_string() const override {
@@ -173,7 +173,7 @@ public:
     }
 
     std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
-        return { _slice.bound(b)->bind_and_get(options) };
+        return { to_bytes_opt(_slice.bound(b)->bind_and_get(options)) };
     }
 
     bool uses_function(const sstring& ks_name,

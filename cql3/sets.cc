@@ -185,7 +185,7 @@ sets::delayed_value::bind(const query_options& options) {
                     b->size()));
         }
 
-        buffers.insert(buffers.end(), std::move(*b));
+        buffers.insert(buffers.end(), std::move(to_bytes(*b)));
     }
     return ::make_shared<value>(std::move(buffers));
 }

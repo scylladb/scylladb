@@ -231,7 +231,7 @@ maps::delayed_value::bind(const query_options& options) {
                                                     std::numeric_limits<uint16_t>::max(),
                                                     value_bytes->size()));
         }
-        buffers.emplace(std::move(*key_bytes), std::move(*value_bytes));
+        buffers.emplace(std::move(to_bytes(*key_bytes)), std::move(to_bytes(*value_bytes)));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -276,7 +276,7 @@ maps::setter_by_key::execute(mutation& m, const exploded_clustering_prefix& pref
                        value->size()));
     }
     auto avalue = value ? params.make_cell(*value) : params.make_dead_cell();
-    map_type_impl::mutation update = { {}, { { std::move(*key), std::move(avalue) } } };
+    map_type_impl::mutation update = { {}, { { std::move(to_bytes(*key)), std::move(avalue) } } };
     // should have been verified as map earlier?
     auto ctype = static_pointer_cast<const map_type_impl>(column.type);
     auto col_mut = ctype->serialize_mutation_form(std::move(update));

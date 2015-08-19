@@ -277,10 +277,10 @@ function_call::collect_marker_specification(shared_ptr<variable_specifications> 
 
 shared_ptr<terminal>
 function_call::bind(const query_options& options) {
-    return make_terminal(_fun, bind_and_get(options), options.get_serialization_format());
+    return make_terminal(_fun, to_bytes_opt(bind_and_get(options)), options.get_serialization_format());
 }
 
-bytes_opt
+bytes_view_opt
 function_call::bind_and_get(const query_options& options) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(_terms.size());
@@ -291,9 +291,10 @@ function_call::bind_and_get(const query_options& options) {
         if (!val) {
             throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
         }
-        buffers.push_back(std::move(val));
+        buffers.push_back(std::move(to_bytes_opt(val)));
     }
-    return execute_internal(options.get_serialization_format(), *_fun, std::move(buffers));
+    auto result = execute_internal(options.get_serialization_format(), *_fun, std::move(buffers));
+    return options.make_temporary(result);
 }
 
 bytes_opt
