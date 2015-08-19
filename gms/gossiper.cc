@@ -417,7 +417,7 @@ void gossiper::do_status_check() {
             && ((now - ep_state.get_update_timestamp()) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-            evict_from_membershipg(endpoint); // can get rid of the state immediately
+            evict_from_membership(endpoint); // can get rid of the state immediately
         }
 
         // check for dead state removal
@@ -425,7 +425,7 @@ void gossiper::do_status_check() {
         if (!is_alive && (now > expire_time)
              && (!service::get_local_storage_service().get_token_metadata().is_member(endpoint))) {
             logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
-            evict_from_membershipg(endpoint);
+            evict_from_membership(endpoint);
         }
     }
 
@@ -638,7 +638,7 @@ int gossiper::get_max_endpoint_state_version(endpoint_state state) {
     return max_version;
 }
 
-void gossiper::evict_from_membershipg(inet_address endpoint) {
+void gossiper::evict_from_membership(inet_address endpoint) {
     _unreachable_endpoints.erase(endpoint);
     endpoint_state_map.erase(endpoint);
     _expire_time_endpoint_map.erase(endpoint);
@@ -662,7 +662,7 @@ void gossiper::replacement_quarantine(inet_address endpoint) {
 
 void gossiper::replaced_endpoint(inet_address endpoint) {
     remove_endpoint(endpoint);
-    evict_from_membershipg(endpoint);
+    evict_from_membership(endpoint);
     replacement_quarantine(endpoint);
 }
 
