@@ -233,24 +233,14 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // FIXME: let the cfs be overriden by an option
     std::vector<sstring> cfs = list_column_families(db.local(), keyspace);
 
-#if 1
-    // repair all the ranges in parallel
-    auto done = make_lw_shared<semaphore>(0);
-    auto success = make_lw_shared<bool>(true);
-    for (auto range : ranges) {
-        repair_range(db, keyspace, range, cfs).
-                handle_exception([success] (std::exception_ptr eptr)
-                        { *success = false; }).
-                finally([done] { done->signal(); });
-    }
-    done->wait(ranges.size()).then([done, id, success] {
-        logger.info("repair {} complete, success={}", id, success);
-        repair_tracker.done(id, *success);
-    });
-#else
-    // repair all the ranges in sequence
     do_with(std::move(ranges), [&db, keyspace, cfs, id] (auto& ranges) {
+#if 1
+        // repair all the ranges in parallel
+        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, cfs, id] (auto&& range) {
+#else
+        // repair all the ranges in sequence
         return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, cfs, id] (auto&& range) {
+#endif
             return repair_range(db, keyspace, range, cfs);
         }).then([id] {
             logger.info("repair {} completed sucessfully", id);
@@ -260,7 +250,6 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             repair_tracker.done(id, false);
         });
     });
-#endif
 }
 
 int repair_start(seastar::sharded<database>& db, sstring keyspace,
