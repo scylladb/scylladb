@@ -96,7 +96,7 @@ future<> do_test(cql_test_env& env, test_config& cfg) {
             case test_config::run_mode::read:
                 return test_read(env, cfg);
             case test_config::run_mode::write:
-                return test_read(env, cfg);
+                return test_write(env, cfg);
         };
         assert(0);
     });
