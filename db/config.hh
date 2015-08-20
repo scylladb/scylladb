@@ -220,7 +220,7 @@ public:
             "Related information: Configuring compaction"   \
     )                                                   \
     /* Common memtable settings */  \
-    val(memtable_total_space_in_mb, uint32_t, 0, Unused,     \
+    val(memtable_total_space_in_mb, uint32_t, 0, Used,     \
             "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb."  \
     )                                                   \
     /* Common disk settings */  \
@@ -297,7 +297,7 @@ public:
             "\toffheap_buffers  Off heap (direct) NIO buffers.\n"   \
             "\toffheap_objects  Native memory, eliminating NIO buffer heap overhead."   \
     )                                                   \
-    val(memtable_cleanup_threshold, double, .11, Unused, \
+    val(memtable_cleanup_threshold, double, .11, Used, \
             "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load." \
     )   \
     val(file_cache_size_in_mb, uint32_t, 512, Unused,  \

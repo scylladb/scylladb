@@ -81,7 +81,7 @@ private:
 private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
 public:
-    explicit memtable(schema_ptr schema);
+    explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);
     ~memtable();
     schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);

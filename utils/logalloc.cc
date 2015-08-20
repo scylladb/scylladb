@@ -3,6 +3,7 @@
  */
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <boost/range/algorithm/remove.hpp>
 #include <boost/heap/binomial_heap.hpp>
 #include <stack>
 
@@ -382,7 +383,7 @@ segment::heap_handle() {
 // Per-segment metadata is kept in a separate array, managed by segment_pool
 // object.
 //
-class region::impl : public allocation_strategy {
+class region_impl : public allocation_strategy {
     static constexpr float max_occupancy_for_compaction = 0.85; // FIXME: make configurable
     static constexpr size_t max_managed_object_size = segment::size * 0.1;
 
@@ -494,6 +495,7 @@ class region::impl : public allocation_strategy {
         }
     } __attribute__((packed));
 private:
+    region_group* _group = nullptr;
     segment* _active = nullptr;
     size_t _active_offset;
     segment_heap _segments; // Contains only closed segments
@@ -507,7 +509,7 @@ private:
         assert(alignment < obj_flags::max_alignment);
 
         if (!_active) {
-            _active = shard_segment_pool.new_segment();
+            _active = new_segment();
             _active_offset = 0;
         }
 
@@ -563,17 +565,32 @@ private:
         _active = nullptr;
     }
 
+    void free_segment(segment* seg) {
+        shard_segment_pool.free_segment(seg);
+        if (_group) {
+            _group->update(-segment::size);
+        }
+    }
+
+    segment* new_segment() {
+        segment* seg = shard_segment_pool.new_segment();
+        if (_group) {
+            _group->update(segment::size);
+        }
+        return seg;
+    }
+
     void compact(segment* seg) {
         for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
             auto dst = alloc_small(desc->migrator(), desc->size(), desc->alignment());
             desc->migrator()(obj, dst, desc->size());
         });
 
-        shard_segment_pool.free_segment(seg);
+        free_segment(seg);
     }
 
     void close_and_open() {
-        segment* new_active = shard_segment_pool.new_segment();
+        segment* new_active = new_segment();
         close_active();
         _active = new_active;
         _active_offset = 0;
@@ -583,25 +600,47 @@ private:
         static std::atomic<uint64_t> id{0};
         return id.fetch_add(1);
     }
+    struct degroup_temporarily {
+        region_impl* impl;
+        region_group* group;
+        explicit degroup_temporarily(region_impl* impl)
+                : impl(impl), group(impl->_group) {
+            if (group) {
+                group->del(impl);
+            }
+        }
+        ~degroup_temporarily() {
+            if (group) {
+                group->add(impl);
+            }
+        }
+    };
+
 public:
-    impl()
-        : _id(next_id())
+    explicit region_impl(region_group* group = nullptr)
+        : _group(group), _id(next_id())
     {
         tracker_instance._impl->register_region(this);
+        if (group) {
+            group->add(this);
+        }
     }
 
-    virtual ~impl() {
+    virtual ~region_impl() {
         tracker_instance._impl->unregister_region(this);
 
         assert(_segments.empty());
         if (_active) {
             assert(_active->is_empty());
-            shard_segment_pool.free_segment(_active);
+            free_segment(_active);
+        }
+        if (_group) {
+            _group->del(this);
         }
     }
 
-    impl(impl&&) = delete;
-    impl(const impl&) = delete;
+    region_impl(region_impl&&) = delete;
+    region_impl(const region_impl&) = delete;
 
     bool empty() const {
         return occupancy().used_space() == 0;
@@ -663,7 +702,7 @@ public:
         if (seg != _active) {
             if (seg_desc.is_empty()) {
                 _segments.erase(seg_desc.heap_handle());
-                shard_segment_pool.free_segment(seg, seg_desc);
+                free_segment(seg);
             } else {
                 _closed_occupancy += seg_desc.occupancy();
                 _segments.decrease(seg_desc.heap_handle());
@@ -673,7 +712,10 @@ public:
 
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
-    void merge(region::impl& other) {
+    void merge(region_impl& other) {
+        degroup_temporarily dgt1(this);
+        degroup_temporarily dgt2(&other);
+
         if (_active && _active->is_empty()) {
             shard_segment_pool.free_segment(_active);
             _active = nullptr;
@@ -768,11 +810,16 @@ public:
         _evictable = true;
         _eviction_fn = std::move(fn);
     }
+    friend class region_group;
 };
 
 region::region()
     : _impl(std::make_unique<impl>())
 { }
+
+region::region(region_group& group)
+        : _impl(std::make_unique<impl>(&group)) {
+}
 
 region::~region() {
 }
@@ -817,7 +864,7 @@ occupancy_stats tracker::impl::occupancy() const {
 void tracker::impl::full_compaction() {
     logger.debug("Full compaction on all regions, {}", occupancy());
 
-    for (region::impl* r : _regions) {
+    for (region_impl* r : _regions) {
         if (r->is_compactible()) {
             r->full_compaction();
         }
@@ -891,7 +938,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
         in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
 
     // Allow dipping into reserves while compacting
-    segment_pool::reservation_goal(shard_segment_pool, 0);
+    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
 
     boost::range::make_heap(_regions, cmp);
 
@@ -966,6 +1013,46 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_fraction() * 100; })
         ),
     });
+}
+
+region_group::region_group(region_group&& o) noexcept
+        : _parent(o._parent), _total_memory(o._total_memory)
+        , _subgroups(std::move(o._subgroups)), _regions(std::move(o._regions)) {
+    if (_parent) {
+        _parent->del(&o);
+        _parent->add(this);
+    }
+    o._total_memory = 0;
+    for (auto&& sg : _subgroups) {
+        sg->_parent = this;
+    }
+    for (auto&& r : _regions) {
+        r->_group = this;
+    }
+}
+
+void
+region_group::add(region_group* child) {
+    _subgroups.push_back(child);
+    update(child->_total_memory);
+}
+
+void
+region_group::del(region_group* child) {
+    _subgroups.erase(boost::range::remove(_subgroups, child), _subgroups.end());
+    update(-child->_total_memory);
+}
+
+void
+region_group::add(region_impl* child) {
+    _regions.push_back(child);
+    update(child->occupancy().total_space());
+}
+
+void
+region_group::del(region_impl* child) {
+    _regions.erase(boost::range::remove(_regions, child), _regions.end());
+    update(-child->occupancy().total_space());
 }
 
 }

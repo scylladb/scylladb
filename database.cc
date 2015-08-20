@@ -16,6 +16,7 @@
 #include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
 #include "core/seastar.hh"
+#include <seastar/core/sleep.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -33,6 +34,8 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
+
+using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
@@ -382,7 +385,7 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
 void column_family::add_memtable() {
     // allow in-progress reads to continue using old list
     _memtables = make_lw_shared(memtable_list(*_memtables));
-    _memtables->emplace_back(make_lw_shared<memtable>(_schema));
+    _memtables->emplace_back(make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group));
 }
 
 future<>
@@ -417,57 +420,75 @@ column_family::seal_active_memtable() {
     );
     _highest_flushed_rp = old->replay_position();
 
+    return seastar::with_gate(_in_flight_seals, [old, this] {
+        return flush_memtable_to_sstable(old);
+    });
+    // FIXME: release commit log
+    // FIXME: provide back-pressure to upper layers
+}
+
+future<stop_iteration>
+column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
 
-    return seastar::with_gate(_in_flight_seals, [gen, old, this] {
-        sstables::sstable newtab = sstables::sstable(_schema->ks_name(), _schema->cf_name(),
-            _config.datadir, gen,
-            sstables::sstable::version_types::ka,
-            sstables::sstable::format_types::big);
+    sstables::sstable newtab = sstables::sstable(_schema->ks_name(), _schema->cf_name(),
+        _config.datadir, gen,
+        sstables::sstable::version_types::ka,
+        sstables::sstable::format_types::big);
 
-        dblog.debug("Flushing to {}", newtab.get_filename());
-        return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
-            // FIXME: write all components
-            return newtab.write_components(*old).then([this, &newtab, old] {
-                return newtab.load();
-            }).then([this, old, &newtab] {
-                dblog.debug("Flushing done");
-                // We must add sstable before we call update_cache(), because
-                // memtable's data after moving to cache can be evicted at any time.
-                auto old_sstables = _sstables;
-                add_sstable(std::move(newtab));
-                return update_cache(*old, std::move(old_sstables));
-            }).then_wrapped([this, old] (future<> ret) {
-                try {
-                    ret.get();
+    dblog.debug("Flushing to {}", newtab.get_filename());
+    return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
+        // FIXME: write all components
+        return newtab.write_components(*old).then([this, &newtab, old] {
+            return newtab.load();
+        }).then([this, old, &newtab] {
+            dblog.debug("Flushing done");
+            // We must add sstable before we call update_cache(), because
+            // memtable's data after moving to cache can be evicted at any time.
+            auto old_sstables = _sstables;
+            add_sstable(std::move(newtab));
+            return update_cache(*old, std::move(old_sstables));
+        }).then_wrapped([this, old] (future<> ret) {
+            try {
+                ret.get();
 
-                    // FIXME: until the surrounding function returns a future and
-                    // caller ensures ordering (i.e. finish flushing one or more sequential tables before
-                    // doing the discard), this below is _not_ correct, since the use of replay_position
-                    // depends on us reporting the factual highest position we've actually flushed,
-                    // _and_ all positions (for a given UUID) below having been dealt with.
-                    //
-                    // Note that the whole scheme is also dependent on memtables being "allocated" in order,
-                    // i.e. we may not flush a younger memtable before and older, and we need to use the
-                    // highest rp.
-                    if (_commitlog) {
-                        _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
-                    }
-                    _memtables->erase(boost::range::find(*_memtables, old));
-                    dblog.debug("Memtable replaced");
-                    trigger_compaction();
-                } catch (std::exception& e) {
-                    dblog.error("failed to write sstable: {}", e.what());
-                } catch (...) {
-                    dblog.error("failed to write sstable: unknown error");
+                // FIXME: until the surrounding function returns a future and
+                // caller ensures ordering (i.e. finish flushing one or more sequential tables before
+                // doing the discard), this below is _not_ correct, since the use of replay_position
+                // depends on us reporting the factual highest position we've actually flushed,
+                // _and_ all positions (for a given UUID) below having been dealt with.
+                //
+                // Note that the whole scheme is also dependent on memtables being "allocated" in order,
+                // i.e. we may not flush a younger memtable before and older, and we need to use the
+                // highest rp.
+                if (_commitlog) {
+                    _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
                 }
+                _memtables->erase(boost::range::find(*_memtables, old));
+                dblog.debug("Memtable replaced");
+                trigger_compaction();
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            } catch (std::exception& e) {
+                dblog.error("failed to write sstable: {}", e.what());
+            } catch (...) {
+                dblog.error("failed to write sstable: unknown error");
+            }
+            return sleep(10s).then([] {
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             });
         });
     });
-    // FIXME: release commit log
-    // FIXME: provide back-pressure to upper layers
+}
+
+future<>
+column_family::flush_memtable_to_sstable(lw_shared_ptr<memtable> memt) {
+    return repeat([this, memt] {
+        return seastar::with_gate(_in_flight_seals, [memt, this] {
+            return try_flush_memtable_to_sstable(memt);
+        });
+    });
 }
 
 void
@@ -643,6 +664,18 @@ database::database(const db::config& cfg)
     db::system_keyspace::make(*this, durable);
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
+    setup_collectd();
+}
+
+void
+database::setup_collectd() {
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("memory"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "dirty")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+            return _dirty_memory_region_group.memory_used();
+    })));
 }
 
 database::~database() {
@@ -955,6 +988,9 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_disk_writes = _config.enable_disk_writes;
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
+    cfg.max_memtable_size = _config.max_memtable_size;
+    cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
+
     return cfg;
 }
 
@@ -1213,7 +1249,7 @@ future<> database::apply(const frozen_mutation& m) {
 }
 
 keyspace::config
-database::make_keyspace_config(const keyspace_metadata& ksm) const {
+database::make_keyspace_config(const keyspace_metadata& ksm) {
     // FIXME support multiple directories
     keyspace::config cfg;
     if (_cfg->data_file_directories().size() > 0) {
@@ -1222,13 +1258,20 @@ database::make_keyspace_config(const keyspace_metadata& ksm) const {
         cfg.enable_disk_reads = true; // we allways read from disk
         cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
         cfg.enable_cache = _cfg->enable_cache();
+        auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
+        if (!memtable_total_space) {
+            memtable_total_space = memory::stats().total_memory() / 2;
+        }
+        cfg.max_memtable_size = memtable_total_space * _cfg->memtable_cleanup_threshold();
     } else {
         cfg.datadir = "";
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
+        cfg.max_memtable_size = std::numeric_limits<size_t>::max();
     }
+    cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     return cfg;
 }
 

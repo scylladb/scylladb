@@ -88,6 +88,8 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
         bool enable_commitlog = true;
+        size_t max_memtable_size = 5'000'000;
+        logalloc::region_group* dirty_memory_region_group = nullptr;
     };
     struct no_commitlog {};
     struct stats {
@@ -123,6 +125,8 @@ private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
+    future<> flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
+    future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
 private:
@@ -307,6 +311,8 @@ public:
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
         bool enable_cache = true;
+        size_t max_memtable_size = 5'000'000;
+        logalloc::region_group* dirty_memory_region_group = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -363,6 +369,8 @@ class database {
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
+    logalloc::region_group _dirty_memory_region_group;
+    std::vector<scollectd::registration> _collectd;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
@@ -375,7 +383,7 @@ private:
     void add_keyspace(sstring name, keyspace k);
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable);
-
+    void setup_collectd();
 public:
     static utils::UUID empty_version;
 
@@ -439,7 +447,7 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(const query::read_command& cmd, const query::partition_range& range);
     future<> apply(const frozen_mutation&);
-    keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
+    keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
@@ -475,8 +483,10 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
 inline
 void
 column_family::seal_on_overflow() {
-    // FIXME: something better
-    if (++_mutation_count == 100000) {
+    ++_mutation_count;
+    if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
+        // FIXME: if sparse, do some in-memory compaction first
+        // FIXME: maybe merge with other in-memory memtables
         _mutation_count = 0;
         seal_active_memtable();
     }

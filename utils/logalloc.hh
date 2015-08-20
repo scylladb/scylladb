@@ -12,8 +12,50 @@
 namespace logalloc {
 
 struct occupancy_stats;
+class region;
+class region_impl;
 
 using eviction_fn = std::function<void()>;
+
+// Groups regions for the purpose of statistics.  Can be nested.
+class region_group {
+    region_group* _parent = nullptr;
+    size_t _total_memory = 0;
+    std::vector<region_group*> _subgroups;
+    std::vector<region_impl*> _regions;
+public:
+    region_group() = default;
+    region_group(region_group* parent) : _parent(parent) {
+        if (_parent) {
+            _parent->add(this);
+        }
+    }
+    region_group(region_group&& o) noexcept;
+    region_group(const region_group&) = delete;
+    ~region_group() {
+        if (_parent) {
+            _parent->del(this);
+        }
+    }
+    region_group& operator=(const region_group&) = delete;
+    region_group& operator=(region_group&&) = delete;
+    size_t memory_used() const {
+        return _total_memory;
+    }
+    void update(ssize_t delta) {
+        auto rg = this;
+        while (rg) {
+            rg->_total_memory += delta;
+            rg = rg->_parent;
+        }
+    }
+private:
+    void add(region_group* child);
+    void del(region_group* child);
+    void add(region_impl* child);
+    void del(region_impl* child);
+    friend class region_impl;
+};
 
 // Controller for all LSA regions. There's one per shard.
 class tracker {
@@ -23,6 +65,7 @@ private:
     std::unique_ptr<impl> _impl;
     memory::reclaimer _reclaimer;
     friend class region;
+    friend class region_impl;
 public:
     tracker();
     ~tracker();
@@ -123,14 +166,15 @@ public:
 //
 class region {
 public:
-    class impl;
+    using impl = region_impl;
 private:
     std::unique_ptr<impl> _impl;
 public:
     region();
+    explicit region(region_group& group);
     ~region();
-    region(region&& other) = default;
-    region& operator=(region&& other) = default;
+    region(region&& other);
+    region& operator=(region&& other);
     region(const region& other) = delete;
 
     occupancy_stats occupancy() const;
@@ -154,6 +198,8 @@ public:
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.
     void make_evictable(eviction_fn);
+
+    friend class region_group;
 };
 
 }
