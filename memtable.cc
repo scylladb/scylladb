@@ -9,8 +9,8 @@ namespace stdx = std::experimental;
 
 memtable::memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group)
         : _schema(std::move(schema))
-        , partitions(partition_entry::compare(_schema))
-        , _region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region()) {
+        , _region(dirty_memory_region_group ? logalloc::region(*dirty_memory_region_group) : logalloc::region())
+        , partitions(partition_entry::compare(_schema)) {
 }
 
 memtable::~memtable() {
