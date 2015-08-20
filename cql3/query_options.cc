@@ -33,7 +33,7 @@ thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, st
     {}, false, query_options::specific_options::DEFAULT, version::native_protocol(), serialization_format::use_32_bit()};
 
 query_options::query_options(db::consistency_level consistency,
-                             std::experimental::optional<std::vector<sstring>> names,
+                             std::experimental::optional<std::vector<sstring_view>> names,
                              std::vector<bytes_opt> values,
                              std::vector<bytes_view_opt> value_views,
                              bool skip_metadata,
@@ -52,7 +52,7 @@ query_options::query_options(db::consistency_level consistency,
 }
 
 query_options::query_options(db::consistency_level consistency,
-                             std::experimental::optional<std::vector<sstring>> names,
+                             std::experimental::optional<std::vector<sstring_view>> names,
                              std::vector<bytes_view_opt> value_views,
                              bool skip_metadata,
                              specific_options options,

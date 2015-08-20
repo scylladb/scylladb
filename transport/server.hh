@@ -182,7 +182,7 @@ private:
     bytes read_short_bytes(temporary_buffer<char>& buf);
     bytes_opt read_value(temporary_buffer<char>& buf);
     bytes_view_opt read_value_view(temporary_buffer<char>& buf);
-    void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_view_opt>& values);
+    void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values);
     void read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings);
     void read_value_view_list(temporary_buffer<char>& buf, std::vector<bytes_view_opt>& values);
     db::consistency_level read_consistency(temporary_buffer<char>& buf);

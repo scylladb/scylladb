@@ -897,7 +897,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
 
     auto flags = enum_set<options_flag_enum>::from_mask(read_byte(buf));
     std::vector<bytes_view_opt> values;
-    std::vector<sstring> names;
+    std::vector<sstring_view> names;
 
     if (flags.contains<options_flag::VALUES>()) {
         if (flags.contains<options_flag::NAMES_FOR_VALUES>()) {
@@ -936,7 +936,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
             }
         }
 
-        std::experimental::optional<std::vector<sstring>> onames;
+        std::experimental::optional<std::vector<sstring_view>> onames;
         if (!names.empty()) {
             onames = std::move(names);
         }
@@ -951,7 +951,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
     return std::move(options);
 }
 
-void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_view_opt>& values) {
+void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
     uint16_t size = read_unsigned_short(buf);
     names.reserve(size);
     values.reserve(size);
