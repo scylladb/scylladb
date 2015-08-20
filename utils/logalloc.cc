@@ -986,11 +986,11 @@ size_t tracker::impl::reclaim(size_t bytes) {
 
 void tracker::impl::register_region(region::impl* r) {
     _regions.push_back(r);
-    logger.debug("Registerred region @{} with id={}", r, r->id());
+    logger.debug("Registered region @{} with id={}", r, r->id());
 }
 
 void tracker::impl::unregister_region(region::impl* r) {
-    logger.debug("Unregisterring region, id={}", r->id());
+    logger.debug("Unregistering region, id={}", r->id());
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
 }
 
