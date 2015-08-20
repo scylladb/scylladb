@@ -181,7 +181,7 @@ void storage_service::join_token_ring(int delay) {
         if (db::system_keyspace::bootstrap_in_progress()) {
             logger.warn("Detected previous bootstrap failure; retrying");
         } else {
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see all our peers
@@ -291,7 +291,7 @@ void storage_service::join_token_ring(int delay) {
 
     if (!_is_survey_mode) {
         // start participating in the ring.
-        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
+        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
         set_tokens(_bootstrap_tokens).get();
         // remove the existing info about the replaced node.
         if (!current.empty()) {
