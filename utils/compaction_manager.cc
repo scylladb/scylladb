@@ -44,13 +44,10 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
         }).then_wrapped([this, task] (future<> f) {
             bool retry = false;
 
-            // Certain exceptions are used for regular termination of the fiber,
-            // such as broken_semaphore and seastar::gate_closed_exception.
+            // seastar::gate_closed_exception is used for regular termination
+            // of the fiber.
             try {
                 f.get();
-            } catch (broken_semaphore& e) {
-                cmlog.info("compaction task handler stopped due to shutdown");
-                throw;
             } catch (seastar::gate_closed_exception& e) {
                 cmlog.info("compaction task handler stopped due to shutdown");
                 throw;
@@ -80,8 +77,6 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
     }).then_wrapped([] (future<> f) {
         try {
             f.get();
-        } catch (broken_semaphore& e) {
-            // exception logged in keep_doing.
         } catch (seastar::gate_closed_exception& e) {
             // exception logged in keep_doing.
         } catch (...) {
@@ -93,7 +88,9 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task>& task) {
     return task->compaction_gate.close().then([task] {
-        task->compaction_sem.broken();
+        // NOTE: Signalling semaphore because we want task to finish with the
+        // gate_closed_exception exception.
+        task->compaction_sem.signal();
         return task->compaction_done.then([] {
             return make_ready_future<>();
         });
