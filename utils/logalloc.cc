@@ -938,7 +938,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
         in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
 
     // Allow dipping into reserves while compacting
-    segment_pool::reservation_goal(shard_segment_pool, 0);
+    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
 
     boost::range::make_heap(_regions, cmp);
 
