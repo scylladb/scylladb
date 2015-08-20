@@ -32,7 +32,11 @@ future<> sstable::read_filter() {
                 }
             }
             _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
+        }).then([this] {
+            return engine().file_size(this->filename(sstable::component_type::Filter));
         });
+    }).then([this] (auto size) {
+        _filter_file_size = size;
     });
 }
 

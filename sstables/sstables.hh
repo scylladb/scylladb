@@ -233,6 +233,9 @@ public:
     uint64_t index_size() {
         return _index_file_size;
     }
+    uint64_t filter_size() {
+        return _filter_file_size;
+    }
 
     // Returns the total bytes of all components.
     future<uint64_t> bytes_on_disk();
@@ -266,6 +269,7 @@ private:
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
+    uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
 
     sstring _ks;
