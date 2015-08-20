@@ -193,7 +193,7 @@ size_t shard_id::hash::operator()(const shard_id& id) const {
     return std::hash<uint32_t>()(id.addr.raw_addr());
 }
 
-messaging_service::shard_info::shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client)
+messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client)
     : rpc_client(std::move(client)) {
 }
 
@@ -258,15 +258,15 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
-messaging_service::rpc_protocol_client_wrapper& messaging_service::get_rpc_client(shard_id id) {
+shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(shard_id id) {
     auto it = _clients.find(id);
     if (it == _clients.end()) {
         auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-        auto client = std::make_unique<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+        auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
         it = _clients.emplace(id, shard_info(std::move(client))).first;
-        return *it->second.rpc_client;
+        return it->second.rpc_client;
     } else {
-        return *it->second.rpc_client;
+        return it->second.rpc_client;
     }
 }
 
@@ -287,9 +287,10 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
-    auto& rpc_client = ms->get_rpc_client(id);
+    auto rpc_client_ptr = ms->get_rpc_client(id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
-    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb] (auto&& f) {
+    auto& rpc_client = *rpc_client_ptr;
+    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
                 ms->increment_dropped_messages(verb);

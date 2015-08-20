@@ -393,8 +393,8 @@ public:
     static constexpr int32_t current_version = 0;
 
     struct shard_info {
-        shard_info(std::unique_ptr<rpc_protocol_client_wrapper>&& client);
-        std::unique_ptr<rpc_protocol_client_wrapper> rpc_client;
+        shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client);
+        shared_ptr<rpc_protocol_client_wrapper> rpc_client;
         rpc::stats get_stats() const;
     };
 
@@ -502,7 +502,7 @@ public:
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    rpc_protocol_client_wrapper& get_rpc_client(shard_id id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(shard_id id);
     void remove_rpc_client(shard_id id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
