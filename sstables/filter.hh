@@ -10,8 +10,8 @@
 class filter_tracker {
 
     lw_shared_ptr<distributed<filter_tracker>> _ptr;
-    uint64_t false_positive;
-    uint64_t true_positive;
+    uint64_t false_positive = 0;
+    uint64_t true_positive = 0;
 
     uint64_t last_false_positive = 0;
     uint64_t last_true_positive = 0;
