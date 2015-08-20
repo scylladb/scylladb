@@ -825,6 +825,17 @@ sstring cql_server::connection::read_string(temporary_buffer<char>& buf)
     return s;
 }
 
+sstring_view cql_server::connection::read_string_view(temporary_buffer<char>& buf)
+{
+    auto n = read_short(buf);
+    check_room(buf, n);
+    sstring_view s{buf.begin(), static_cast<size_t>(n)};
+    assert(n >= 0);
+    buf.trim_front(n);
+    validate_utf8(s);
+    return s;
+}
+
 sstring_view cql_server::connection::read_long_string_view(temporary_buffer<char>& buf)
 {
     auto n = read_int(buf);
