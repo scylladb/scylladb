@@ -778,11 +778,13 @@ bootstrap_state get_bootstrap_state() {
 }
 
 future<> set_bootstrap_state(bootstrap_state state) {
-    static sstring state_name = std::unordered_map<bootstrap_state, sstring, enum_hash<bootstrap_state>>({
+    static std::unordered_map<bootstrap_state, sstring, enum_hash<bootstrap_state>> state_to_name({
         { bootstrap_state::NEEDS_BOOTSTRAP, "NEEDS_BOOTSTRAP" },
         { bootstrap_state::COMPLETED, "COMPLETED" },
         { bootstrap_state::IN_PROGRESS, "IN_PROGRESS" }
-    }).at(state);
+    });
+
+    sstring state_name = state_to_name.at(state);
 
     sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES (?, ?)";
     return execute_cql(req, LOCAL, sstring(LOCAL), state_name).discard_result().then([state] {
