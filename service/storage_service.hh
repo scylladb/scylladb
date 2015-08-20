@@ -369,7 +369,7 @@ public:
 private:
     bool should_bootstrap();
     future<> prepare_to_join();
-    future<> join_token_ring(int delay);
+    void join_token_ring(int delay);
 public:
     future<> join_ring();
     bool is_joined() {

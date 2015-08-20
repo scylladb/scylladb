@@ -156,8 +156,8 @@ future<> storage_service::prepare_to_join() {
     });
 }
 
-future<> storage_service::join_token_ring(int delay) {
-    return seastar::async([this, delay] {
+// Runs inside seastar::async context
+void storage_service::join_token_ring(int delay) {
     _joined = true;
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -305,26 +305,23 @@ future<> storage_service::join_token_ring(int delay) {
     } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
-    });
 }
 
 future<> storage_service::join_ring() {
-    if (!_joined) {
-        logger.info("Joining ring by operator request");
-        return join_token_ring(0);
-    } else if (_is_survey_mode) {
-        return db::system_keyspace::get_saved_tokens().then([this] (auto tokens) {
-            return this->set_tokens(std::move(tokens)).then([this] {
-                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-                _is_survey_mode = false;
-                logger.info("Leaving write survey mode and joining ring at operator request");
-                assert(_token_metadata.sorted_tokens().size() > 0);
-                //Auth.setup();
-                return make_ready_future<>();
-            });
-        });
-    }
-    return make_ready_future<>();
+    return seastar::async([this] {
+        if (!_joined) {
+            logger.info("Joining ring by operator request");
+            join_token_ring(0);
+        } else if (_is_survey_mode) {
+            auto tokens = db::system_keyspace::get_saved_tokens().get0();
+            set_tokens(std::move(tokens)).get();
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+            _is_survey_mode = false;
+            logger.info("Leaving write survey mode and joining ring at operator request");
+            assert(_token_metadata.sorted_tokens().size() > 0);
+            //Auth.setup();
+        }
+    });
 }
 
 // Runs inside seastar::async context
@@ -914,7 +911,7 @@ future<> storage_service::init_server(int delay) {
 #endif
 
         if (get_property_join_ring()) {
-            join_token_ring(delay).get();
+            join_token_ring(delay);
         } else {
             auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
             if (!tokens.empty()) {
