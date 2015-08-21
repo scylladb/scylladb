@@ -309,7 +309,7 @@ void storage_service::join_token_ring(int delay) {
     if (!_is_survey_mode) {
         // start participating in the ring.
         db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-        set_tokens(_bootstrap_tokens).get();
+        set_tokens(_bootstrap_tokens);
         // remove the existing info about the replaced node.
         if (!current.empty()) {
             auto& gossiper = gms::get_local_gossiper();
@@ -331,7 +331,7 @@ future<> storage_service::join_ring() {
             join_token_ring(0);
         } else if (_is_survey_mode) {
             auto tokens = db::system_keyspace::get_saved_tokens().get0();
-            set_tokens(std::move(tokens)).get();
+            set_tokens(std::move(tokens));
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
             _is_survey_mode = false;
             logger.info("Leaving write survey mode and joining ring at operator request");
@@ -795,19 +795,18 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
+// Runs inside seastar::async context
+void storage_service::set_tokens(std::unordered_set<token> tokens) {
     logger.debug("Setting tokens to {}", tokens);
-    auto f = db::system_keyspace::update_tokens(tokens);
-    return f.then([this, tokens = std::move(tokens)] {
-        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-        // Collection<Token> localTokens = getLocalTokens();
-        auto local_tokens = _bootstrap_tokens;
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
-        set_mode(mode::NORMAL, false);
-        return replicate_to_all_cores();
-    });
+    db::system_keyspace::update_tokens(tokens).get();
+    _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+    // Collection<Token> localTokens = getLocalTokens();
+    auto local_tokens = _bootstrap_tokens;
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
+    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
+    set_mode(mode::NORMAL, false);
+    replicate_to_all_cores().get();
 }
 
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
