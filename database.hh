@@ -190,6 +190,7 @@ public:
 
     lw_shared_ptr<sstable_list> get_sstables();
     size_t sstables_count();
+    int64_t get_unleveled_sstables() const;
 
     void start_compaction();
     void trigger_compaction();
