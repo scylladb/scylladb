@@ -57,4 +57,46 @@ future<> boot_strapper::bootstrap() {
 #endif
 }
 
+std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata metadata, database& db) {
+#if 0
+    Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
+    // if user specified tokens, use those
+    if (initialTokens.size() > 0)
+    {
+        logger.debug("tokens manually specified as {}",  initialTokens);
+        List<Token> tokens = new ArrayList<Token>(initialTokens.size());
+        for (String tokenString : initialTokens)
+        {
+            Token token = StorageService.getPartitioner().getTokenFactory().fromString(tokenString);
+            if (metadata.getEndpoint(token) != null)
+                throw new ConfigurationException("Bootstrapping to existing token " + tokenString + " is not allowed (decommission/removenode the old node first).");
+            tokens.add(token);
+        }
+        return tokens;
+    }
+#endif
+    size_t num_tokens = db.get_config().num_tokens();
+    if (num_tokens < 1) {
+        throw std::runtime_error("num_tokens must be >= 1");
+    }
+
+    // if (numTokens == 1)
+    //     logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+
+    return get_random_tokens(metadata, num_tokens);
+}
+
+std::unordered_set<token> boot_strapper::get_random_tokens(token_metadata metadata, size_t num_tokens) {
+    std::unordered_set<token> tokens;
+    while (tokens.size() < num_tokens) {
+        auto token = global_partitioner().get_random_token();
+        auto ep = metadata.get_endpoint(token);
+        if (!ep) {
+            tokens.emplace(token);
+        }
+    }
+    return tokens;
+}
+
+
 } // namespace dht
