@@ -286,9 +286,9 @@ void storage_service::join_token_ring(int delay) {
                     logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
                 }
             } else {
-                for (auto token : initial_tokens) {
-                    // FIXME: token from string
-                    // _bootstrap_tokens.insert(getPartitioner().getTokenFactory().fromString(token));
+                for (auto token_string : initial_tokens) {
+                    auto token = dht::global_partitioner().from_sstring(token_string);
+                    _bootstrap_tokens.insert(token);
                 }
                 logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
