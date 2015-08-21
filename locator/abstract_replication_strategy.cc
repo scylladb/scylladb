@@ -91,4 +91,20 @@ abstract_replication_strategy::get_ranges(inet_address ep) {
     return ret;
 }
 
+std::vector<range<token>>
+abstract_replication_strategy::get_primary_ranges(inet_address ep) {
+    std::vector<range<token>> ret;
+    auto prev_tok = _token_metadata.sorted_tokens().back();
+    for (auto tok : _token_metadata.sorted_tokens()) {
+        auto&& eps = calculate_natural_endpoints(tok);
+        if (eps.size() > 0 && eps[0] == ep) {
+            ret.emplace_back(
+                    range<token>::bound(prev_tok, false),
+                    range<token>::bound(tok, true));
+        }
+        prev_tok = tok;
+    }
+    return ret;
+}
+
 } // namespace locator

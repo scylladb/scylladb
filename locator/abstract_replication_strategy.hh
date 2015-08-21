@@ -82,6 +82,13 @@ public:
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
     std::vector<range<token>> get_ranges(inet_address ep);
+    // get_primary_ranges() returns the list of "primary ranges" for the given
+    // endpoint. "Primary ranges" are the ranges that the node is responsible
+    // for storing replica primarily, which means this is the first node
+    // returned calculate_natural_endpoints().
+    // This function is the analogue of Origin's
+    // StorageService.getPrimaryRangesForEndpoint().
+    std::vector<range<token>> get_primary_ranges(inet_address ep);
 };
 
 }
