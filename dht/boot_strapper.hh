@@ -35,10 +35,10 @@ class boot_strapper {
     /* endpoint that needs to be bootstrapped */
     inet_address _address;
     /* token of the node being bootstrapped. */
-    std::vector<token> _tokens;
+    std::unordered_set<token> _tokens;
     token_metadata _token_metadata;
 public:
-    boot_strapper(inet_address addr, std::vector<token> tokens, token_metadata tmd)
+    boot_strapper(inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
         : _address(addr)
         , _tokens(tokens)
         , _token_metadata(tmd) {
