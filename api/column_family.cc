@@ -113,6 +113,15 @@ static int64_t max_row_size(column_family& cf) {
     return res;
 }
 
+static double update_ratio(double acc, double f, double total) {
+    if (f && !total) {
+        throw bad_param_exception("total should include all elements");
+    } else if (total) {
+        acc += f / total;
+    }
+    return acc;
+}
+
 void set_column_family(http_context& ctx, routes& r) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
@@ -389,26 +398,40 @@ void set_column_family(http_context& ctx, routes& r) {
         }, std::plus<uint64_t>());
     });
 
-    cf::get_bloom_filter_false_ratio.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], double(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
+                double f = sst.second->filter_get_false_positive();
+                return update_ratio(s, f, f + sst.second->filter_get_true_positive());
+            });
+        }, std::plus<double>());
     });
 
-    cf::get_all_bloom_filter_false_ratio.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, double(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
+                double f = sst.second->filter_get_false_positive();
+                return update_ratio(s, f, f + sst.second->filter_get_true_positive());
+            });
+        }, std::plus<double>());
     });
 
-    cf::get_recent_bloom_filter_false_ratio.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], double(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
+                double f = sst.second->filter_get_recent_false_positive();
+                return update_ratio(s, f, f + sst.second->filter_get_recent_true_positive());
+            });
+        }, std::plus<double>());
     });
 
-    cf::get_all_recent_bloom_filter_false_ratio.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_recent_bloom_filter_false_ratio.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, double(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), double(0), [](double s, auto& sst) {
+                double f = sst.second->filter_get_recent_false_positive();
+                return update_ratio(s, f, f + sst.second->filter_get_recent_true_positive());
+            });
+        }, std::plus<double>());
     });
 
     cf::get_bloom_filter_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
