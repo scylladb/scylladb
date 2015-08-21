@@ -254,8 +254,7 @@ void storage_service::join_token_ring(int delay) {
             set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
         }
         bootstrap(_bootstrap_tokens);
-        // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
-        // assert(!_is_bootstrap_mode); // bootstrap will block until finished
+        assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
@@ -348,7 +347,8 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
          throw std::runtime_error("Unable to contact any seeds!");
     }
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
+    dht::boot_strapper bs(get_broadcast_address(), tokens, _token_metadata);
+    bs.bootstrap().get(); // handles token update
     logger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 
