@@ -1088,4 +1088,11 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
     }
 }
 
+// Runs inside seastar::async context
+std::unordered_set<dht::token> storage_service::get_local_tokens() {
+    auto tokens = db::system_keyspace::get_saved_tokens().get0();
+    assert(!tokens.empty()); // should not be called before initServer sets this
+    return tokens;
+}
+
 } // namespace service

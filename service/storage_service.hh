@@ -1071,14 +1071,11 @@ private:
     {
         HintedHandOffManager.instance.scheduleHintDelivery(host);
     }
+#endif
+public:
+    std::unordered_set<dht::token> get_local_tokens();
 
-    public Collection<Token> getLocalTokens()
-    {
-        Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-        assert tokens != null && !tokens.isEmpty(); // should not be called before initServer sets this
-        return tokens;
-    }
-
+#if 0
     /* These methods belong to the MBean interface */
 
     public List<String> getTokens()
