@@ -434,15 +434,20 @@ void set_column_family(http_context& ctx, routes& r) {
         }, std::plus<double>());
     });
 
-    cf::get_bloom_filter_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], uint64_t(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+                return sst.second->filter_size();
+            });
+        }, std::plus<uint64_t>());
     });
 
-    cf::get_all_bloom_filter_disk_space_used.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_bloom_filter_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, uint64_t(0), [] (column_family& cf) {
+            return std::accumulate(cf.get_sstables()->begin(), cf.get_sstables()->end(), uint64_t(0), [](uint64_t s, auto& sst) {
+                return sst.second->filter_size();
+            });
+        }, std::plus<uint64_t>());
     });
 
     cf::get_bloom_filter_off_heap_memory_used.set(r, [] (std::unique_ptr<request> req) {
