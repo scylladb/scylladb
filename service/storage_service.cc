@@ -930,7 +930,7 @@ future<> storage_service::init_server(int delay) {
         if (get_property_join_ring()) {
             join_token_ring(delay);
         } else {
-            auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
+            auto tokens = db::system_keyspace::get_saved_tokens().get0();
             if (!tokens.empty()) {
                 _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
                 // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
