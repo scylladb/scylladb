@@ -116,9 +116,42 @@ token murmur3_partitioner::midpoint(const token& t1, const token& t2) const {
     return get_token(mid);
 }
 
+static float ratio_helper(int64_t a, int64_t b) {
+
+    uint64_t val = (a > b)? static_cast<uint64_t>(a) - static_cast<uint64_t>(b) : (static_cast<uint64_t>(a) - static_cast<uint64_t>(b) - 1);
+    return val/(float)std::numeric_limits<uint64_t>::max();
+}
+
 std::map<token, float>
 murmur3_partitioner::describe_ownership(const std::vector<token>& sorted_tokens) {
-    abort();
+    std::map<token, float> ownerships;
+    auto i = sorted_tokens.begin();
+
+    // 0-case
+    if (i == sorted_tokens.end()) {
+        throw runtime_exception("No nodes present in the cluster. Has this node finished starting up?");
+    }
+    // 1-case
+    if (sorted_tokens.size() == 1) {
+        ownerships[sorted_tokens[0]] = 1.0;
+    // n-case
+    } else {
+        const token& start = sorted_tokens[0];
+
+        int64_t ti = long_token(start);  // The first token and its value
+        int64_t start_long = ti;
+        int64_t tim1 = ti; // The last token and its value (after loop)
+        for (i++; i != sorted_tokens.end(); i++) {
+            ti = long_token(*i); // The next token and its value
+            ownerships[*i]= ratio_helper(ti, tim1);  // save (T(i) -> %age)
+            tim1 = ti;
+        }
+
+        // The start token's range extends backward to the last token, which is why both were saved above.
+        ownerships[start] = ratio_helper(start_long, ti);
+    }
+
+    return ownerships;
 }
 
 data_type
