@@ -1592,13 +1592,26 @@ public:
     }
 };
 
+db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s) {
+    double chance = _read_repair_chance(_urandom);
+    if (s.read_repair_chance() > chance) {
+        return db::read_repair_decision::GLOBAL;
+    }
+
+    if (s.dc_local_read_repair_chance() > chance) {
+        return db::read_repair_decision::DC_LOCAL;
+    }
+
+    return db::read_repair_decision::NONE;
+}
+
 ::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl) {
     const dht::token& token = pr.start()->value().token();
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
 
     std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
-    db::read_repair_decision repair_decision = db::read_repair_decision::NONE;//Schema.instance.getCFMetaData(command.ksName, command.cfName).newReadRepairDecision();
+    db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
 
     // Throw UAE early if we don't have enough replicas.

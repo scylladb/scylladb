@@ -67,6 +67,9 @@ private:
     std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
+    // for read repair chance calculation
+    std::default_random_engine _urandom;
+    std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
 private:
     void init_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
@@ -86,6 +89,7 @@ private:
     bool should_hint(gms::inet_address ep);
     bool submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
+    db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
     future<query::result_digest> query_singular_local_digest(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
