@@ -110,7 +110,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
     }
 }
 
-size_t token_metadata::first_token_index(const token& start) {
+size_t token_metadata::first_token_index(const token& start) const {
     assert(_sorted_tokens.size() > 0);
     auto it = std::lower_bound(_sorted_tokens.begin(), _sorted_tokens.end(), start);
     if (it == _sorted_tokens.end()) {
@@ -120,7 +120,7 @@ size_t token_metadata::first_token_index(const token& start) {
     }
 }
 
-const token& token_metadata::first_token(const token& start) {
+const token& token_metadata::first_token(const token& start) const {
     return _sorted_tokens[first_token_index(start)];
 }
 
@@ -212,7 +212,7 @@ void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
 boost::iterator_range<token_metadata::tokens_iterator>
 token_metadata::ring_range(
     const std::experimental::optional<query::partition_range::bound>& start,
-    bool include_min)
+    bool include_min) const
 {
     auto r = ring_range(start ? start->value().token() : dht::minimum_token(), include_min);
 
