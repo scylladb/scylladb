@@ -1484,7 +1484,7 @@ protected:
     }
     virtual future<> make_requests(digest_resolver_ptr resolver) {
         return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
-                        _targets.size() > 1 ? make_digest_requests(resolver, _targets.begin() + 1, _targets.end()) : make_ready_future()).discard_result();
+                        make_digest_requests(resolver, _targets.begin() + 1, _targets.end())).discard_result();
     }
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
