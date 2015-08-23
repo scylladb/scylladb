@@ -49,6 +49,9 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
     , _compaction_manager(compaction_manager)
 {
     add_memtable();
+    if (!_config.enable_disk_writes) {
+        dblog.warn("Writes disabled, column family no durable.");
+    }
 }
 
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
@@ -61,6 +64,9 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
     , _compaction_manager(compaction_manager)
 {
     add_memtable();
+    if (!_config.enable_disk_writes) {
+        dblog.warn("Writes disabled, column family no durable.");
+    }
 }
 
 negative_mutation_reader
@@ -405,7 +411,6 @@ column_family::seal_active_memtable() {
     dblog.debug("Sealing active memtable, partitions: {}, occupancy: {}", old->partition_count(), old->occupancy());
 
     if (!_config.enable_disk_writes) {
-       dblog.warn("Writes disabled, memtable not sealed.");
        return make_ready_future<>();
     }
 
