@@ -27,7 +27,7 @@
 #pragma once
 #include "i_filter.hh"
 #include "utils/murmur_hash.hh"
-#include <boost/dynamic_bitset.hpp>
+#include "utils/large_bitset.hh"
 
 #include <vector>
 
@@ -36,8 +36,7 @@ namespace filter {
 
 class bloom_filter: public i_filter {
 public:
-    using bitmap_block = uint64_t;
-    using bitmap = boost::dynamic_bitset<bitmap_block>;
+    using bitmap = large_bitset;
 
 private:
     bitmap _bitset;
@@ -51,8 +50,7 @@ public:
     int num_hashes() { return _hash_count; }
     bitmap& bits() { return _bitset; }
 
-    bloom_filter(int hashes, bitmap&& bs) : _bitset(bs), _hash_count(hashes) {
-        _bitset.resize(_bitset.num_blocks() * bitmap::bits_per_block);
+    bloom_filter(int hashes, bitmap&& bs) : _bitset(std::move(bs)), _hash_count(hashes) {
     }
 
     virtual void hash(const bytes_view& b, long seed, std::array<uint64_t, 2>& result) = 0;
@@ -105,7 +103,7 @@ struct always_present_filter: public i_filter {
     virtual void close() override { }
 };
 
-filter_ptr create_filter(int hash, boost::dynamic_bitset<uint64_t>&& bitset);
+filter_ptr create_filter(int hash, large_bitset&& bitset);
 filter_ptr create_filter(int hash, long num_elements, int buckets_per);
 }
 }

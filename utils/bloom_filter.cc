@@ -27,7 +27,7 @@
 #include "bytes.hh"
 #include "utils/murmur_hash.hh"
 #include "core/shared_ptr.hh"
-#include <boost/dynamic_bitset.hpp>
+#include "utils/large_bitset.hh"
 #include <array>
 #include <cstdlib>
 #include "bloom_filter.hh"
@@ -66,13 +66,14 @@ std::vector<long> bloom_filter::indexes(const bytes_view& key) {
     return idx;
 }
 
-filter_ptr create_filter(int hash, boost::dynamic_bitset<uint64_t>&& bitset) {
+filter_ptr create_filter(int hash, large_bitset&& bitset) {
     return std::make_unique<murmur3_bloom_filter>(hash, std::move(bitset));
 }
 
 filter_ptr create_filter(int hash, long num_elements, int buckets_per) {
     long num_bits = (num_elements * buckets_per) + bloom_calculations::EXCESS;
-    boost::dynamic_bitset<uint64_t> bitset(num_bits);
+    num_bits = align_up<long>(num_bits, 64);  // Seems to be implied in origin
+    large_bitset bitset(num_bits);
     return std::make_unique<murmur3_bloom_filter>(hash, std::move(bitset));
 }
 }

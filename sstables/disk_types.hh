@@ -5,10 +5,9 @@
 #pragma once
 
 #include "bytes.hh"
-#include <vector>
 #include <unordered_map>
 #include <type_traits>
-#include <vector>
+#include <deque>
 
 namespace sstables {
 
@@ -37,7 +36,7 @@ struct disk_string_view {
 template <typename Size, typename Members>
 struct disk_array {
     static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
-    std::vector<Members> elements;
+    std::deque<Members> elements;
 };
 
 template <typename Size, typename Key, typename Value>
