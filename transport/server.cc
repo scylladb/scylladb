@@ -383,7 +383,9 @@ future<> cql_server::connection::process()
     return do_until([this] {
         return _read_buf.eof();
     }, [this] {
-        return process_request();
+        return with_gate(_pending_requests_gate, [this] {
+            return process_request();
+        });
     }).then_wrapped([this] (future<> f) {
         try {
             f.get();
