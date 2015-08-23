@@ -577,6 +577,26 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto debug_threshold = req->get_query_param("throttle");
         return make_ready_future<json::json_return_type>(json_void());
     });
+
+    ss::get_metrics_load.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    ss::get_exceptions.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    ss::get_total_hints_in_progress.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    ss::get_total_hints.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 
 }
