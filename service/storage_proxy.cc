@@ -1625,7 +1625,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 #if 0
     ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
 #endif
-    speculative_retry::type retry_type = speculative_retry::type::NONE;//cfs.metadata.getSpeculativeRetry().type;
+    speculative_retry::type retry_type = schema->speculative_retry().get_type();
 
     size_t block_for = db::block_for(ks, cl);
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.

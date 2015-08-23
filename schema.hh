@@ -119,6 +119,12 @@ public:
         }
         return speculative_retry(t, v);
     }
+    type get_type() const {
+        return _t;
+    }
+    double get_value() const {
+        return _v;
+    }
 };
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
