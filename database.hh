@@ -332,6 +332,7 @@ public:
     }
     void create_replication_strategy(const std::map<sstring, sstring>& options);
     locator::abstract_replication_strategy& get_replication_strategy();
+    const locator::abstract_replication_strategy& get_replication_strategy() const;
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_column_family(const schema_ptr& s) {
@@ -433,6 +434,7 @@ public:
     void update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
+    std::vector<sstring> get_non_system_keyspaces() const;
     column_family& find_column_family(const sstring& ks, const sstring& name) throw (no_such_column_family);
     const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
     column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);
