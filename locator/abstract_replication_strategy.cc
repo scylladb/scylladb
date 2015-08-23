@@ -50,7 +50,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
     return res->second;
 }
 
-void abstract_replication_strategy::validate_replication_factor(sstring rf)
+void abstract_replication_strategy::validate_replication_factor(sstring rf) const
 {
     try {
         if (std::stol(rf) < 0) {
@@ -74,7 +74,7 @@ abstract_replication_strategy::get_cached_endpoints() {
 }
 
 std::vector<range<token>>
-abstract_replication_strategy::get_ranges(inet_address ep) {
+abstract_replication_strategy::get_ranges(inet_address ep) const {
     std::vector<range<token>> ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {

@@ -72,7 +72,7 @@ network_topology_strategy::network_topology_strategy(
 
 std::vector<inet_address>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token) {
+    const token& search_token) const {
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
@@ -186,7 +186,7 @@ inline bool network_topology_strategy::has_sufficient_replicas(
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) {
+                           std::unordered_set<inet_address>>& all_endpoints) const {
 
         return dc_replicas[dc].size() >=
             std::min(all_endpoints[dc].size(), get_replication_factor(dc));
@@ -196,7 +196,7 @@ inline bool network_topology_strategy::has_sufficient_replicas(
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints) {
+                           std::unordered_set<inet_address>>& all_endpoints) const {
 
         for (auto& dc : get_datacenters()) {
             if (!has_sufficient_replicas(dc, dc_replicas, all_endpoints)) {

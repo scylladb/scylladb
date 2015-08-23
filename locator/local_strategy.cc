@@ -17,7 +17,7 @@ std::vector<inet_address> local_strategy::get_natural_endpoints(const token& t) 
     return calculate_natural_endpoints(t);
 }
 
-std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t) {
+std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t) const {
     return std::vector<inet_address>({utils::fb_utilities::get_broadcast_address()});
 }
 

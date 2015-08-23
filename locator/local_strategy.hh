@@ -16,7 +16,7 @@ using token = dht::token;
 
 class local_strategy : public abstract_replication_strategy {
 protected:
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token);
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) const override;
 public:
     local_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options);
     virtual ~local_strategy() {};
