@@ -6,6 +6,7 @@
 #include "core/future-util.hh"
 #include "core/shared_ptr.hh"
 #include "core/do_with.hh"
+#include <seastar/core/align.hh>
 
 #include "types.hh"
 #include "sstables.hh"
@@ -48,7 +49,7 @@ void sstable::write_filter() {
     auto f = static_cast<utils::filter::murmur3_bloom_filter *>(_filter.get());
 
     auto&& bs = f->bits();
-    std::vector<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
+    std::deque<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
     for (size_t i = 0; i != bs.size(); ++i) {
         if (bs.test(i)) {
             v[i / 64] |= uint64_t(1) << (i % 64);

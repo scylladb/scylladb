@@ -301,7 +301,7 @@ inline void write(file_writer& out, disk_string_view<Size>& s) {
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
+parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
     auto eoarr = [count, len] { return *count == len; };
@@ -313,15 +313,20 @@ parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
 
 template <typename Size, typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
-parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
-    return in.read_exactly(len * sizeof(Members)).then([&arr, len] (auto buf) {
-        check_buf_size(buf, len * sizeof(Members));
+parse(random_access_reader& in, Size& len, std::deque<Members>& arr) {
+    auto done = make_lw_shared<size_t>(0);
+    return repeat([&in, &len, &arr, done]  {
+        auto now = std::min(len - *done, 100000 / sizeof(Members));
+        return in.read_exactly(now * sizeof(Members)).then([&arr, len, now, done] (auto buf) {
+            check_buf_size(buf, now * sizeof(Members));
 
-        auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
-        for (size_t i = 0; i < len; ++i) {
-            arr[i] = net::ntoh(nr[i]);
-        }
-        return make_ready_future<>();
+            auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
+            for (size_t i = 0; i < now; ++i) {
+                arr[*done + i] = net::ntoh(nr[i]);
+            }
+            *done += now;
+            return make_ready_future<stop_iteration>(*done == len ? stop_iteration::yes : stop_iteration::no);
+        });
     });
 }
 
@@ -329,17 +334,17 @@ parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
 // specializations
 template <typename Size, typename Members>
 future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
-    auto len = std::make_unique<Size>();
+    auto len = make_lw_shared<Size>();
     auto f = parse(in, *len);
-    return f.then([&in, &arr, len = std::move(len)] {
+    return f.then([&in, &arr, len] {
         arr.elements.resize(*len);
         return parse(in, *len, arr.elements);
-    });
+    }).finally([len] {});
 }
 
 template <typename Members>
 inline typename std::enable_if_t<!std::is_integral<Members>::value, void>
-write(file_writer& out, std::vector<Members>& arr) {
+write(file_writer& out, std::deque<Members>& arr) {
     for (auto& a : arr) {
         write(out, a);
     }
@@ -347,17 +352,23 @@ write(file_writer& out, std::vector<Members>& arr) {
 
 template <typename Members>
 inline typename std::enable_if_t<std::is_integral<Members>::value, void>
-write(file_writer& out, std::vector<Members>& arr) {
+write(file_writer& out, std::deque<Members>& arr) {
     std::vector<Members> tmp;
-    tmp.resize(arr.size());
-    // copy arr into tmp converting each entry into big-endian representation.
-    auto *nr = reinterpret_cast<const net::packed<Members> *>(arr.data());
-    for (size_t i = 0; i < arr.size(); i++) {
-        tmp[i] = net::hton(nr[i]);
+    size_t per_loop = 100000 / sizeof(Members);
+    tmp.resize(per_loop);
+    size_t idx = 0;
+    while (idx != arr.size()) {
+        auto now = std::min(arr.size() - idx, per_loop);
+        // copy arr into tmp converting each entry into big-endian representation.
+        auto nr = arr.begin() + idx;
+        for (size_t i = 0; i < now; i++) {
+            tmp[i] = net::hton(nr[i]);
+        }
+        auto p = reinterpret_cast<const char*>(tmp.data());
+        auto bytes = now * sizeof(Members);
+        out.write(p, bytes).get();
+        idx += now;
     }
-    auto p = reinterpret_cast<const char*>(tmp.data());
-    auto bytes = tmp.size() * sizeof(Members);
-    out.write(p, bytes).get();
 }
 
 template <typename Size, typename Members>
@@ -426,7 +437,7 @@ future<> parse(random_access_reader& in, summary& s) {
             s.entries.resize(s.header.size);
 
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
-            s.positions = std::vector<pos_type>(nr, nr + s.header.size);
+            s.positions = std::deque<pos_type>(nr, nr + s.header.size);
 
             // Since the keys in the index are not sized, we need to calculate
             // the start position of the index i+1 to determine the boundaries
@@ -480,16 +491,15 @@ inline void write(file_writer& out, summary_entry& entry) {
 }
 
 inline void write(file_writer& out, summary& s) {
-    using pos_type = typename decltype(summary::positions)::value_type;
-
     // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
     write(out, s.header.min_index_interval,
                   s.header.size,
                   s.header.memory_size,
                   s.header.sampling_level,
                   s.header.size_at_full_sampling);
-    auto p = reinterpret_cast<const char*>(s.positions.data());
-    out.write(p, sizeof(pos_type) * s.positions.size()).get();
+    for (auto&& e : s.positions) {
+        out.write(reinterpret_cast<const char*>(&e), sizeof(e)).get();
+    }
     write(out, s.entries);
     write(out, s.first_key, s.last_key);
 }
@@ -1119,8 +1129,6 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count) {
         throw malformed_sstable_exception("Current sampling level (" + to_sstring(BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
     }
 
-    s.positions.reserve(max_expected_entries);
-    s.entries.reserve(max_expected_entries);
     s.keys_written = 0;
     s.header.memory_size = 0;
 }
