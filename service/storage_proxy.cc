@@ -1257,7 +1257,7 @@ class digest_read_resolver : public abstract_read_resolver {
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
 public:
-    digest_read_resolver(db::consistency_level cl, size_t block_for, size_t targets_count, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(cl, targets_count, timeout), _block_for(block_for) {}
+    digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
             _digest_results.emplace_back(result->digest());
@@ -1296,6 +1296,12 @@ public:
     }
     future<> has_cl() {
         return _cl_promise.get_future();
+    }
+    bool has_data() {
+        return _data_results.size() != 0;
+    }
+    void add_wait_targets(size_t targets_count) {
+        _targets_count += targets_count;
     }
 };
 
@@ -1483,9 +1489,11 @@ protected:
         });
     }
     virtual future<> make_requests(digest_resolver_ptr resolver) {
+        resolver->add_wait_targets(_targets.size());
         return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
                         make_digest_requests(resolver, _targets.begin() + 1, _targets.end())).discard_result();
     }
+    virtual void got_cl() {}
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
     }
@@ -1527,7 +1535,7 @@ protected:
 
 public:
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) {
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, _targets.size(), timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver).finally([exec]() {
@@ -1536,6 +1544,7 @@ public:
 
         digest_resolver->has_cl().then_wrapped([this, exec, digest_resolver, timeout] (future<> f) {
             try {
+                got_cl();
                 f.get();
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
@@ -1566,20 +1575,56 @@ public:
 
 class never_speculating_read_executor : public abstract_read_executor {
 public:
-    never_speculating_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, size_t block_for, std::vector<gms::inet_address> targets) :
-                                    abstract_read_executor(std::move(cmd), std::move(pr), cl, block_for, std::move(targets)) {}
+    using abstract_read_executor::abstract_read_executor;
 };
 
+// this executor always asks for one additional data reply
 class always_speculating_read_executor : public abstract_read_executor {
 public:
-    always_speculating_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, size_t block_for, std::vector<gms::inet_address> targets) :
-                                    abstract_read_executor(std::move(cmd), std::move(pr), cl, block_for, std::move(targets)) {}
+    using abstract_read_executor::abstract_read_executor;
+    virtual future<> make_requests(digest_resolver_ptr resolver) {
+        resolver->add_wait_targets(_targets.size());
+        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2),
+                        make_digest_requests(resolver, _targets.begin() + 2, _targets.end())).discard_result();
+    }
 };
 
+// this executor sends request to an additional replica after some time below timeout
 class speculating_read_executor : public abstract_read_executor {
+    timer<> _speculate_timer;
 public:
-    speculating_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, size_t block_for, std::vector<gms::inet_address> targets) :
-                              abstract_read_executor(std::move(cmd), std::move(pr), cl, block_for, std::move(targets)) {}
+    using abstract_read_executor::abstract_read_executor;
+    virtual future<> make_requests(digest_resolver_ptr resolver) {
+        _speculate_timer.set_callback([this, resolver] {
+            resolver->add_wait_targets(1); // we send one more request so wait for it too
+            future<> f = resolver->has_data() ?
+                    make_digest_requests(resolver, _targets.end() - 1, _targets.end()) :
+                    make_data_requests(resolver, _targets.end() - 1, _targets.end());
+            f.finally([exec = shared_from_this()]{});
+        });
+        // FIXME: the timeout should come from previous latency statistics for a partition
+        auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(get_local_storage_proxy().get_db().local().get_config().read_request_timeout_in_ms()/2);
+        _speculate_timer.arm(timeout);
+
+        // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
+        // that the last replica in our list is "extra."
+        resolver->add_wait_targets(_targets.size() - 1);
+        if (_block_for < _targets.size() - 1) {
+            // We're hitting additional targets for read repair.  Since our "extra" replica is the least-
+            // preferred by the snitch, we do an extra data read to start with against a replica more
+            // likely to reply; better to let RR fail than the entire query.
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2),
+                            make_digest_requests(resolver, _targets.begin() + 2, _targets.end())).discard_result();
+        } else {
+            // not doing read repair; all replies are important, so it doesn't matter which nodes we
+            // perform data reads against vs digest.
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
+                            make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1)).discard_result();
+        }
+    }
+    virtual void got_cl() override {
+        _speculate_timer.cancel();
+    }
 };
 
 class range_slice_read_executor : public abstract_read_executor {
