@@ -432,7 +432,9 @@ future<> cql_server::connection::process_request() {
                 [this, op, stream, buf = std::move(buf)] () mutable {
                     return process_request_one(std::move(buf), op, stream);
                 }
-            );
+            ).handle_exception([] (std::exception_ptr ex) {
+                logger.error("request processing failed: {}", ex);
+            });
 
             return make_ready_future<>();
         });
