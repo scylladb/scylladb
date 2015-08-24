@@ -149,7 +149,7 @@ public:
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
-    future<> update(memtable&, negative_mutation_reader underlying_negative);
+    future<> update(memtable&, partition_presence_checker underlying_negative);
     auto num_entries() const {
         return _partitions.size();
     }

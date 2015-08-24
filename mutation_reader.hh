@@ -90,15 +90,15 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 // independent mutation_reader.
 using mutation_source = std::function<mutation_reader(const query::partition_range& range)>;
 
-/// A negative_mutation_reader quickly returns whether a key is known not to exist
+/// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
-enum class negative_mutation_reader_result {
+enum class partition_presence_checker_result {
     definitely_doesnt_exists,
     maybe_exists
 };
-using negative_mutation_reader = std::function<negative_mutation_reader_result (const partition_key& key)>;
+using partition_presence_checker = std::function<partition_presence_checker_result (const partition_key& key)>;
 
 inline
-negative_mutation_reader make_default_negative_mutation_reader() {
-    return [] (const partition_key& key) { return negative_mutation_reader_result::maybe_exists; };
+partition_presence_checker make_default_partition_presence_checker() {
+    return [] (const partition_key& key) { return partition_presence_checker_result::maybe_exists; };
 }

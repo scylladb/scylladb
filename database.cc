@@ -69,15 +69,15 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
     }
 }
 
-negative_mutation_reader
-column_family::make_negative_mutation_reader(lw_shared_ptr<sstable_list> old_sstables) {
+partition_presence_checker
+column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables) {
     return [this, old_sstables = std::move(old_sstables)] (const partition_key& key) {
         for (auto&& s : *old_sstables) {
             if (s.second->filter_has_key(*_schema, key)) {
-                return negative_mutation_reader_result::maybe_exists;
+                return partition_presence_checker_result::maybe_exists;
             }
         }
-        return negative_mutation_reader_result::definitely_doesnt_exists;
+        return partition_presence_checker_result::definitely_doesnt_exists;
     };
 }
 
@@ -399,7 +399,7 @@ column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstable
     if (_config.enable_cache) {
        // be careful to use the old sstable list, since the new one will hit every
        // mutation in m.
-       return _cache.update(m, make_negative_mutation_reader(std::move(old_sstables)));
+       return _cache.update(m, make_partition_presence_checker(std::move(old_sstables)));
     } else {
        return make_ready_future<>();
     }

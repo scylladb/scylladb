@@ -136,7 +136,7 @@ private:
     mutation_reader make_sstable_reader(const query::partition_range& range) const;
 
     mutation_source sstables_as_mutation_source();
-    negative_mutation_reader make_negative_mutation_reader(lw_shared_ptr<sstable_list> old_sstables);
+    partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
