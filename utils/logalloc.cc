@@ -954,7 +954,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
         region::impl* r = _regions.back();
 
         if (!r->is_compactible()) {
-            logger.warn("Unable to release segments, no compactible pools.");
+            logger.trace("Unable to release segments, no compactible pools.");
             break;
         }
 
