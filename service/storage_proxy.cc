@@ -987,10 +987,9 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
                 got_response(response_id, my_address);
             });
         } else {
-            auto response_id_ = response_id; // make local copy since capture is reused
             auto& ms = net::get_local_messaging_service();
             return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id_);
+                std::move(forward), my_address, engine().cpu_id(), response_id);
         }
     }).finally([mptr] {
         // make mutation alive until it is sent or processed locally, otherwise it
@@ -2421,12 +2420,7 @@ void storage_proxy::init_messaging_service() {
             }),
             parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
                 auto& ms = net::get_local_messaging_service();
-                // we need to get copy of all captured element since lambda is used more than one, so we cannot move from it
-                // we cannot pass references to send_message either since lambda may be destroyed before send completes
-                auto reply_to_ = reply_to;
-                auto shard_ = shard;
-                auto response_id_ = response_id;
-                return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to_, shard_, response_id_);
+                return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id);
             })
             );
         }).discard_result();
