@@ -1457,3 +1457,27 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         }).then([sst, mt] {});
     });
 }
+
+SEASTAR_TEST_CASE(check_compaction_ancestor_metadata) {
+    // NOTE: generations 18 to 38 are used here.
+
+    // check that ancestors list of compacted sstable is correct.
+
+    return test_setup::do_with_test_directory([] {
+        return compact_sstables({ 42, 43, 44, 45 }, 46).then([] {
+            return open_sstable("tests/sstables/tests-temporary", 46).then([] (shared_sstable sst) {
+                std::set<unsigned long> ancestors;
+                const compaction_metadata& cm = sst->get_compaction_metadata();
+                for (auto& ancestor : cm.ancestors.elements) {
+                    ancestors.insert(ancestor);
+                }
+                BOOST_REQUIRE(ancestors.find(42) != ancestors.end());
+                BOOST_REQUIRE(ancestors.find(43) != ancestors.end());
+                BOOST_REQUIRE(ancestors.find(44) != ancestors.end());
+                BOOST_REQUIRE(ancestors.find(45) != ancestors.end());
+
+                return make_ready_future<>();
+            });
+        });
+    });
+}
