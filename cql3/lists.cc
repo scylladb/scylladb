@@ -170,7 +170,7 @@ lists::delayed_value::bind(const query_options& options) {
     std::vector<bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
-        bytes_opt bo = t->bind_and_get(options);
+        auto bo = t->bind_and_get(options);
 
         if (!bo) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -183,14 +183,14 @@ lists::delayed_value::bind(const query_options& options) {
                     bo->size()));
         }
 
-        buffers.push_back(std::move(*bo));
+        buffers.push_back(std::move(to_bytes(*bo)));
     }
     return ::make_shared<value>(buffers);
 }
 
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
-    const bytes_opt& value = options.get_value_at(_bind_index);
+    const auto& value = options.get_value_at(_bind_index);
     auto ltype = static_pointer_cast<const list_type_impl>(_receiver->type);
     if (!value) {
         return nullptr;
@@ -244,8 +244,8 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 
     auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
 
-    bytes_opt index = _idx->bind_and_get(params._options);
-    bytes_opt value = _t->bind_and_get(params._options);
+    auto index = _idx->bind_and_get(params._options);
+    auto value = _t->bind_and_get(params._options);
 
     if (!index) {
         throw exceptions::invalid_request_exception("Invalid null value for list index");

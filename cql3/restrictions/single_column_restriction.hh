@@ -109,12 +109,12 @@ public:
 
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
         std::vector<bytes_opt> v;
-        v.push_back(_value->bind_and_get(options));
+        v.push_back(to_bytes_opt(_value->bind_and_get(options)));
         return v;
     }
 
     virtual bytes_opt value(const query_options& options) const override {
-        return _value->bind_and_get(options);
+        return to_bytes_opt(_value->bind_and_get(options));
     }
 
     virtual sstring to_string() const override {
@@ -175,7 +175,7 @@ public:
     virtual std::vector<bytes_opt> values(const query_options& options) const override {
         std::vector<bytes_opt> ret;
         for (auto&& v : _values) {
-            ret.emplace_back(v->bind_and_get(options));
+            ret.emplace_back(to_bytes_opt(v->bind_and_get(options)));
         }
         return ret;
     }
@@ -237,7 +237,7 @@ public:
     }
 
     virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
-        return {_slice.bound(b)->bind_and_get(options)};
+        return {to_bytes_opt(_slice.bound(b)->bind_and_get(options))};
     }
 
     virtual bool is_inclusive(statements::bound b) const override {
@@ -442,7 +442,7 @@ private:
         std::vector<bytes_opt> values;
         values.reserve(terms.size());
         for (auto&& term : terms) {
-            values.emplace_back(term->bind_and_get(options));
+            values.emplace_back(to_bytes_opt(term->bind_and_get(options)));
         }
         return values;
     }

@@ -72,7 +72,7 @@ public:
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    virtual bytes_opt bind_and_get(const query_options& options) = 0;
+    virtual bytes_view_opt bind_and_get(const query_options& options) = 0;
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -172,8 +172,8 @@ public:
      */
     virtual bytes_opt get(const query_options& options) = 0;
 
-    virtual bytes_opt bind_and_get(const query_options& options) override {
-        return get(options);
+    virtual bytes_view_opt bind_and_get(const query_options& options) override {
+        return options.make_temporary(get(options));
     }
 
     virtual sstring to_string() const = 0;
@@ -207,10 +207,10 @@ public:
         return false;
     }
 
-    virtual bytes_opt bind_and_get(const query_options& options) override {
+    virtual bytes_view_opt bind_and_get(const query_options& options) override {
         auto t = bind(options);
         if (t) {
-            return t->get(options);
+            return options.make_temporary(t->get(options));
         }
         return {};
     };

@@ -805,6 +805,24 @@ to_bytes(bytes_view x) {
     return bytes(x.begin(), x.size());
 }
 
+inline
+bytes_opt
+to_bytes_opt(bytes_view_opt bv) {
+    if (bv) {
+        return to_bytes(*bv);
+    }
+    return std::experimental::nullopt;
+}
+
+inline
+bytes_view_opt
+as_bytes_view_opt(const bytes_opt& bv) {
+    if (bv) {
+        return bytes_view{*bv};
+    }
+    return std::experimental::nullopt;
+}
+
 // FIXME: make more explicit
 inline
 bytes

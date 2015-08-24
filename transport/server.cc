@@ -481,7 +481,7 @@ future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer
     auto query = read_long_string_view(buf);
     auto& q_state = get_query_state(stream);
     q_state.options = read_options(buf);
-    return _server._query_processor.local().process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
+    return _server._query_processor.local().process(query, q_state.query_state, *q_state.options).then([this, stream, buf = std::move(buf)] (auto msg) {
          return this->write_result(stream, msg);
     });
 }
@@ -525,7 +525,7 @@ future<> cql_server::connection::process_execute(uint16_t stream, temporary_buff
     if (stmt->get_bound_terms() != options.get_values_count()) {
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
-    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream] (auto msg) {
+    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
          return this->write_result(stream, msg);
     });
 }
@@ -829,6 +829,17 @@ sstring cql_server::connection::read_string(temporary_buffer<char>& buf)
     return s;
 }
 
+sstring_view cql_server::connection::read_string_view(temporary_buffer<char>& buf)
+{
+    auto n = read_short(buf);
+    check_room(buf, n);
+    sstring_view s{buf.begin(), static_cast<size_t>(n)};
+    assert(n >= 0);
+    buf.trim_front(n);
+    validate_utf8(s);
+    return s;
+}
+
 sstring_view cql_server::connection::read_long_string_view(temporary_buffer<char>& buf)
 {
     auto n = read_int(buf);
@@ -882,21 +893,21 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
 {
     auto consistency = read_consistency(buf);
     if (_version == 1) {
-        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_opt>{},
+        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_view_opt>{},
             false, cql3::query_options::specific_options::DEFAULT, 1, _serialization_format);
     }
 
     assert(_version >= 2);
 
     auto flags = enum_set<options_flag_enum>::from_mask(read_byte(buf));
-    std::vector<bytes_opt> values;
-    std::vector<sstring> names;
+    std::vector<bytes_view_opt> values;
+    std::vector<sstring_view> names;
 
     if (flags.contains<options_flag::VALUES>()) {
         if (flags.contains<options_flag::NAMES_FOR_VALUES>()) {
             read_name_and_value_list(buf, names, values);
         } else {
-            read_value_list(buf, values);
+            read_value_view_list(buf, values);
         }
     }
 
@@ -929,7 +940,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
             }
         }
 
-        std::experimental::optional<std::vector<sstring>> onames;
+        std::experimental::optional<std::vector<sstring_view>> onames;
         if (!names.empty()) {
             onames = std::move(names);
         }
@@ -944,13 +955,13 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
     return std::move(options);
 }
 
-void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_opt>& values) {
+void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
     uint16_t size = read_unsigned_short(buf);
     names.reserve(size);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
         names.emplace_back(read_string(buf));
-        values.emplace_back(read_value(buf));
+        values.emplace_back(read_value_view(buf));
     }
 }
 
@@ -962,11 +973,11 @@ void cql_server::connection::read_string_list(temporary_buffer<char>& buf, std::
     }
 }
 
-void cql_server::connection::read_value_list(temporary_buffer<char>& buf, std::vector<bytes_opt>& values) {
+void cql_server::connection::read_value_view_list(temporary_buffer<char>& buf, std::vector<bytes_view_opt>& values) {
     uint16_t size = read_unsigned_short(buf);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
-        values.emplace_back(read_value(buf));
+        values.emplace_back(read_value_view(buf));
     }
 }
 
@@ -979,6 +990,17 @@ bytes_opt cql_server::connection::read_value(temporary_buffer<char>& buf) {
     bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
     buf.trim_front(len);
     return {std::move(b)};
+}
+
+bytes_view_opt cql_server::connection::read_value_view(temporary_buffer<char>& buf) {
+    auto len = read_int(buf);
+    if (len < 0) {
+        return {};
+    }
+    check_room(buf, len);
+    bytes_view bv(reinterpret_cast<const int8_t*>(buf.begin()), len);
+    buf.trim_front(len);
+    return {std::move(bv)};
 }
 
 scattered_message<char> cql_server::response::make_message(uint8_t version) {

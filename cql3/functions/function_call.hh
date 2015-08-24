@@ -42,7 +42,7 @@ public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
     virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override;
     virtual shared_ptr<terminal> bind(const query_options& options) override;
-    virtual bytes_opt bind_and_get(const query_options& options) override;
+    virtual bytes_view_opt bind_and_get(const query_options& options) override;
 private:
     static bytes_opt execute_internal(serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params);
 public:
