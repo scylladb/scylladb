@@ -244,6 +244,10 @@ public:
     const sstring get_filename() {
         return filename(component_type::Data);
     }
+
+    metadata_collector& get_metadata_collector() {
+        return _collector;
+    }
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
