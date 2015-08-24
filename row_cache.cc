@@ -77,6 +77,10 @@ logalloc::region& cache_tracker::region() {
     return _region;
 }
 
+const logalloc::region& cache_tracker::region() const {
+    return _region;
+}
+
 // Reader which populates the cache using data from the delegate.
 class populating_reader {
     row_cache& _cache;
