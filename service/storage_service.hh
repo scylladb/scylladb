@@ -178,7 +178,7 @@ public:
     }
 
     /** This method updates the local token on disk  */
-    future<> set_tokens(std::unordered_set<token> tokens);
+    void set_tokens(std::unordered_set<token> tokens);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
@@ -369,7 +369,7 @@ public:
 private:
     bool should_bootstrap();
     future<> prepare_to_join();
-    future<> join_token_ring(int delay);
+    void join_token_ring(int delay);
 public:
     future<> join_ring();
     bool is_joined() {
@@ -1071,14 +1071,11 @@ private:
     {
         HintedHandOffManager.instance.scheduleHintDelivery(host);
     }
+#endif
+public:
+    std::unordered_set<dht::token> get_local_tokens();
 
-    public Collection<Token> getLocalTokens()
-    {
-        Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-        assert tokens != null && !tokens.isEmpty(); // should not be called before initServer sets this
-        return tokens;
-    }
-
+#if 0
     /* These methods belong to the MBean interface */
 
     public List<String> getTokens()

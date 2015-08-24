@@ -1,5 +1,23 @@
 /*
- * Copyright (C) 2015 Cloudius Systems, Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
+ *
  */
 
 #include "storage_service.hh"
@@ -156,8 +174,8 @@ future<> storage_service::prepare_to_join() {
     });
 }
 
-future<> storage_service::join_token_ring(int delay) {
-    return seastar::async([this, delay] {
+// Runs inside seastar::async context
+void storage_service::join_token_ring(int delay) {
     _joined = true;
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
@@ -181,7 +199,7 @@ future<> storage_service::join_token_ring(int delay) {
         if (db::system_keyspace::bootstrap_in_progress()) {
             logger.warn("Detected previous bootstrap failure; retrying");
         } else {
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS);
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::IN_PROGRESS).get();
         }
         set_mode(mode::JOINING, "waiting for ring information", true);
         // first sleep the delay to make sure we see all our peers
@@ -254,8 +272,7 @@ future<> storage_service::join_token_ring(int delay) {
             set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
         }
         bootstrap(_bootstrap_tokens);
-        // FIXME: _is_bootstrap_mode is set to fasle in BootStrapper::bootstrap
-        // assert(!_is_bootstrap_mode); // bootstrap will block until finished
+        assert(!_is_bootstrap_mode); // bootstrap will block until finished
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
@@ -269,9 +286,9 @@ future<> storage_service::join_token_ring(int delay) {
                     logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
                 }
             } else {
-                for (auto token : initial_tokens) {
-                    // FIXME: token from string
-                    // _bootstrap_tokens.insert(getPartitioner().getTokenFactory().fromString(token));
+                for (auto token_string : initial_tokens) {
+                    auto token = dht::global_partitioner().from_sstring(token_string);
+                    _bootstrap_tokens.insert(token);
                 }
                 logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
             }
@@ -291,8 +308,8 @@ future<> storage_service::join_token_ring(int delay) {
 
     if (!_is_survey_mode) {
         // start participating in the ring.
-        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-        set_tokens(_bootstrap_tokens).get();
+        db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+        set_tokens(_bootstrap_tokens);
         // remove the existing info about the replaced node.
         if (!current.empty()) {
             auto& gossiper = gms::get_local_gossiper();
@@ -305,26 +322,23 @@ future<> storage_service::join_token_ring(int delay) {
     } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
-    });
 }
 
 future<> storage_service::join_ring() {
-    if (!_joined) {
-        logger.info("Joining ring by operator request");
-        return join_token_ring(0);
-    } else if (_is_survey_mode) {
-        return db::system_keyspace::get_saved_tokens().then([this] (auto tokens) {
-            return this->set_tokens(std::move(tokens)).then([this] {
-                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
-                _is_survey_mode = false;
-                logger.info("Leaving write survey mode and joining ring at operator request");
-                assert(_token_metadata.sorted_tokens().size() > 0);
-                //Auth.setup();
-                return make_ready_future<>();
-            });
-        });
-    }
-    return make_ready_future<>();
+    return seastar::async([this] {
+        if (!_joined) {
+            logger.info("Joining ring by operator request");
+            join_token_ring(0);
+        } else if (_is_survey_mode) {
+            auto tokens = db::system_keyspace::get_saved_tokens().get0();
+            set_tokens(std::move(tokens));
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+            _is_survey_mode = false;
+            logger.info("Leaving write survey mode and joining ring at operator request");
+            assert(_token_metadata.sorted_tokens().size() > 0);
+            //Auth.setup();
+        }
+    });
 }
 
 // Runs inside seastar::async context
@@ -351,7 +365,8 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
          throw std::runtime_error("Unable to contact any seeds!");
     }
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
+    dht::boot_strapper bs(get_broadcast_address(), tokens, _token_metadata);
+    bs.bootstrap().get(); // handles token update
     logger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 
@@ -780,19 +795,18 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
+// Runs inside seastar::async context
+void storage_service::set_tokens(std::unordered_set<token> tokens) {
     logger.debug("Setting tokens to {}", tokens);
-    auto f = db::system_keyspace::update_tokens(tokens);
-    return f.then([this, tokens = std::move(tokens)] {
-        _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-        // Collection<Token> localTokens = getLocalTokens();
-        auto local_tokens = _bootstrap_tokens;
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
-        set_mode(mode::NORMAL, false);
-        return replicate_to_all_cores();
-    });
+    db::system_keyspace::update_tokens(tokens).get();
+    _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
+    // Collection<Token> localTokens = getLocalTokens();
+    auto local_tokens = _bootstrap_tokens;
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
+    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
+    set_mode(mode::NORMAL, false);
+    replicate_to_all_cores().get();
 }
 
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
@@ -914,9 +928,9 @@ future<> storage_service::init_server(int delay) {
 #endif
 
         if (get_property_join_ring()) {
-            join_token_ring(delay).get();
+            join_token_ring(delay);
         } else {
-            auto tokens = std::get<0>(db::system_keyspace::get_saved_tokens().get());
+            auto tokens = db::system_keyspace::get_saved_tokens().get0();
             if (!tokens.empty()) {
                 _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
                 // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
@@ -1071,6 +1085,13 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
     } else {
         logger.debug("{}: {}", m, msg);
     }
+}
+
+// Runs inside seastar::async context
+std::unordered_set<dht::token> storage_service::get_local_tokens() {
+    auto tokens = db::system_keyspace::get_saved_tokens().get0();
+    assert(!tokens.empty()); // should not be called before initServer sets this
+    return tokens;
 }
 
 } // namespace service
