@@ -997,3 +997,18 @@ future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_desc
 future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors(const sstring& dir) const {
     return _segment_manager->list_descriptors(dir);
 }
+
+future<std::vector<sstring>> db::commitlog::list_existing_segments() const {
+    return list_existing_segments(active_config().commit_log_location);
+}
+
+future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring& dir) const {
+    return list_existing_descriptors(dir).then([dir](auto descs) {
+        std::vector<sstring> paths;
+        std::transform(descs.begin(), descs.end(), std::back_inserter(paths), [&](auto& d) {
+           return dir + "/" + d.filename();
+        });
+        return make_ready_future<std::vector<sstring>>(std::move(paths));
+    });
+}
+
