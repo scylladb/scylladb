@@ -187,6 +187,9 @@ public:
     future<std::vector<descriptor>> list_existing_descriptors() const;
     future<std::vector<descriptor>> list_existing_descriptors(const sstring& dir) const;
 
+    future<std::vector<sstring>> list_existing_segments() const;
+    future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
+
     typedef std::function<future<>(temporary_buffer<char>, replay_position)> commit_load_reader_func;
 
     static subscription<temporary_buffer<char>, replay_position> read_log_file(file, commit_load_reader_func);
