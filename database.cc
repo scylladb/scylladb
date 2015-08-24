@@ -1322,6 +1322,12 @@ database::stop() {
     });
 }
 
+future<> database::flush_all_memtables() {
+    return parallel_for_each(_column_families, [this] (auto& cfp) {
+        return cfp.second->flush();
+    });
+}
+
 const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
 }
