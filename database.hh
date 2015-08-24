@@ -361,6 +361,7 @@ public:
 //   use shard_of() for data
 
 class database {
+    logalloc::region_group _dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
@@ -369,7 +370,6 @@ class database {
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
-    logalloc::region_group _dirty_memory_region_group;
     std::vector<scollectd::registration> _collectd;
 
     future<> init_commitlog();
