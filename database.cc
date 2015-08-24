@@ -666,7 +666,7 @@ database::database(const db::config& cfg)
     , _version(empty_version)
 {
     bool durable = cfg.data_file_directories().size() > 0;
-    db::system_keyspace::make(*this, durable);
+    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
     setup_collectd();

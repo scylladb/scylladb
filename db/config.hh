@@ -690,6 +690,7 @@ public:
     val(enable_in_memory_data_store, bool, false, Used, "Enable in memory mode (system tables are always persisted)") \
     val(enable_cache, bool, true, Used, "Enable cache") \
     val(enable_commitlog, bool, true, Used, "Enable commitlog") \
+    val(volatile_system_keyspace_for_testing, bool, false, Used, "Don't persist system keyspace - testing only!") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

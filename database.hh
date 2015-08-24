@@ -71,7 +71,7 @@ class commitlog;
 class config;
 
 namespace system_keyspace {
-void make(database& db, bool durable);
+void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
@@ -385,7 +385,7 @@ private:
     // not be using this directly.  Go for the public create_keyspace instead.
     void add_keyspace(sstring name, keyspace k);
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    friend void db::system_keyspace::make(database& db, bool durable);
+    friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
 public:
     static utils::UUID empty_version;

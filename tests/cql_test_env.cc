@@ -216,6 +216,7 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
             return seastar::async([db] {
                 auto cfg = make_lw_shared<db::config>();
                 cfg->data_file_directories() = {};
+                cfg->volatile_system_keyspace_for_testing() = true;
                 db->start(std::move(*cfg)).get();
 
                 distributed<service::storage_proxy>& proxy = service::get_storage_proxy();

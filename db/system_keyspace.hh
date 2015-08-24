@@ -83,7 +83,7 @@ future<> remove_endpoint(gms::inet_address ep);
 future<> update_hints_dropped(gms::inet_address ep, utils::UUID time_period, int value);
 
 std::vector<schema_ptr> all_tables();
-void make(database& db, bool durable);
+void make(database& db, bool durable, bool volatile_testing_only = false);
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 query_mutations(service::storage_proxy& proxy, const sstring& cf_name);

@@ -813,16 +813,16 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
-void make(database& db, bool durable) {
+void make(database& db, bool durable, bool volatile_testing_only) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
             "org.apache.cassandra.locator.LocalStrategy",
             std::map<sstring, sstring>{},
             durable
             );
     auto kscfg = db.make_keyspace_config(*ksm);
-    kscfg.enable_disk_reads = true;
-    kscfg.enable_disk_writes = true;
-    kscfg.enable_commitlog = true;
+    kscfg.enable_disk_reads = !volatile_testing_only;
+    kscfg.enable_disk_writes = !volatile_testing_only;
+    kscfg.enable_commitlog = !volatile_testing_only;
     kscfg.enable_cache = true;
     keyspace _ks{ksm, std::move(kscfg)};
     auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), ksm->strategy_options()));
