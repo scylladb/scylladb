@@ -34,6 +34,7 @@ private:
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         // CF being currently compacted.
         column_family* compacting_cf = nullptr;
+        bool stopping = false;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.

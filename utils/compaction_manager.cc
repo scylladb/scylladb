@@ -67,7 +67,8 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 retry = true;
             }
 
-            if (retry) {
+            // We shouldn't retry compaction if task was asked to stop.
+            if (!task->stopping && retry) {
                 cmlog.info("compaction task handler sleeping for {} seconds",
                     std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
                 return task->compaction_retry.retry().then([this, task] {
@@ -95,11 +96,13 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
 }
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task>& task) {
+    task->stopping = true;
     return task->compaction_gate.close().then([task] {
         // NOTE: Signalling semaphore because we want task to finish with the
         // gate_closed_exception exception.
         task->compaction_sem.signal();
-        return task->compaction_done.then([] {
+        return task->compaction_done.then([task] {
+            task->stopping = false;
             return make_ready_future<>();
         });
     });
