@@ -238,6 +238,10 @@ public:
     const sstring get_filename() {
         return filename(component_type::Data);
     }
+
+    metadata_collector& get_metadata_collector() {
+        return _collector;
+    }
 private:
     sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : sstable_buffer_size(wbuffer_size)
