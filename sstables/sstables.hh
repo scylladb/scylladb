@@ -123,7 +123,6 @@ public:
         , _generation(generation)
         , _version(v)
         , _format(f)
-        , _filter_tracker(make_lw_shared<distributed<filter_tracker>>())
         , _now(now)
     { }
     sstable& operator=(const sstable&) = delete;
@@ -276,7 +275,7 @@ private:
     version_types _version;
     format_types _format;
 
-    lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
+    filter_tracker _filter_tracker;
 
     bool _marked_for_deletion = false;
 
@@ -378,6 +377,24 @@ public:
     bool filter_has_key(const schema& s, const partition_key& key) {
         return filter_has_key(key::from_partition_key(s, key));
     }
+
+    uint64_t filter_get_false_positive() {
+        return _filter_tracker.false_positive;
+    }
+    uint64_t filter_get_true_positive() {
+        return _filter_tracker.true_positive;
+    }
+    uint64_t filter_get_recent_false_positive() {
+        auto t = _filter_tracker.false_positive - _filter_tracker.last_false_positive;
+        _filter_tracker.last_false_positive = _filter_tracker.false_positive;
+        return t;
+    }
+    uint64_t filter_get_recent_true_positive() {
+        auto t = _filter_tracker.true_positive - _filter_tracker.last_true_positive;
+        _filter_tracker.last_true_positive = _filter_tracker.true_positive;
+        return t;
+    }
+
     const stats_metadata& get_stats_metadata() const {
         auto entry = _statistics.contents.find(metadata_type::Stats);
         if (entry == _statistics.contents.end()) {

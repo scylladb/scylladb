@@ -15,28 +15,23 @@
 namespace sstables {
 
 future<> sstable::read_filter() {
-    auto ft = _filter_tracker;
-    return _filter_tracker->start(std::move(ft)).then([this] {
-        // FIXME: should stop this service. This one is definitely wrong to stop at_exit.
-        // We should use a Deleter class in lw_shared_ptr
-        if (!has_component(sstable::component_type::Filter)) {
-            _filter = std::make_unique<utils::filter::always_present_filter>();
-            return make_ready_future<>();
-        }
+    if (!has_component(sstable::component_type::Filter)) {
+        _filter = std::make_unique<utils::filter::always_present_filter>();
+        return make_ready_future<>();
+    }
 
-        return do_with(sstables::filter(), [this] (auto& filter) {
-            return this->read_simple<sstable::component_type::Filter>(filter).then([this, &filter] {
-                large_bitset bs(filter.buckets.elements.size() * 64);
-                for (size_t i = 0; i != filter.buckets.elements.size(); ++i) {
-                    auto w = filter.buckets.elements[i];
-                    for (size_t j = 0; j < 64; ++j) {
-                        if (w & (uint64_t(1) << j)) {
-                            bs.set(i * 64 + j);
-                        }
+    return do_with(sstables::filter(), [this] (auto& filter) {
+        return this->read_simple<sstable::component_type::Filter>(filter).then([this, &filter] {
+            large_bitset bs(filter.buckets.elements.size() * 64);
+            for (size_t i = 0; i != filter.buckets.elements.size(); ++i) {
+                auto w = filter.buckets.elements[i];
+                for (size_t j = 0; j < 64; ++j) {
+                    if (w & (uint64_t(1) << j)) {
+                        bs.set(i * 64 + j);
                     }
                 }
-                _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
-            });
+            }
+            _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
         });
     });
 }
