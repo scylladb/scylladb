@@ -390,6 +390,18 @@ public:
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
     }
+    const compaction_metadata& get_compaction_metadata() const {
+        auto entry = _statistics.contents.find(metadata_type::Compaction);
+        if (entry == _statistics.contents.end()) {
+            throw std::runtime_error("Compaction metadata not available");
+        }
+        auto& p = entry->second;
+        if (!p) {
+            throw std::runtime_error("Statistics is malformed");
+        }
+        const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
+        return s;
+    }
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
