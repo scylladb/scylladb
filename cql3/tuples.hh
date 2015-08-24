@@ -182,7 +182,7 @@ public:
             std::vector<bytes_opt> buffers;
             buffers.resize(_elements.size());
             for (size_t i = 0; i < _elements.size(); ++i) {
-                buffers[i] = _elements[i]->bind_and_get(options);
+                buffers[i] = to_bytes_opt(_elements[i]->bind_and_get(options));
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (options.get_serialization_format() != serialization_format::internal()
@@ -203,9 +203,9 @@ public:
             return ::make_shared<value>(bind_internal(options));
         }
 
-        virtual bytes_opt bind_and_get(const query_options& options) override {
+        virtual bytes_view_opt bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return _type->build_value(bind_internal(options));
+            return options.make_temporary(_type->build_value(bind_internal(options)));
         }
 
 #if 0
@@ -372,7 +372,7 @@ public:
         { }
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            auto value = options.get_value_at(_bind_index);
+            const auto& value = options.get_value_at(_bind_index);
             if (!value) {
                 return nullptr;
             } else {
@@ -394,7 +394,7 @@ public:
         }
 
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            auto value = options.get_value_at(_bind_index);
+            const auto& value = options.get_value_at(_bind_index);
             if (!value) {
                 return nullptr;
             } else {

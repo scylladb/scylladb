@@ -172,7 +172,7 @@ shared_ptr<terminal>
 sets::delayed_value::bind(const query_options& options) {
     std::set<bytes, serialized_compare> buffers(_comparator);
     for (auto&& t : _elements) {
-        bytes_opt b = t->bind_and_get(options);
+        auto b = t->bind_and_get(options);
 
         if (!b) {
             throw exceptions::invalid_request_exception("null is not supported inside collections");
@@ -185,7 +185,7 @@ sets::delayed_value::bind(const query_options& options) {
                     b->size()));
         }
 
-        buffers.insert(buffers.end(), std::move(*b));
+        buffers.insert(buffers.end(), std::move(to_bytes(*b)));
     }
     return ::make_shared<value>(std::move(buffers));
 }
@@ -193,7 +193,7 @@ sets::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {
-    auto value = options.get_value_at(_bind_index);
+    const auto& value = options.get_value_at(_bind_index);
     if (!value) {
         return nullptr;
     } else {

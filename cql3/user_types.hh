@@ -167,7 +167,7 @@ public:
             auto sf = options.get_serialization_format();
             std::vector<bytes_opt> buffers;
             for (size_t i = 0; i < _type->size(); ++i) {
-                buffers.push_back(_values[i]->bind_and_get(options));
+                buffers.push_back(to_bytes_opt(_values[i]->bind_and_get(options)));
                 // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (sf != serialization_format::use_32_bit() && _type->field_type(i)->is_collection() && buffers.back()) {
@@ -179,11 +179,11 @@ public:
         }
     public:
         virtual shared_ptr<terminal> bind(const query_options& options) override {
-            return ::make_shared<constants::value>(bind_and_get(options));
+            return ::make_shared<constants::value>(to_bytes_opt(bind_and_get(options)));
         }
 
-        virtual bytes_opt bind_and_get(const query_options& options) override {
-            return user_type_impl::build_value(bind_internal(options));
+        virtual bytes_view_opt bind_and_get(const query_options& options) override {
+            return options.make_temporary(user_type_impl::build_value(bind_internal(options)));
         }
     };
 };

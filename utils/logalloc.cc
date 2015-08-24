@@ -150,12 +150,12 @@ struct segment_descriptor {
 // Stores segment descriptors in a vector which is indexed using most significant
 // bits of segment address.
 class segment_pool {
-    static constexpr size_t emergency_reserve_max() { return 1; }
+    static constexpr size_t emergency_reserve_max() { return 30; }
     std::vector<segment_descriptor> _segments;
     uintptr_t _segments_base; // The address of the first segment
     size_t _segments_in_use{};
     memory::memory_layout _layout;
-    size_t _current_emergeny_reserve_goal = emergency_reserve_max();
+    size_t _current_emergeny_reserve_goal = 1;
     std::stack<std::unique_ptr<segment>> _emergency_reserve;
 private:
     segment* allocate_or_fallback_to_reserve();

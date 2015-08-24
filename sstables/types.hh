@@ -36,7 +36,7 @@ struct filter {
 
     // Create an always positive filter if nothing else is specified.
     filter() : hashes(0), buckets({}) {}
-    explicit filter(int hashes, std::vector<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
+    explicit filter(int hashes, std::deque<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
 struct index_entry {
@@ -86,8 +86,8 @@ struct summary_ka {
     // NOTE3: The sizes in this array represent positions in the memory stream,
     // not the file. The memory stream effectively begins after the header,
     // so every position here has to be added of sizeof(header).
-    std::vector<uint32_t> positions;
-    std::vector<summary_entry> entries;
+    std::deque<uint32_t> positions;   // can be large, so use a deque instead of a vector
+    std::deque<summary_entry> entries;
 
     disk_string<uint32_t> first_key;
     disk_string<uint32_t> last_key;
@@ -204,7 +204,7 @@ static constexpr int DEFAULT_CHUNK_SIZE = 65536;
 // checksums are generated using adler32 algorithm.
 struct checksum {
     uint32_t chunk_size;
-    std::vector<uint32_t> checksums;
+    std::deque<uint32_t> checksums;
 
     template <typename Describer>
     auto describe_type(Describer f) { return f(chunk_size, checksums); }
