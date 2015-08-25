@@ -1114,11 +1114,6 @@ public:
         return stringify(Gossiper.instance.getUnreachableMembers());
     }
 
-    public String getSavedCachesLocation()
-    {
-        return FileUtils.getCanonicalPath(DatabaseDescriptor.getSavedCachesLocation());
-    }
-
     private List<String> stringify(Iterable<InetAddress> endpoints)
     {
         List<String> stringEndpoints = new ArrayList<>();
