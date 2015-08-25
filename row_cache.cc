@@ -149,10 +149,10 @@ void row_cache::populate(const mutation& m) {
     });
 }
 
-future<> row_cache::update(memtable& m, partition_presence_checker underlying_negative) {
+future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
     _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
-    return repeat([this, &m, underlying_negative = std::move(underlying_negative)] () mutable {
-        return with_allocator(_tracker.allocator(), [this, &m, &underlying_negative] () {
+    return repeat([this, &m, presence_checker = std::move(presence_checker)] () mutable {
+        return with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
             unsigned quota = 30;
             auto i = m.partitions.begin();
             const schema& s = *m.schema();
@@ -167,7 +167,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker underlying_ne
                     cache_entry& entry = *cache_i;
                     _tracker.touch(entry);
                     entry.partition().apply(s, std::move(mem_e.partition()));
-                } else if (underlying_negative(mem_e.key().key()) == partition_presence_checker_result::definitely_doesnt_exists) {
+                } else if (presence_checker(mem_e.key().key()) == partition_presence_checker_result::definitely_doesnt_exists) {
                     cache_entry* entry = current_allocator().construct<cache_entry>(mem_e.key(), mem_e.partition());
                     _tracker.insert(*entry);
                     _partitions.insert(cache_i, *entry);
