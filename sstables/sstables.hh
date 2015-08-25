@@ -123,7 +123,6 @@ public:
         , _generation(generation)
         , _version(v)
         , _format(f)
-        , _filter_tracker(make_lw_shared<distributed<filter_tracker>>())
         , _now(now)
     { }
     sstable& operator=(const sstable&) = delete;
@@ -234,6 +233,9 @@ public:
     uint64_t index_size() {
         return _index_file_size;
     }
+    uint64_t filter_size() {
+        return _filter_file_size;
+    }
 
     // Returns the total bytes of all components.
     future<uint64_t> bytes_on_disk();
@@ -267,6 +269,7 @@ private:
     file _data_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
+    uint64_t _filter_file_size = 0;
     uint64_t _bytes_on_disk = 0;
 
     sstring _ks;
@@ -276,7 +279,7 @@ private:
     version_types _version;
     format_types _format;
 
-    lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
+    filter_tracker _filter_tracker;
 
     bool _marked_for_deletion = false;
 
@@ -378,6 +381,24 @@ public:
     bool filter_has_key(const schema& s, const partition_key& key) {
         return filter_has_key(key::from_partition_key(s, key));
     }
+
+    uint64_t filter_get_false_positive() {
+        return _filter_tracker.false_positive;
+    }
+    uint64_t filter_get_true_positive() {
+        return _filter_tracker.true_positive;
+    }
+    uint64_t filter_get_recent_false_positive() {
+        auto t = _filter_tracker.false_positive - _filter_tracker.last_false_positive;
+        _filter_tracker.last_false_positive = _filter_tracker.false_positive;
+        return t;
+    }
+    uint64_t filter_get_recent_true_positive() {
+        auto t = _filter_tracker.true_positive - _filter_tracker.last_true_positive;
+        _filter_tracker.last_true_positive = _filter_tracker.true_positive;
+        return t;
+    }
+
     const stats_metadata& get_stats_metadata() const {
         auto entry = _statistics.contents.find(metadata_type::Stats);
         if (entry == _statistics.contents.end()) {

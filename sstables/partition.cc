@@ -411,7 +411,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
     auto& summary = _summary;
     auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
     if (summary_idx < 0) {
-        _filter_tracker->local().add_false_positive();
+        _filter_tracker.add_false_positive();
         return make_ready_future<mutation_opt>();
     }
 
@@ -419,10 +419,10 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
     return read_indexes(position).then([this, schema, &key, token, summary_idx] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
-            _filter_tracker->local().add_false_positive();
+            _filter_tracker.add_false_positive();
             return make_ready_future<mutation_opt>();
         }
-        _filter_tracker->local().add_true_positive();
+        _filter_tracker.add_true_positive();
 
         auto position = index_list[index_idx].position;
         return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (uint64_t end) {
