@@ -168,7 +168,8 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                     _tracker.touch(entry);
                     entry.partition().apply(s, std::move(mem_e.partition()));
                 } else if (presence_checker(mem_e.key().key()) == partition_presence_checker_result::definitely_doesnt_exists) {
-                    cache_entry* entry = current_allocator().construct<cache_entry>(mem_e.key(), mem_e.partition());
+                    cache_entry* entry = current_allocator().construct<cache_entry>(
+                        std::move(mem_e.key()), std::move(mem_e.partition()));
                     _tracker.insert(*entry);
                     _partitions.insert(cache_i, *entry);
                 }
