@@ -34,6 +34,7 @@
 #include <sstream>
 #include <algorithm>
 #include "locator/local_strategy.hh"
+#include "version.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1149,6 +1150,10 @@ std::unordered_set<dht::token> storage_service::get_local_tokens() {
     auto tokens = db::system_keyspace::get_saved_tokens().get0();
     assert(!tokens.empty()); // should not be called before initServer sets this
     return tokens;
+}
+
+sstring storage_service::get_release_version() {
+    return version::release();
 }
 
 } // namespace service

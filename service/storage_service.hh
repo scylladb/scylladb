@@ -1095,12 +1095,11 @@ public:
             strTokens.add(tok.toString());
         return strTokens;
     }
+#endif
 
-    public String getReleaseVersion()
-    {
-        return FBUtilities.getReleaseVersionString();
-    }
+    sstring get_release_version();
 
+#if 0
     public String getSchemaVersion()
     {
         return Schema.instance.getVersion().toString();
