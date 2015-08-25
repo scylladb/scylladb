@@ -989,3 +989,11 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next) {
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
     return _segment_manager->get_active_names();
 }
+
+future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors() const {
+    return list_existing_descriptors(active_config().commit_log_location);
+}
+
+future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors(const sstring& dir) const {
+    return _segment_manager->list_descriptors(dir);
+}
