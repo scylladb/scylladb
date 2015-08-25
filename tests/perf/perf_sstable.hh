@@ -16,6 +16,7 @@ public:
     struct conf {
         unsigned partitions;
         unsigned key_size;
+        size_t buffer_size;
         sstring dir;
     };
 
@@ -66,7 +67,7 @@ public:
         auto start = test_env::now();
         size_t partitions = _mt->partition_count();
         return test_setup::create_empty_test_dir(dir()).then([this, idx] {
-            auto sst = make_lw_shared<sstable>("ks", "cf", dir(), idx, sstable::version_types::ka, sstable::format_types::big);
+            auto sst = sstables::test::make_test_sstable(_cfg.buffer_size, "ks", "cf", dir(), idx, sstable::version_types::ka, sstable::format_types::big);
             return sst->write_components(*_mt).then([sst] {});
         }).then([start, partitions] {
             auto end = test_env::now();

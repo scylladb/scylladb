@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
         ("parallelism", bpo::value<unsigned>()->default_value(1), "number parallel requests")
         ("iterations", bpo::value<unsigned>()->default_value(30), "number of iterations")
         ("partitions", bpo::value<unsigned>()->default_value(5000000), "number of partitions")
+        ("buffer_size", bpo::value<unsigned>()->default_value(64), "sstable buffer size, in KB")
         ("key_size", bpo::value<unsigned>()->default_value(128), "size of partition key")
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/cassandra/perf-tests"), "directory in which to store the sstables");
 
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
         parallelism = app.configuration()["parallelism"].as<unsigned>();
         cfg.partitions = app.configuration()["partitions"].as<unsigned>();
         cfg.key_size = app.configuration()["key_size"].as<unsigned>();
+        cfg.buffer_size = app.configuration()["buffer_size"].as<unsigned>() << 10;
         sstring dir = app.configuration()["testdir"].as<sstring>();
         cfg.dir = dir;
         return test->start(std::move(cfg)).then([dir, test] {

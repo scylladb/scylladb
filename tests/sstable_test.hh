@@ -84,6 +84,11 @@ public:
             sst->write_toc();
         });
     }
+
+    static sstable_ptr make_test_sstable(size_t buffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, sstable::version_types v, sstable::format_types f, gc_clock::time_point now = gc_clock::now()) {
+        auto sst = sstable(buffer_size, ks, cf, dir, generation, v, f, now);
+        return make_lw_shared<sstable>(std::move(sst));
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
