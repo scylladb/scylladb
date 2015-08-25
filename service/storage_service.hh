@@ -2689,12 +2689,9 @@ public:
     }
 #endif
     sstring get_operation_mode();
-#if 0
-    public boolean isStarting()
-    {
-        return operationMode == Mode.STARTING;
-    }
 
+    bool is_starting();
+#if 0
     public String getDrainProgress()
     {
         return String.format("Drained %s/%s ColumnFamilies", remainingCFs, totalCFs);

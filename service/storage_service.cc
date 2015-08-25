@@ -1164,4 +1164,8 @@ sstring storage_service::get_operation_mode() {
     return sprint("%s", _operation_mode);
 }
 
+bool storage_service::is_starting() {
+    return _operation_mode == storage_service::mode::STARTING;
+}
+
 } // namespace service
