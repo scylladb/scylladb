@@ -76,20 +76,26 @@ public:
 // The function func should carry on with the test, and return the number of partitions processed.
 // time_runs will then map reduce it, and return the aggregate partitions / sec for the whole system.
 template <typename Func>
-future<> time_runs(unsigned iterations, distributed<test_env>& dt, Func func) {
+future<> time_runs(unsigned iterations, unsigned parallelism, distributed<test_env>& dt, Func func) {
     using namespace boost::accumulators;
     auto acc = make_lw_shared<accumulator_set<double, features<tag::mean, tag::error_of<tag::mean>>>>();
     auto idx = boost::irange(0, int(iterations));
-    return parallel_for_each(idx.begin(), idx.end(), [acc, &dt, func] (auto idx) {
+    return do_for_each(idx.begin(), idx.end(), [parallelism, acc, &dt, func] (auto iter) {
+        auto idx = boost::irange(0, int(parallelism));
         auto start = test_env::now();
-        return dt.map_reduce(adder<size_t>(), func, std::move(idx)).then([start, acc] (size_t partitions) {
+        auto partitions = make_lw_shared<size_t>(0);
+        return parallel_for_each(idx.begin(), idx.end(), [&dt, func, partitions] (auto idx) {
+            return dt.map_reduce(adder<size_t>(), func, std::move(idx)).then([partitions] (size_t iter_partitions) {
+                *partitions += iter_partitions;
+            });
+        }).then([start, acc, partitions] () {
             auto end = test_env::now();
             auto duration = std::chrono::duration<double>(end - start).count();
             auto& a = *acc;
-            double result = partitions / duration;
+            double result = *partitions / duration;
             a(result);
         });
-    }).then([acc, iterations] {
-        std::cout << sprint("%.2f", mean(*acc)) << " +- " << sprint("%.2f", error_of<tag::mean>(*acc)) << " partitions / sec (" << iterations << " runs)\n";
+    }).then([acc, iterations, parallelism] {
+        std::cout << sprint("%.2f", mean(*acc)) << " +- " << sprint("%.2f", error_of<tag::mean>(*acc)) << " partitions / sec (" << iterations << " runs, " << parallelism << " concurrent ops)\n";
     });
 }
