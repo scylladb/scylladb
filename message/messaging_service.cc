@@ -250,7 +250,8 @@ future<> messaging_service::stop() {
     return when_all(_server->stop(),
         parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
             return c.second.rpc_client->stop();
-        })
+        }),
+        gate().close()
     ).discard_result();
 }
 
@@ -285,34 +286,46 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 // Send a message for verb
-template <typename MsgIn, typename... MsgOut>
-auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
+template <typename MsgIn, typename Ret, typename... MsgOut>
+auto send_message_helper(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
     auto rpc_client_ptr = ms->get_rpc_client(id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
-    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
-        try {
-            if (f.failed()) {
-                ms->increment_dropped_messages(verb);
-                f.get();
-                assert(false); // never reached
+    try {
+        ms->gate().enter();
+        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
+            ms->gate().leave();
+            try {
+                if (f.failed()) {
+                    ms->increment_dropped_messages(verb);
+                    f.get();
+                    assert(false); // never reached
+                }
+                return std::move(f);
+            } catch (rpc::closed_error) {
+                // This is a transport error
+                ms->remove_rpc_client(id);
+                throw;
+            } catch (...) {
+                // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
+                throw;
             }
-            return std::move(f);
-        } catch (rpc::closed_error) {
-            // This is a transport error
-            ms->remove_rpc_client(id);
-            throw;
-        } catch (...) {
-            // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
-            throw;
-        }
-    });
+        });
+    } catch(...) {
+        ms->increment_dropped_messages(verb);
+        return futurize<Ret>::make_exception_future(std::current_exception());
+    }
+}
+
+template <typename MsgIn, typename... MsgOut>
+auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
+    return send_message_helper<MsgIn, MsgIn>(ms, verb, std::move(id), std::forward<MsgOut>(msg)...);
 }
 
 // Send one way message for verb
 template <typename... MsgOut>
 auto send_message_oneway(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
-    return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
+    return send_message_helper<rpc::no_wait_type, void>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
 }
 
 // Wrappers for verbs
