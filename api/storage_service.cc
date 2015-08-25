@@ -76,8 +76,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_schema_version.set(r, [](const_req req) {
-        //TBD
-        return "";
+        return service::get_local_storage_service().get_schema_version();
     });
 
     ss::get_all_data_file_locations.set(r, [&ctx](const_req req) {
