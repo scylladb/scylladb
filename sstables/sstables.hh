@@ -258,7 +258,7 @@ private:
         , _now(now)
     { }
 
-    size_t sstable_buffer_size = 64*1024;
+    size_t sstable_buffer_size = 128*1024;
 
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
