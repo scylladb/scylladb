@@ -202,18 +202,10 @@ public:
             _initialized = false;
         }
     }
+#endif
 
     // should only be called via JMX
-    public void startGossiping()
-    {
-        if (!_initialized)
-        {
-            logger.warn("Starting gossip by operator request");
-            Gossiper.instance.start((int) (System.currentTimeMillis() / 1000));
-            _initialized = true;
-        }
-    }
-#endif
+    future<> start_gossiping();
 
     // should only be called via JMX
     bool is_gossip_running();

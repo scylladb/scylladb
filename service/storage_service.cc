@@ -1176,4 +1176,14 @@ bool storage_service::is_gossip_running() {
     return gms::get_local_gossiper().is_enabled();
 }
 
+future<> storage_service::start_gossiping() {
+    if (!_initialized) {
+        logger.warn("Starting gossip by operator request");
+        return gms::get_local_gossiper().start(get_generation_number()).then([this] {
+            _initialized = true;
+        });
+    }
+    return make_ready_future<>();
+}
+
 } // namespace service
