@@ -318,6 +318,52 @@
          ]
       },
       {
+         "path":"/storage_service/ownership/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Effective ownership is % of the data each node owns given the keyspace",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_effective_ownership",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to fetch information about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/ownership/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"The mapping from token -> % of cluster owned by that token",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_ownership",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/host_id",
          "operations":[
             {

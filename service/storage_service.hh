@@ -1988,17 +1988,17 @@ public:
 
         return localDCPrimaryRanges;
     }
-
+#endif
     /**
      * Get all ranges an endpoint is responsible for (by keyspace)
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */
-    Collection<Range<Token>> getRangesForEndpoint(String keyspaceName, InetAddress ep)
-    {
-        return Keyspace.open(keyspaceName).getReplicationStrategy().getAddressRanges().get(ep);
+    std::vector<range<token>> get_ranges_for_endpoint(const sstring& name, const gms::inet_address& ep) const {
+        return _db.local().find_keyspace(name).get_replication_strategy().get_ranges(ep);
     }
 
+#if 0
     /**
      * Get all ranges that span the ring given a set
      * of tokens. All ranges are in sorted order of
@@ -2815,25 +2815,12 @@ public:
             throw new IOException(e.getMessage());
         }
     }
+#endif
+public:
+    std::map<gms::inet_address, float> get_ownership() const;
 
-    public Map<InetAddress, Float> getOwnership()
-    {
-        List<Token> sortedTokens = _token_metadata.sortedTokens();
-        // describeOwnership returns tokens in an unspecified order, let's re-order them
-        Map<Token, Float> tokenMap = new TreeMap<Token, Float>(getPartitioner().describeOwnership(sortedTokens));
-        Map<InetAddress, Float> nodeMap = new LinkedHashMap<>();
-        for (Map.Entry<Token, Float> entry : tokenMap.entrySet())
-        {
-            InetAddress endpoint = _token_metadata.getEndpoint(entry.getKey());
-            Float tokenOwnership = entry.getValue();
-            if (nodeMap.containsKey(endpoint))
-                nodeMap.put(endpoint, nodeMap.get(endpoint) + tokenOwnership);
-            else
-                nodeMap.put(endpoint, tokenOwnership);
-        }
-        return nodeMap;
-    }
-
+    std::map<gms::inet_address, float> effective_ownership(sstring keyspace) const;
+#if 0
     /**
      * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
      * calculated per dc, i.e. each DC will have total ring ownership divided amongst its nodes. Without replication

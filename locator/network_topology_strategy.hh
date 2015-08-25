@@ -52,7 +52,7 @@ protected:
      * progress in each DC, rack etc.
      */
     virtual std::vector<inet_address> calculate_natural_endpoints(
-        const token& search_token) override;
+        const token& search_token) const override;
 
 private:
     bool has_sufficient_replicas(
@@ -60,15 +60,15 @@ private:
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints);
+                           std::unordered_set<inet_address>>& all_endpoints) const;
 
     bool has_sufficient_replicas(
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
-                           std::unordered_set<inet_address>>& all_endpoints);
+                           std::unordered_set<inet_address>>& all_endpoints) const;
 
-    void validate_options() {
+    void validate_options() const {
         for (auto& c : _config_options)
         {
             if (c.first == sstring("replication_factor"))

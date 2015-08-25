@@ -68,6 +68,12 @@ public:
         return _dc_endpoints;
     }
 
+    const std::unordered_map<sstring,
+                           std::unordered_set<inet_address>>&
+    get_datacenter_endpoints() const {
+        return _dc_endpoints;
+    }
+
     std::unordered_map<sstring,
                        std::unordered_map<sstring,
                                           std::unordered_set<inet_address>>>&
@@ -126,7 +132,7 @@ private:
         : _cur_it(it), _ring_pos(pos), _insert_min(false) {}
 
     public:
-        tokens_iterator(const token& start, token_metadata* token_metadata, bool include_min = false)
+        tokens_iterator(const token& start, const token_metadata* token_metadata, bool include_min = false)
         : _token_metadata(token_metadata) {
             _cur_it = _token_metadata->sorted_tokens().begin() + _token_metadata->first_token_index(start);
             _insert_min = include_min && *_token_metadata->sorted_tokens().begin() != dht::minimum_token();
@@ -180,7 +186,7 @@ private:
         bool _insert_min;
         bool _min = false;
         const token _min_token = dht::minimum_token();
-        token_metadata* _token_metadata = nullptr;
+        const token_metadata* _token_metadata = nullptr;
 
         friend class token_metadata;
     };
@@ -192,8 +198,8 @@ public:
     void update_normal_token(token token, inet_address endpoint);
     void update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint);
     void update_normal_tokens(std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
-    const token& first_token(const token& start);
-    size_t first_token_index(const token& start);
+    const token& first_token(const token& start) const;
+    size_t first_token_index(const token& start) const;
     std::experimental::optional<inet_address> get_endpoint(const token& token) const;
     std::vector<token> get_tokens(const inet_address& addr) const;
     const std::map<token, inet_address>& get_token_to_endpoint() const {
@@ -211,7 +217,7 @@ public:
         return _bootstrap_tokens;
     }
 
-    tokens_iterator tokens_end() {
+    tokens_iterator tokens_end() const {
         return tokens_iterator(sorted_tokens().end(), sorted_tokens().size());
     }
 
@@ -223,16 +229,20 @@ public:
      *
      * @return The requested range (see the description above)
      */
-    auto ring_range(const token& start, bool include_min = false) {
+    auto ring_range(const token& start, bool include_min = false) const {
         auto begin = tokens_iterator(start, this, include_min);
         auto end = tokens_end();
         return boost::make_iterator_range(begin, end);
     }
 
     boost::iterator_range<tokens_iterator> ring_range(
-        const std::experimental::optional<query::partition_range::bound>& start, bool include_min = false);
+        const std::experimental::optional<query::partition_range::bound>& start, bool include_min = false) const;
 
     topology& get_topology() {
+        return _topology;
+    }
+
+    const topology& get_topology() const {
         return _topology;
     }
 

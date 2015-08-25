@@ -932,6 +932,16 @@ bool database::has_keyspace(const sstring& name) const {
     return _keyspaces.count(name) != 0;
 }
 
+std::vector<sstring>  database::get_non_system_keyspaces() const {
+    std::vector<sstring> res;
+    for (auto const &i : _keyspaces) {
+        if (i.first != db::system_keyspace::NAME) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
 column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) throw (no_such_column_family) {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
@@ -977,6 +987,12 @@ keyspace::create_replication_strategy(const std::map<sstring, sstring>& options)
 
 locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() {
+    return *_replication_strategy;
+}
+
+
+const locator::abstract_replication_strategy&
+keyspace::get_replication_strategy() const {
     return *_replication_strategy;
 }
 

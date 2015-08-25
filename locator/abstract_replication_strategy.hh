@@ -60,9 +60,9 @@ protected:
         logger.debug(fmt, std::forward<Args>(args)...);
     }
 
-    void validate_replication_factor(sstring rf);
+    void validate_replication_factor(sstring rf) const;
 
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) const = 0;
 
 public:
     abstract_replication_strategy(
@@ -81,7 +81,7 @@ public:
     // get_ranges() returns the list of ranges held by the given endpoint.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
-    std::vector<range<token>> get_ranges(inet_address ep);
+    std::vector<range<token>> get_ranges(inet_address ep) const;
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible
     // for storing replica primarily, which means this is the first node
@@ -89,6 +89,7 @@ public:
     // This function is the analogue of Origin's
     // StorageService.getPrimaryRangesForEndpoint().
     std::vector<range<token>> get_primary_ranges(inet_address ep);
+
 };
 
 }
