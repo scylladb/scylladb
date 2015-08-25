@@ -353,9 +353,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_gossip_running.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(true);
+    ss::is_gossip_running.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_gossip_running();
     });
 
     ss::stop_daemon.set(r, [](std::unique_ptr<request> req) {
