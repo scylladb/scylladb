@@ -95,8 +95,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto output_writer = make_lw_shared<seastar::pipe_writer<mutation>>(std::move(output.writer));
 
     auto done = make_lw_shared<bool>(false);
-    future<> read_done = do_until([done] { return *done; }, [done, output_writer, combined_reader = std::move(combined_reader), stats] {
-        return combined_reader().then([done = std::move(done), output_writer = std::move(output_writer), stats] (auto mopt) {
+    future<> read_done = do_until([done] { return *done; }, [done, output_writer, combined_reader = std::move(combined_reader), stats] () mutable {
+        return combined_reader().then([done, output_writer, stats] (auto mopt) {
             if (mopt) {
                 stats->total_keys_written++;
                 return output_writer->write(std::move(*mopt));
@@ -105,7 +105,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
                 return make_ready_future<>();
             }
         });
-    });
+    }).then([output_writer, done] {});
 
     ::mutation_reader mutation_queue_reader = [output_reader] () {
         return output_reader->read();
