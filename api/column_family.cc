@@ -122,6 +122,16 @@ static double update_ratio(double acc, double f, double total) {
     return acc;
 }
 
+static ratio_holder mean_row_size(column_family& cf) {
+    ratio_holder res;
+    for (auto i: *cf.get_sstables() ) {
+        auto c = i.second->get_stats_metadata().estimated_row_size.count();
+        res.sub += i.second->get_stats_metadata().estimated_row_size.mean() * c;
+        res.total += c;
+    }
+    return res;
+}
+
 void set_column_family(http_context& ctx, routes& r) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
@@ -354,16 +364,12 @@ void set_column_family(http_context& ctx, routes& r) {
         return map_reduce_cf(ctx, 0, max_row_size, max_int64);
     });
 
-    cf::get_mean_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], ratio_holder(), mean_row_size, std::plus<ratio_holder>());
     });
 
-    cf::get_all_mean_row_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_mean_row_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, ratio_holder(), mean_row_size, std::plus<ratio_holder>());
     });
 
     cf::get_bloom_filter_false_positives.set(r, [&ctx] (std::unique_ptr<request> req) {
