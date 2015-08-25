@@ -1211,8 +1211,6 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     s.hash.map[metadata_type::Stats] = offset;
 }
 
-static constexpr size_t sstable_buffer_size = 64*1024;
-
 ///
 ///  @param out holds an output stream to data file.
 ///
