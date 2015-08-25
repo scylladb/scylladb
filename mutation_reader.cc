@@ -107,10 +107,6 @@ public:
             : _readers(std::move(readers))
             , _current(_readers.begin()) {
     }
-    joining_reader(const joining_reader& x)
-            : _readers(x._readers)
-            , _current(_readers.begin() + (x._current - x._readers.begin())) {
-    }
     joining_reader(joining_reader&&) = default;
     future<mutation_opt> operator()() {
         if (_current == _readers.end()) {
@@ -126,6 +122,15 @@ public:
         });
     }
 };
+
+mutation_reader
+make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
+    std::vector<mutation_reader> v;
+    v.reserve(2);
+    v.push_back(std::move(a));
+    v.push_back(std::move(b));
+    return make_combined_reader(std::move(v));
+}
 
 mutation_reader
 make_joining_reader(std::vector<mutation_reader> readers) {

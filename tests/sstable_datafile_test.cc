@@ -1064,8 +1064,8 @@ SEASTAR_TEST_CASE(compact) {
                 //   john |  20 |   deleted
                 //   nadav - deleted partition
                 return open_sstable("tests/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
-                    auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
-                    return reader().then([reader, s] (mutation_opt m) {
+                    auto reader = make_lw_shared(sstable_reader(sst, s)); // reader holds sst and s alive.
+                    return (*reader)().then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().representation() == bytes("jerry"));
                         BOOST_REQUIRE(!m->partition().partition_tombstone());
@@ -1076,7 +1076,7 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)170}));
-                        return reader();
+                        return (*reader)();
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().representation() == bytes("tom"));
@@ -1088,7 +1088,7 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)180}));
-                        return reader();
+                        return (*reader)();
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().representation() == bytes("john"));
@@ -1100,7 +1100,7 @@ SEASTAR_TEST_CASE(compact) {
                         auto &cells = row.cells();
                         BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
                         BOOST_REQUIRE(cells.find_cell(s->get_column_definition("height")->id) == nullptr);
-                        return reader();
+                        return (*reader)();
                     }).then([reader, s] (mutation_opt m) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().representation() == bytes("nadav"));
@@ -1108,7 +1108,7 @@ SEASTAR_TEST_CASE(compact) {
                         // FIXME: enable the following test.
                         //auto &rows = m->partition().clustered_rows();
                         //BOOST_REQUIRE(rows.size() == 0);
-                        return reader();
+                        return (*reader)();
                     }).then([reader] (mutation_opt m) {
                         BOOST_REQUIRE(!m);
                     });
@@ -1198,25 +1198,27 @@ static future<> check_compacted_sstables(unsigned long generation, std::vector<u
         auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
         auto keys = make_lw_shared<std::vector<bytes>>();
 
-        return do_for_each(*generations, [reader, s, keys] (unsigned long generation) {
-            return reader().then([generation, keys, reader] (mutation_opt m) {
-                BOOST_REQUIRE(m);
-                bytes key = to_bytes(m->key().representation());
-                keys->push_back(key);
+        return do_with(std::move(reader), [generations, s, keys] (::mutation_reader& reader) {
+            return do_for_each(*generations, [&reader, s, keys] (unsigned long generation) mutable {
+                return reader().then([generation, keys] (mutation_opt m) {
+                    BOOST_REQUIRE(m);
+                    bytes key = to_bytes(m->key().representation());
+                    keys->push_back(key);
+                    return make_ready_future<>();
+                });
+            }).then([keys, generations] {
+                // keys from compacted sstable aren't ordered lexographically,
+                // thus we must read all keys into a vector, sort the vector
+                // lexographically, then proceed with the comparison.
+                std::sort(keys->begin(), keys->end());
+                BOOST_REQUIRE(keys->size() == generations->size());
+                auto i = 0;
+                for (auto& k : *keys) {
+                    sstring original_k = "key" + to_sstring((*generations)[i++]);
+                    BOOST_REQUIRE(k == to_bytes(original_k));
+                }
                 return make_ready_future<>();
             });
-        }).then([keys, generations] {
-            // keys from compacted sstable aren't ordered lexographically,
-            // thus we must read all keys into a vector, sort the vector
-            // lexographically, then proceed with the comparison.
-            std::sort(keys->begin(), keys->end());
-            BOOST_REQUIRE(keys->size() == generations->size());
-            auto i = 0;
-            for (auto& k : *keys) {
-                sstring original_k = "key" + to_sstring((*generations)[i++]);
-                BOOST_REQUIRE(k == to_bytes(original_k));
-            }
-            return make_ready_future<>();
         });
     });
 }

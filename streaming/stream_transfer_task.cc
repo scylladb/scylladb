@@ -59,7 +59,7 @@ void stream_transfer_task::start() {
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
         it++;
-        consume(msg.detail.mr, [&msg, this, seq, id] (mutation&& m) {
+        consume(*msg.detail.mr, [&msg, this, seq, id] (mutation&& m) {
             msg.mutations_nr++;
             auto fm = make_lw_shared<const frozen_mutation>(m);
             return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, id] {

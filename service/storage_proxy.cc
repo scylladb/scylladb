@@ -2625,9 +2625,11 @@ storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range
     auto schema = _db.local().find_column_family(cf_id).schema();
     if (range.is_wrap_around(dht::ring_position_comparator(*schema))) {
         auto unwrapped = range.unwrap();
-        return make_joining_reader({
-            make_local_reader(cf_id, unwrapped.second),
-            make_local_reader(cf_id, unwrapped.first)});
+        std::vector<mutation_reader> both;
+        both.reserve(2);
+        both.push_back(make_local_reader(cf_id, unwrapped.second));
+        both.push_back(make_local_reader(cf_id, unwrapped.first));
+        return make_joining_reader(std::move(both));
     }
 
     unsigned first_shard = range.start() ? dht::shard_of(range.start()->value().token()) : 0;

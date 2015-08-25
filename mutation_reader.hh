@@ -22,9 +22,34 @@
 // TODO: When iterating over mutations, we don't need a schema_ptr for every
 // single one as it is normally the same for all of them. So "mutation" might
 // not be the optimal object to use here.
-using mutation_reader = std::function<future<mutation_opt>()>;
+class mutation_reader final {
+    struct impl_base {
+        virtual ~impl_base() {}
+        virtual future<mutation_opt> operator()() = 0;
+    };
+    template <typename Func>
+    struct impl final : public impl_base {
+        Func _func;
+        impl(Func&& func) : _func(std::move(func)) {}
+        virtual future<mutation_opt> operator()() override {
+            return _func();
+        }
+    };
+private:
+    std::unique_ptr<impl_base> _impl;
+public:
+    template <typename Func>
+    mutation_reader(Func&& func) : _impl(std::make_unique<impl<Func>>(std::forward<Func>(func))) {}
+    mutation_reader() : mutation_reader([] () -> future<mutation_opt> { throw std::bad_function_call(); }) {}
+    mutation_reader(mutation_reader&&) = default;
+    mutation_reader(const mutation_reader&) = delete;
+    mutation_reader& operator=(mutation_reader&&) = default;
+    mutation_reader& operator=(const mutation_reader&) = delete;
+    future<mutation_opt> operator()() { return _impl->operator()(); }
+};
 
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
+mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
 mutation_reader make_joining_reader(std::vector<mutation_reader> readers);
 mutation_reader make_reader_returning(mutation);
