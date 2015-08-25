@@ -1142,11 +1142,6 @@ public:
         return stringEndpoints;
     }
 
-    public int getCurrentGenerationNumber()
-    {
-        return Gossiper.instance.getCurrentGenerationNumber(FBUtilities.getBroadcastAddress());
-    }
-
     public int forceKeyspaceCleanup(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
     {
         if (keyspaceName.equals(SystemKeyspace.NAME))
