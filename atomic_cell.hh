@@ -244,7 +244,7 @@ class serializer;
 }
 
 // A variant type that can hold either an atomic_cell, or a serialized collection.
-// Which type is stored is determinied by the schema.
+// Which type is stored is determined by the schema.
 class atomic_cell_or_collection final {
     managed_bytes _data;
 

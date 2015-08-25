@@ -24,7 +24,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
     // to avoid unconditional copy of the partition key.
     // We can't do it right now because std::map<> which holds
-    // partitions doesn't support heterogenous lookup.
+    // partitions doesn't support heterogeneous lookup.
     // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     auto& outer = current_allocator();
     return with_allocator(standard_allocator(), [&, this] () -> mutation_partition& {
