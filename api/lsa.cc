@@ -20,7 +20,7 @@ void set_lsa(http_context& ctx, routes& r) {
         return ctx.db.invoke_on_all([] (database&) {
             logalloc::shard_tracker().reclaim(std::numeric_limits<size_t>::max());
         }).then([] {
-            return json::json_return_type(0);
+            return json::json_return_type(json::json_void());
         });
     });
 }

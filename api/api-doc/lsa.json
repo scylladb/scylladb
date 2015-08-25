@@ -13,10 +13,7 @@
         {
           "method":"POST",
           "summary":"Force compaction of all regions",
-          "type":"array",
-          "items":{
-            "type":"string"
-          },
+          "type":"void",
           "nickname":"lsa_compact",
           "produces":[
             "application/json"
