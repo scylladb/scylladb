@@ -1168,4 +1168,8 @@ bool storage_service::is_starting() {
     return _operation_mode == storage_service::mode::STARTING;
 }
 
+bool storage_service::is_gossip_running() {
+    return gms::get_local_gossiper().is_enabled();
+}
+
 } // namespace service

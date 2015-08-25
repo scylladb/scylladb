@@ -213,12 +213,11 @@ public:
             _initialized = true;
         }
     }
+#endif
 
     // should only be called via JMX
-    public boolean isGossipRunning()
-    {
-        return Gossiper.instance.isEnabled();
-    }
+    bool is_gossip_running();
+#if 0
 
     // should only be called via JMX
     public void startRPCServer()
