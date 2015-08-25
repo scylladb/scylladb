@@ -1186,4 +1186,14 @@ future<> storage_service::start_gossiping() {
     return make_ready_future<>();
 }
 
+future<> storage_service::stop_gossiping() {
+    if (_initialized) {
+        logger.warn("Stopping gossip by operator request");
+        return gms::get_local_gossiper().shutdown().then([this] {
+            _initialized = false;
+        });
+    }
+    return make_ready_future<>();
+}
+
 } // namespace service

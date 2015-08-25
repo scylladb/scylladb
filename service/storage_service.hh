@@ -191,18 +191,8 @@ public:
 
     void unregister_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
-#if 0
     // should only be called via JMX
-    public void stopGossiping()
-    {
-        if (_initialized)
-        {
-            logger.warn("Stopping gossip by operator request");
-            Gossiper.instance.stop();
-            _initialized = false;
-        }
-    }
-#endif
+    future<> stop_gossiping();
 
     // should only be called via JMX
     future<> start_gossiping();
