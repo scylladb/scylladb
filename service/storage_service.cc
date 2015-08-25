@@ -48,6 +48,13 @@ int storage_service::RING_DELAY = storage_service::get_ring_delay();
 
 distributed<storage_service> _the_storage_service;
 
+static int get_generation_number() {
+    using namespace std::chrono;
+    auto now = high_resolution_clock::now().time_since_epoch();
+    int generation_number = duration_cast<seconds>(now).count();
+    return generation_number;
+}
+
 bool is_replacing() {
     // FIXME: DatabaseDescriptor.isReplacing()
     return false;
@@ -148,12 +155,9 @@ future<> storage_service::prepare_to_join() {
 
         auto& gossiper = gms::get_local_gossiper();
         gossiper.register_(this);
-        using namespace std::chrono;
-        auto now = high_resolution_clock::now().time_since_epoch();
-        int generation_number = duration_cast<seconds>(now).count();
         // FIXME: SystemKeyspace.incrementAndGetGeneration()
         print("Start gossiper service ...\n");
-        return gossiper.start(generation_number, app_states).then([this] {
+        return gossiper.start(get_generation_number(), app_states).then([this] {
 #if SS_DEBUG
             gms::get_local_gossiper().debug_show();
             _token_metadata.debug_show();
