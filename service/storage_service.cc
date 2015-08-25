@@ -1156,4 +1156,8 @@ sstring storage_service::get_release_version() {
     return version::release();
 }
 
+sstring storage_service::get_schema_version() {
+    return _db.local().get_version().to_sstring();
+}
+
 } // namespace service

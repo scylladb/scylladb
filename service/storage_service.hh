@@ -1099,12 +1099,8 @@ public:
 
     sstring get_release_version();
 
+    sstring get_schema_version();
 #if 0
-    public String getSchemaVersion()
-    {
-        return Schema.instance.getVersion().toString();
-    }
-
     public List<String> getLeavingNodes()
     {
         return stringify(_token_metadata.getLeavingEndpoints());
