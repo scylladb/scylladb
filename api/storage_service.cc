@@ -404,9 +404,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::is_joined.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(false);
+    ss::is_joined.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_joined();
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
