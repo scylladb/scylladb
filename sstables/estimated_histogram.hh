@@ -248,7 +248,7 @@ public:
     /**
      * @return the mean histogram value (average of bucket offsets, weighted by count)
      */
-    int64_t mean() {
+    int64_t mean() const {
         auto lastBucket = buckets.size() - 1;
         int64_t elements = 0;
         int64_t sum = 0;
