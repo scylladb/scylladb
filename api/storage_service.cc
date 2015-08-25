@@ -228,39 +228,14 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto keyspace = req->param["keyspace"];
-        // FIXME: the "id" and "options" parameters are mutually exclusive,
-        // and lead to different operations. It would have made sense to make
-        // these separate requests (with a different method and/or url).
-        auto options = req->get_query_param("options");
-        auto id = req->get_query_param("id");
-
-        if (!id.empty()) {
-            return repair_get_status(ctx.db, boost::lexical_cast<int>(id))
-                    .then_wrapped([] (future<repair_status>&& fut) {
-                        try {
-                            repair_status s = fut.get0();
-                            sstring ret;
-                            switch(s) {
-                            case repair_status::RUNNING: ret="RUNNING"; break;
-                            case repair_status::SUCCESSFUL: ret="SUCCESSFUL"; break;
-                            case repair_status::FAILED: ret="FAILED"; break;
-                            }
-                            return make_ready_future<json::json_return_type>(ret);
-                        } catch(std::runtime_error& e) {
-                            throw httpd::bad_param_exception(e.what());
-                        }
-                    });
-        }
-
+    ss::repair_async.set(r, [&ctx](const_req req) {
         // Currently, we get all the repair options encoded in a single
         // "options" option, and split it to a map using the "," and ":"
         // delimiters. TODO: consider if it doesn't make more sense to just
         // take all the query parameters as this map and pass it to the repair
         // function.
         std::unordered_map<sstring, sstring> options_map;
-        for (auto s : split(options, ",")) {
+        for (auto s : split(req.get_query_param("options"), ",")) {
             auto kv = split(s, ":");
             if (kv.size() != 2) {
                 throw httpd::bad_param_exception("malformed async repair options");
@@ -272,8 +247,20 @@ void set_storage_service(http_context& ctx, routes& r) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        int i = repair_start(ctx.db, keyspace, options_map);
-        return make_ready_future<json::json_return_type>(i);
+        return repair_start(ctx.db, req.param["keyspace"], options_map);
+    });
+
+    ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
+        return repair_get_status(ctx.db, boost::lexical_cast<int>( req->get_query_param("id")))
+                .then_wrapped([] (future<repair_status>&& fut) {
+            ss::ns_repair_async_status::return_type_wrapper res;
+            try {
+                res = fut.get0();
+            } catch(std::runtime_error& e) {
+                return make_ready_future<json::json_return_type>(json_exception(httpd::bad_param_exception(e.what())));
+            }
+            return make_ready_future<json::json_return_type>(json::json_return_type(res));
+        });
     });
 
     ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {

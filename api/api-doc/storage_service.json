@@ -715,8 +715,8 @@
          "path":"/storage_service/repair_async/{keyspace}",
          "operations":[
             {
-               "method":"GET",
-               "summary":"Invoke repair asynchronously. You can track repair progress by supplying id",
+               "method":"POST",
+               "summary":"Invoke repair asynchronously. You can track repair progress by using the get supplying id",
                "type":"int",
                "nickname":"repair_async",
                "produces":[
@@ -725,7 +725,7 @@
                "parameters":[
                   {
                      "name":"keyspace",
-                     "description":"The keyspace to flush",
+                     "description":"The keyspace to repair",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
@@ -738,11 +738,35 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Track already running repair progress",
+               "type":"string",
+               "enum":[
+                  "RUNNING",
+                  "SUCCESSFUL",
+                  "FAILED"
+               ],
+               "nickname":"repair_async_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace repair is running on",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
                   },
                   {
                      "name":"id",
-                     "description":"Check for the status of the repair",
-                     "required":false,
+                     "description":"The repair ID to check for status",
+                     "required":true,
                      "allowMultiple":false,
                      "type":"int",
                      "paramType":"query"
