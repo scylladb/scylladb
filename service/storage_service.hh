@@ -2687,12 +2687,9 @@ public:
             logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
         }
     }
-
-    public String getOperationMode()
-    {
-        return operationMode.toString();
-    }
-
+#endif
+    sstring get_operation_mode();
+#if 0
     public boolean isStarting()
     {
         return operationMode == Mode.STARTING;

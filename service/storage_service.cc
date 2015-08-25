@@ -1160,4 +1160,8 @@ sstring storage_service::get_schema_version() {
     return _db.local().get_version().to_sstring();
 }
 
+sstring storage_service::get_operation_mode() {
+    return sprint("%s", _operation_mode);
+}
+
 } // namespace service
