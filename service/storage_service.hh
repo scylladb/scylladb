@@ -1114,14 +1114,6 @@ public:
         return stringify(Gossiper.instance.getUnreachableMembers());
     }
 
-    public String[] getAllDataFileLocations()
-    {
-        String[] locations = DatabaseDescriptor.getAllDataFileLocations();
-        for (int i = 0; i < locations.length; i++)
-            locations[i] = FileUtils.getCanonicalPath(locations[i]);
-        return locations;
-    }
-
     public String getCommitLogLocation()
     {
         return FileUtils.getCanonicalPath(DatabaseDescriptor.getCommitLogLocation());
