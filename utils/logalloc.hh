@@ -194,6 +194,9 @@ public:
     // compactible after construction.
     void set_compaction_enabled(bool);
 
+    // Returns the compactibility state of this region.
+    bool compaction_enabled() const;
+
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.

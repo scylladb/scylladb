@@ -787,6 +787,10 @@ public:
         _compaction_enabled = enabled;
     }
 
+    bool compaction_enabled() const {
+        return _compaction_enabled;
+    }
+
     //
     // Returns true if this pool is evictable and evict_some() will make some forward progress, so
     // this will eventually stop:
@@ -846,6 +850,10 @@ allocation_strategy& region::allocator() {
 
 void region::set_compaction_enabled(bool compactible) {
     _impl->set_compaction_enabled(compactible);
+}
+
+bool region::compaction_enabled() const {
+    return _impl->compaction_enabled();
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
