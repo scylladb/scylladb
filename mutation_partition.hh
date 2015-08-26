@@ -77,6 +77,23 @@ public:
     // Returns a pointer to cell's value or nullptr if column is not set.
     const atomic_cell_or_collection* find_cell(column_id id) const;
 public:
+    template<typename Func>
+    void for_each_cell(Func&& func) const {
+        for_each_cell_until([func = std::forward<Func>(func)] (column_id id, const atomic_cell_or_collection& c) {
+            func(id, c);
+            return stop_iteration::no;
+        });
+    }
+
+    template<typename Func>
+    void for_each_cell_until(Func&& func) const {
+        for (auto&& cell : _cells) {
+            if (func(cell.id(), cell.cell()) == stop_iteration::yes) {
+                break;
+            }
+        }
+    }
+
     // Merges cell's value into the row.
     void apply(const column_definition& column, atomic_cell_or_collection cell);
 
