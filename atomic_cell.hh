@@ -251,9 +251,9 @@ class atomic_cell_or_collection final {
     template<typename T>
     friend class db::serializer;
 private:
-    atomic_cell_or_collection() = default;
     atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
 public:
+    atomic_cell_or_collection() = default;
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
