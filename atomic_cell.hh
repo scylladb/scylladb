@@ -258,6 +258,9 @@ public:
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
     atomic_cell_or_collection(collection_mutation::one cm) : _data(std::move(cm.data)) {}
+    explicit operator bool() const {
+        return !_data.empty();
+    }
     static atomic_cell_or_collection from_collection_mutation(collection_mutation::one data) {
         return std::move(data.data);
     }
