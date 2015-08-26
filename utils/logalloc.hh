@@ -15,6 +15,13 @@ struct occupancy_stats;
 class region;
 class region_impl;
 
+//
+// Frees some amount of objects from the region to which it's attached.
+//
+// Should always make forward progress unless region is empty, so this should eventually stop:
+//
+//     while (!region.empty()) { eviction_fn(); }
+//
 using eviction_fn = std::function<void()>;
 
 // Groups regions for the purpose of statistics.  Can be nested.

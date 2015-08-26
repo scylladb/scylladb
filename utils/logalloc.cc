@@ -796,12 +796,7 @@ public:
         return _compaction_enabled;
     }
 
-    //
-    // Returns true if this pool is evictable and evict_some() will make some forward progress, so
-    // this will eventually stop:
-    //
-    //     while (evictable()) { evict_some(); }
-    //
+    // Returns true if this pool is evictable, so that evict_some() can be called.
     bool is_evictable() const {
         return _evictable;
     }
