@@ -57,19 +57,13 @@ class row {
     map_type _cells;
 public:
     using value_type = cell_entry;
-    using iterator = map_type::iterator;
-    using const_iterator = map_type::const_iterator;
 public:
     row() = default;
     ~row();
     row(const row&);
     row(row&&) = default;
     row& operator=(row&&) = default;
-
-    iterator begin() { return _cells.begin(); }
-    iterator end() { return _cells.end(); }
-    const_iterator begin() const { return _cells.begin(); }
-    const_iterator end() const { return _cells.end(); }
+    
     size_t size() const { return _cells.size(); }
 
     const atomic_cell_or_collection& cell_at(column_id id) const;
