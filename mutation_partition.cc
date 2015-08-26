@@ -38,16 +38,10 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         apply_row_tombstone(schema, e.prefix(), e.t());
     }
 
-    static auto merge_cells = [] (row& old_row, const row& new_row, auto&& find_column_def) {
-        for (auto&& new_column : new_row) {
-            old_row.apply(new_column.id(), new_column.cell(), find_column_def);
-        }
-    };
-
     auto find_static_column_def = [&schema] (auto col) -> const column_definition& { return schema.static_column_at(col); };
     auto find_regular_column_def = [&schema] (auto col) -> const column_definition& { return schema.regular_column_at(col); };
 
-    merge_cells(_static_row, p._static_row, find_static_column_def);
+    _static_row.merge(p._static_row, find_static_column_def);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.key();
@@ -58,7 +52,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         } else {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
-            merge_cells(i->row().cells(), entry.row().cells(), find_regular_column_def);
+            i->row().cells().merge(entry.row().cells(), find_regular_column_def);
         }
     }
 }
