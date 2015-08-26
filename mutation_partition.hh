@@ -89,7 +89,7 @@ private:
             }
         }
     }
-    
+
 public:
     template<typename Func>
     void for_each_cell(Func&& func) const {
@@ -132,21 +132,20 @@ public:
     template <typename ColumnDefinitionResolver>
     bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time, ColumnDefinitionResolver&& resolver) {
         bool any_live = false;
-        for (auto it = _cells.begin(); it != _cells.end(); ) {
-            auto& entry = *it;
+        remove_if([&] (column_id id, atomic_cell_or_collection& c) {
             bool erase = false;
-            const column_definition& def = resolver(entry.id());
+            const column_definition& def = resolver(id);
             if (def.is_atomic()) {
-                atomic_cell_view cell = entry.cell().as_atomic_cell();
+                atomic_cell_view cell = c.as_atomic_cell();
                 if (cell.is_covered_by(tomb)) {
                     erase = true;
                 } else if (cell.has_expired(query_time)) {
-                    entry.cell() = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+                    c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
                 } else {
                     any_live |= cell.is_live();
                 }
             } else {
-                auto&& cell = entry.cell().as_collection_mutation();
+                auto&& cell = c.as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
                 auto m_view = ctype->deserialize_mutation_form(cell);
                 collection_type_impl::mutation m = m_view.materialize();
@@ -154,16 +153,11 @@ public:
                 if (m.cells.empty() && m.tomb <= tomb) {
                     erase = true;
                 } else {
-                    entry.cell() = ctype->serialize_mutation_form(m);
+                    c = ctype->serialize_mutation_form(m);
                 }
             }
-            if (erase) {
-                it = _cells.erase(it);
-                current_allocator().destroy(&entry);
-            } else {
-                ++it;
-            }
-        }
+            return erase;
+        });
         return any_live;
     }
 };
