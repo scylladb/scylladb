@@ -599,19 +599,24 @@ future<std::unordered_set<dht::token>> update_local_tokens(
 }
 
 future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> load_tokens() {
-    // FIXME
-#if 0
-    SetMultimap<InetAddress, Token> tokenMap = HashMultimap.create();
-    for (UntypedResultSet.Row row : executeInternal("SELECT peer, tokens FROM system." + PEERS))
-    {
-        InetAddress peer = row.getInetAddress("peer");
-        if (row.has("tokens"))
-            tokenMap.putAll(peer, deserializeTokens(row.getSet("tokens", UTF8Type.instance)));
-    }
+    sstring req = "SELECT peer, tokens FROM system.%s";
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        auto ret = make_lw_shared<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
+        return do_for_each(*msg, [ret] (auto& row) {
+            auto peer = gms::inet_address(row.template get_as<net::ipv4_address>("peer"));
+            if (row.has("tokens")) {
+                auto blob = row.get_blob("tokens");
+                auto cdef = peers()->get_column_definition("tokens");
+                auto deserialized = cdef->type->deserialize(blob);
+                auto tokens = boost::any_cast<set_type_impl::native_type>(deserialized);
 
-    return tokenMap;
-#endif
-    return make_ready_future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>>();
+                ret->emplace(peer, decode_tokens(tokens));
+            }
+            return make_ready_future<>();
+        }).then([ret] () mutable {
+            return std::move(*ret);
+        });
+    });
 }
 
 future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
