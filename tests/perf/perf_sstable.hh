@@ -16,6 +16,8 @@ public:
     struct conf {
         unsigned partitions;
         unsigned key_size;
+        unsigned num_columns;
+        unsigned column_size;
         size_t buffer_size;
         sstring dir;
     };
@@ -25,12 +27,20 @@ private:
         return _cfg.dir + "/" + to_sstring(engine().cpu_id());
     }
 
-    sstring random_key() {
-        sstring key(sstring::initialized_later{}, size_t(_cfg.key_size));
-        for (auto& b: key) {
+    sstring random_string(unsigned size) {
+        sstring str(sstring::initialized_later{}, size_t(size));
+        for (auto& b: str) {
             b = _distribution(_generator);
         }
-        return key;
+        return str;
+    }
+
+    sstring random_key() {
+        return random_string(_cfg.key_size);
+    }
+
+    sstring random_column() {
+        return random_string(_cfg.column_size);
     }
 
     conf _cfg;
@@ -40,9 +50,33 @@ private:
     lw_shared_ptr<memtable> _mt;
     std::vector<lw_shared_ptr<sstable>> _sst;
 
+    schema_ptr create_schema() {
+        std::vector<schema::column> columns;
+
+        for (unsigned i = 0; i < _cfg.num_columns; ++i) {
+            columns.push_back(schema::column{ to_bytes(sprint("column%04d", i)), utf8_type });
+        }
+
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
+            // partition key
+            {{"name", utf8_type}},
+            // clustering key
+            {},
+            // regular columns
+            { columns },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "Perf tests"
+        )));
+        return builder.build(schema_builder::compact_storage::no);
+    }
+
 public:
     test_env(conf cfg) : _cfg(std::move(cfg))
-           , s(uncompressed_schema())
+           , s(create_schema())
            , _distribution('@', '~')
            , _mt(make_lw_shared<memtable>(s))
     {}
@@ -52,7 +86,11 @@ public:
     void fill_memtable() {
         for (unsigned i = 0; i < _cfg.partitions; i++) {
             auto key = partition_key::from_deeply_exploded(*s, { boost::any(random_key()) });
-            _mt->apply(mutation(key, s));
+            auto mut = mutation(key, s);
+            for (auto& cdef: s->regular_columns()) {
+                mut.set_clustered_cell(clustering_key::make_empty(*s), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));
+            }
+            _mt->apply(std::move(mut));
         }
     }
 
