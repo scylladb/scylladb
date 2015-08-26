@@ -265,23 +265,26 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
 
 template <typename ColumnDefResolver>
 bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def, gc_clock::time_point now) {
-    for (auto&& e : cells) {
-        auto&& cell_or_collection = e.cell();
-        const column_definition& def = id_to_def(e.id());
+    bool any_live = false;
+    cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
+        const column_definition& def = id_to_def(id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
             if (c.is_live(tomb, now)) {
-                return true;
+                any_live = true;
+                return stop_iteration::yes;
             }
         } else {
             auto&& cell = cell_or_collection.as_collection_mutation();
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             if (ctype->is_any_live(cell, tomb, now)) {
-                return true;
+                any_live = true;
+                return stop_iteration::yes;
             }
         }
-    }
-    return false;
+        return stop_iteration::no;
+    });
+    return any_live;
 }
 
 void
