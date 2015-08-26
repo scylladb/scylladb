@@ -8,7 +8,7 @@ License:        Proprietary
 URL:            http://www.seastar-project.org/
 Source0:        %{name}-%{version}.tar
 
-BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel xen-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++
+BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel xen-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++ make
 Requires:       libaio boost-program-options boost-system libstdc++ boost-test boost-thread cryptopp xen-libs hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs
 
 # TODO: create our own bridge device for virtio
