@@ -8,12 +8,15 @@
 #include <map>
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
+#include <boost/range/adaptor/indexed.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 
 #include "schema.hh"
 #include "keys.hh"
 #include "atomic_cell.hh"
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
+#include "utils/managed_vector.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -50,21 +53,53 @@ class row {
             }
         };
     };
+
+    using size_type = std::make_unsigned_t<column_id>;
+
+    enum class storage_type {
+        vector,
+        set,
+    };
+    storage_type _type = storage_type::vector;
+    size_type _size = 0;
+
     using map_type = boost::intrusive::set<cell_entry,
         boost::intrusive::member_hook<cell_entry, boost::intrusive::set_member_hook<>, &cell_entry::_link>,
-        boost::intrusive::compare<cell_entry::compare>>;
+        boost::intrusive::compare<cell_entry::compare>, boost::intrusive::constant_time_size<false>>;
 
-    map_type _cells;
+    static constexpr size_t max_vector_size = 32;
+    static constexpr size_t internal_count = (sizeof(map_type) + sizeof(cell_entry)) / sizeof(atomic_cell_or_collection);
+    using vector_type = managed_vector<atomic_cell_or_collection, internal_count, size_type>;
+
+    union storage {
+        storage() { }
+        ~storage() { }
+        map_type set;
+        vector_type vector;
+    } _storage;
 public:
-    using value_type = cell_entry;
-public:
-    row() = default;
+    row() {
+        new (&_storage.vector) vector_type;
+    }
     ~row();
     row(const row&);
-    row(row&&) = default;
-    row& operator=(row&&) = default;
-    
-    size_t size() const { return _cells.size(); }
+    row(row&& other) : _type(other._type), _size(other._size) {
+        if (_type == storage_type::vector) {
+            new (&_storage.vector) vector_type(std::move(other._storage.vector));
+        } else {
+            new (&_storage.set) map_type(std::move(other._storage.set));
+        }
+    }
+    row& operator=(row&& other) {
+        if (this != &other) {
+            this->~row();
+            new (this) row(std::move(other));
+        }
+        return *this;
+    }
+    size_t size() const { return _size; }
+
+    void reserve(column_id);
 
     const atomic_cell_or_collection& cell_at(column_id id) const;
 
@@ -73,17 +108,48 @@ public:
 private:
     template<typename Func>
     void remove_if(Func&& func) {
-        for (auto it = _cells.begin(); it != _cells.end(); ) {
-            if (func(it->id(), it->cell())) {
-                auto& entry = *it;
-                it = _cells.erase(it);
-                current_allocator().destroy(&entry);
-            } else {
-                ++it;
+        if (_type == storage_type::vector) {
+            for (unsigned i = 0; i < _storage.vector.size(); i++) {
+                auto& c = _storage.vector[i];
+                if (!bool(c)) {
+                    continue;
+                }
+                if (func(i, c)) {
+                    c = atomic_cell_or_collection();
+                    _size--;
+                }
+            }
+        } else {
+            for (auto it = _storage.set.begin(); it != _storage.set.end();) {
+                if (func(it->id(), it->cell())) {
+                    auto& entry = *it;
+                    it = _storage.set.erase(it);
+                    current_allocator().destroy(&entry);
+                    _size--;
+                } else {
+                    ++it;
+                }
             }
         }
     }
 
+private:
+    auto get_range_vector() const {
+        auto range = boost::make_iterator_range(_storage.vector.begin(), _storage.vector.end());
+        return range | boost::adaptors::filtered([] (const atomic_cell_or_collection& c) { return bool(c); })
+               | boost::adaptors::transformed([this] (const atomic_cell_or_collection& c) {
+            auto id = &c - _storage.vector.data();
+            return std::pair<column_id, const atomic_cell_or_collection&>(id, std::cref(c));
+        });
+    }
+    auto get_range_set() const {
+        auto range = boost::make_iterator_range(_storage.set.begin(), _storage.set.end());
+        return range | boost::adaptors::transformed([] (const cell_entry& c) {
+            return std::pair<column_id, const atomic_cell_or_collection&>(c.id(), c.cell());
+        });
+    }
+
+    void vector_to_set();
 public:
     template<typename Func>
     void for_each_cell(Func&& func) const {
@@ -95,9 +161,21 @@ public:
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        for (auto&& cell : _cells) {
-            if (func(cell.id(), cell.cell()) == stop_iteration::yes) {
-                break;
+        if (_type == storage_type::vector) {
+            for (unsigned i = 0; i < _storage.vector.size(); i++) {
+                auto& cell = _storage.vector[i];
+                if (!bool(cell)) {
+                    continue;
+                }
+                if (func(i, cell) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                if (func(cell.id(), cell.cell()) == stop_iteration::yes) {
+                    break;
+                }
             }
         }
     }
@@ -116,6 +194,11 @@ public:
 
     template <typename ColumnDefinitionResolver>
     void merge(const row& other, ColumnDefinitionResolver&& resolver) {
+        if (other._type == storage_type::vector) {
+            reserve(other._storage.vector.size() - 1);
+        } else {
+            reserve(other._storage.set.rbegin()->id());
+        }
         other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
             apply(id, cell, std::forward<ColumnDefinitionResolver>(resolver));
         });
@@ -160,7 +243,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
 
-std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
+std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
 
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
