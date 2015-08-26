@@ -40,10 +40,10 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
 
     // static row
     size += sizeof(count_type);
-    for (auto&& e : p.static_row()) {
+    p.static_row().for_each_cell([&] (column_id, const atomic_cell_or_collection& c) {
         size += sizeof(column_id);
-        size += bytes_view_serializer(e.cell().serialize()).size();
-    }
+        size += bytes_view_serializer(c.serialize()).size();
+    });
 
     // row tombstones
     size += sizeof(count_type);
@@ -64,15 +64,15 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
         }
         size += tombstone_serializer(e.row().deleted_at()).size();
         size += sizeof(count_type); // e.row().cells.size()
-        for (auto&& cell_entry : e.row().cells()) {
+        e.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
             size += sizeof(column_id);
-            const column_definition& def = schema.regular_column_at(cell_entry.id());
+            const column_definition& def = schema.regular_column_at(id);
             if (def.is_atomic()) {
-                size += atomic_cell_view_serializer(cell_entry.cell().as_atomic_cell()).size();
+                size += atomic_cell_view_serializer(c.as_atomic_cell()).size();
             } else {
-                size += collection_mutation_view_serializer(cell_entry.cell().as_collection_mutation()).size();
+                size += collection_mutation_view_serializer(c.as_collection_mutation()).size();
             }
-        }
+        });
     }
 
     return size;
@@ -93,10 +93,10 @@ mutation_partition_serializer::write_without_framing(data_output& out) const {
     assert(n_static_columns == (count_type)n_static_columns);
     out.write<count_type>(n_static_columns);
 
-    for (auto&& e : _p.static_row()) {
-        out.write(e.id());
-        bytes_view_serializer::write(out, e.cell().serialize());
-    }
+    _p.static_row().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+        out.write(id);
+        bytes_view_serializer::write(out, c.serialize());
+    });
 
     // row tombstones
     auto n_tombstones = _p.row_tombstones().size();
@@ -121,15 +121,15 @@ mutation_partition_serializer::write_without_framing(data_output& out) const {
         }
         tombstone_serializer::write(out, e.row().deleted_at());
         out.write<count_type>(e.row().cells().size());
-        for (auto&& cell_entry : e.row().cells()) {
-            out.write(cell_entry.id());
-            const column_definition& def = _schema.regular_column_at(cell_entry.id());
+        e.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
+            out.write(id);
+            const column_definition& def = _schema.regular_column_at(id);
             if (def.is_atomic()) {
-                atomic_cell_view_serializer::write(out, cell_entry.cell().as_atomic_cell());
+                atomic_cell_view_serializer::write(out, c.as_atomic_cell());
             } else {
-                collection_mutation_view_serializer::write(out, cell_entry.cell().as_collection_mutation());
+                collection_mutation_view_serializer::write(out, c.as_collection_mutation());
             }
-        }
+        });
     }
 }
 
