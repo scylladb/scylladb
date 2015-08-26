@@ -159,6 +159,8 @@ public:
     const row_cache& get_row_cache() const {
         return _cache;
     }
+
+    logalloc::occupancy_stats occupancy() const;
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager&);
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
@@ -490,6 +492,10 @@ public:
     }
 
     future<> flush_all_memtables();
+
+    const logalloc::region_group& dirty_memory_region_group() const {
+        return _dirty_memory_region_group;
+    }
 };
 
 // FIXME: stub
