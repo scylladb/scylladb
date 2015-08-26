@@ -636,3 +636,10 @@ const atomic_cell_or_collection& row::cell_at(column_id id) const {
     }
     return *cell;
 }
+
+bool row::operator==(const row& other) const {
+    return std::equal(_cells.begin(), _cells.end(), other._cells.begin(), other._cells.end(),
+        [] (const cell_entry& c1, const cell_entry& c2) {
+            return c1.id() == c2.id() && c1.cell() == c2.cell();
+        });
+}

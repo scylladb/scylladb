@@ -160,6 +160,8 @@ public:
         });
         return any_live;
     }
+
+    bool operator==(const row&) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
