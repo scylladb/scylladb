@@ -106,6 +106,13 @@ public:
         apply(resolver(id), std::move(cell));
     }
 
+    template <typename ColumnDefinitionResolver>
+    void merge(const row& other, ColumnDefinitionResolver&& resolver) {
+        other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            apply(id, cell, std::forward<ColumnDefinitionResolver>(resolver));
+        });
+    }
+
     // Expires cells based on query_time. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
     template <typename ColumnDefinitionResolver>
