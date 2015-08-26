@@ -154,7 +154,7 @@ public:
     }
 
     bool empty() const {
-        return size() == 0;
+        return _u.small.size == 0;
     }
 
     blob_storage::char_type* data() {
