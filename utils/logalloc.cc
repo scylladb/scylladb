@@ -500,7 +500,7 @@ private:
     size_t _active_offset;
     segment_heap _segments; // Contains only closed segments
     occupancy_stats _closed_occupancy;
-    bool _compactible = true;
+    bool _compaction_enabled = true;
     bool _evictable = false;
     uint64_t _id;
     eviction_fn _eviction_fn;
@@ -666,7 +666,7 @@ public:
     //    while (is_compactible()) { compact(); }
     //
     bool is_compactible() const {
-        return _compactible
+        return _compaction_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
             && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
             && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
@@ -783,8 +783,8 @@ public:
         return _id;
     }
 
-    void set_compactible(bool compactible) {
-        _compactible = compactible;
+    void set_compaction_enabled(bool enabled) {
+        _compaction_enabled = enabled;
     }
 
     //
@@ -844,8 +844,8 @@ allocation_strategy& region::allocator() {
     return *_impl;
 }
 
-void region::set_compactible(bool compactible) {
-    _impl->set_compactible(compactible);
+void region::set_compaction_enabled(bool compactible) {
+    _impl->set_compaction_enabled(compactible);
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {

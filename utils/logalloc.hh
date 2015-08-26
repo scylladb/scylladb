@@ -192,7 +192,7 @@ public:
     // Changes the compactibility state of this region. When region is not
     // compactible, it won't be considered by tracker::reclaim(). By default region is
     // compactible after construction.
-    void set_compactible(bool);
+    void set_compaction_enabled(bool);
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
