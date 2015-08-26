@@ -76,6 +76,20 @@ public:
 
     // Returns a pointer to cell's value or nullptr if column is not set.
     const atomic_cell_or_collection* find_cell(column_id id) const;
+private:
+    template<typename Func>
+    void remove_if(Func&& func) {
+        for (auto it = _cells.begin(); it != _cells.end(); ) {
+            if (func(it->id(), it->cell())) {
+                auto& entry = *it;
+                it = _cells.erase(it);
+                current_allocator().destroy(&entry);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
 public:
     template<typename Func>
     void for_each_cell(Func&& func) const {
