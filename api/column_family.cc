@@ -179,82 +179,74 @@ void set_column_family(http_context& ctx, routes& r) {
         }, std::plus<int>());
     });
 
-    cf::get_memtable_on_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_memtable_on_heap_size.set(r, [] (const_req req) {
+        return 0;
     });
 
-    cf::get_all_memtable_on_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_memtable_on_heap_size.set(r, [] (const_req req) {
+        return 0;
     });
 
-    cf::get_memtable_off_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+            return cf.active_memtable().region().occupancy().total_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_memtable_off_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_memtable_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](column_family& cf) {
+            return cf.active_memtable().region().occupancy().total_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_memtable_live_data_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+            return cf.active_memtable().region().occupancy().used_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_memtable_live_data_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_memtable_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](column_family& cf) {
+            return cf.active_memtable().region().occupancy().used_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_memtables_on_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cf_all_memtables_on_heap_size.set(r, [] (const_req req) {
+        return 0;
     });
 
-    cf::get_all_all_memtables_on_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_cf_all_memtables_on_heap_size.set(r, [] (const_req req) {
+        return 0;
     });
 
-    cf::get_all_memtables_off_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cf_all_memtables_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        warn(unimplemented::cause::INDEXES);
+        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+            return cf.occupancy().total_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_all_memtables_off_heap_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_cf_all_memtables_off_heap_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        warn(unimplemented::cause::INDEXES);
+        return ctx.db.map_reduce0([](const database& db){
+            return db.dirty_memory_region_group().memory_used();
+        }, 0, std::plus<int64_t>()).then([](int res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
-    cf::get_all_memtables_live_data_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_cf_all_memtables_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        warn(unimplemented::cause::INDEXES);
+        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+            return cf.occupancy().used_space();
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_all_memtables_live_data_size.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_cf_all_memtables_live_data_size.set(r, [&ctx] (std::unique_ptr<request> req) {
+        warn(unimplemented::cause::INDEXES);
+        return map_reduce_cf(ctx, 0, [](column_family& cf) {
+            return cf.active_memtable().region().occupancy().used_space();
+        }, std::plus<int64_t>());
     });
 
     cf::get_memtable_switch_count.set(r, [&ctx] (std::unique_ptr<request> req) {

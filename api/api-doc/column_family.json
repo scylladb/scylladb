@@ -522,7 +522,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get memtable on heap size",
+               "summary":"Get the column family active memtable on heap size",
                "type":"long",
                "nickname":"get_memtable_on_heap_size",
                "produces":[
@@ -546,7 +546,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtable on heap size",
+               "summary":"Get all active memtable of all column family on heap size",
                "type":"long",
                "nickname":"get_all_memtable_on_heap_size",
                "produces":[
@@ -562,7 +562,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get memtable off heap size",
+               "summary":"Get the column family active memtable off heap size",
                "type":"long",
                "nickname":"get_memtable_off_heap_size",
                "produces":[
@@ -586,7 +586,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtable off heap size",
+               "summary":"Get all active memtable of all column family off heap size",
                "type":"long",
                "nickname":"get_all_memtable_off_heap_size",
                "produces":[
@@ -602,7 +602,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get memtable live data size",
+               "summary":"Get the column family active memtable live data size",
                "type":"long",
                "nickname":"get_memtable_live_data_size",
                "produces":[
@@ -626,7 +626,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtable live data size",
+               "summary":"Get all active memtable of all column family live data size",
                "type":"long",
                "nickname":"get_all_memtable_live_data_size",
                "produces":[
@@ -642,9 +642,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtables on heap size",
+               "summary":"Get all of the column family active and not memtables on heap size",
                "type":"long",
-               "nickname":"get_all_memtables_on_heap_size",
+               "nickname":"get_cf_all_memtables_on_heap_size",
                "produces":[
                   "application/json"
                ],
@@ -666,9 +666,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all all memtables on heap size",
+               "summary":"Get all memtables active and not of all column family on heap size",
                "type":"long",
-               "nickname":"get_all_all_memtables_on_heap_size",
+               "nickname":"get_all_cf_all_memtables_on_heap_size",
                "produces":[
                   "application/json"
                ],
@@ -682,9 +682,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtables off heap size",
+               "summary":"Get all of the column family active and not memtables off heap size",
                "type":"long",
-               "nickname":"get_all_memtables_off_heap_size",
+               "nickname":"get_cf_all_memtables_off_heap_size",
                "produces":[
                   "application/json"
                ],
@@ -706,9 +706,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all all memtables off heap size",
+               "summary":"Get all memtables active and not of all column family off heap size",
                "type":"long",
-               "nickname":"get_all_all_memtables_off_heap_size",
+               "nickname":"get_all_cf_all_memtables_off_heap_size",
                "produces":[
                   "application/json"
                ],
@@ -722,9 +722,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all memtables live data size",
+               "summary":"Get all of the column family active and not memtables live data size",
                "type":"long",
-               "nickname":"get_all_memtables_live_data_size",
+               "nickname":"get_cf_all_memtables_live_data_size",
                "produces":[
                   "application/json"
                ],
@@ -746,9 +746,9 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get all all memtables live data size",
+               "summary":"Get all memtables active and not of all column family live data size",
                "type":"long",
-               "nickname":"get_all_all_memtables_live_data_size",
+               "nickname":"get_all_cf_all_memtables_live_data_size",
                "produces":[
                   "application/json"
                ],
