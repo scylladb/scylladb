@@ -503,6 +503,7 @@ private:
     bool _compaction_enabled = true;
     bool _evictable = false;
     uint64_t _id;
+    uint64_t _compaction_counter = 0;
     eviction_fn _eviction_fn;
 private:
     void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
@@ -581,6 +582,8 @@ private:
     }
 
     void compact(segment* seg) {
+        ++_compaction_counter;
+
         for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
             auto dst = alloc_small(desc->migrator(), desc->size(), desc->alignment());
             desc->migrator()(obj, dst, desc->size());
@@ -814,6 +817,11 @@ public:
         _evictable = true;
         _eviction_fn = std::move(fn);
     }
+
+    uint64_t compaction_counter() const {
+        return _compaction_counter;
+    }
+
     friend class region_group;
 };
 
@@ -854,6 +862,10 @@ void region::set_compaction_enabled(bool compactible) {
 
 bool region::compaction_enabled() const {
     return _impl->compaction_enabled();
+}
+
+uint64_t region::compaction_counter() const {
+    return _impl->compaction_counter();
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {

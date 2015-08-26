@@ -197,6 +197,12 @@ public:
     // Returns the compactibility state of this region.
     bool compaction_enabled() const;
 
+    // Returns a value which is increased when this region is compacted.
+    // Can be used to determine if references into this region were invalidated
+    // between two points in execution. When this value doesn't change, references
+    // remain valid.
+    uint64_t compaction_counter() const;
+
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
     // The function should free some space from this region.
