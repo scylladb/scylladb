@@ -349,7 +349,7 @@ operator<<(std::ostream& os, const row::value_type& rv) {
 
 std::ostream&
 operator<<(std::ostream& os, const row& r) {
-    return fprint(os, "{row: %s}", ::join(", ", r));
+    return fprint(os, "{row: %s}", ::join(", ", r._cells));
 }
 
 std::ostream&

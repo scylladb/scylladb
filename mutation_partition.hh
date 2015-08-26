@@ -162,10 +162,11 @@ public:
     }
 
     bool operator==(const row&) const;
+
+    friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
-std::ostream& operator<<(std::ostream& os, const row& r);
 
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
