@@ -247,6 +247,19 @@ public:
         return filename(component_type::Data);
     }
 private:
+    sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
+        : sstable_buffer_size(wbuffer_size)
+        , _ks(std::move(ks))
+        , _cf(std::move(cf))
+        , _dir(std::move(dir))
+        , _generation(generation)
+        , _version(v)
+        , _format(f)
+        , _now(now)
+    { }
+
+    size_t sstable_buffer_size = 128*1024;
+
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
     void prepare_write_components(::mutation_reader mr,
