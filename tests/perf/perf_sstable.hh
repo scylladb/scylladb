@@ -56,6 +56,11 @@ public:
         }
     }
 
+    future<> load_sstables(unsigned iterations) {
+        _sst.push_back(make_lw_shared<sstable>("ks", "cf", this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
+        return _sst.back()->load();
+    }
+
     using clk = std::chrono::high_resolution_clock;
     static auto now() {
         return clk::now();
@@ -73,6 +78,25 @@ public:
             auto end = test_env::now();
             auto duration = std::chrono::duration<double>(end - start).count();
             return partitions / duration;
+        });
+    }
+
+    future<double> read_all_indexes(int idx) {
+        return do_with(test(_sst[0]), [] (auto& sst) {
+            auto start = test_env::now();
+            auto total = make_lw_shared<size_t>(0);
+            auto& summary = sst.get_summary();
+            auto idx = boost::irange(0, int(summary.header.size));
+
+            return do_for_each(idx.begin(), idx.end(), [&sst, total] (uint64_t entry) {
+                return sst.read_indexes(entry).then([total] (auto il) {
+                    *total += il.size();
+                });
+            }).then([total, start] {
+                auto end = test_env::now();
+                auto duration = std::chrono::duration<double>(end - start).count();
+                return *total / duration;
+            });
         });
     }
 };
