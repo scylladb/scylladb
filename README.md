@@ -8,7 +8,7 @@ In addition to required packages by Seastar, the following packages are required
 Urchin uses submodules, so make sure you pull the submodules first by doing:
 ```
 git submodule init
-git submodule update
+git submodule update --recursive
 ```
 
 ### Building urchin on Fedora
