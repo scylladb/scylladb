@@ -21,6 +21,7 @@
 #include "unimplemented.hh"
 #include <boost/algorithm/string.hpp>
 #include <regex>
+#include <core/align.hh>
 
 namespace sstables {
 
@@ -752,14 +753,23 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     uint64_t position = _summary.entries[summary_idx].position;
     uint64_t quantity = _summary.header.sampling_level;
 
+    uint64_t estimated_size;
+    if (++summary_idx >= _summary.header.size) {
+        estimated_size = index_size() - position;
+    } else {
+        estimated_size = _summary.entries[summary_idx].position - position;
+    }
+
+    estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(estimated_size, uint64_t(8 << 10)));
+
     struct reader {
         uint64_t count = 0;
         std::vector<index_entry> indexes;
         shared_file_random_access_reader stream;
-        reader(file f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
+        reader(file f, uint64_t quantity, uint64_t estimated_size) : stream(f, estimated_size) { indexes.reserve(quantity); }
     };
 
-    auto r = make_lw_shared<reader>(_index_file, quantity);
+    auto r = make_lw_shared<reader>(_index_file, quantity, estimated_size);
 
     r->stream.seek(position);
 
