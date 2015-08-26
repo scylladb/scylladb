@@ -389,20 +389,12 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
 constexpr gc_clock::duration row_marker::no_ttl;
 constexpr gc_clock::duration row_marker::dead;
 
-static bool
-rows_equal(const schema& s, const row& r1, const row& r2) {
-    return std::equal(r1.begin(), r1.end(), r2.begin(), r2.end(),
-        [] (const row::value_type& c1, const row::value_type& c2) {
-            return c1.id() == c2.id() && c1.cell().serialize() == c2.cell().serialize();
-        });
-}
-
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
     if (_deleted_at != other._deleted_at || _marker != other._marker) {
         return false;
     }
-    return rows_equal(s, _cells, other._cells);
+    return _cells == other._cells;
 }
 
 bool
@@ -433,7 +425,7 @@ bool mutation_partition::equal(const schema& s, const mutation_partition& p) con
         return false;
     }
 
-    return rows_equal(s, _static_row, p._static_row);
+    return _static_row == p._static_row;
 }
 
 void
