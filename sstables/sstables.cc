@@ -1470,12 +1470,12 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
-input_stream<char> sstable::data_stream_at(uint64_t pos) {
+input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
     if (_compression) {
         return make_compressed_file_input_stream(
                 _data_file, &_compression, pos);
     } else {
-        return make_file_input_stream(_data_file, pos);
+        return make_file_input_stream(_data_file, pos, buf_size);
     }
 }
 

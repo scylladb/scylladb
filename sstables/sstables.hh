@@ -334,7 +334,7 @@ private:
 
     future<index_list> read_indexes(uint64_t summary_idx);
 
-    input_stream<char> data_stream_at(uint64_t pos);
+    input_stream<char> data_stream_at(uint64_t pos, uint64_t buf_size = 8192);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
