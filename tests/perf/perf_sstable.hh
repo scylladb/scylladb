@@ -5,6 +5,7 @@
 #pragma once
 #include "../sstable_test.hh"
 #include "sstables/sstables.hh"
+#include "mutation_reader.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>
@@ -129,6 +130,32 @@ public:
             return do_for_each(idx.begin(), idx.end(), [&sst, total] (uint64_t entry) {
                 return sst.read_indexes(entry).then([total] (auto il) {
                     *total += il.size();
+                });
+            }).then([total, start] {
+                auto end = test_env::now();
+                auto duration = std::chrono::duration<double>(end - start).count();
+                return *total / duration;
+            });
+        });
+    }
+
+    future<double> read_sequential_partitions(int idx) {
+        return do_with(_sst[0]->read_rows(s), [this] (sstables::mutation_reader& r) {
+            auto start = test_env::now();
+            auto total = make_lw_shared<size_t>(0);
+            auto done = make_lw_shared<bool>(false);
+            return do_until([done] { return *done; }, [this, done, total, &r] {
+                return r.read().then([this, done, total] (mutation_opt m) {
+                    if (!m) {
+                        *done = true;
+                    } else {
+                        auto row = m->partition().find_row(clustering_key::make_empty(*s));
+                        if (!row || row->size() != _cfg.num_columns) {
+                            throw std::invalid_argument("Invalid sstable found. Maybe you ran write mode with different num_columns settings?");
+                        } else {
+                            (*total)++;
+                        }
+                    }
                 });
             }).then([total, start] {
                 auto end = test_env::now();

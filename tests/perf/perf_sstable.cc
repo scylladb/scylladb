@@ -22,17 +22,23 @@ future<> test_write(distributed<test_env>& dt) {
     });
 }
 
-future<> test_read(distributed<test_env>& dt) {
+future<> test_index_read(distributed<test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &test_env::read_all_indexes);
 }
 
+future<> test_sequential_read(distributed<test_env>& dt) {
+    return time_runs(iterations, parallelism, dt, &test_env::read_sequential_partitions);
+}
+
 enum class test_modes {
+    sequential_read,
     index_read,
     write,
     index_write,
 };
 
 static std::unordered_map<sstring, test_modes> test_mode = {
+    {"sequential_read", test_modes::sequential_read },
     {"index_read", test_modes::index_read },
     {"write", test_modes::write },
     {"index_write", test_modes::index_write },
@@ -73,7 +79,8 @@ int main(int argc, char** argv) {
         }
         return test->start(std::move(cfg)).then([mode, dir, test] {
             engine().at_exit([test] { return test->stop(); });
-            if (mode == test_modes::index_read) {
+            if ((mode == test_modes::index_read) ||
+               (mode == test_modes::sequential_read)) {
                 return test->invoke_on_all([] (test_env &t) {
                     return t.load_sstables(iterations);
                 }).then_wrapped([] (future<> f) {
@@ -91,7 +98,9 @@ int main(int argc, char** argv) {
             }
         }).then([test, mode] {
             if (mode == test_modes::index_read) {
-                return test_read(*test).then([test] {});
+                return test_index_read(*test).then([test] {});
+            } else if (mode == test_modes::sequential_read) {
+                return test_sequential_read(*test).then([test] {});
             } else if ((mode == test_modes::index_write) || (mode == test_modes::write)) {
                 return test_write(*test).then([test] {});
             } else {
