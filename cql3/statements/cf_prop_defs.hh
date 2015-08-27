@@ -64,13 +64,6 @@ private:
     std::experimental::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
     void validate();
-
-#if 0
-    public Class<? extends AbstractCompactionStrategy> getCompactionStrategy()
-    {
-        return compactionStrategyClass;
-    }
-#endif
     std::map<sstring, sstring> get_compaction_options() const;
     std::map<sstring, sstring> get_compression_options() const;
 #if 0
@@ -90,16 +83,7 @@ public:
         return options;
     }
 #endif
-
     void apply_to_builder(schema_builder& builder);
-
-#if 0
-    @Override
-    public String toString()
-    {
-        return String.format("CFPropDefs(%s)", properties.toString());
-    }
-#endif
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 
