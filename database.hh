@@ -378,10 +378,13 @@ class database {
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
+    size_t _memtable_total_space = 500 << 20;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
     std::vector<scollectd::registration> _collectd;
+    timer<> _throttling_timer{[this] { unthrottle(); }};
+    circular_buffer<promise<>> _throttled_requests;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
@@ -395,13 +398,16 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
+    future<> throttle();
+    future<> do_apply(const frozen_mutation&);
+    void unthrottle();
 public:
     static utils::UUID empty_version;
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
     database(const db::config&);
-    database(database&&) = default;
+    database(database&&) = delete;
     ~database();
 
     void update_version(const utils::UUID& version);
