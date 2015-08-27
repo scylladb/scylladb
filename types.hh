@@ -733,6 +733,7 @@ extern thread_local const shared_ptr<const abstract_type> inet_addr_type;
 extern thread_local const shared_ptr<const abstract_type> float_type;
 extern thread_local const shared_ptr<const abstract_type> double_type;
 extern thread_local const shared_ptr<const abstract_type> varint_type;
+extern thread_local const shared_ptr<const abstract_type> counter_type;
 extern thread_local const data_type empty_type;
 
 template <>

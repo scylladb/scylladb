@@ -263,6 +263,7 @@ thread_local shared_ptr<cql3_type> cql3_type::varchar = make("varchar", utf8_typ
 thread_local shared_ptr<cql3_type> cql3_type::timeuuid = make("timeuuid", timeuuid_type, cql3_type::kind::TIMEUUID);
 thread_local shared_ptr<cql3_type> cql3_type::inet = make("inet", inet_addr_type, cql3_type::kind::INET);
 thread_local shared_ptr<cql3_type> cql3_type::varint = make("varint", varint_type, cql3_type::kind::VARINT);
+thread_local shared_ptr<cql3_type> cql3_type::counter = make("counter", counter_type, cql3_type::kind::COUNTER);
 
 const std::vector<shared_ptr<cql3_type>>&
 cql3_type::values() {
@@ -271,8 +272,8 @@ cql3_type::values() {
         cql3_type::bigint,
         cql3_type::blob,
         cql3_type::boolean,
-#if 0
         cql3_type::counter,
+#if 0
         cql3_type::decimal,
 #endif
         cql3_type::double_,

@@ -121,9 +121,9 @@ public:
     static thread_local shared_ptr<cql3_type> timeuuid;
     static thread_local shared_ptr<cql3_type> inet;
     static thread_local shared_ptr<cql3_type> varint;
+    static thread_local shared_ptr<cql3_type> counter;
 
 #if 0
-        COUNTER  (CounterColumnType.instance),
         DECIMAL  (DecimalType.instance),
         VARINT   (IntegerType.instance),
 #endif

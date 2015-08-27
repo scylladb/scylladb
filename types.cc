@@ -994,6 +994,41 @@ public:
     }
 };
 
+class counter_type_impl : public abstract_type {
+public:
+    counter_type_impl() : abstract_type{"org.apache.cassandra.db.marshal.CounterColumnType"} { }
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual size_t serialized_size(const boost::any& value) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual size_t hash(bytes_view v) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual boost::any deserialize(bytes_view v) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual bytes from_string(sstring_view text) const override {
+        fail(unimplemented::cause::COUNTERS);
+    }
+    virtual bool is_counter() const override {
+        return true;
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::counter;
+    }
+};
+
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type("org.apache.cassandra.db.marshal.EmptyType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
@@ -2096,25 +2131,27 @@ thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<in
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const shared_ptr<const abstract_type> varint_type(make_shared<varint_type_impl>());
+thread_local const shared_ptr<const abstract_type> counter_type(make_shared<counter_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
 
 data_type abstract_type::parse_type(const sstring& name)
 {
     static thread_local const std::unordered_map<sstring, data_type> types = {
-        { "org.apache.cassandra.db.marshal.Int32Type",       int32_type     },
-        { "org.apache.cassandra.db.marshal.LongType",        long_type      },
-        { "org.apache.cassandra.db.marshal.AsciiType",       ascii_type     },
-        { "org.apache.cassandra.db.marshal.BytesType",       bytes_type     },
-        { "org.apache.cassandra.db.marshal.UTF8Type",        utf8_type      },
-        { "org.apache.cassandra.db.marshal.BooleanType",     boolean_type   },
-        { "org.apache.cassandra.db.marshal.TimeUUIDType",    timeuuid_type  },
-        { "org.apache.cassandra.db.marshal.TimestampType",   timestamp_type },
-        { "org.apache.cassandra.db.marshal.UUIDType",        uuid_type      },
-        { "org.apache.cassandra.db.marshal.InetAddressType", inet_addr_type },
-        { "org.apache.cassandra.db.marshal.FloatType",       float_type     },
-        { "org.apache.cassandra.db.marshal.DoubleType",      double_type    },
-        { "org.apache.cassandra.db.marshal.IntegerType",     varint_type    },
-        { "org.apache.cassandra.db.marshal.EmptyType",       empty_type     },
+        { "org.apache.cassandra.db.marshal.Int32Type",         int32_type     },
+        { "org.apache.cassandra.db.marshal.LongType",          long_type      },
+        { "org.apache.cassandra.db.marshal.AsciiType",         ascii_type     },
+        { "org.apache.cassandra.db.marshal.BytesType",         bytes_type     },
+        { "org.apache.cassandra.db.marshal.UTF8Type",          utf8_type      },
+        { "org.apache.cassandra.db.marshal.BooleanType",       boolean_type   },
+        { "org.apache.cassandra.db.marshal.TimeUUIDType",      timeuuid_type  },
+        { "org.apache.cassandra.db.marshal.TimestampType",     timestamp_type },
+        { "org.apache.cassandra.db.marshal.UUIDType",          uuid_type      },
+        { "org.apache.cassandra.db.marshal.InetAddressType",   inet_addr_type },
+        { "org.apache.cassandra.db.marshal.FloatType",         float_type     },
+        { "org.apache.cassandra.db.marshal.DoubleType",        double_type    },
+        { "org.apache.cassandra.db.marshal.IntegerType",       varint_type    },
+        { "org.apache.cassandra.db.marshal.CounterColumnType", counter_type   },
+        { "org.apache.cassandra.db.marshal.EmptyType",         empty_type     },
     };
     auto it = types.find(name);
     if (it == types.end()) {

@@ -173,6 +173,10 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());
+        // FIXME: remove this check once we support counters
+        if (pt->is_counter()) {
+            fail(unimplemented::cause::COUNTERS);
+        }
         if (pt->is_collection() && pt->get_type()->is_multi_cell()) {
             if (!defined_multi_cell_collections) {
                 defined_multi_cell_collections = std::map<bytes, data_type>{};
