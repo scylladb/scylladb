@@ -110,12 +110,6 @@ static typename Map::key_type reverse_map(const typename Map::mapped_type& value
     throw std::out_of_range("unable to reverse map");
 }
 
-struct bufsize_mismatch_exception : malformed_sstable_exception {
-    bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
-    {}
-};
-
 // This should be used every time we use read_exactly directly.
 //
 // read_exactly is a lot more convenient of an interface to use, because we'll

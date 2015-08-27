@@ -27,6 +27,7 @@
 #include "writer.hh"
 #include "metadata_collector.hh"
 #include "filter.hh"
+#include "exceptions.hh"
 
 namespace sstables {
 
@@ -88,15 +89,6 @@ public:
 };
 
 class key;
-
-class malformed_sstable_exception : public std::exception {
-    sstring _msg;
-public:
-    malformed_sstable_exception(sstring s) : _msg(s) {}
-    const char *what() const noexcept {
-        return _msg.c_str();
-    }
-};
 
 using index_list = std::vector<index_entry>;
 
