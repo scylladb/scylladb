@@ -848,6 +848,15 @@ future<> storage_service::init_server(int delay) {
             logger.info("Loading persisted ring state");
             auto loaded_tokens = db::system_keyspace::load_tokens().get0();
             auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+
+            for (auto& x : loaded_tokens) {
+                logger.debug("Loaded tokens: ep={}, tokens={}", x.first, x.second);
+            }
+
+            for (auto& x : loaded_host_ids) {
+                logger.debug("Loaded host_id: ep={}, uuid={}", x.first, x.second);
+            }
+
             for (auto x : loaded_tokens) {
                 auto ep = x.first;
                 auto tokens = x.second;
