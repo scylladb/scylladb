@@ -50,7 +50,7 @@ public:
         } else if (name == "SizeTieredCompactionStrategy") {
             return compaction_strategy_type::size_tiered;
         } else {
-            throw std::runtime_error("Invalid Compaction Strategy");
+            throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class 'org.apache.cassandra.db.compaction.%s", name));
         }
     }
 };

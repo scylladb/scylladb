@@ -29,6 +29,7 @@
 #include "schema.hh"
 #include "database.hh"
 #include "schema_builder.hh"
+#include "compaction_strategy.hh"
 
 namespace cql3 {
 
@@ -60,7 +61,7 @@ public:
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
     static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
 private:
-    std::experimental::optional<sstring> _compaction_strategy_class;
+    std::experimental::optional<sstables::compaction_strategy_type> _compaction_strategy_class;
 public:
     void validate() {
         // Skip validation if the comapction strategy class is already set as it means we've alreayd
@@ -89,9 +90,8 @@ public:
             if (strategy == compaction_options.end()) {
                 throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
             }
-            _compaction_strategy_class = strategy->second;
+            _compaction_strategy_class = sstables::compaction_strategy::type(strategy->second);
 #if 0
-            compactionStrategyClass = CFMetaData.createCompactionStrategy(strategy);
             compactionOptions.remove(COMPACTION_STRATEGY_CLASS_KEY);
 
             CFMetaData.validateCompactionOptions(compactionStrategyClass, compactionOptions);
@@ -216,13 +216,10 @@ public:
             builder.set_max_index_interval(get_int(KW_MAX_INDEX_INTERVAL, builder.get_max_index_interval()));
         }
 
-#if 0
-        if (compactionStrategyClass != null)
-        {
-            cfm.compactionStrategyClass(compactionStrategyClass);
-            cfm.compactionStrategyOptions(new HashMap<>(getCompactionOptions()));
+        if (_compaction_strategy_class) {
+            builder.set_compaction_strategy(*_compaction_strategy_class);
+            builder.set_compaction_strategy_options(get_compaction_options());
         }
-#endif
 
         builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
         if (!get_compression_options().empty()) {
