@@ -25,8 +25,11 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
-#include "core/sstring.hh"
 
+#include "database.hh"
+
+#include <seastar/core/shared_ptr.hh>
+#include <seastar/core/sstring.hh>
 #include <experimental/optional>
 
 namespace cql3 {
@@ -42,39 +45,10 @@ public:
 private:
     std::experimental::optional<sstring> _strategy_class;
 public:
-    void validate() {
-        // Skip validation if the strategy class is already set as it means we've alreayd
-        // prepared (and redoing it would set strategyClass back to null, which we don't want)
-        if (_strategy_class) {
-            return;
-        }
-
-        static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION) });
-        property_definitions::validate(keywords, std::set<sstring>());
-
-        auto replication_options = get_replication_options();
-        if (replication_options.count(REPLICATION_STRATEGY_CLASS_KEY)) {
-            _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
-        }
-    }
-
-    std::map<sstring, sstring> get_replication_options() const {
-        auto replication_options = get_map(KW_REPLICATION);
-        if (replication_options) {
-            return replication_options.value();
-        }
-        return std::map<sstring, sstring>{};
-    }
-
-    std::experimental::optional<sstring> get_replication_strategy_class() const {
-        return _strategy_class;
-    }
-
-    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name) {
-        auto options = get_replication_options();
-        options.erase(REPLICATION_STRATEGY_CLASS_KEY);
-        return keyspace_metadata::new_keyspace(ks_name, get_replication_strategy_class().value(), options, get_boolean(KW_DURABLE_WRITES, true));
-    }
+    void validate();
+    std::map<sstring, sstring> get_replication_options() const;
+    std::experimental::optional<sstring> get_replication_strategy_class() const;
+    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name);
 
 #if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException
