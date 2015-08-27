@@ -53,26 +53,26 @@ with_column_family(schema_ptr s, column_family::config cfg, Func func) {
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
     return seastar::async([] {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    memtable mt(s);
+        memtable mt(s);
 
-    const column_definition& r1_col = *s->get_column_definition("r1");
-    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-    auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
+        const column_definition& r1_col = *s->get_column_definition("r1");
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
 
-    mutation m(key, s);
-    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
-    mt.apply(std::move(m));
+        mutation m(key, s);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
+        mt.apply(std::move(m));
 
-    auto p = get_partition(mt, key);
-    row& r = p.clustered_row(c_key).cells();
-    auto i = r.find_cell(r1_col.id);
-    BOOST_REQUIRE(i);
-    auto cell = i->as_atomic_cell();
-    BOOST_REQUIRE(cell.is_live());
-    BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
+        auto p = get_partition(mt, key);
+        row& r = p.clustered_row(c_key).cells();
+        auto i = r.find_cell(r1_col.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_atomic_cell();
+        BOOST_REQUIRE(cell.is_live());
+        BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
     });
 }
 
@@ -139,110 +139,110 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
 
 SEASTAR_TEST_CASE(test_map_mutations) {
     return seastar::async([] {
-    auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
-    memtable mt(s);
-    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-    auto& column = *s->get_column_definition("s1");
-    map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}}};
-    mutation m1(key, s);
-    m1.set_static_cell(column, my_map_type->serialize_mutation_form(mmut1));
-    mt.apply(m1);
-    map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102")))}}};
-    mutation m2(key, s);
-    m2.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2));
-    mt.apply(m2);
-    map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell(utf8_type->decompose(sstring("103")))}}};
-    mutation m3(key, s);
-    m3.set_static_cell(column, my_map_type->serialize_mutation_form(mmut3));
-    mt.apply(m3);
-    map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102 override")))}}};
-    mutation m2o(key, s);
-    m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
-    mt.apply(m2o);
+        auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
+        memtable mt(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto& column = *s->get_column_definition("s1");
+        map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}}};
+        mutation m1(key, s);
+        m1.set_static_cell(column, my_map_type->serialize_mutation_form(mmut1));
+        mt.apply(m1);
+        map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102")))}}};
+        mutation m2(key, s);
+        m2.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2));
+        mt.apply(m2);
+        map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell(utf8_type->decompose(sstring("103")))}}};
+        mutation m3(key, s);
+        m3.set_static_cell(column, my_map_type->serialize_mutation_form(mmut3));
+        mt.apply(m3);
+        map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102 override")))}}};
+        mutation m2o(key, s);
+        m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
+        mt.apply(m2o);
 
-    auto p = get_partition(mt, key);
-    row& r = p.static_row();
-    auto i = r.find_cell(column.id);
-    BOOST_REQUIRE(i);
-    auto cell = i->as_collection_mutation();
-    auto muts = my_map_type->deserialize_mutation_form(cell);
-    BOOST_REQUIRE(muts.cells.size() == 3);
-    // FIXME: more strict tests
+        auto p = get_partition(mt, key);
+        row& r = p.static_row();
+        auto i = r.find_cell(column.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_collection_mutation();
+        auto muts = my_map_type->deserialize_mutation_form(cell);
+        BOOST_REQUIRE(muts.cells.size() == 3);
+        // FIXME: more strict tests
     });
 }
 
 SEASTAR_TEST_CASE(test_set_mutations) {
     return seastar::async([] {
-    auto my_set_type = set_type_impl::get_instance(int32_type, true);
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
-    memtable mt(s);
-    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-    auto& column = *s->get_column_definition("s1");
-    map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell({})}}};
-    mutation m1(key, s);
-    m1.set_static_cell(column, my_set_type->serialize_mutation_form(mmut1));
-    mt.apply(m1);
-    map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
-    mutation m2(key, s);
-    m2.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2));
-    mt.apply(m2);
-    map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell({})}}};
-    mutation m3(key, s);
-    m3.set_static_cell(column, my_set_type->serialize_mutation_form(mmut3));
-    mt.apply(m3);
-    map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
-    mutation m2o(key, s);
-    m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
-    mt.apply(m2o);
+        auto my_set_type = set_type_impl::get_instance(int32_type, true);
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
+        memtable mt(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto& column = *s->get_column_definition("s1");
+        map_type_impl::mutation mmut1{{}, {{int32_type->decompose(101), make_atomic_cell({})}}};
+        mutation m1(key, s);
+        m1.set_static_cell(column, my_set_type->serialize_mutation_form(mmut1));
+        mt.apply(m1);
+        map_type_impl::mutation mmut2{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
+        mutation m2(key, s);
+        m2.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2));
+        mt.apply(m2);
+        map_type_impl::mutation mmut3{{}, {{int32_type->decompose(103), make_atomic_cell({})}}};
+        mutation m3(key, s);
+        m3.set_static_cell(column, my_set_type->serialize_mutation_form(mmut3));
+        mt.apply(m3);
+        map_type_impl::mutation mmut2o{{}, {{int32_type->decompose(102), make_atomic_cell({})}}};
+        mutation m2o(key, s);
+        m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
+        mt.apply(m2o);
 
-    auto p = get_partition(mt, key);
-    row& r = p.static_row();
-    auto i = r.find_cell(column.id);
-    BOOST_REQUIRE(i);
-    auto cell = i->as_collection_mutation();
-    auto muts = my_set_type->deserialize_mutation_form(cell);
-    BOOST_REQUIRE(muts.cells.size() == 3);
-    // FIXME: more strict tests
+        auto p = get_partition(mt, key);
+        row& r = p.static_row();
+        auto i = r.find_cell(column.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_collection_mutation();
+        auto muts = my_set_type->deserialize_mutation_form(cell);
+        BOOST_REQUIRE(muts.cells.size() == 3);
+        // FIXME: more strict tests
     });
 }
 
 SEASTAR_TEST_CASE(test_list_mutations) {
     return seastar::async([] {
-    auto my_list_type = list_type_impl::get_instance(int32_type, true);
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
-    memtable mt(s);
-    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
-    auto& column = *s->get_column_definition("s1");
-    auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
-    collection_type_impl::mutation mmut1{{}, {{make_key(), make_atomic_cell(int32_type->decompose(101))}}};
-    mutation m1(key, s);
-    m1.set_static_cell(column, my_list_type->serialize_mutation_form(mmut1));
-    mt.apply(m1);
-    collection_type_impl::mutation mmut2{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
-    mutation m2(key, s);
-    m2.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2));
-    mt.apply(m2);
-    collection_type_impl::mutation mmut3{{}, {{make_key(), make_atomic_cell(int32_type->decompose(103))}}};
-    mutation m3(key, s);
-    m3.set_static_cell(column, my_list_type->serialize_mutation_form(mmut3));
-    mt.apply(m3);
-    collection_type_impl::mutation mmut2o{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
-    mutation m2o(key, s);
-    m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
-    mt.apply(m2o);
+        auto my_list_type = list_type_impl::get_instance(int32_type, true);
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
+        memtable mt(s);
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto& column = *s->get_column_definition("s1");
+        auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
+        collection_type_impl::mutation mmut1{{}, {{make_key(), make_atomic_cell(int32_type->decompose(101))}}};
+        mutation m1(key, s);
+        m1.set_static_cell(column, my_list_type->serialize_mutation_form(mmut1));
+        mt.apply(m1);
+        collection_type_impl::mutation mmut2{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
+        mutation m2(key, s);
+        m2.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2));
+        mt.apply(m2);
+        collection_type_impl::mutation mmut3{{}, {{make_key(), make_atomic_cell(int32_type->decompose(103))}}};
+        mutation m3(key, s);
+        m3.set_static_cell(column, my_list_type->serialize_mutation_form(mmut3));
+        mt.apply(m3);
+        collection_type_impl::mutation mmut2o{{}, {{make_key(), make_atomic_cell(int32_type->decompose(102))}}};
+        mutation m2o(key, s);
+        m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
+        mt.apply(m2o);
 
-    auto p = get_partition(mt, key);
-    row& r = p.static_row();
-    auto i = r.find_cell(column.id);
-    BOOST_REQUIRE(i);
-    auto cell = i->as_collection_mutation();
-    auto muts = my_list_type->deserialize_mutation_form(cell);
-    BOOST_REQUIRE(muts.cells.size() == 4);
-    // FIXME: more strict tests
+        auto p = get_partition(mt, key);
+        row& r = p.static_row();
+        auto i = r.find_cell(column.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_collection_mutation();
+        auto muts = my_list_type->deserialize_mutation_form(cell);
+        BOOST_REQUIRE(muts.cells.size() == 4);
+        // FIXME: more strict tests
     });
 }
 
