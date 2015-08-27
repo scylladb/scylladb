@@ -32,6 +32,7 @@
 #include <unordered_set>
 #include <vector>
 #include "message/messaging_service.hh"
+#include "version.hh"
 
 namespace gms {
 
@@ -242,9 +243,7 @@ public:
 
         versioned_value release_version()
         {
-            // FIXME: FBUtilities.getReleaseVersionString()
-            sstring ver("urchin_1_0");
-            return versioned_value(ver);
+            return versioned_value(version::release());
         }
 
         versioned_value network_version()
