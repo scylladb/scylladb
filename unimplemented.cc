@@ -48,7 +48,7 @@ void warn(cause c) {
     auto i = _warnings.find(c);
     if (i == _warnings.end()) {
         _warnings.insert({c, true});
-        logger.warn("{}", c);
+        logger.debug("{}", c);
     }
 }
 
