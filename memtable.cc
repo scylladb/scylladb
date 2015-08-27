@@ -149,12 +149,6 @@ memtable::make_reader(const query::partition_range& range) const {
     }
 }
 
-row&
-memtable::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition& p = find_or_create_partition_slow(partition_key);
-    return p.clustered_row(clustering_key).cells();
-}
-
 void
 memtable::update(const db::replay_position& rp) {
     if (_replay_position < rp) {

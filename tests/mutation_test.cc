@@ -33,6 +33,14 @@ static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(0, std::move(value));
 };
 
+static mutation_partition get_partition(const memtable& mt, const partition_key& key) {
+    auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
+    auto reader = mt.make_reader(query::partition_range::make_singular(dk));
+    auto mo = reader().get0();
+    BOOST_REQUIRE(bool(mo));
+    return std::move(mo->partition());
+}
+
 template <typename Func>
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, Func func) {
@@ -44,6 +52,7 @@ with_column_family(schema_ptr s, column_family::config cfg, Func func) {
 }
 
 SEASTAR_TEST_CASE(test_mutation_is_applied) {
+    return seastar::async([] {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
@@ -57,13 +66,14 @@ SEASTAR_TEST_CASE(test_mutation_is_applied) {
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
     mt.apply(std::move(m));
 
-    row& r = mt.find_or_create_row_slow(key, c_key);
+    auto p = get_partition(mt, key);
+    row& r = p.clustered_row(c_key).cells();
     auto i = r.find_cell(r1_col.id);
     BOOST_REQUIRE(i);
     auto cell = i->as_atomic_cell();
     BOOST_REQUIRE(cell.is_live());
     BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
-    return make_ready_future<>();
+    });
 }
 
 SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
@@ -128,6 +138,7 @@ SEASTAR_TEST_CASE(test_row_tombstone_updates) {
 }
 
 SEASTAR_TEST_CASE(test_map_mutations) {
+    return seastar::async([] {
     auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
@@ -151,17 +162,19 @@ SEASTAR_TEST_CASE(test_map_mutations) {
     m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
     mt.apply(m2o);
 
-    row& r = mt.find_or_create_partition_slow(key).static_row();
+    auto p = get_partition(mt, key);
+    row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
     auto cell = i->as_collection_mutation();
     auto muts = my_map_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
-    return make_ready_future<>();
+    });
 }
 
 SEASTAR_TEST_CASE(test_set_mutations) {
+    return seastar::async([] {
     auto my_set_type = set_type_impl::get_instance(int32_type, true);
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
@@ -185,17 +198,19 @@ SEASTAR_TEST_CASE(test_set_mutations) {
     m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
     mt.apply(m2o);
 
-    row& r = mt.find_or_create_partition_slow(key).static_row();
+    auto p = get_partition(mt, key);
+    row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
     auto cell = i->as_collection_mutation();
     auto muts = my_set_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
-    return make_ready_future<>();
+    });
 }
 
 SEASTAR_TEST_CASE(test_list_mutations) {
+    return seastar::async([] {
     auto my_list_type = list_type_impl::get_instance(int32_type, true);
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
@@ -220,14 +235,15 @@ SEASTAR_TEST_CASE(test_list_mutations) {
     m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
     mt.apply(m2o);
 
-    row& r = mt.find_or_create_partition_slow(key).static_row();
+    auto p = get_partition(mt, key);
+    row& r = p.static_row();
     auto i = r.find_cell(column.id);
     BOOST_REQUIRE(i);
     auto cell = i->as_collection_mutation();
     auto muts = my_list_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 4);
     // FIXME: more strict tests
-    return make_ready_future<>();
+    });
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
