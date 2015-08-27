@@ -199,6 +199,70 @@ private:
         }
     }
 
+    // This is separated so that the compiler can inline "process_buffer". Because this chunk is too big,
+    // it usually won't if this is part of the main function
+    void do_process_buffer(temporary_buffer<char>& data) {
+        // We're in the middle of reading a basic type, which crossed
+        // an input buffer. Resume that read before continuing to
+        // handle the current state:
+        if (_prestate == prestate::READING_BYTES) {
+            auto n = std::min(_read_bytes.size() - _pos, data.size());
+            std::copy(data.begin(), data.begin() + n,
+                    _read_bytes.get_write() + _pos);
+            data.trim_front(n);
+            _pos += n;
+            if (_pos == _read_bytes.size()) {
+                *_read_bytes_where = std::move(_read_bytes);
+                _prestate = prestate::NONE;
+            }
+        } else {
+            // in the middle of reading an integer
+            unsigned len;
+            switch (_prestate) {
+            case prestate::READING_U16:
+                len = sizeof(uint16_t);
+                break;
+            case prestate::READING_U32:
+                len = sizeof(uint32_t);
+                break;
+            case prestate::READING_U64:
+                len = sizeof(uint64_t);
+                break;
+            default:
+                throw malformed_sstable_exception("unknown prestate");
+            }
+            assert(_pos < len);
+            auto n = std::min((size_t)(len - _pos), data.size());
+            std::copy(data.begin(), data.begin() + n, _read_int.bytes + _pos);
+            data.trim_front(n);
+            _pos += n;
+            if (_pos == len) {
+                // done reading the integer, store it in _u16, _u32 or _u64:
+                switch (_prestate) {
+                case prestate::READING_U16:
+                    _u16 = net::ntoh(_read_int.uint16);
+                    break;
+                case prestate::READING_U32:
+                    _u32 = net::ntoh(_read_int.uint32);
+                    break;
+                case prestate::READING_U64:
+                    _u64 = net::ntoh(_read_int.uint64);
+                    break;
+                default:
+                    throw malformed_sstable_exception(
+                            "unknown prestate");
+                }
+                _prestate = prestate::NONE;
+            }
+        }
+    }
+
+protected:
+    inline void process_buffer(temporary_buffer<char>& data) {
+        while (__builtin_expect((_prestate != prestate::NONE), 0)) {
+            do_process_buffer(data);
+        }
+    }
 public:
     // process() feeds the given data into the state machine.
     // The consumer may request at any point (e.g., after reading a whole
@@ -224,62 +288,7 @@ public:
         }
 #endif
         while (data || non_consuming()) {
-            if (_prestate != prestate::NONE) {
-                // We're in the middle of reading a basic type, which crossed
-                // an input buffer. Resume that read before continuing to
-                // handle the current state:
-                if (_prestate == prestate::READING_BYTES) {
-                    auto n = std::min(_read_bytes.size() - _pos, data.size());
-                    std::copy(data.begin(), data.begin() + n,
-                            _read_bytes.get_write() + _pos);
-                    data.trim_front(n);
-                    _pos += n;
-                    if (_pos == _read_bytes.size()) {
-                        *_read_bytes_where = std::move(_read_bytes);
-                        _prestate = prestate::NONE;
-                    }
-                } else {
-                    // in the middle of reading an integer
-                    unsigned len;
-                    switch (_prestate) {
-                    case prestate::READING_U16:
-                        len = sizeof(uint16_t);
-                        break;
-                    case prestate::READING_U32:
-                        len = sizeof(uint32_t);
-                        break;
-                    case prestate::READING_U64:
-                        len = sizeof(uint64_t);
-                        break;
-                    default:
-                        throw malformed_sstable_exception("unknown prestate");
-                    }
-                    assert(_pos < len);
-                    auto n = std::min((size_t)(len - _pos), data.size());
-                    std::copy(data.begin(), data.begin() + n, _read_int.bytes + _pos);
-                    data.trim_front(n);
-                    _pos += n;
-                    if (_pos == len) {
-                        // done reading the integer, store it in _u16, _u32 or _u64:
-                        switch (_prestate) {
-                        case prestate::READING_U16:
-                            _u16 = net::ntoh(_read_int.uint16);
-                            break;
-                        case prestate::READING_U32:
-                            _u32 = net::ntoh(_read_int.uint32);
-                            break;
-                        case prestate::READING_U64:
-                            _u64 = net::ntoh(_read_int.uint64);
-                            break;
-                        default:
-                            throw malformed_sstable_exception(
-                                    "unknown prestate");
-                        }
-                        _prestate = prestate::NONE;
-                    }
-                }
-                continue;
-            }
+            process_buffer(data);
 
             switch (_state) {
             case state::ROW_START:
