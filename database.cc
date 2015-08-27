@@ -829,8 +829,22 @@ database::load_sstables(distributed<service::storage_proxy>& proxy) {
 
 future<>
 database::init_commitlog() {
-    return db::commitlog::create_commitlog(*_cfg).then([this](db::commitlog&& log) {
-        _commitlog = std::make_unique<db::commitlog>(std::move(log));
+    auto logdir = _cfg->commitlog_directory() + "/work" + std::to_string(engine().cpu_id());
+
+    return engine().file_type(logdir).then([this, logdir](auto type) {
+        if (type && type.value() != directory_entry_type::directory) {
+            throw std::runtime_error("Not a directory " + logdir);
+        }
+        if (!type && ::mkdir(logdir.c_str(), S_IRWXU) != 0) {
+            throw std::runtime_error("Could not create directory " + logdir);
+        }
+
+        db::commitlog::config cfg(*_cfg);
+        cfg.commit_log_location = logdir;
+
+        return db::commitlog::create_commitlog(cfg).then([this](db::commitlog&& log) {
+            _commitlog = std::make_unique<db::commitlog>(std::move(log));
+        });
     });
 }
 
@@ -1354,12 +1368,6 @@ database::stop() {
         return parallel_for_each(_column_families, [this] (auto& val_pair) {
             return val_pair.second->stop();
         });
-    });
-}
-
-future<> database::flush_all_memtables() {
-    return parallel_for_each(_column_families, [this] (auto& cfp) {
-        return cfp.second->flush();
     });
 }
 

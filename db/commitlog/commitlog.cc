@@ -40,7 +40,6 @@
 #include "db/config.hh"
 #include "utils/data_input.hh"
 #include "utils/crc.hh"
-#include "utils/runtime.hh"
 #include "log.hh"
 
 static logging::logger logger("commitlog");
@@ -74,47 +73,50 @@ db::commitlog::config::config(const db::config& cfg)
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
 {}
 
-db::commitlog::descriptor::descriptor(segment_id_type i, uint32_t v)
-        : id(i), ver(v) {
-}
+class db::commitlog::descriptor {
+public:
+    static const std::string SEPARATOR;
+    static const std::string FILENAME_PREFIX;
+    static const std::string FILENAME_EXTENSION;
 
-db::commitlog::descriptor::descriptor(replay_position p)
-        : descriptor(p.id) {
-}
+    descriptor(descriptor&&) = default;
+    descriptor(const descriptor&) = default;
+    // TODO : version management
+    descriptor(uint64_t i, uint32_t v = 1)
+            : id(i), ver(v) {
+    }
+    descriptor(std::pair<uint64_t, uint32_t> p)
+            : descriptor(p.first, p.second) {
+    }
+    descriptor(sstring filename)
+            : descriptor([filename]() {
+                std::smatch m;
+                // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
+                    std::regex rx(FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                    std::string sfilename = filename;
+                    if (!std::regex_match(sfilename, m, rx)) {
+                        throw std::runtime_error("Cannot parse the version of the file: " + filename);
+                    }
+                    if (m[3].length() == 0) {
+                        // CMH. Can most likely ignore this
+                        throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
+                    }
 
-db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p)
-        : descriptor(p.first, p.second) {
-}
+                    uint64_t id = std::stoull(m[3].str().substr(1));
+                    uint32_t ver = std::stoul(m[2].str());
 
-db::commitlog::descriptor::descriptor(sstring filename)
-        : descriptor([filename]() {
-            std::smatch m;
-            // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:.*/)?" + FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
-                std::string sfilename = filename;
-                if (!std::regex_match(sfilename, m, rx)) {
-                    throw std::runtime_error("Cannot parse the version of the file: " + filename);
-                }
-                if (m[3].length() == 0) {
-                    // CMH. Can most likely ignore this
-                    throw std::domain_error("Commitlog segment is too old to open; upgrade to 1.2.5+ first");
-                }
+                    return std::make_pair(id, ver);
+                }()) {
+    }
 
-                segment_id_type id = std::stoull(m[3].str().substr(1));
-                uint32_t ver = std::stoul(m[2].str());
+    sstring filename() const {
+        return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
+                + std::to_string(id) + FILENAME_EXTENSION;
+    }
 
-                return std::make_pair(id, ver);
-            }()) {
-}
-
-sstring db::commitlog::descriptor::filename() const {
-    return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
-            + std::to_string(id) + FILENAME_EXTENSION;
-}
-
-db::commitlog::descriptor::operator db::replay_position() const {
-    return replay_position(id);
-}
+    const uint64_t id;
+    const uint32_t ver;
+};
 
 const std::string db::commitlog::descriptor::SEPARATOR("-");
 const std::string db::commitlog::descriptor::FILENAME_PREFIX(
@@ -149,14 +151,13 @@ public:
 
     segment_manager(config cfg)
             : cfg(cfg), max_size(
-                    std::min<size_t>(std::numeric_limits<position_type>::max(),
-                            std::max<size_t>(cfg.commitlog_segment_size_in_mb,
-                                    1) * 1024 * 1024)), max_mutation_size(
-                    max_size >> 1)
+                    std::max<size_t>(cfg.commitlog_segment_size_in_mb, 1) * 1024
+                            * 1024), max_mutation_size(max_size >> 1)
     {
         assert(max_size > 0);
         if (cfg.commit_log_location.empty()) {
-            cfg.commit_log_location = "/var/lib/scylla/commitlog";
+            cfg.commit_log_location = "/tmp/urchin/commitlog/"
+                    + std::to_string(engine().cpu_id());
         }
         _regs = create_counters();
     }
@@ -203,10 +204,8 @@ public:
     buffer_type acquire_buffer(size_t s);
     void release_buffer(buffer_type&&);
 
-    future<std::vector<descriptor>> list_descriptors(sstring dir);
-
 private:
-    segment_id_type _ids = 0;
+    uint64_t _ids = 0;
     std::vector<sseg_ptr> _segments;
     std::vector<buffer_type> _temp_buffers;
     timer<clock_type> _timer;
@@ -495,7 +494,7 @@ public:
     }
 
     position_type position() const {
-        return position_type(_file_pos + _buf_pos);
+        return _file_pos + _buf_pos;
     }
 
     size_t size_on_disk() const {
@@ -546,38 +545,16 @@ public:
 
 const size_t db::commitlog::segment::default_size;
 
-future<std::vector<db::commitlog::descriptor>>
-db::commitlog::segment_manager::list_descriptors(sstring dirname) {
+future<> db::commitlog::segment_manager::init() {
     struct helper {
-        sstring _dirname;
         file _file;
         subscription<directory_entry> _list;
-        std::vector<db::commitlog::descriptor> _result;
 
-        helper(helper&&) = default;
-        helper(sstring n, file && f)
-                : _dirname(std::move(n)), _file(std::move(f)), _list(
+        helper(segment_manager * m, file && f)
+                : _file(std::move(f)), _list(
                         _file.list_directory(
-                                std::bind(&helper::process, this,
+                                std::bind(&segment_manager::process, m,
                                         std::placeholders::_1))) {
-        }
-
-        future<> process(directory_entry de) {
-            auto entry_type = [this](const directory_entry & de) {
-                if (!de.type && !de.name.empty()) {
-                    return engine().file_type(_dirname + "/" + de.name);
-                }
-                return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
-            };
-            return entry_type(de).then([this, de](auto type) {
-                if (type == directory_entry_type::regular) {
-                    try {
-                        _result.emplace_back(de.name);
-                    } catch (std::domain_error &) {
-                    }
-                }
-                return make_ready_future<>();
-            });
         }
 
         future<> done() {
@@ -585,29 +562,19 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         }
     };
 
-    return engine().open_directory(dirname).then([this, dirname](auto dir) {
-        auto h = make_lw_shared<helper>(std::move(dirname), std::move(dir));
-        return h->done().then([h]() {
-            return make_ready_future<std::vector<db::commitlog::descriptor>>(std::move(h->_result));
-        }).finally([h] {});
-    });
-}
-
-future<> db::commitlog::segment_manager::init() {
-    return list_descriptors(cfg.commit_log_location).then([this](auto descs) {
-        segment_id_type id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
-        for (auto& d : descs) {
-            id = std::max(id, replay_position(d.id).base_id());
-        }
-
-        // base id counter is [ <shard> | <base> ]
-        _ids = replay_position(engine().cpu_id(), id).id;
-
-        if (cfg.mode != sync_mode::BATCH) {
-            _timer.set_callback(std::bind(&segment_manager::sync, this));
-            this->arm();
-        }
-    });
+    return engine().open_directory(cfg.commit_log_location).then([this](auto dir) {
+        // keep sub alive...
+            auto h = make_lw_shared<helper>(this, std::move(dir));
+            return h->done().then([this, h]() {
+                        return this->active_segment().then([this, h](auto) {
+                                    // nothing really. just keeping sub alive
+                                    if (cfg.mode != sync_mode::BATCH) {
+                                        _timer.set_callback(std::bind(&segment_manager::sync, this));
+                                        this->arm();
+                                    }
+                                });
+                    });
+        });
 }
 
 scollectd::registrations db::commitlog::segment_manager::create_counters() {
@@ -731,7 +698,7 @@ std::ostream& db::operator<<(std::ostream& out, const db::commitlog::segment::cf
 }
 
 std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
-    return out << "{" << p.shard_id() << ", " << p.base_id() << ", " << p.pos << "}";
+    return out << "{" << p.id << ", " << p.pos << "}";
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() {
@@ -861,197 +828,126 @@ const db::commitlog::config& db::commitlog::active_config() const {
     return _segment_manager->cfg;
 }
 
-future<subscription<temporary_buffer<char>, db::replay_position>>
-db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
-    return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next), off](file f) {
-       return read_log_file(std::move(f), std::move(next), off);
+future<subscription<temporary_buffer<char>>> db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next) {
+    return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next)](file f) {
+       return read_log_file(std::move(f), std::move(next));
     });
 }
 
-subscription<temporary_buffer<char>, db::replay_position>
-db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type off) {
+subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit_load_reader_func next) {
     struct work {
         file f;
-        stream<temporary_buffer<char>, replay_position> s;
+        stream<temporary_buffer<char>> s;
         input_stream<char> fin;
         input_stream<char> r;
         uint64_t id = 0;
         size_t pos = 0;
         size_t next = 0;
-        size_t start_off = 0;
-        size_t skip_to = 0;
         bool eof = false;
         bool header = true;
-
-        work(file f, position_type o = 0)
-                : f(f), fin(make_file_input_stream(f)), start_off(o) {
-        }
-        work(work&&) = default;
-
-        bool advance(const temporary_buffer<char>& buf) {
-            pos += buf.size();
-            if (buf.size() == 0) {
-                eof = true;
-            }
-            return !eof;
-        }
-        bool end_of_file() const {
-            return eof;
-        }
-        bool end_of_chunk() const {
-            return eof || next == pos;
-        }
-        future<> skip(size_t bytes) {
-            skip_to = pos + bytes;
-            return do_until([this] { return pos == skip_to || eof; }, [this, bytes] {
-                auto s = std::min<size_t>(4096, skip_to - pos);
-                // should eof be an error here?
-                return fin.read_exactly(s).then([this](auto buf) {
-                    this->advance(buf);
-                });
-            });
-        }
-        future<> read_header() {
-            return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
-                advance(buf);
-                // Will throw if we got eof
-                data_input in(buf);
-                auto ver = in.read<uint32_t>();
-                auto id = in.read<uint64_t>();
-                auto checksum = in.read<uint32_t>();
-
-                crc32_nbo crc;
-                crc.process(ver);
-                crc.process<int32_t>(id & 0xffffffff);
-                crc.process<int32_t>(id >> 32);
-
-                auto cs = crc.checksum();
-                if (cs != checksum) {
-                    throw std::runtime_error("Checksum error in file header");
-                }
-
-                this->id = id;
-                this->next = 0;
-
-                if (start_off > pos) {
-                    return skip(start_off - pos);
-                }
-                return make_ready_future<>();
-            });
-        }
-        future<> read_chunk() {
-            return fin.read_exactly(segment::segment_overhead_size).then([this](temporary_buffer<char> buf) {
-                auto start = pos;
-
-                if (!advance(buf)) {
-                    return make_ready_future<>();
-                }
-
-                data_input in(buf);
-                auto next = in.read<uint32_t>();
-                auto checksum = in.read<uint32_t>();
-
-                crc32_nbo crc;
-                crc.process<int32_t>(id & 0xffffffff);
-                crc.process<int32_t>(id >> 32);
-                crc.process<uint32_t>(start);
-
-                auto cs = crc.checksum();
-                if (cs != checksum) {
-                    throw std::runtime_error("Checksum error in chunk header");
-                }
-
-                this->next = next;
-
-                return do_until(std::bind(&work::end_of_chunk, this), std::bind(&work::read_entry, this));
-            });
-        }
-        future<> read_entry() {
-            static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
-            return fin.read_exactly(entry_header_size).then([this](temporary_buffer<char> buf) {
-                replay_position rp(id, position_type(pos));
-
-                if (!advance(buf)) {
-                    return make_ready_future<>();
-                }
-
-                data_input in(buf);
-
-                auto size = in.read<uint32_t>();
-                auto checksum = in.read<uint32_t>();
-
-                if (size == 0) {
-                    // special urchin case: zero padding due to dma blocks
-                    auto slack = next - pos;
-                    return skip(slack);
-                }
-
-                if (size < 3 * sizeof(uint32_t)) {
-                    throw std::runtime_error("Invalid entry size");
-                }
-
-                return fin.read_exactly(size - entry_header_size).then([this, size, checksum, rp](temporary_buffer<char> buf) {
-                    advance(buf);
-
-                    data_input in(buf);
-
-                    auto data_size = size - segment::entry_overhead_size;
-                    in.skip(data_size);
-                    auto checksum = in.read<uint32_t>();
-
-                    crc32_nbo crc;
-                    crc.process(size);
-                    crc.process_bytes(buf.get(), data_size);
-
-                    if (crc.checksum() != checksum) {
-                        throw std::runtime_error("Checksum error in data entry");
-                    }
-
-                    return s.produce(buf.share(0, data_size), rp);
-                });
-            });
-        }
-        future<> read_file() {
-            return read_header().then(
-                    [this] {
-                        return do_until(std::bind(&work::end_of_file, this), std::bind(&work::read_chunk, this));
-                    });
-        }
+        work(file f) : f(f), fin(make_file_input_stream(f)) {}
     };
 
-    auto w = make_lw_shared<work>(std::move(f), off);
+    auto w = make_lw_shared<work>(std::move(f));
+
     auto ret = w->s.listen(std::move(next));
 
-    w->s.started().then(std::bind(&work::read_file, w.get())).finally([w] {
-        w->s.close();
-    });
+    w->s.started().then([w] {
+        return w->fin.read_exactly(segment::descriptor_header_size).then([w](temporary_buffer<char> buf) {
+           // Will throw if we got eof
+           data_input in(buf);
+           auto ver = in.read<uint32_t>();
+           auto id = in.read<uint64_t>();
+           auto checksum = in.read<uint32_t>();
 
+           crc32_nbo crc;
+           crc.process(ver);
+           crc.process<int32_t>(id & 0xffffffff);
+           crc.process<int32_t>(id >> 32);
+
+           auto cs = crc.checksum();
+           if (cs != checksum) {
+               throw std::runtime_error("Checksum error in file header");
+           }
+
+           w->id = id;
+           w->next = 0;
+           w->pos = buf.size();
+
+           auto eofcond = [w] { return w->eof; };
+           return do_until(eofcond, [w] {
+               assert(w->pos == w->next || w->next == 0);
+               return w->fin.read_exactly(segment::segment_overhead_size).then([w](temporary_buffer<char> buf) {
+                   if (buf.size() == 0) {
+                       w->eof = true;
+                       return make_ready_future<>();
+                   }
+
+                   data_input in(buf);
+                   auto next = in.read<uint32_t>();
+                   auto checksum = in.read<uint32_t>();
+
+                   crc32_nbo crc;
+                   crc.process<int32_t>(w->id & 0xffffffff);
+                   crc.process<int32_t>(w->id >> 32);
+                   crc.process<uint32_t>(w->pos);
+
+                   auto cs = crc.checksum();
+                   if (cs != checksum) {
+                       throw std::runtime_error("Checksum error in chunk header");
+                   }
+
+                   w->pos += 8;
+                   w->next = next;
+
+                   auto eoccond = [w] { return w->pos == w->next; };
+                   return do_until(eoccond, [w] {
+                       static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
+                       return w->fin.read_exactly(entry_header_size).then([w](temporary_buffer<char> buf) {
+                           data_input in(buf);
+
+                           auto size = in.read<uint32_t>();
+                           auto checksum = in.read<uint32_t>();
+
+                           if (size == 0) {
+                               // special urchin case: zero padding due to dma blocks
+                               auto slack = w->next - entry_header_size - w->pos;
+                               return w->fin.read_exactly(slack).then([w, slack](temporary_buffer<char> buf) {
+                                   // should eof be an error here?
+                                   w->pos += slack + entry_header_size;
+                               });
+                           }
+                           if (size < 3 * sizeof(uint32_t)) {
+                               throw std::runtime_error("Invalid entry size");
+                           }
+                           return w->fin.read_exactly(size - entry_header_size).then([w, size, checksum](temporary_buffer<char> buf) {
+                               data_input in(buf);
+
+                               auto data_size = size - segment::entry_overhead_size;
+                               in.skip(data_size);
+                               auto checksum = in.read<uint32_t>();
+
+                               crc32_nbo crc;
+                               crc.process(size);
+                               crc.process_bytes(buf.get(), data_size);
+
+                               if (crc.checksum() != checksum) {
+                                   throw std::runtime_error("Checksum error in data entry");
+                               }
+                               w->pos += size;
+                               return w->s.produce(buf.share(0, data_size));
+                           });
+                       });
+                   });
+               });
+           });
+        });
+    }).then([w] {
+        return w->s.close();
+    }).finally([w] {}); // keep w alive for last close
     return ret;
 }
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
     return _segment_manager->get_active_names();
 }
-
-future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors() const {
-    return list_existing_descriptors(active_config().commit_log_location);
-}
-
-future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors(const sstring& dir) const {
-    return _segment_manager->list_descriptors(dir);
-}
-
-future<std::vector<sstring>> db::commitlog::list_existing_segments() const {
-    return list_existing_segments(active_config().commit_log_location);
-}
-
-future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring& dir) const {
-    return list_existing_descriptors(dir).then([dir](auto descs) {
-        std::vector<sstring> paths;
-        std::transform(descs.begin(), descs.end(), std::back_inserter(paths), [&](auto& d) {
-           return dir + "/" + d.filename();
-        });
-        return make_ready_future<std::vector<sstring>>(std::move(paths));
-    });
-}
-

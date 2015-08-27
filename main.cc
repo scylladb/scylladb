@@ -16,8 +16,6 @@
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/batchlog_manager.hh"
-#include "db/commitlog/commitlog.hh"
-#include "db/commitlog/commitlog_replayer.hh"
 #include "utils/runtime.hh"
 #include "dns.hh"
 #include "log.hh"
@@ -174,29 +172,6 @@ int main(int ac, char** av) {
                 });
             }).then([&db, &qp] {
                 return db::system_keyspace::setup(db, qp);
-            }).then([&db, &qp] {
-                auto cl = db.local().commitlog();
-                if (cl == nullptr) {
-                    return make_ready_future<>();
-                }
-                return cl->list_existing_segments().then([&db, &qp](auto paths) {
-                    if (paths.empty()) {
-                        return make_ready_future<>();
-                    }
-                    return db::commitlog_replayer::create_replayer(qp).then([paths](auto rp) {
-                        return do_with(std::move(rp), [paths = std::move(paths)](auto& rp) {
-                            return rp.recover(paths);
-                        });
-                    }).then([&db] {
-                        return db.invoke_on_all([] (database& db) {
-                            return db.flush_all_memtables();
-                        });
-                    }).then([paths] {
-                        for (auto& path : paths) {
-                            ::unlink(path.c_str());
-                        }
-                    });
-                });
             }).then([] {
                 auto& ss = service::get_local_storage_service();
                 return ss.init_server();

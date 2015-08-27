@@ -9,8 +9,6 @@
 #include <stdlib.h>
 #include <iostream>
 #include <unordered_map>
-#include <unordered_set>
-#include <set>
 
 #include "tests/test-utils.hh"
 #include "core/future-util.hh"
@@ -183,25 +181,26 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
     return make_commitlog(cfg).then([](tmplog_ptr log) {
-        return do_with(std::unordered_set<db::segment_id_type>(), [log](auto& set) {
+            auto state = make_lw_shared(false);
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([&set]() { return set.size() > 1; }, [log, &set, uuid]() {
-                sstring tmp = "hej bubba cow";
-                return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                    dst.write(tmp.begin(), tmp.end());
-                }).then([log, &set](replay_position rp) {
-                    BOOST_CHECK_NE(rp, db::replay_position());
-                    set.insert(rp.id);
-                });
-            });
-        }).then([log] {
-            return count_files(log->first.path).then([](size_t n) {
-                        BOOST_REQUIRE(n > 1);
+            return do_until([state]() {return *state;},
+                    [log, state, uuid]() {
+                        sstring tmp = "hej bubba cow";
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([log, state](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    *state = rp.id > 1;
+                                });
+
+                    }).then([log]() {
+                        return count_files(log->first.path).then([](size_t n) {
+                                    BOOST_REQUIRE(n > 1);
+                                });
+                    }).finally([log]() {
+                        return log->second.clear().then([log] {});
                     });
-        }).finally([log] {
-            return log->second.clear().then([log] {});
-        });
-    });
+        }).then([]{});
 }
 
 
@@ -212,7 +211,6 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
             struct state_type {
                 std::vector<utils::UUID> uuids;
                 std::unordered_map<utils::UUID, replay_position> rps;
-                std::unordered_set<db::segment_id_type> ids;
                 mutable size_t index = 0;
                 bool done = false;
 
@@ -227,14 +225,14 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
             };
 
             auto state = make_lw_shared<state_type>();
-            return do_until([state]() { return state->ids.size() > 1; },
+            return do_until([state]() {return state->done;},
                     [log, state]() {
                         sstring tmp = "hej bubba cow";
                         auto uuid = state->next_uuid();
                         return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.begin(), tmp.end());
                                 }).then([log, state, uuid](replay_position pos) {
-                                    state->ids.insert(pos.id);
+                                    state->done = pos.id > 1;
                                     state->rps[uuid] = pos;
                                 });
                     }).then([log, state]() {
@@ -320,40 +318,39 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
     return make_commitlog(cfg).then([](tmplog_ptr log) {
-            auto set = make_lw_shared<std::set<segment_id_type>>();
+            auto state = make_lw_shared(false);
             auto count = make_lw_shared<size_t>(0);
             auto count2 = make_lw_shared<size_t>(0);
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([count, set]() {return set->size() > 1;},
-                    [log, uuid, count, set]() {
+            return do_until([state]() {return *state;},
+                    [log, state, uuid, count]() {
                         sstring tmp = "hej bubba cow";
                         return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.begin(), tmp.end());
-                                }).then([log, set, count](replay_position rp) {
+                                }).then([log, state, count](replay_position rp) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
-                                    set->insert(rp.id);
-                                    if (set->size() == 1) {
-                                        ++(*count);
+                                    if (rp.id == 1) {
+                                        (*count)++;
                                     }
+                                    *state = rp.id > 1;
                                 });
 
-                    }).then([log]() {
+                    }).then([log, count]() {
                         return count_files(log->first.path).then([](size_t n) {
                                     BOOST_REQUIRE(n > 1);
                                 });
-                    }).then([log, set, count2] {
-                        // TODO, meh, hard coded name...
-                        auto findme = sstring("CommitLog-1-") + std::to_string(*set->begin()) + ".log";
-                        return list_files(log->first.path).then([log, findme, count2](auto l) {
+                    }).then([log, count2] {
+                        return list_files(log->first.path).then([log, count2](auto l) {
                                     for (auto & de : l->contents()) {
-                                        if (de.name == findme) {
+                                        // TODO, meh, hard coded name...
+                                        if (de.name == "CommitLog-1-1.log") {
                                             auto path = log->first.path + "/" + de.name;
-                                            return db::commitlog::read_log_file(path, [count2](temporary_buffer<char> buf, db::replay_position rp) {
+                                            return db::commitlog::read_log_file(path, [count2](temporary_buffer<char> buf) {
                                                         sstring str(buf.get(), buf.size());
                                                         BOOST_CHECK_EQUAL(str, "hej bubba cow");
                                                         (*count2)++;
                                                         return make_ready_future<>();
-                                                    }).then([log](auto s) {
+                                                    }).then([log](subscription<temporary_buffer<char>> s) {
                                                         auto ss = make_lw_shared(std::move(s));
                                                         return ss->done().then([ss] {});
                                                     });

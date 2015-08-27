@@ -477,8 +477,6 @@ public:
     const db::config& get_config() const {
         return *_cfg;
     }
-
-    future<> flush_all_memtables();
 };
 
 // FIXME: stub

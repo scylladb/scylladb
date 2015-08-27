@@ -27,7 +27,6 @@
 #include "types.hh"
 #include "utils/murmur_hash.hh"
 #include "hyperloglog.hh"
-#include "db/commitlog/replay_position.hh"
 #include <algorithm>
 
 namespace sstables {
@@ -176,6 +175,15 @@ class metadata_collector {
 public:
     static constexpr double NO_COMPRESSION_RATIO = -1.0;
 
+    static replay_position replay_position_none() {
+        // Cassandra says the following about replay position none:
+        // NONE is used for SSTables that are streamed from other nodes and thus have no relationship
+        // with our local commitlog. The values satisfy the critera that
+        //  - no real commitlog segment will have the given id
+        //  - it will sort before any real replayposition, so it will be effectively ignored by getReplayPosition
+        return replay_position(-1UL, 0U);
+    }
+
     static hll::HyperLogLog hyperloglog(int p, int sp) {
         // FIXME: hll::HyperLogLog doesn't support sparse format, so ignoring parameters by the time being.
         return hll::HyperLogLog();
@@ -185,7 +193,7 @@ private:
     estimated_histogram _estimated_row_size{150};
     // EH of 114 can track a max value of 2395318855, i.e., > 2B columns
     estimated_histogram _estimated_column_count{114};
-    db::replay_position _replay_position;
+    replay_position _replay_position = replay_position_none();
     uint64_t _min_timestamp = std::numeric_limits<uint64_t>::max();
     uint64_t _max_timestamp = std::numeric_limits<uint64_t>::min();
     uint64_t _repaired_at = 0;
@@ -253,7 +261,7 @@ public:
         _max_local_deletion_time = std::max(_max_local_deletion_time, max_local_deletion_time);
     }
 
-    void set_replay_position(const db::replay_position & rp) {
+    void set_replay_position(replay_position rp) {
         _replay_position = rp;
     }
 

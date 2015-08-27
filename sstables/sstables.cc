@@ -1346,7 +1346,6 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
 }
 
 future<> sstable::write_components(const memtable& mt) {
-    _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(),
             mt.partition_count(), mt.schema());
 }
