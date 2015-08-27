@@ -34,6 +34,8 @@ bool check_compound(sstring comparator);
 // make sure these match the order we like columns back from schema
 enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
+sstring to_sstring(column_kind k);
+
 // CMH this is also manually defined in thrift gen file.
 enum class index_type {
     keys,
@@ -41,6 +43,8 @@ enum class index_type {
     composites,
     none, // cwi: added none to avoid "optional" bs.
 };
+
+sstring to_sstring(index_type t);
 
 enum class cf_type : uint8_t {
     standard,

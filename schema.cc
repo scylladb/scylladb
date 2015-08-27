@@ -14,6 +14,27 @@ constexpr int32_t schema::NAME_LENGTH;
 
 const std::experimental::optional<sstring> schema::DEFAULT_COMPRESSOR = sstring("LZ4Compressor");
 
+sstring to_sstring(column_kind k) {
+    switch (k) {
+    case column_kind::partition_key:  return "PARTITION_KEY";
+    case column_kind::clustering_key: return "CLUSTERING_COLUMN";
+    case column_kind::static_column:  return "STATIC";
+    case column_kind::regular_column: return "REGULAR";
+    case column_kind::compact_column: return "COMPACT_VALUE";
+    }
+    throw std::invalid_argument("unknown column kind");
+}
+
+sstring to_sstring(index_type t) {
+    switch (t) {
+    case index_type::keys:       return "KEYS";
+    case index_type::custom:     return "CUSTOM";
+    case index_type::composites: return "COMPOSITES";
+    case index_type::none:       return "null";
+    }
+    throw std::invalid_argument("unknown index type");
+}
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
