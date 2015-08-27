@@ -158,7 +158,14 @@ make_lazy_reader(std::function<mutation_reader ()> make_reader) {
 }
 
 mutation_reader make_reader_returning(mutation m) {
-    return make_reader_returning_many({std::move(m)});
+    return [m = std::move(m), done = false] () mutable {
+        if (done) {
+            return make_ready_future<mutation_opt>();
+        } else {
+            done = true;
+            return make_ready_future<mutation_opt>(std::move(m));
+        }
+    };
 }
 
 mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
