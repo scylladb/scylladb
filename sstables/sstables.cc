@@ -744,7 +744,14 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
     w.close().get();
 }
 
-future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
+future<index_list> sstable::read_indexes(uint64_t summary_idx) {
+    if (summary_idx >= _summary.header.size) {
+        return make_ready_future<index_list>(index_list());
+    }
+
+    uint64_t position = _summary.entries[summary_idx].position;
+    uint64_t quantity = _summary.header.sampling_level;
+
     struct reader {
         uint64_t count = 0;
         std::vector<index_entry> indexes;

@@ -332,11 +332,7 @@ private:
     future<> open_data();
     future<> create_data();
 
-    future<index_list> read_indexes(uint64_t position, uint64_t quantity);
-
-    future<index_list> read_indexes(uint64_t position) {
-        return read_indexes(position, _summary.header.sampling_level);
-    }
+    future<index_list> read_indexes(uint64_t summary_idx);
 
     input_stream<char> data_stream_at(uint64_t pos);
 

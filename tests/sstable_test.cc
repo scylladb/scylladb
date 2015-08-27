@@ -77,68 +77,36 @@ SEASTAR_TEST_CASE(composite_index) {
     return working_sst("tests/sstables/composite", 1);
 }
 
-template<uint64_t Position, uint64_t Howmany, uint64_t Expected>
+template<uint64_t SummaryIdx, uint64_t Expected>
 future<> index_read(sstring path) {
     return reusable_sst(path, 1).then([] (sstable_ptr ptr) {
-        return sstables::test(ptr).read_indexes(Position, Howmany).then([ptr] (auto vec) {
+        return sstables::test(ptr).read_indexes(SummaryIdx).then([ptr] (auto vec) {
             BOOST_REQUIRE(vec.size() == Expected);
             return make_ready_future<>();
         });
     });
 }
 
-template<uint64_t Position, uint64_t HowMany, uint64_t Expected>
+template<uint64_t SummaryIdx, uint64_t Expected>
 future<> simple_index_read() {
-    return index_read<Position, HowMany, Expected>("tests/sstables/uncompressed");
+    return index_read<SummaryIdx, Expected>("tests/sstables/uncompressed");
 }
 
-template<uint64_t Position, uint64_t HowMany, uint64_t Expected>
+template<uint64_t SummaryIdx, uint64_t Expected>
 future<> composite_index_read() {
-    return index_read<Position, HowMany, Expected>("tests/sstables/composite");
+    return index_read<SummaryIdx, Expected>("tests/sstables/composite");
 }
 
-SEASTAR_TEST_CASE(simple_index_read_0_0_0) {
-    return simple_index_read<0, 0, 0>();
+SEASTAR_TEST_CASE(simple_index_read_0_4) {
+    return simple_index_read<0, 4>();
 }
 
-SEASTAR_TEST_CASE(simple_index_read_0_1_1) {
-    return simple_index_read<0, 1, 1>();
+SEASTAR_TEST_CASE(simple_index_read_1_0) {
+    return simple_index_read<1, 0>();
 }
 
-SEASTAR_TEST_CASE(simple_index_read_0_4_4) {
-    return simple_index_read<0, 4, 4>();
-}
-
-SEASTAR_TEST_CASE(simple_index_read_0_10_4) {
-    return simple_index_read<0, 10, 4>();
-}
-
-SEASTAR_TEST_CASE(simple_index_read_x13_1_1) {
-    return simple_index_read<0x13, 1, 1>();
-}
-
-SEASTAR_TEST_CASE(simple_index_read_x50_0_0) {
-    return simple_index_read<0x50, 0, 0>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_0_0) {
-    return composite_index_read<0, 0, 0>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_1_1) {
-    return composite_index_read<0, 1, 1>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_10_10) {
-    return composite_index_read<0, 10, 10>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_20_20) {
-    return composite_index_read<0, 20, 20>();
-}
-
-SEASTAR_TEST_CASE(composite_index_read_0_21_20) {
-    return composite_index_read<0, 21, 20>();
+SEASTAR_TEST_CASE(composite_index_read_0_20) {
+    return composite_index_read<0, 20>();
 }
 
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
@@ -760,7 +728,7 @@ SEASTAR_TEST_CASE(all_in_place) {
 
 SEASTAR_TEST_CASE(full_index_search) {
     return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
-        return sstables::test(sstp).read_indexes(0, 4).then([sstp] (auto index_list) {
+        return sstables::test(sstp).read_indexes(0).then([sstp] (auto index_list) {
             int idx = 0;
             for (auto& ie: index_list) {
                 auto key = key::from_bytes(ie.key.value);

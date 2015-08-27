@@ -391,7 +391,7 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx) {
         return make_ready_future<uint64_t>(data_size());
     }
 
-    return read_indexes(_summary.entries[summary_idx + 1].position, 128).then([] (auto next_il) {
+    return read_indexes(summary_idx + 1).then([] (auto next_il) {
         return next_il.front().position;
     });
 }
@@ -415,8 +415,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         return make_ready_future<mutation_opt>();
     }
 
-    auto position = _summary.entries[summary_idx].position;
-    return read_indexes(position).then([this, schema, &key, token, summary_idx] (auto index_list) {
+    return read_indexes(summary_idx).then([this, schema, &key, token, summary_idx] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             _filter_tracker.add_false_positive();
@@ -546,7 +545,7 @@ future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& po
 
     --summary_idx;
 
-    return read_indexes(_summary.entries[summary_idx].position).then([this, s, pos, summary_idx] (index_list il) {
+    return read_indexes(summary_idx).then([this, s, pos, summary_idx] (index_list il) {
         auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(*s));
         if (i == il.end()) {
             return this->data_end_position(summary_idx);
@@ -565,7 +564,7 @@ future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& po
 
     --summary_idx;
 
-    return read_indexes(_summary.entries[summary_idx].position).then([this, s, pos, summary_idx] (index_list il) {
+    return read_indexes(summary_idx).then([this, s, pos, summary_idx] (index_list il) {
         auto i = std::upper_bound(il.begin(), il.end(), pos, index_comparator(*s));
         if (i == il.end()) {
             return this->data_end_position(summary_idx);

@@ -36,8 +36,8 @@ public:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
         return _sst->data_read(pos, len);
     }
-    future<index_list> read_indexes(uint64_t position, uint64_t quantity) {
-        return _sst->read_indexes(position, quantity);
+    future<index_list> read_indexes(uint64_t summary_idx) {
+        return _sst->read_indexes(summary_idx);
     }
 
     future<> read_statistics() {
