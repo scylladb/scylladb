@@ -5,6 +5,7 @@
 #pragma once
 #include "../sstable_test.hh"
 #include "sstables/sstables.hh"
+#include "mutation_reader.hh"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics.hpp>
 #include <boost/range/irange.hpp>
@@ -16,6 +17,8 @@ public:
     struct conf {
         unsigned partitions;
         unsigned key_size;
+        unsigned num_columns;
+        unsigned column_size;
         size_t buffer_size;
         sstring dir;
     };
@@ -25,12 +28,20 @@ private:
         return _cfg.dir + "/" + to_sstring(engine().cpu_id());
     }
 
-    sstring random_key() {
-        sstring key(sstring::initialized_later{}, size_t(_cfg.key_size));
-        for (auto& b: key) {
+    sstring random_string(unsigned size) {
+        sstring str(sstring::initialized_later{}, size_t(size));
+        for (auto& b: str) {
             b = _distribution(_generator);
         }
-        return key;
+        return str;
+    }
+
+    sstring random_key() {
+        return random_string(_cfg.key_size);
+    }
+
+    sstring random_column() {
+        return random_string(_cfg.column_size);
     }
 
     conf _cfg;
@@ -40,9 +51,33 @@ private:
     lw_shared_ptr<memtable> _mt;
     std::vector<lw_shared_ptr<sstable>> _sst;
 
+    schema_ptr create_schema() {
+        std::vector<schema::column> columns;
+
+        for (unsigned i = 0; i < _cfg.num_columns; ++i) {
+            columns.push_back(schema::column{ to_bytes(sprint("column%04d", i)), utf8_type });
+        }
+
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("ks", "perf-test"), "ks", "perf-test",
+            // partition key
+            {{"name", utf8_type}},
+            // clustering key
+            {},
+            // regular columns
+            { columns },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "Perf tests"
+        )));
+        return builder.build(schema_builder::compact_storage::no);
+    }
+
 public:
     test_env(conf cfg) : _cfg(std::move(cfg))
-           , s(uncompressed_schema())
+           , s(create_schema())
            , _distribution('@', '~')
            , _mt(make_lw_shared<memtable>(s))
     {}
@@ -52,8 +87,17 @@ public:
     void fill_memtable() {
         for (unsigned i = 0; i < _cfg.partitions; i++) {
             auto key = partition_key::from_deeply_exploded(*s, { boost::any(random_key()) });
-            _mt->apply(mutation(key, s));
+            auto mut = mutation(key, s);
+            for (auto& cdef: s->regular_columns()) {
+                mut.set_clustered_cell(clustering_key::make_empty(*s), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));
+            }
+            _mt->apply(std::move(mut));
         }
+    }
+
+    future<> load_sstables(unsigned iterations) {
+        _sst.push_back(make_lw_shared<sstable>("ks", "cf", this->dir(), 0, sstable::version_types::ka, sstable::format_types::big));
+        return _sst.back()->load();
     }
 
     using clk = std::chrono::high_resolution_clock;
@@ -73,6 +117,51 @@ public:
             auto end = test_env::now();
             auto duration = std::chrono::duration<double>(end - start).count();
             return partitions / duration;
+        });
+    }
+
+    future<double> read_all_indexes(int idx) {
+        return do_with(test(_sst[0]), [] (auto& sst) {
+            auto start = test_env::now();
+            auto total = make_lw_shared<size_t>(0);
+            auto& summary = sst.get_summary();
+            auto idx = boost::irange(0, int(summary.header.size));
+
+            return do_for_each(idx.begin(), idx.end(), [&sst, total] (uint64_t entry) {
+                return sst.read_indexes(entry).then([total] (auto il) {
+                    *total += il.size();
+                });
+            }).then([total, start] {
+                auto end = test_env::now();
+                auto duration = std::chrono::duration<double>(end - start).count();
+                return *total / duration;
+            });
+        });
+    }
+
+    future<double> read_sequential_partitions(int idx) {
+        return do_with(_sst[0]->read_rows(s), [this] (sstables::mutation_reader& r) {
+            auto start = test_env::now();
+            auto total = make_lw_shared<size_t>(0);
+            auto done = make_lw_shared<bool>(false);
+            return do_until([done] { return *done; }, [this, done, total, &r] {
+                return r.read().then([this, done, total] (mutation_opt m) {
+                    if (!m) {
+                        *done = true;
+                    } else {
+                        auto row = m->partition().find_row(clustering_key::make_empty(*s));
+                        if (!row || row->size() != _cfg.num_columns) {
+                            throw std::invalid_argument("Invalid sstable found. Maybe you ran write mode with different num_columns settings?");
+                        } else {
+                            (*total)++;
+                        }
+                    }
+                });
+            }).then([total, start] {
+                auto end = test_env::now();
+                auto duration = std::chrono::duration<double>(end - start).count();
+                return *total / duration;
+            });
         });
     }
 };
