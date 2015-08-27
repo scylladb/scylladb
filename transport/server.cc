@@ -398,8 +398,11 @@ future<> cql_server::connection::process()
             return write_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error");
         }
     }).finally([this] {
-        return _pending_requests_gate.close().then([this] {
-            return std::move(_ready_to_respond);
+        return _pending_requests_gate.close().then_wrapped([this] (future<> f1) {
+            return _ready_to_respond.then_wrapped([f1 = std::move(f1)] (future<> f2) mutable {
+                f1.get();
+                f2.get();
+            });
         });
     });
 }
