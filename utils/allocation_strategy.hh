@@ -23,8 +23,8 @@ void standard_migrator(void* src, void* dst, size_t) noexcept {
 //
 // Managed objects may be moved by the allocator during compaction, which
 // invalidates any references to those objects. Compaction may be started
-// asynchronously by the reclaimer or invoked explicitly from code. Compaction
-// never happens synchronously with allocation/deallocation.
+// synchronously with allocations. To ensure that references remain valid, use
+// logalloc::compaction_lock.
 //
 // Because references may get invalidated, managing allocators can't be used
 // with standard containers, because they assume the reference is valid until freed.
@@ -58,12 +58,12 @@ public:
     //
     // Throws std::bad_alloc on allocation failure.
     //
-    // Doesn't invalidate references to allocated objects.
+    // Doesn't invalidate references to objects allocated with this strategy.
     //
     virtual void* alloc(migrate_fn, size_t size, size_t alignment) = 0;
 
     // Releases storage for the object. Doesn't invoke object's destructor.
-    // Doesn't invalidate references to allocated objects.
+    // Doesn't invalidate references to objects allocated with this strategy.
     virtual void free(void*) = 0;
 
     // Like alloc() but also constructs the object with a migrator using

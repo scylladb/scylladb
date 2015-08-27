@@ -92,7 +92,7 @@ public:
     void full_compaction();
 
     // Returns aggregate statistics for all pools.
-    occupancy_stats occupancy() const;
+    occupancy_stats occupancy();
 };
 
 tracker& shard_tracker();

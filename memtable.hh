@@ -74,7 +74,7 @@ public:
         bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
-    logalloc::region _region;
+    mutable logalloc::region _region;
     partitions_type partitions;
     db::replay_position _replay_position;
     void update(const db::replay_position&);
