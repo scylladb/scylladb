@@ -847,7 +847,7 @@ future<utils::UUID> get_local_host_id() {
     return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
         auto new_id = [] {
             auto host_id = utils::make_random_uuid();
-            return make_ready_future<utils::UUID>(host_id);
+            return set_local_host_id(host_id);
         };
         if (msg->empty() || !msg->one().has("host_id")) {
             return new_id();
