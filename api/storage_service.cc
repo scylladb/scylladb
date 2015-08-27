@@ -72,13 +72,11 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_release_version.set(r, [](const_req req) {
-        //TBD
-        return "";
+        return service::get_local_storage_service().get_release_version();
     });
 
     ss::get_schema_version.set(r, [](const_req req) {
-        //TBD
-        return "";
+        return service::get_local_storage_service().get_schema_version();
     });
 
     ss::get_all_data_file_locations.set(r, [&ctx](const_req req) {
@@ -309,13 +307,12 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_operation_mode.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>("");
+        auto mode = service::get_local_storage_service().get_operation_mode();
+        return make_ready_future<json::json_return_type>(mode);
     });
 
-    ss::is_starting.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(false);
+    ss::is_starting.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_starting();
     });
 
     ss::get_drain_progress.set(r, [](std::unique_ptr<request> req) {
@@ -347,18 +344,19 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::stop_gossiping.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().stop_gossiping().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::start_gossiping.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().start_gossiping().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
-    ss::is_gossip_running.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(true);
+    ss::is_gossip_running.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_gossip_running();
     });
 
     ss::stop_daemon.set(r, [](std::unique_ptr<request> req) {
@@ -402,13 +400,13 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::join_ring.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().join_ring().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
-    ss::is_joined.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(false);
+    ss::is_joined.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_joined();
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {

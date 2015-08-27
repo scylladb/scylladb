@@ -191,34 +191,15 @@ public:
 
     void unregister_subscriber(endpoint_lifecycle_subscriber* subscriber);
 
+    // should only be called via JMX
+    future<> stop_gossiping();
+
+    // should only be called via JMX
+    future<> start_gossiping();
+
+    // should only be called via JMX
+    bool is_gossip_running();
 #if 0
-    // should only be called via JMX
-    public void stopGossiping()
-    {
-        if (_initialized)
-        {
-            logger.warn("Stopping gossip by operator request");
-            Gossiper.instance.stop();
-            _initialized = false;
-        }
-    }
-
-    // should only be called via JMX
-    public void startGossiping()
-    {
-        if (!_initialized)
-        {
-            logger.warn("Starting gossip by operator request");
-            Gossiper.instance.start((int) (System.currentTimeMillis() / 1000));
-            _initialized = true;
-        }
-    }
-
-    // should only be called via JMX
-    public boolean isGossipRunning()
-    {
-        return Gossiper.instance.isEnabled();
-    }
 
     // should only be called via JMX
     public void startRPCServer()
@@ -1095,17 +1076,12 @@ public:
             strTokens.add(tok.toString());
         return strTokens;
     }
+#endif
 
-    public String getReleaseVersion()
-    {
-        return FBUtilities.getReleaseVersionString();
-    }
+    sstring get_release_version();
 
-    public String getSchemaVersion()
-    {
-        return Schema.instance.getVersion().toString();
-    }
-
+    sstring get_schema_version();
+#if 0
     public List<String> getLeavingNodes()
     {
         return stringify(_token_metadata.getLeavingEndpoints());
@@ -1138,24 +1114,6 @@ public:
         return stringify(Gossiper.instance.getUnreachableMembers());
     }
 
-    public String[] getAllDataFileLocations()
-    {
-        String[] locations = DatabaseDescriptor.getAllDataFileLocations();
-        for (int i = 0; i < locations.length; i++)
-            locations[i] = FileUtils.getCanonicalPath(locations[i]);
-        return locations;
-    }
-
-    public String getCommitLogLocation()
-    {
-        return FileUtils.getCanonicalPath(DatabaseDescriptor.getCommitLogLocation());
-    }
-
-    public String getSavedCachesLocation()
-    {
-        return FileUtils.getCanonicalPath(DatabaseDescriptor.getSavedCachesLocation());
-    }
-
     private List<String> stringify(Iterable<InetAddress> endpoints)
     {
         List<String> stringEndpoints = new ArrayList<>();
@@ -1164,11 +1122,6 @@ public:
             stringEndpoints.add(ep.getHostAddress());
         }
         return stringEndpoints;
-    }
-
-    public int getCurrentGenerationNumber()
-    {
-        return Gossiper.instance.getCurrentGenerationNumber(FBUtilities.getBroadcastAddress());
     }
 
     public int forceKeyspaceCleanup(String keyspaceName, String... columnFamilies) throws IOException, ExecutionException, InterruptedException
@@ -2692,17 +2645,11 @@ public:
             logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
         }
     }
+#endif
+    sstring get_operation_mode();
 
-    public String getOperationMode()
-    {
-        return operationMode.toString();
-    }
-
-    public boolean isStarting()
-    {
-        return operationMode == Mode.STARTING;
-    }
-
+    bool is_starting();
+#if 0
     public String getDrainProgress()
     {
         return String.format("Drained %s/%s ColumnFamilies", remainingCFs, totalCFs);
