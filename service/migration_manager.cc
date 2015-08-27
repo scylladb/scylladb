@@ -257,7 +257,7 @@ future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadat
     if (proxy.get_db().local().has_keyspace(ksm->name())) {
         throw exceptions::already_exists_exception{ksm->name()};
     }
-    logger.info("Create new Keyspace: {}", ksm->name());
+    logger.info("Create new Keyspace: {}", ksm);
     auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
     return announce(std::move(mutations), announce_locally);
 }
@@ -272,7 +272,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
         if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
-        logger.info("Create new table: {}", cfm->cf_name());
+        logger.info("Create new ColumnFamily: {}", cfm);
         auto mutations = db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
