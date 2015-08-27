@@ -60,6 +60,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     assert(sstables.size() > 0);
 
+    db::replay_position rp;
+
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
         readers.emplace_back([sst, r = make_lw_shared(sst->read_rows(schema))] () mutable { return r->read(); });
@@ -73,6 +75,14 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // FIXME: get sstable level
         sstable_logger_msg += sprint("%s:level=%d, ", sst->get_filename(), 0);
         stats->start_size += sst->data_size();
+        // TODO:
+        // Note that this is not fully correct. Since we might be merging sstables that originated on
+        // another shard (#cpu changed), we might be comparing RP:s with differing shard ids,
+        // which might vary in "comparable" size quite a bit. However, since the worst that happens
+        // is that we might miss a high water mark for the commit log replayer,
+        // this is kind of ok, esp. since we will hopefully not be trying to recover based on
+        // compacted sstables anyway (CL should be clean by then).
+        rp = std::max(rp, sst->get_stats_metadata().position);
     }
     sstable_logger_msg += "]";
     stats->sstables = sstables.size();
@@ -110,6 +120,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     ::mutation_reader mutation_queue_reader = [output_reader] () {
         return output_reader->read();
     };
+
+    newtab->get_metadata_collector().set_replay_position(rp);
 
     future<> write_done = newtab->write_components(
             std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats, start_time] {
