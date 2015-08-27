@@ -290,14 +290,16 @@ public:
             switch (_state) {
             case state::ROW_START:
                 // read 2-byte key length into _u16
-                read_16(data);
-                _state = state::ROW_KEY_BYTES;
-                break;
+                if (read_16(data) != read_status::ready) {
+                    _state = state::ROW_KEY_BYTES;
+                    break;
+                }
             case state::ROW_KEY_BYTES:
                 // After previously reading 16-bit length, read key's bytes.
-                read_bytes(data, _u16, _key);
-                _state = state::DELETION_TIME;
-                break;
+                if (read_bytes(data, _u16, _key) != read_status::ready) {
+                    _state = state::DELETION_TIME;
+                    break;
+                }
             case state::DELETION_TIME:
                 if (read_32(data) != read_status::ready) {
                     _state = state::DELETION_TIME_2;
@@ -319,7 +321,6 @@ public:
                 // buffers we held for it.
                 _key.release();
                 _state = state::ATOM_START;
-                break;
             }
             case state::ATOM_START:
                 if (read_16(data) == read_status::ready) {
@@ -350,9 +351,10 @@ public:
                 }
                 break;
             case state::ATOM_NAME_BYTES:
-                read_bytes(data, _u16, _key);
-                _state = state::ATOM_MASK;
-                break;
+                if (read_bytes(data, _u16, _key) != read_status::ready) {
+                    _state = state::ATOM_MASK;
+                    break;
+                }
             case state::ATOM_MASK: {
                 auto mask = consume_be<uint8_t>(data);
                 enum mask_type {
@@ -397,21 +399,17 @@ public:
             case state::EXPIRING_CELL_3:
                 _expiration = _u32;
                 _state = state::CELL;
-                break;
             case state::CELL: {
-                auto status = read_64(data);
-                _state = state::CELL_2;
-                // Try to read both values in the same loop if possible
-                if (status == read_status::ready) {
-                    read_32(data);
-                    _state = state::CELL_VALUE_BYTES;
+                if (read_64(data) != read_status::ready) {
+                    _state = state::CELL_2;
+                    break;
                 }
-                break;
             }
             case state::CELL_2:
-                read_32(data);
-                _state = state::CELL_VALUE_BYTES;
-                break;
+                if (read_32(data) != read_status::ready) {
+                    _state = state::CELL_VALUE_BYTES;
+                    break;
+                }
             case state::CELL_VALUE_BYTES:
                 if (read_bytes(data, _u32, _val) == read_status::ready) {
                     // If the whole string is in our buffer, great, we don't
@@ -459,22 +457,26 @@ public:
                 _state = state::ATOM_START;
                 break;
             case state::RANGE_TOMBSTONE:
-                read_16(data);
-                _state = state::RANGE_TOMBSTONE_2;
-                break;
+                if (read_16(data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_2;
+                    break;
+                }
             case state::RANGE_TOMBSTONE_2:
                 // read the end column into _val.
-                read_bytes(data, _u16, _val);
-                _state = state::RANGE_TOMBSTONE_3;
-                break;
+                if (read_bytes(data, _u16, _val) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_3;
+                    break;
+                }
             case state::RANGE_TOMBSTONE_3:
-                read_32(data);
-                _state = state::RANGE_TOMBSTONE_4;
-                break;
+                if (read_32(data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_4;
+                    break;
+                }
             case state::RANGE_TOMBSTONE_4:
-                read_64(data);
-                _state = state::RANGE_TOMBSTONE_5;
-                break;
+                if (read_64(data) != read_status::ready) {
+                    _state = state::RANGE_TOMBSTONE_5;
+                    break;
+                }
             case state::RANGE_TOMBSTONE_5:
             {
                 deletion_time del;
