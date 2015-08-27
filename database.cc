@@ -623,6 +623,13 @@ size_t column_family::sstables_count() {
     return _sstables->size();
 }
 
+int64_t column_family::get_unleveled_sstables() const {
+    // TODO: when we support leveled compaction, we should return the number of
+    // SSTables in L0. If leveled compaction is enabled in this column family,
+    // then we should return zero, as we currently do.
+    return 0;
+}
+
 lw_shared_ptr<sstable_list> column_family::get_sstables() {
     return _sstables;
 }

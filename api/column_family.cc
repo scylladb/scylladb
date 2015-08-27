@@ -97,6 +97,12 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
     });
 }
 
+static future<json::json_return_type> get_cf_unleveled_sstables(http_context& ctx, const sstring& name) {
+    return map_reduce_cf(ctx, name, 0, [](const column_family& cf) {
+        return cf.get_unleveled_sstables();
+    }, std::plus<int64_t>());
+}
+
 static int64_t min_row_size(column_family& cf) {
     int64_t res = INT64_MAX;
     for (auto i: *cf.get_sstables() ) {
@@ -330,6 +336,10 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_all_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<request> req) {
         return get_cf_stats(ctx, &column_family::stats::live_sstable_count);
+    });
+
+    cf::get_unleveled_sstables.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_unleveled_sstables(ctx, req->param["name"]);
     });
 
     cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<request> req) {
