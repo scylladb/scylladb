@@ -125,10 +125,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         return service::get_local_storage_service().get_load();
     });
 
-    ss::get_load_map.set(r, [](std::unique_ptr<request> req) {
-        //TBD
+    ss::get_load_map.set(r, [](const_req req) {
         std::vector<ss::mapper> res;
-        return make_ready_future<json::json_return_type>(res);
+        auto load_map= service::get_local_storage_service().get_load_map();
+        return map_to_key_value(load_map, res);
     });
 
     ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
