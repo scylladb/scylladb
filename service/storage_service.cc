@@ -1258,4 +1258,16 @@ future<> storage_service::start_native_transport() {
     return make_ready_future<>();
 }
 
+future<> storage_service::stop_native_transport() {
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+    if (daemon.nativeServer != null)
+        daemon.nativeServer.stop();
+#endif
+    return make_ready_future<>();
+}
+
 } // namespace service

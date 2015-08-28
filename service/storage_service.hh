@@ -209,17 +209,9 @@ public:
 
     future<> start_native_transport();
 
-#if 0
-    public void stopNativeTransport()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        if (daemon.nativeServer != null)
-            daemon.nativeServer.stop();
-    }
+    future<> stop_native_transport();
 
+#if 0
     public boolean isNativeTransportRunning()
     {
         if ((daemon == null) || (daemon.nativeServer == null))
