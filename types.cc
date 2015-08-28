@@ -148,8 +148,8 @@ struct long_type_impl : integer_type_impl<int64_t> {
 };
 
 struct string_type_impl : public abstract_type {
-    string_type_impl(sstring name, std::function<shared_ptr<cql3::cql3_type>()> cql3_type)
-        : abstract_type(name), _cql3_type(cql3_type) {}
+    string_type_impl(sstring name)
+        : abstract_type(name) {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         if (value.empty()) {
             return;
@@ -202,10 +202,20 @@ struct string_type_impl : public abstract_type {
     virtual sstring to_string(const bytes& b) const override {
         return sstring(reinterpret_cast<const char*>(b.begin()), b.size());
     }
+};
+
+struct ascii_type_impl final : public string_type_impl {
+    ascii_type_impl() : string_type_impl("org.apache.cassandra.db.marshal.AsciiType") {} 
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
-        return _cql3_type();
+        return cql3::cql3_type::ascii;
     }
-    std::function<shared_ptr<cql3::cql3_type>()> _cql3_type;
+};
+
+struct utf8_type_impl final : public string_type_impl {
+    utf8_type_impl() : string_type_impl("org.apache.cassandra.db.marshal.UTF8Type") {} 
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::text;
+    }
 };
 
 struct bytes_type_impl final : public abstract_type {
@@ -2119,9 +2129,9 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
 
 thread_local const shared_ptr<const abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<const abstract_type> long_type(make_shared<long_type_impl>());
-thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<string_type_impl>("org.apache.cassandra.db.marshal.AsciiType", [] { return cql3::cql3_type::ascii; }));
+thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<ascii_type_impl>());
 thread_local const shared_ptr<const abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<string_type_impl>("org.apache.cassandra.db.marshal.UTF8Type", [] { return cql3::cql3_type::text; }));
+thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<utf8_type_impl>());
 thread_local const shared_ptr<const abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
