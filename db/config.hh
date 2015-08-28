@@ -691,6 +691,10 @@ public:
     val(enable_cache, bool, true, Used, "Enable cache") \
     val(enable_commitlog, bool, true, Used, "Enable commitlog") \
     val(volatile_system_keyspace_for_testing, bool, false, Used, "Don't persist system keyspace - testing only!") \
+    val(api_port, uint16_t, 10000, Used, "Http Rest API port") \
+    val(api_address, sstring, "", Used, "Http Rest API address") \
+    val(api_ui_dir, sstring, "swagger-ui/dist/", Used, "The directory location of the API GUI") \
+    val(api_doc_dir, sstring, "api/api-doc/", Used, "The API definition file directory") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
