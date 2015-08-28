@@ -1502,4 +1502,34 @@ std::map<sstring, sstring> storage_service::get_load_map() {
 }
 
 
+future<> storage_service::rebuild(sstring source_dc) {
+#if 0
+    logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
+
+    RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
+    streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
+    if (sourceDc != null)
+        streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
+
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+        streamer.addRanges(keyspaceName, getLocalRanges(keyspaceName));
+
+    try
+    {
+        streamer.fetchAsync().get();
+    }
+    catch (InterruptedException e)
+    {
+        throw new RuntimeException("Interrupted while waiting on rebuild streaming");
+    }
+    catch (ExecutionException e)
+    {
+        // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+        logger.error("Error while rebuilding node", e.getCause());
+        throw new RuntimeException("Error while rebuilding node: " + e.getCause().getMessage());
+    }
+#endif
+    return make_ready_future<>();
+}
+
 } // namespace service
