@@ -76,10 +76,6 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>();
     bool help_loggers = false;
     cfg->add_options(opt_add)
-        ("api-address", bpo::value<sstring>(), "Http Rest API address")
-        ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
-        ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
-                "The directory location of the API GUI")
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>()->default_value("conf/scylla.yaml"), "scylla.yaml file to read options from")
         ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
@@ -106,11 +102,12 @@ int main(int ac, char** av) {
             dht::set_global_partitioner(cfg->partitioner());
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
-            uint16_t api_port = opts["api-port"].as<uint16_t>();
-            ctx.api_dir = opts["api-dir"].as<sstring>();
+            uint16_t api_port = cfg->api_port();
+            ctx.api_dir = cfg->api_ui_dir();
+            ctx.api_doc = cfg->api_doc_dir();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
-            sstring api_address = opts.count("api-address") ? opts["api-address"].as<sstring>() : rpc_address;
+            sstring api_address = cfg->api_addres() != "" ? cfg->api_addres() : rpc_address;
             auto seed_provider= cfg->seed_provider();
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
