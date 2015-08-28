@@ -2466,7 +2466,7 @@ public:
             logger.warn("No tokens to force removal on, call 'removenode' first");
         }
     }
-
+#endif
     /**
      * Remove a node that has died, attempting to restore the replica count.
      * If the node is alive, decommission should be attempted.  If decommission
@@ -2476,77 +2476,9 @@ public:
      *
      * @param hostIdString token for the node
      */
-    public void removeNode(String hostIdString)
-    {
-        InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        UUID localHostId = _token_metadata.getHostId(myAddress);
-        UUID hostId = UUID.fromString(hostIdString);
-        InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
+    future<> remove_node(sstring host_id_string);
 
-        if (endpoint == null)
-            throw new UnsupportedOperationException("Host ID not found.");
-
-        Collection<Token> tokens = _token_metadata.getTokens(endpoint);
-
-        if (endpoint.equals(myAddress))
-             throw new UnsupportedOperationException("Cannot remove self");
-
-        if (Gossiper.instance.getLiveMembers().contains(endpoint))
-            throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
-
-        // A leaving endpoint that is dead is already being removed.
-        if (_token_metadata.isLeaving(endpoint))
-            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-
-        if (!replicatingNodes.isEmpty())
-            throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-
-        // Find the endpoints that are going to become responsible for data
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-            if (Keyspace.open(keyspaceName).getReplicationStrategy().getReplicationFactor() == 1)
-                continue;
-
-            // get all ranges that change ownership (that is, a node needs
-            // to take responsibility for new range)
-            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-            IFailureDetector failureDetector = FailureDetector.instance;
-            for (InetAddress ep : changedRanges.values())
-            {
-                if (failureDetector.isAlive(ep))
-                    replicatingNodes.add(ep);
-                else
-                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
-            }
-        }
-        removingNode = endpoint;
-
-        _token_metadata.addLeavingEndpoint(endpoint);
-        PendingRangeCalculatorService.instance.update();
-
-        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-        // we add our own token so other nodes to let us know when they're done
-        Gossiper.instance.advertiseRemoving(endpoint, hostId, localHostId);
-
-        // kick off streaming commands
-        restoreReplicaCount(endpoint, myAddress);
-
-        // wait for ReplicationFinishedVerbHandler to signal we're done
-        while (!replicatingNodes.isEmpty())
-        {
-            Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-        }
-
-        excise(tokens, endpoint);
-
-        // gossiper will indicate the token has left
-        Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
-
-        replicatingNodes.clear();
-        removingNode = null;
-    }
-
+#if 0
     public void confirmReplication(InetAddress node)
     {
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
