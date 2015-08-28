@@ -2789,12 +2789,9 @@ public:
         SSTableLoader loader = new SSTableLoader(dir, client, new OutputHandler.LogOutput());
         return loader.stream();
     }
-
-    public int getExceptionCount()
-    {
-        return (int)StorageMetrics.exceptions.count();
-    }
-
+#endif
+    int32_t get_exception_count();
+#if 0
     public void rescheduleFailedDeletions()
     {
         SSTableDeletingTask.rescheduleFailedTasks();

@@ -1532,4 +1532,9 @@ future<> storage_service::rebuild(sstring source_dc) {
     return make_ready_future<>();
 }
 
+int32_t storage_service::get_exception_count() {
+    //return (int)StorageMetrics.exceptions.count();
+    return 0;
+}
+
 } // namespace service
