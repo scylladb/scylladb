@@ -1468,4 +1468,19 @@ future<> storage_service::drain() {
     return make_ready_future<>();
 }
 
+double storage_service::get_load() {
+    double bytes = 0;
+#if 0
+    for (String keyspaceName : Schema.instance.getKeyspaces())
+    {
+        Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
+        if (keyspace == null)
+            continue;
+        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+            bytes += cfs.getLiveDiskSpaceUsed();
+    }
+#endif
+    return bytes;
+}
+
 } // namespace service

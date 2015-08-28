@@ -963,22 +963,12 @@ private:
 
         return changedRanges;
     }
-
+#endif
+public:
     /** raw load value */
-    public double getLoad()
-    {
-        double bytes = 0;
-        for (String keyspaceName : Schema.instance.getKeyspaces())
-        {
-            Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
-            if (keyspace == null)
-                continue;
-            for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                bytes += cfs.getLiveDiskSpaceUsed();
-        }
-        return bytes;
-    }
+    double get_load();
 
+#if 0
     public String getLoadString()
     {
         return FileUtils.stringifyFileSize(getLoad());
