@@ -203,17 +203,9 @@ public:
     // should only be called via JMX
     future<> start_rpc_server();
 
-#if 0
-    public void stopRPCServer()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        if (daemon.thriftServer != null)
-            daemon.thriftServer.stop();
-    }
+    future<> stop_rpc_server();
 
+#if 0
     public boolean isRPCServerRunning()
     {
         if ((daemon == null) || (daemon.thriftServer == null))
