@@ -199,18 +199,11 @@ public:
 
     // should only be called via JMX
     bool is_gossip_running();
-#if 0
 
     // should only be called via JMX
-    public void startRPCServer()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        daemon.thriftServer.start();
-    }
+    future<> start_rpc_server();
 
+#if 0
     public void stopRPCServer()
     {
         if (daemon == null)

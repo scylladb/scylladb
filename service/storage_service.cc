@@ -1205,4 +1205,15 @@ future<> storage_service::stop_gossiping() {
     return make_ready_future<>();
 }
 
+future<> storage_service::start_rpc_server() {
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+    daemon.thriftServer.start();
+#endif
+    return make_ready_future<>();
+}
+
 } // namespace service
