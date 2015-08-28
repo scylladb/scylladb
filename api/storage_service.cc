@@ -278,8 +278,9 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::decommission.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().decommission().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::move.set(r, [](std::unique_ptr<request> req) {
