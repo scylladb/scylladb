@@ -7,7 +7,7 @@ static atomic_cell make_atomic_cell(bytes value) {
 };
 
 int main(int argc, char* argv[]) {
-    return app_template().run(argc, argv, [] {
+    return app_template().run_deprecated(argc, argv, [] {
         auto s = make_lw_shared(schema({}, "ks", "cf",
             {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 

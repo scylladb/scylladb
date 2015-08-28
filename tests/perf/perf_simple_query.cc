@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
         ("query-single-key", "test write path instead of read path")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core");
 
-    return app.run(argc, argv, [&app] {
+    return app.run_deprecated(argc, argv, [&app] {
         make_env_for_test().then([&app] (auto env) {
             auto cfg = make_lw_shared<test_config>();
             cfg->partitions = app.configuration()["partitions"].as<unsigned>();
