@@ -2098,43 +2098,11 @@ public:
         _token_metadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
         PendingRangeCalculatorService.instance.update();
     }
+#endif
 
-    public void decommission() throws InterruptedException
-    {
-        if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
-            throw new UnsupportedOperationException("local node is not a member of the token ring yet");
-        if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
-            throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
+    future<> decommission();
 
-        PendingRangeCalculatorService.instance.blockUntilFinished();
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
-                throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
-        }
-
-        if (logger.isDebugEnabled())
-            logger.debug("DECOMMISSIONING");
-        startLeaving();
-        long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-        setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
-        Thread.sleep(timeout);
-
-        Runnable finishLeaving = new Runnable()
-        {
-            public void run()
-            {
-                shutdownClientServers();
-                Gossiper.instance.stop();
-                MessagingService.instance().shutdown();
-                StageManager.shutdownNow();
-                setMode(Mode.DECOMMISSIONED, true);
-                // let op be responsible for killing the process
-            }
-        };
-        unbootstrap(finishLeaving);
-    }
-
+#if 0
     private void leaveRing()
     {
         SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.NEEDS_BOOTSTRAP);

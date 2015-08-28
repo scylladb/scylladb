@@ -1281,4 +1281,42 @@ bool storage_service::is_native_transport_running() {
     return false;
 }
 
+future<> storage_service::decommission() {
+#if 0
+    if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
+        throw new UnsupportedOperationException("local node is not a member of the token ring yet");
+    if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
+        throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
+
+    PendingRangeCalculatorService.instance.blockUntilFinished();
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+    {
+        if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
+            throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
+    }
+
+    if (logger.isDebugEnabled())
+        logger.debug("DECOMMISSIONING");
+    startLeaving();
+    long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
+    setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
+    Thread.sleep(timeout);
+
+    Runnable finishLeaving = new Runnable()
+    {
+        public void run()
+        {
+            shutdownClientServers();
+            Gossiper.instance.stop();
+            MessagingService.instance().shutdown();
+            StageManager.shutdownNow();
+            setMode(Mode.DECOMMISSIONED, true);
+            // let op be responsible for killing the process
+        }
+    };
+    unbootstrap(finishLeaving);
+#endif
+    return make_ready_future<>();
+}
+
 } // namespace service
