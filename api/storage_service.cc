@@ -457,9 +457,10 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::rebuild.set(r, [](std::unique_ptr<request> req) {
-        //TBD
         auto source_dc = req->get_query_param("source_dc");
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().rebuild(std::move(source_dc)).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::bulk_load.set(r, [](std::unique_ptr<request> req) {
