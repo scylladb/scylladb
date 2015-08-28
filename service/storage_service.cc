@@ -1483,4 +1483,23 @@ double storage_service::get_load() {
     return bytes;
 }
 
+sstring storage_service::get_load_string() {
+    return sprint("%f", get_load());
+}
+
+std::map<sstring, sstring> storage_service::get_load_map() {
+#if 0
+    Map<String, String> map = new HashMap<>();
+    for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
+    {
+        map.put(entry.getKey().getHostAddress(), FileUtils.stringifyFileSize(entry.getValue()));
+    }
+    // gossiper doesn't see its own updates, so we need to special-case the local node
+    map.put(FBUtilities.getBroadcastAddress().getHostAddress(), getLoadString());
+    return map;
+#endif
+    return std::map<sstring, sstring>();
+}
+
+
 } // namespace service

@@ -968,24 +968,11 @@ public:
     /** raw load value */
     double get_load();
 
+    sstring get_load_string();
+
+    std::map<sstring, sstring> get_load_map();
+
 #if 0
-    public String getLoadString()
-    {
-        return FileUtils.stringifyFileSize(getLoad());
-    }
-
-    public Map<String, String> getLoadMap()
-    {
-        Map<String, String> map = new HashMap<>();
-        for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
-        {
-            map.put(entry.getKey().getHostAddress(), FileUtils.stringifyFileSize(entry.getValue()));
-        }
-        // gossiper doesn't see its own updates, so we need to special-case the local node
-        map.put(FBUtilities.getBroadcastAddress().getHostAddress(), getLoadString());
-        return map;
-    }
-
     public final void deliverHints(String host) throws UnknownHostException
     {
         HintedHandOffManager.instance.scheduleHintDelivery(host);
