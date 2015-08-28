@@ -139,13 +139,18 @@ uint64_t hash2_64(bytes_view key, uint64_t seed)
     return h64;
 }
 
-static uint64_t getblock(bytes_view key, uint32_t index)
+static inline uint64_t getblock(bytes_view key, uint32_t index)
 {
     uint32_t i_8 = index << 3;
-    return ((uint64_t) key[i_8 + 0] & 0xff) + (((uint64_t) key[i_8 + 1] & 0xff) << 8) +
-            (((uint64_t) key[i_8 + 2] & 0xff) << 16) + (((uint64_t) key[i_8 + 3] & 0xff) << 24) +
-            (((uint64_t) key[i_8 + 4] & 0xff) << 32) + (((uint64_t) key[i_8 + 5] & 0xff) << 40) +
-            (((uint64_t) key[i_8 + 6] & 0xff) << 48) + (((uint64_t) key[i_8 + 7] & 0xff) << 56);
+    auto p = reinterpret_cast<const uint8_t*>(key.data() + i_8);
+    return uint64_t(p[0])
+            | (uint64_t(p[1]) << 8)
+            | (uint64_t(p[2]) << 16)
+            | (uint64_t(p[3]) << 24)
+            | (uint64_t(p[4]) << 32)
+            | (uint64_t(p[5]) << 40)
+            | (uint64_t(p[6]) << 48)
+            | (uint64_t(p[7]) << 56);
 }
 
 void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result)
