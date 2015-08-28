@@ -1228,4 +1228,15 @@ future<> storage_service::stop_rpc_server() {
     return make_ready_future<>();
 }
 
+bool storage_service::is_rpc_server_running() {
+#if 0
+    if ((daemon == null) || (daemon.thriftServer == null))
+    {
+        return false;
+    }
+    return daemon.thriftServer.isRunning();
+#endif
+    return true;
+}
+
 } // namespace service

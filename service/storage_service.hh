@@ -205,16 +205,9 @@ public:
 
     future<> stop_rpc_server();
 
-#if 0
-    public boolean isRPCServerRunning()
-    {
-        if ((daemon == null) || (daemon.thriftServer == null))
-        {
-            return false;
-        }
-        return daemon.thriftServer.isRunning();
-    }
+    bool is_rpc_server_running();
 
+#if 0
     public void startNativeTransport()
     {
         if (daemon == null)
