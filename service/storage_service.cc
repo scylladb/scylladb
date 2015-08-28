@@ -1270,4 +1270,15 @@ future<> storage_service::stop_native_transport() {
     return make_ready_future<>();
 }
 
+bool storage_service::is_native_transport_running() {
+#if 0
+    if ((daemon == null) || (daemon.nativeServer == null))
+    {
+        return false;
+    }
+    return daemon.nativeServer.isRunning();
+#endif
+    return false;
+}
+
 } // namespace service

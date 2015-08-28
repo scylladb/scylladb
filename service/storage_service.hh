@@ -211,16 +211,9 @@ public:
 
     future<> stop_native_transport();
 
-#if 0
-    public boolean isNativeTransportRunning()
-    {
-        if ((daemon == null) || (daemon.nativeServer == null))
-        {
-            return false;
-        }
-        return daemon.nativeServer.isRunning();
-    }
+    bool is_native_transport_running();
 
+#if 0
     public void stopTransports()
     {
         if (isInitialized())
