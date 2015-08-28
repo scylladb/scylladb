@@ -1239,4 +1239,23 @@ bool storage_service::is_rpc_server_running() {
     return true;
 }
 
+future<> storage_service::start_native_transport() {
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+
+    try
+    {
+        daemon.nativeServer.start();
+    }
+    catch (Exception e)
+    {
+        throw new RuntimeException("Error starting native transport: " + e.getMessage());
+    }
+#endif
+    return make_ready_future<>();
+}
+
 } // namespace service

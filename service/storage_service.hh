@@ -207,24 +207,9 @@ public:
 
     bool is_rpc_server_running();
 
+    future<> start_native_transport();
+
 #if 0
-    public void startNativeTransport()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-
-        try
-        {
-            daemon.nativeServer.start();
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException("Error starting native transport: " + e.getMessage());
-        }
-    }
-
     public void stopNativeTransport()
     {
         if (daemon == null)
