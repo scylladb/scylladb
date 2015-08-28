@@ -391,9 +391,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_rpc_server_running.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(true);
+    ss::is_rpc_server_running.set(r, [](const_req req) {
+        return service::get_local_storage_service().is_rpc_server_running();
     });
 
     ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
