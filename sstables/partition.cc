@@ -377,7 +377,7 @@ static int adjust_binary_search_index(int idx) {
 
 future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il) {
     if (uint64_t(index_idx + 1) < il.size()) {
-        return make_ready_future<uint64_t>(il[index_idx + 1].position);
+        return make_ready_future<uint64_t>(il[index_idx + 1].position());
     }
 
     return data_end_position(summary_idx);
@@ -392,7 +392,7 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx) {
     }
 
     return read_indexes(summary_idx + 1).then([] (auto next_il) {
-        return next_il.front().position;
+        return next_il.front().position();
     });
 }
 
@@ -423,7 +423,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         }
         _filter_tracker.add_true_positive();
 
-        auto position = index_list[index_idx].position;
+        auto position = index_list[index_idx].position();
         return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (uint64_t end) {
             return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
@@ -550,7 +550,7 @@ future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& po
         if (i == il.end()) {
             return this->data_end_position(summary_idx);
         }
-        return make_ready_future<uint64_t>(i->position);
+        return make_ready_future<uint64_t>(i->position());
     });
 }
 
@@ -569,7 +569,7 @@ future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& po
         if (i == il.end()) {
             return this->data_end_position(summary_idx);
         }
-        return make_ready_future<uint64_t>(i->position);
+        return make_ready_future<uint64_t>(i->position());
     });
 }
 
