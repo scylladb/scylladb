@@ -22,7 +22,7 @@
 namespace api {
 
 future<> set_server(http_context& ctx) {
-    auto rb = std::make_shared < api_registry_builder > ("api/api-doc/");
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         httpd::directory_handler* dir = new httpd::directory_handler(ctx.api_dir,
