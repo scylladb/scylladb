@@ -40,13 +40,13 @@ struct filter {
 };
 
 class index_entry {
-    bytes _key;
+    temporary_buffer<char> _key;
     uint64_t _position;
-    bytes _promoted_index;
+    temporary_buffer<char> _promoted_index;
 public:
 
     bytes_view get_key_bytes() const {
-        return _key;
+        return bytes_view(reinterpret_cast<const bytes::value_type *>(_key.get()), _key.size());
     }
 
     key_view get_key() const {
@@ -57,8 +57,9 @@ public:
         return _position;
     }
 
-    index_entry(bytes&& key, uint64_t position, bytes&& promoted_index)
+    index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
         : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
+
 };
 
 struct summary_entry {

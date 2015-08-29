@@ -43,13 +43,6 @@ private:
     temporary_buffer<char> _key;
     temporary_buffer<char> _promoted;
 
-    static inline bytes to_bytes(temporary_buffer<char>& b) {
-        using byte = bytes_view::value_type;
-        auto s = bytes(reinterpret_cast<const byte*>(b.get()), b.size());
-        b.release();
-        return s;
-    }
-
 public:
     void verify_end_state() {
     }
@@ -94,7 +87,7 @@ public:
                 break;
             }
         case state::CONSUME_ENTRY:
-            _consumer.consume_entry(index_entry(to_bytes(_key), _u64, to_bytes(_promoted)));
+            _consumer.consume_entry(index_entry(std::move(_key), _u64, std::move(_promoted)));
             _state = state::START;
             break;
         default:
