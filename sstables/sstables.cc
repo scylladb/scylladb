@@ -881,8 +881,7 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
     // FIXME: min_components and max_components also keep track of clustering
     // prefix, so we must merge clustering_key and column_names somehow and
     // pass the result to the functions below.
-    column_name_helper::min_components(_c_stats.min_column_names, column_names);
-    column_name_helper::max_components(_c_stats.max_column_names, column_names);
+    column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, column_names);
 
     // was defined in the schema, for example.
     auto c= composite::from_exploded(column_names, m);
@@ -901,8 +900,7 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
 }
 
 void sstable::write_column_name(file_writer& out, bytes_view column_names) {
-    column_name_helper::min_components(_c_stats.min_column_names, { column_names });
-    column_name_helper::max_components(_c_stats.max_column_names, { column_names });
+    column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, { column_names });
 
     uint16_t sz = column_names.size();
     write(out, sz, column_names);

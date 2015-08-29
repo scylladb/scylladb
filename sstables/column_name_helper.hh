@@ -29,26 +29,14 @@
 
 class column_name_helper {
 private:
-    static void get_components(std::vector<bytes>& v, const std::vector<bytes_view>& column_names) {
-        v.resize(column_names.size());
-        for (auto i = 0U; i < column_names.size(); i++) {
-            auto& name = column_names[i];
-            v[i] = bytes(name.data(), name.size());
-        }
-    }
-
     static void may_grow(std::vector<bytes>& v, size_t target_size) {
         if (target_size > v.size()) {
             v.resize(target_size);
         }
     }
 public:
-    static void max_components(std::vector<bytes>& max_seen, const std::vector<bytes_view>& column_names) {
-        if (max_seen.empty()) {
-            get_components(max_seen, column_names);
-            return;
-        }
-
+    static void min_max_components(std::vector<bytes>& min_seen, std::vector<bytes>& max_seen, const std::vector<bytes_view>& column_names) {
+        may_grow(min_seen, column_names.size());
         may_grow(max_seen, column_names.size());
 
         for (auto i = 0U; i < column_names.size(); i++) {
@@ -56,19 +44,6 @@ public:
             if (max_seen[i].size() == 0 || name > bytes_view(max_seen[i])) {
                 max_seen[i] = bytes(name.data(), name.size());
             }
-        }
-    }
-
-    static void min_components(std::vector<bytes>& min_seen, const std::vector<bytes_view>& column_names) {
-        if (min_seen.empty()) {
-            get_components(min_seen, column_names);
-            return;
-        }
-
-        may_grow(min_seen, column_names.size());
-
-        for (auto i = 0U; i < column_names.size(); i++) {
-            auto& name = column_names[i];
             if (min_seen[i].size() == 0 || name < bytes_view(min_seen[i])) {
                 min_seen[i] = bytes(name.data(), name.size());
             }
