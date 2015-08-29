@@ -19,6 +19,7 @@
 #include "sstables.hh"
 #include "compress.hh"
 #include "unimplemented.hh"
+#include "index_reader.hh"
 #include <boost/algorithm/string.hpp>
 #include <regex>
 #include <core/align.hh>
@@ -109,12 +110,6 @@ static typename Map::key_type reverse_map(const typename Map::mapped_type& value
     }
     throw std::out_of_range("unable to reverse map");
 }
-
-struct bufsize_mismatch_exception : malformed_sstable_exception {
-    bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
-    {}
-};
 
 // This should be used every time we use read_exactly directly.
 //
@@ -762,56 +757,12 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
 
     estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(estimated_size, uint64_t(8 << 10)));
 
-    struct reader {
-        uint64_t count = 0;
-        std::vector<index_entry> indexes;
-        shared_file_random_access_reader stream;
-        reader(file f, uint64_t quantity, uint64_t estimated_size) : stream(f, estimated_size) { indexes.reserve(quantity); }
-    };
-
-    auto r = make_lw_shared<reader>(_index_file, quantity, estimated_size);
-
-    r->stream.seek(position);
-
-    auto end = [r, quantity] { return r->count >= quantity; };
-
-    return do_until(end, [this, r] {
-        r->indexes.emplace_back();
-        auto fut = parse(r->stream, r->indexes.back());
-        return std::move(fut).then_wrapped([this, r] (future<> f) mutable {
-            try {
-               f.get();
-               r->count++;
-            } catch (bufsize_mismatch_exception &e) {
-                // We have optimistically emplaced back one element of the
-                // vector. If we have failed to parse, we should remove it
-                // so size() gives us the right picture.
-                r->indexes.pop_back();
-
-                // FIXME: If the file ends at an index boundary, there is
-                // no problem. Essentially, we can't know how many indexes
-                // are in a sampling group, so there isn't really any way
-                // to know, other than reading.
-                //
-                // If, however, we end in the middle of an index, this is a
-                // corrupted file. This code is not perfect because we only
-                // know that an exception happened, and it happened due to
-                // eof. We don't really know if eof happened at the index
-                // boundary.  To know that, we would have to keep track of
-                // the real position of the stream (including what's
-                // already in the buffer) before we start to read the
-                // index, and after. We won't go through such complexity at
-                // the moment.
-                if (r->stream.eof()) {
-                    r->count = std::numeric_limits<std::remove_reference<decltype(r->count)>::type>::max();
-                } else {
-                    throw e;
-                }
-            }
-            return make_ready_future<>();
+    return do_with(index_consumer(quantity), [this, position, estimated_size] (index_consumer& ic) {
+        auto stream = make_file_input_stream(this->_index_file, position, estimated_size);
+        auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
+        return ctx->consume_input(*ctx).then([ctx, &ic] {
+            return make_ready_future<index_list>(std::move(ic.indexes));
         });
-    }).then([r] {
-        return make_ready_future<index_list>(std::move(r->indexes));
     });
 }
 
