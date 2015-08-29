@@ -509,10 +509,6 @@ future<summary_entry&> sstable::read_summary_entry(size_t i) {
     return make_ready_future<summary_entry&>(_summary.entries[i]);
 }
 
-future<> parse(random_access_reader& in, index_entry& ie) {
-    return parse(in, ie.key, ie.position, ie.promoted_index);
-}
-
 future<> parse(random_access_reader& in, deletion_time& d) {
     return parse(in, d.local_deletion_time, d.marked_for_delete_at);
 }

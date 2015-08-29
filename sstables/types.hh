@@ -40,9 +40,9 @@ struct filter {
 };
 
 struct index_entry {
-    disk_string<uint16_t> key;
+    bytes key;
     uint64_t position;
-    disk_string<uint32_t> promoted_index;
+    bytes promoted_index;
 
     key_view get_key() const {
         return { bytes_view(key) };

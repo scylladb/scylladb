@@ -95,9 +95,9 @@ public:
             }
         case state::CONSUME_ENTRY: {
             index_entry ie;
-            ie.key.value = to_bytes(_key);
+            ie.key = to_bytes(_key);
             ie.position = _u64;
-            ie.promoted_index.value = to_bytes(_promoted);
+            ie.promoted_index = to_bytes(_promoted);
             _consumer.consume_entry(std::move(ie));
             _state = state::START;
             break;
