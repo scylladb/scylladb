@@ -110,7 +110,7 @@ public:
 
     index_consume_entry_context(index_consumer& consumer,
             input_stream<char>&& input, uint64_t maxlen)
-        : continuous_data_consumer(*this, std::move(input), maxlen)
+        : continuous_data_consumer(std::move(input), maxlen)
         , _consumer(consumer)
     {}
 

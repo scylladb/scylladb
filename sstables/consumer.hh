@@ -23,7 +23,9 @@ enum class proceed { yes, no };
 template <typename StateProcessor>
 class continuous_data_consumer {
     using proceed = data_consumer::proceed;
-    StateProcessor& _state_processor;
+    StateProcessor& state_processor() {
+        return static_cast<StateProcessor&>(*this);
+    };
 protected:
     input_stream<char> _input;
     // remaining length of input to read (if <0, continue until end of file).
@@ -177,15 +179,11 @@ private:
     }
 
     void verify_end_state() {
-        _state_processor.verify_end_state();
+        state_processor().verify_end_state();
     }
 public:
-    continuous_data_consumer(StateProcessor& state_processor, input_stream<char>&& input, uint64_t maxlen)
-            : _state_processor(state_processor), _input(std::move(input)), _remain(maxlen) {}
-
-
-    continuous_data_consumer(continuous_data_consumer&&) = delete;
-    continuous_data_consumer(const continuous_data_consumer&) = default;
+    continuous_data_consumer(input_stream<char>&& input, uint64_t maxlen)
+            : _input(std::move(input)), _remain(maxlen) {}
 
     template<typename Consumer>
     future<> consume_input(Consumer& c) {
@@ -197,13 +195,13 @@ public:
     // the rare case that a primitive type crossed a buffer). Such
     // non-consuming states need to run even if the data buffer is empty.
     bool non_consuming() {
-        return _state_processor.non_consuming();
+        return state_processor().non_consuming();
     }
 
     inline proceed process(temporary_buffer<char>& data) {
         while (data || non_consuming()) {
             process_buffer(data);
-            auto ret = _state_processor.process_state(data);
+            auto ret = state_processor().process_state(data);
             if (__builtin_expect(ret == proceed::no, 0)) {
                 return ret;
             }
