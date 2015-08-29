@@ -1035,7 +1035,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
         // non atomic cell maps to multiple trift cell, e.g. collection.
         if (!column_definition.is_atomic()) {
             write_collection(out, clustering_key, column_definition, value.cell().as_collection_mutation());
-            return;
+            continue;
         }
         assert(column_definition.is_regular());
         atomic_cell_view cell = value.cell().as_atomic_cell();
@@ -1065,7 +1065,7 @@ void sstable::write_static_row(file_writer& out, const schema& schema, const row
         if (!column_definition.is_atomic()) {
             auto sp = composite::static_prefix(schema);
             write_collection(out, sp, column_definition, value.cell().as_collection_mutation());
-            return;
+            continue;
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.cell().as_atomic_cell();
