@@ -47,6 +47,8 @@ struct index_entry {
     key_view get_key() const {
         return { bytes_view(key) };
     }
+    index_entry(bytes&& key, uint64_t position, bytes&& promoted_index)
+        : key(std::move(key)), position(position), promoted_index(std::move(promoted_index)) {}
 };
 
 struct summary_entry {
