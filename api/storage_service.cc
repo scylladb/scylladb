@@ -233,14 +233,15 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::repair_async.set(r, [&ctx](const_req req) {
+
+    ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         // Currently, we get all the repair options encoded in a single
         // "options" option, and split it to a map using the "," and ":"
         // delimiters. TODO: consider if it doesn't make more sense to just
         // take all the query parameters as this map and pass it to the repair
         // function.
         std::unordered_map<sstring, sstring> options_map;
-        for (auto s : split(req.get_query_param("options"), ",")) {
+        for (auto s : split(req->get_query_param("options"), ",")) {
             auto kv = split(s, ":");
             if (kv.size() != 2) {
                 throw httpd::bad_param_exception("malformed async repair options");
@@ -252,7 +253,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        return repair_start(ctx.db, validate_keyspace(ctx, req.param), options_map);
+        return repair_start(ctx.db, validate_keyspace(ctx, req->param),
+                options_map).then([] (int i) {
+                    return make_ready_future<json::json_return_type>(i);
+                });
     });
 
     ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {

@@ -115,9 +115,6 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
-// Each repair_start() call returns a unique integer which the user can later
-// use to follow the status of this repair with the repair_status() function.
-static std::atomic<int> next_repair_command {0};
 
 // The repair_tracker tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
@@ -127,8 +124,11 @@ static std::atomic<int> next_repair_command {0};
 // This object is not thread safe, and must be used by only one cpu.
 static class {
 private:
+    // Each repair_start() call returns a unique int which the user can later
+    // use to follow the status of this repair with repair_status().
+    int _next_repair_command = 0;
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
-    // Successfully-finished repairs are those with id < next_repair_command
+    // Successfully-finished repairs are those with id < _next_repair_command
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
 public:
@@ -143,7 +143,7 @@ public:
         }
     }
     repair_status get(int id) {
-        if (id >= next_repair_command.load(std::memory_order_relaxed)) {
+        if (id >= _next_repair_command) {
             throw std::runtime_error(sprint("unknown repair id %d", id));
         }
         auto it = _status.find(id);
@@ -152,6 +152,9 @@ public:
         } else {
             return it->second;
         }
+    }
+    int next_repair_command() {
+        return _next_repair_command++;
     }
 } repair_tracker;
 
@@ -198,11 +201,10 @@ static std::vector<query::range<dht::token>> get_local_ranges(
     return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
 }
 
-
-static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options, int id) {
-
-    logger.info("starting user-requested repair for keyspace {}", keyspace);
+static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
+        std::unordered_map<sstring, sstring> options) {
+    int id = repair_tracker.next_repair_command();
+    logger.info("starting user-requested repair for keyspace {}, repair id {}", keyspace, id);
 
     repair_tracker.start(id);
 
@@ -250,15 +252,15 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             repair_tracker.done(id, false);
         });
     });
+
+    return id;
 }
 
-int repair_start(seastar::sharded<database>& db, sstring keyspace,
+future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options) {
-    int i = next_repair_command++;
-    db.invoke_on(0, [i, &db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
-        do_repair_start(db, std::move(keyspace), std::move(options), i);
-    }); // Note we ignore the value of this future
-    return i;
+    return db.invoke_on(0, [&db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
+        return do_repair_start(db, std::move(keyspace), std::move(options));
+    });
 }
 
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {
