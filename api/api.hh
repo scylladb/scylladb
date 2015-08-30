@@ -18,7 +18,6 @@ namespace api {
 
 struct http_context {
     sstring api_dir;
-    sstring api_doc;
     httpd::http_server_control http_server;
     distributed<database>& db;
     distributed<service::storage_proxy>& sp;
