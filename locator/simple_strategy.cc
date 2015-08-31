@@ -52,6 +52,10 @@ size_t simple_strategy::get_replication_factor() const {
     return _replication_factor;
 }
 
+std::experimental::optional<std::set<sstring>>simple_strategy::recognized_options() const {
+    return {{ "replication_factor" }};
+}
+
 using registry = class_registrator<abstract_replication_strategy, simple_strategy, const sstring&, token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");

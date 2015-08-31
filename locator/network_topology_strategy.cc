@@ -181,6 +181,11 @@ network_topology_strategy::calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
+std::experimental::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
+    // We explicitely allow all options
+    return std::experimental::nullopt;
+}
+
 inline bool network_topology_strategy::has_sufficient_replicas(
         const sstring& dc,
         std::unordered_map<sstring,

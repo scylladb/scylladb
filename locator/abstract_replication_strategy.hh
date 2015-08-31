@@ -74,6 +74,7 @@ public:
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
     virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
+    virtual std::experimental::optional<std::set<sstring>> recognized_options() const = 0;
     virtual size_t get_replication_factor() const = 0;
     uint64_t get_cache_hits_count() const { return _cache_hits_count; }
     replication_strategy_type get_type() const { return _my_type; }
