@@ -73,6 +73,10 @@ public:
         replication_strategy_type my_type);
     virtual ~abstract_replication_strategy() {}
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& token_metadata, const std::map<sstring, sstring>& config_options);
+    static void validate_replication_strategy(const sstring& ks_name,
+                                              const sstring& strategy_name,
+                                              token_metadata& token_metadata,
+                                              const std::map<sstring, sstring>& config_options);
     virtual std::vector<inet_address> get_natural_endpoints(const token& search_token);
     virtual void validate_options() const = 0;
     virtual std::experimental::optional<std::set<sstring>> recognized_options() const = 0;
