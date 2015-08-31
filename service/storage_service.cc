@@ -35,6 +35,7 @@
 #include <algorithm>
 #include "locator/local_strategy.hh"
 #include "version.hh"
+#include "unimplemented.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1206,6 +1207,7 @@ future<> storage_service::stop_gossiping() {
 }
 
 future<> storage_service::start_rpc_server() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if (daemon == null)
     {
@@ -1217,6 +1219,7 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::stop_rpc_server() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if (daemon == null)
     {
@@ -1229,6 +1232,7 @@ future<> storage_service::stop_rpc_server() {
 }
 
 bool storage_service::is_rpc_server_running() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if ((daemon == null) || (daemon.thriftServer == null))
     {
@@ -1240,6 +1244,7 @@ bool storage_service::is_rpc_server_running() {
 }
 
 future<> storage_service::start_native_transport() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if (daemon == null)
     {
@@ -1259,6 +1264,7 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::stop_native_transport() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if (daemon == null)
     {
@@ -1271,6 +1277,7 @@ future<> storage_service::stop_native_transport() {
 }
 
 bool storage_service::is_native_transport_running() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if ((daemon == null) || (daemon.nativeServer == null))
     {
@@ -1282,6 +1289,7 @@ bool storage_service::is_native_transport_running() {
 }
 
 future<> storage_service::decommission() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
         throw new UnsupportedOperationException("local node is not a member of the token ring yet");
@@ -1320,6 +1328,7 @@ future<> storage_service::decommission() {
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     InetAddress myAddress = FBUtilities.getBroadcastAddress();
     UUID localHostId = _token_metadata.getHostId(myAddress);
@@ -1393,6 +1402,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
 }
 
 future<> storage_service::drain() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
     ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
@@ -1469,6 +1479,7 @@ future<> storage_service::drain() {
 }
 
 double storage_service::get_load() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
     double bytes = 0;
 #if 0
     for (String keyspaceName : Schema.instance.getKeyspaces())
@@ -1488,6 +1499,7 @@ sstring storage_service::get_load_string() {
 }
 
 std::map<sstring, sstring> storage_service::get_load_map() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     Map<String, String> map = new HashMap<>();
     for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
@@ -1503,6 +1515,7 @@ std::map<sstring, sstring> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
+    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
 
@@ -1533,6 +1546,7 @@ future<> storage_service::rebuild(sstring source_dc) {
 }
 
 int32_t storage_service::get_exception_count() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
     //return (int)StorageMetrics.exceptions.count();
     return 0;
 }
