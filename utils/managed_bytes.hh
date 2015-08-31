@@ -49,7 +49,9 @@ public:
     using size_type = blob_storage::size_type;
     struct initialized_later {};
 
-    managed_bytes() : managed_bytes(bytes_view()) {}
+    managed_bytes() {
+        _u.small.size = 0;
+    }
 
     managed_bytes(const blob_storage::char_type* ptr, size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
@@ -152,7 +154,7 @@ public:
     }
 
     bool empty() const {
-        return size() == 0;
+        return _u.small.size == 0;
     }
 
     blob_storage::char_type* data() {
