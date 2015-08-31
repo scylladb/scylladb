@@ -232,6 +232,18 @@ column_definition::column_definition(bytes name, data_type type, column_kind kin
         : _name(std::move(name)), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
 {}
 
+std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
+    os << "ColumnDefinition{";
+    os << "name=" << cd.name_as_text();
+    os << ", type=" << cd.type->name();
+    os << ", kind=" << to_sstring(cd.kind);
+    os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
+    os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
+    os << ", indexType=" << to_sstring(cd.idx_info.index_type);
+    os << "}";
+    return os;
+}
+
 const column_definition*
 schema::get_column_definition(const bytes& name) const {
     auto i = _columns_by_name.find(name);

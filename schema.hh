@@ -187,9 +187,7 @@ public:
     bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
-    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
-        return os << cd.name_as_text();
-    }
+    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd);
     friend std::ostream& operator<<(std::ostream& os, const column_definition* cd) {
         return cd != nullptr ? os << *cd : os << "(null)";
     }
