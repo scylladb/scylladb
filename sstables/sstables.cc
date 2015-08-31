@@ -40,6 +40,10 @@ public:
         _in = open_at(pos);
     }
     bool eof() { return _in.eof(); }
+    virtual future<> close() {
+        return make_ready_future<>();
+        // FIXME: return _in.close();
+    }
     virtual ~random_access_reader() { }
 };
 
@@ -55,9 +59,11 @@ public:
     {
         seek(0);
     }
-    ~file_random_access_reader() {
-        _file.close().handle_exception([save = _file] (auto ep) {
-            sstlog.warn("sstable close failed: {}", ep);
+    virtual future<> close() override {
+        return random_access_reader::close().then([this] {
+            return _file.close().handle_exception([save = _file] (auto ep) {
+                sstlog.warn("sstable close failed: {}", ep);
+            });
         });
     }
 };
@@ -754,9 +760,11 @@ future<> sstable::read_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
-        auto r = std::make_unique<file_random_access_reader>(std::move(f), 4096);
+        auto r = make_lw_shared<file_random_access_reader>(std::move(f), 4096);
         auto fut = parse(*r, component);
-        return fut.then([r = std::move(r)] {});
+        return fut.finally([r = std::move(r)] {
+            return r->close();
+        }).then([r] {});
     }).then_wrapped([this, file_path] (future<> f) {
         try {
             f.get();
