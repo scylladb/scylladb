@@ -1058,6 +1058,13 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
     return find_column_family(schema->id());
 }
 
+void keyspace_metadata::validate() const {
+    using namespace locator;
+
+    auto& ss = service::get_local_storage_service();
+    abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), ss.get_token_metadata(), strategy_options());
+}
+
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
     try {
         return find_schema(find_uuid(ks_name, cf_name));
