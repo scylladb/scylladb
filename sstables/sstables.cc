@@ -744,6 +744,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     }
 
     estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(estimated_size, uint64_t(8 << 10)));
+    estimated_size = std::max<size_t>(estimated_size, 8192);
 
     return do_with(index_consumer(quantity), [this, position, estimated_size] (index_consumer& ic) {
         auto stream = make_file_input_stream(this->_index_file, position, estimated_size);
