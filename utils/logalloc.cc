@@ -500,9 +500,10 @@ private:
     size_t _active_offset;
     segment_heap _segments; // Contains only closed segments
     occupancy_stats _closed_occupancy;
-    bool _compactible = true;
+    bool _compaction_enabled = true;
     bool _evictable = false;
     uint64_t _id;
+    uint64_t _compaction_counter = 0;
     eviction_fn _eviction_fn;
 private:
     void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
@@ -581,6 +582,8 @@ private:
     }
 
     void compact(segment* seg) {
+        ++_compaction_counter;
+
         for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
             auto dst = alloc_small(desc->migrator(), desc->size(), desc->alignment());
             desc->migrator()(obj, dst, desc->size());
@@ -666,7 +669,7 @@ public:
     //    while (is_compactible()) { compact(); }
     //
     bool is_compactible() const {
-        return _compactible
+        return _compaction_enabled
             && (_closed_occupancy.free_space() >= 2 * segment::size)
             && (_closed_occupancy.used_fraction() < max_occupancy_for_compaction)
             && (_segments.top()->occupancy().free_space() >= max_managed_object_size);
@@ -783,8 +786,12 @@ public:
         return _id;
     }
 
-    void set_compactible(bool compactible) {
-        _compactible = compactible;
+    void set_compaction_enabled(bool enabled) {
+        _compaction_enabled = enabled;
+    }
+
+    bool compaction_enabled() const {
+        return _compaction_enabled;
     }
 
     //
@@ -810,6 +817,11 @@ public:
         _evictable = true;
         _eviction_fn = std::move(fn);
     }
+
+    uint64_t compaction_counter() const {
+        return _compaction_counter;
+    }
+
     friend class region_group;
 };
 
@@ -844,8 +856,16 @@ allocation_strategy& region::allocator() {
     return *_impl;
 }
 
-void region::set_compactible(bool compactible) {
-    _impl->set_compactible(compactible);
+void region::set_compaction_enabled(bool compactible) {
+    _impl->set_compaction_enabled(compactible);
+}
+
+bool region::compaction_enabled() const {
+    return _impl->compaction_enabled();
+}
+
+uint64_t region::compaction_counter() const {
+    return _impl->compaction_counter();
 }
 
 std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {

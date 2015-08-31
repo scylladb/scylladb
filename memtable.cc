@@ -80,32 +80,37 @@ class scanning_reader {
     lw_shared_ptr<const memtable> _memtable;
     const query::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
+    memtable::partitions_type::const_iterator _i;
+    memtable::partitions_type::const_iterator _end;
+    uint64_t _last_compaction_counter;
 private:
-    memtable::partitions_type::const_iterator current() {
-        // We must be prepared that iterators may get invalidated across deferring points,
-        // due to LSA compactions.
-        // FIXME: Avoid lookup if the iterators didn't get invalidated. We could consult
-        // compaction counter of _memtable->_region.
+    memtable::partitions_type::const_iterator lookup_end() {
+        auto cmp = partition_entry::compare(_memtable->_schema);
+        return _range.end()
+            ? (_range.end()->is_inclusive()
+                ? _memtable->partitions.upper_bound(_range.end()->value(), cmp)
+                : _memtable->partitions.lower_bound(_range.end()->value(), cmp))
+            : _memtable->partitions.cend();
+    }
+    void update_iterators() {
+        // We must be prepared that iterators may get invalidated during compaction.
+        auto current_compaction_counter = _memtable->_region.compaction_counter();
         auto cmp = partition_entry::compare(_memtable->_schema);
         if (_last) {
-            return _memtable->partitions.upper_bound(*_last, cmp);
+            if (current_compaction_counter != _last_compaction_counter) {
+                _i = _memtable->partitions.upper_bound(*_last, cmp);
+                _end = lookup_end();
+            }
         } else {
-            auto i = _range.start()
+            // Initial lookup
+            _i = _range.start()
                  ? (_range.start()->is_inclusive()
                     ? _memtable->partitions.lower_bound(_range.start()->value(), cmp)
                     : _memtable->partitions.upper_bound(_range.start()->value(), cmp))
                  : _memtable->partitions.cbegin();
-            return i;
+            _end = lookup_end();
         }
-    }
-    memtable::partitions_type::const_iterator end() {
-        // FIXME: Same comment as for current()
-        auto cmp = partition_entry::compare(_memtable->_schema);
-        return _range.end()
-               ? (_range.end()->is_inclusive()
-                  ? _memtable->partitions.upper_bound(_range.end()->value(), cmp)
-                  : _memtable->partitions.lower_bound(_range.end()->value(), cmp))
-               : _memtable->partitions.cend();
+        _last_compaction_counter = current_compaction_counter;
     }
 public:
     scanning_reader(lw_shared_ptr<const memtable> m, const query::partition_range& range)
@@ -114,12 +119,14 @@ public:
     { }
 
     future<mutation_opt> operator()() {
-        auto i = current();
-        if (i == end()) {
+        update_iterators();
+        if (_i == _end) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
         }
-        _last = i->key();
-        return make_ready_future<mutation_opt>(mutation(_memtable->_schema, i->key(), i->partition()));
+        const partition_entry& e = *_i;
+        ++_i;
+        _last = e.key();
+        return make_ready_future<mutation_opt>(mutation(_memtable->_schema, e.key(), e.partition()));
     }
 };
 

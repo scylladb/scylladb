@@ -26,14 +26,20 @@ using namespace logalloc;
 SEASTAR_TEST_CASE(test_compaction) {
     return seastar::async([] {
         region reg;
-        with_allocator(reg.allocator(), [] {
+
+        with_allocator(reg.allocator(), [&reg] {
             std::vector<managed_ref<int>> _allocated;
 
             // Allocate several segments
 
+            auto compaction_counter_1 = reg.compaction_counter();
+
             for (int i = 0; i < 32 * 1024 * 4; i++) {
                 _allocated.push_back(make_managed<int>());
             }
+
+            // Allocation should not invalidate references
+            BOOST_REQUIRE_EQUAL(reg.compaction_counter(), compaction_counter_1);
 
             // Free 1/3 randomly
 
@@ -45,10 +51,16 @@ SEASTAR_TEST_CASE(test_compaction) {
                 *it++ = {};
             }
 
+            // Freeing should not invalidate references
+            BOOST_REQUIRE_EQUAL(reg.compaction_counter(), compaction_counter_1);
+
             // Try to reclaim
 
             size_t target = sizeof(managed<int>) * nr_freed;
             BOOST_REQUIRE(shard_tracker().reclaim(target) >= target);
+
+            // There must have been some compaction during such reclaim
+            BOOST_REQUIRE(reg.compaction_counter() != compaction_counter_1);
         });
     });
 }
