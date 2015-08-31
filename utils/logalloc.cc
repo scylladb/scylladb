@@ -46,6 +46,8 @@ tracker::tracker()
     : _impl(std::make_unique<impl>())
     , _reclaimer([this] {
         reclaim(10*1024*1024);
+        // FIXME: be accurate
+        return memory::reclaiming_result::reclaimed_something;
     })
 { }
 
