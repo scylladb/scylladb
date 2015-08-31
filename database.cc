@@ -1448,3 +1448,36 @@ future<> column_family::flush() {
         return make_ready_future<>();
     });
 }
+
+std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
+    os << "org.apache.cassandra.config.UTMetaData@" << &m;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
+    os << "KSMetaData{";
+    os << "name=" << m._name;
+    os << ", strategyClass=" << m._strategy_name;
+    os << ", strategyOptions={";
+    int n = 0;
+    for (auto& p : m._strategy_options) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ", cfMetaData={";
+    n = 0;
+    for (auto& p : m._cf_meta_data) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ", durable_writes=" << m._durable_writes;
+    os << ", userTypes=" << m._user_types;
+    os << "}";
+    return os;
+}

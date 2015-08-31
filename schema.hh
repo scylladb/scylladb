@@ -34,6 +34,8 @@ bool check_compound(sstring comparator);
 // make sure these match the order we like columns back from schema
 enum class column_kind { partition_key, clustering_key, static_column, regular_column, compact_column };
 
+sstring to_sstring(column_kind k);
+
 // CMH this is also manually defined in thrift gen file.
 enum class index_type {
     keys,
@@ -41,6 +43,8 @@ enum class index_type {
     composites,
     none, // cwi: added none to avoid "optional" bs.
 };
+
+sstring to_sstring(index_type t);
 
 enum class cf_type : uint8_t {
     standard,
@@ -183,9 +187,7 @@ public:
     bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
-    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
-        return os << cd.name_as_text();
-    }
+    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd);
     friend std::ostream& operator<<(std::ostream& os, const column_definition* cd) {
         return cd != nullptr ? os << *cd : os << "(null)";
     }
@@ -527,6 +529,7 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
+    friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
 };
 

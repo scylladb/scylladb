@@ -14,6 +14,27 @@ constexpr int32_t schema::NAME_LENGTH;
 
 const std::experimental::optional<sstring> schema::DEFAULT_COMPRESSOR = sstring("LZ4Compressor");
 
+sstring to_sstring(column_kind k) {
+    switch (k) {
+    case column_kind::partition_key:  return "PARTITION_KEY";
+    case column_kind::clustering_key: return "CLUSTERING_COLUMN";
+    case column_kind::static_column:  return "STATIC";
+    case column_kind::regular_column: return "REGULAR";
+    case column_kind::compact_column: return "COMPACT_VALUE";
+    }
+    throw std::invalid_argument("unknown column kind");
+}
+
+sstring to_sstring(index_type t) {
+    switch (t) {
+    case index_type::keys:       return "KEYS";
+    case index_type::custom:     return "CUSTOM";
+    case index_type::composites: return "COMPOSITES";
+    case index_type::none:       return "null";
+    }
+    throw std::invalid_argument("unknown index type");
+}
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
@@ -211,6 +232,18 @@ column_definition::column_definition(bytes name, data_type type, column_kind kin
         : _name(std::move(name)), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
 {}
 
+std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
+    os << "ColumnDefinition{";
+    os << "name=" << cd.name_as_text();
+    os << ", type=" << cd.type->name();
+    os << ", kind=" << to_sstring(cd.kind);
+    os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
+    os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
+    os << ", indexType=" << to_sstring(cd.idx_info.index_type);
+    os << "}";
+    return os;
+}
+
 const column_definition*
 schema::get_column_definition(const bytes& name) const {
     auto i = _columns_by_name.find(name);
@@ -218,6 +251,63 @@ schema::get_column_definition(const bytes& name) const {
         return nullptr;
     }
     return i->second;
+}
+
+std::ostream& operator<<(std::ostream& os, const schema& s) {
+    os << "org.apache.cassandra.config.CFMetaData@" << &s << "[";
+    os << "cfId=" << s._raw._id;
+    os << ",ksName=" << s._raw._ks_name;
+    os << ",cfName=" << s._raw._cf_name;
+    os << ",cfType=" << cf_type_to_sstring(s._raw._type);
+    os << ",comparator=" << cell_comparator::to_sstring(s);
+    os << ",comment=" << s._raw._comment;
+    os << ",readRepairChance=" << s._raw._read_repair_chance;
+    os << ",dcLocalReadRepairChance=" << s._raw._dc_local_read_repair_chance;
+    os << ",gcGraceSeconds=" << s._raw._gc_grace_seconds;
+    os << ",defaultValidator=" << s._raw._default_validator->name();
+    os << ",keyValidator=" << s.thrift_key_validator();
+    os << ",minCompactionThreshold=" << s._raw._min_compaction_threshold;
+    os << ",maxCompactionThreshold=" << s._raw._max_compaction_threshold;
+    os << ",columnMetadata=[";
+    int n = 0;
+    for (auto& cdef : s._raw._columns) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << cdef;
+    }
+    os << "]";
+    os << ",compactionStrategyClass=class org.apache.cassandra.db.compaction." << sstables::compaction_strategy::name(s._raw._compaction_strategy);
+    os << ",compactionStrategyOptions={";
+    n = 0;
+    for (auto& p : s._raw._compaction_strategy_options) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ",compressionParameters={";
+    n = 0;
+    for (auto& p : s._raw._compressor_params.get_options() ) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ",bloomFilterFpChance=" << s._raw._bloom_filter_fp_chance;
+    os << ",memtableFlushPeriod=" << s._raw._memtable_flush_period;
+    os << ",caching=" << s._raw._caching_options.to_sstring();
+    os << ",defaultTimeToLive=" << s._raw._default_time_to_live.count();
+    os << ",minIndexInterval=" << s._raw._min_index_interval;
+    os << ",maxIndexInterval=" << s._raw._max_index_interval;
+    os << ",speculativeRetry=" << s._raw._speculative_retry.to_sstring();
+    os << ",droppedColumns={}";
+    os << ",triggers=[]";
+    os << ",isDense=" << std::boolalpha << s._raw._is_dense;
+    os << "]";
+    return os;
 }
 
 const sstring&

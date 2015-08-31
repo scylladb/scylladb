@@ -255,6 +255,7 @@ public:
     void remove_type(user_type type) {
         _user_types.erase(type->_name);
     }
+    friend std::ostream& operator<<(std::ostream& os, const user_types_metadata& m);
 };
 
 class keyspace_metadata final {
@@ -312,6 +313,7 @@ public:
     void add_column_family(const schema_ptr& s) {
         _cf_meta_data.emplace(s->cf_name(), s);
     }
+    friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
 class keyspace {
