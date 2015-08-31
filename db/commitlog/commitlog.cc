@@ -361,7 +361,7 @@ public:
                     _buffer = _segment_manager->acquire_buffer(k);
                     break;
                 } catch (std::bad_alloc&) {
-                    logger.error("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
+                    logger.warn("Could not allocate {} k bytes output buffer ({} k required)", k / 1024, a / 1024);
                     if (k > a) {
                         k = std::max(a, k / 2);
                         logger.debug("Trying reduced size: {} k", k / 1024);
@@ -408,30 +408,44 @@ public:
         out.write(crc.checksum());
 
         // acquire read lock
-        return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me = std::move(me)]() mutable {
+        return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me]() mutable {
+            auto written = make_lw_shared<size_t>(0);
             auto p = buf.get();
-            return _file.dma_write(off, p, size).then_wrapped([this, size, me, buf = std::move(buf)](auto&& f) mutable {
-                try {
-                    _segment_manager->release_buffer(std::move(buf));
-                    size_t written = std::get<0>(f.get());
-                    assert(written == size); // we are not equipped to deal with partial writes.
-                    _segment_manager->totals.bytes_written += written;
-                    ++_segment_manager->totals.cycle_count;
-                    return make_ready_future<sseg_ptr>(std::move(me));
-                    // TODO: retry/ignore/fail/stop - optional behaviour in origin.
-                    // we fast-fail the whole commit.
-                } catch (std::exception& e) {
-                    logger.error("Failed to persist commits to disk: {}", e.what());
-                    throw;
-                } catch (...) {
-                    logger.error("Failed to persist commits to disk.");
-                    throw;
-                }
+            return repeat([this, size, off, written, p]() mutable {
+                return _file.dma_write(off + *written, p + *written, size - *written).then_wrapped([this, size, written](auto&& f) {
+                    try {
+                        auto bytes = std::get<0>(f.get());
+                        *written += bytes;
+                        _segment_manager->totals.bytes_written += bytes;
+                        ++_segment_manager->totals.cycle_count;
+                        if (*written == size) {
+                            return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        }
+                        // gah, partial write. should always get here with dma chunk sized
+                        // "bytes", but lets make sure...
+                        logger.debug("Partial write: {}/{} bytes", *written, size);
+                        *written = align_down(*written, alignment);
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                        // TODO: retry/ignore/fail/stop - optional behaviour in origin.
+                        // we fast-fail the whole commit.
+                    } catch (std::exception& e) {
+                        logger.error("Failed to persist commits to disk: {}", e.what());
+                        throw;
+                    } catch (...) {
+                        logger.error("Failed to persist commits to disk.");
+                        throw;
+                    }
+                });
+            }).finally([this, buf = std::move(buf)]() mutable {
+                _segment_manager->release_buffer(std::move(buf));
             });
+        }).then([me] {
+            return make_ready_future<sseg_ptr>(std::move(me));
         }).finally([me, this]() {
             _dwrite.read_unlock(); // release
         });
     }
+
     /**
      * Add a "mutation" to the segment.
      */

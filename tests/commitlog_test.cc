@@ -383,3 +383,32 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
         BOOST_CHECK_EQUAL(count_cl_counters(), 0);
     });
 }
+
+#ifndef DEFAULT_ALLOCATOR
+
+SEASTAR_TEST_CASE(test_allocation_failure){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = (std::numeric_limits<size_t>::max() >> 24) / (1024 * 1024);
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
+            auto size = log->second.max_record_size() - 1;
+            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+                        dst.write(char(1), size);
+                    }).then([](db::replay_position rp) {
+                        // should not reach.
+                    }).then_wrapped([](future<> f) {
+                        try {
+                            f.get();
+                        } catch (std::bad_alloc&) {
+                            // ok.
+                            return make_ready_future();
+                        } catch (...) {
+                            throw std::runtime_error("Did not get expected exception from writing too large record");
+                        }
+                        return make_ready_future<>();
+                    }).finally([log]() {
+                        return log->second.clear().then([log] {});
+                    });
+        });
+}
+
+#endif
