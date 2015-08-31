@@ -181,6 +181,17 @@ network_topology_strategy::calculate_natural_endpoints(
     return std::move(replicas.get_vector());
 }
 
+void network_topology_strategy::validate_options() const {
+    for (auto& c : _config_options) {
+        if (c.first == sstring("replication_factor"))
+            throw exceptions::configuration_exception(
+                "replication_factor is an option for simple_strategy, not "
+                "network_topology_strategy");
+
+        validate_replication_factor(c.second);
+    }
+}
+
 std::experimental::optional<std::set<sstring>> network_topology_strategy::recognized_options() const {
     // We explicitely allow all options
     return std::experimental::nullopt;

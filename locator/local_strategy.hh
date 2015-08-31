@@ -31,6 +31,8 @@ public:
      */
     std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
 
+    virtual void validate_options() const override;
+
     virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
 };
 

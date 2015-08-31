@@ -21,6 +21,9 @@ std::vector<inet_address> local_strategy::calculate_natural_endpoints(const toke
     return std::vector<inet_address>({utils::fb_utilities::get_broadcast_address()});
 }
 
+void local_strategy::validate_options() const {
+}
+
 std::experimental::optional<std::set<sstring>> local_strategy::recognized_options() const {
     // LocalStrategy doesn't expect any options.
     return {};
