@@ -24,6 +24,9 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "exceptions/exceptions.hh"
 
+#include <experimental/optional>
+#include <set>
+
 namespace locator {
 class network_topology_strategy : public abstract_replication_strategy {
 public:
@@ -54,6 +57,10 @@ protected:
     virtual std::vector<inet_address> calculate_natural_endpoints(
         const token& search_token) const override;
 
+    virtual void validate_options() const override;
+
+    virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
+
 private:
     bool has_sufficient_replicas(
         const sstring& dc,
@@ -67,27 +74,6 @@ private:
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& all_endpoints) const;
-
-    void validate_options() const {
-        for (auto& c : _config_options)
-        {
-            if (c.first == sstring("replication_factor"))
-                throw exceptions::configuration_exception(
-                    "replication_factor is an option for simple_strategy, not "
-                    "network_topology_strategy");
-
-            validate_replication_factor(c.second);
-        }
-    }
-
-    // ????
-    #if 0
-    public Collection<String> recognized_options()
-    {
-        // We explicitely allow all options
-        return null;
-    }
-    #endif
 
 private:
     // map: data centers -> replication factor

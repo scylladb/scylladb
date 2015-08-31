@@ -34,6 +34,24 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
          locator::i_endpoint_snitch::get_local_snitch_ptr(), config_options);
 }
 
+void abstract_replication_strategy::validate_replication_strategy(const sstring& ks_name,
+                                                                  const sstring& strategy_name,
+                                                                  token_metadata& token_metadata,
+                                                                  const std::map<sstring, sstring>& config_options)
+{
+    auto strategy = create_replication_strategy(ks_name, strategy_name, token_metadata, config_options);
+    strategy->validate_options();
+    auto expected = strategy->recognized_options();
+    if (expected) {
+        for (auto&& item : config_options) {
+            sstring key = item.first;
+            if (!expected->count(key)) {
+                 throw exceptions::configuration_exception(sprint("Unrecognized strategy option {%s} passed to %s for keyspace %s", key, strategy_name, ks_name));
+            }
+        }
+    }
+}
+
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token) {
     const token& key_token = _token_metadata.first_token(search_token);
     auto& cached_endpoints = get_cached_endpoints();

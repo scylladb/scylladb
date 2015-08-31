@@ -290,6 +290,7 @@ public:
     {
         return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
     }
+    void validate() const;
     const sstring& name() const {
         return _name;
     }

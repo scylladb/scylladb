@@ -6,6 +6,9 @@
 
 #include "abstract_replication_strategy.hh"
 
+#include <experimental/optional>
+#include <set>
+
 // forward declaration since database.hh includes this file
 class keyspace;
 
@@ -27,6 +30,10 @@ public:
      * LocalStrategy may be used before tokens are set up.
      */
     std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
+
+    virtual void validate_options() const override;
+
+    virtual std::experimental::optional<std::set<sstring>> recognized_options() const override;
 };
 
 }

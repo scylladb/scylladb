@@ -41,82 +41,82 @@ public:
     size_t offset() {
         return _offset;
     }
-
-    friend class checksummed_file_writer;
 };
+
+output_stream<char> make_checksummed_file_output_stream(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file);
 
 class checksummed_file_writer : public file_writer {
     checksum _c;
-    uint32_t _per_chunk_checksum;
     uint32_t _full_checksum;
-    bool _checksum_file;
-private:
-    void close_checksum() {
-        if (!_checksum_file) {
-            return;
-        }
-        if ((_offset % _c.chunk_size) != 0) {
-            _c.checksums.push_back(_per_chunk_checksum);
-        }
-    }
-
-    // NOTE: adler32 is the algorithm used to compute checksum.
-    // compute a checksum per chunk of size _c.chunk_size
-    void compute_checksum(const char* buf, size_t n) {
-        if (!_checksum_file) {
-            _offset += n;
-            _full_checksum = checksum_adler32(_full_checksum, buf, n);
-            return;
-        }
-
-        size_t remaining = n;
-        while (remaining) {
-            // available means available space in the current chunk.
-            size_t available = _c.chunk_size - (_offset % _c.chunk_size);
-
-            if (remaining < available) {
-                _offset += remaining;
-                _per_chunk_checksum = checksum_adler32(_per_chunk_checksum, buf, remaining);
-                remaining = 0;
-            } else {
-                _offset += available;
-                _per_chunk_checksum = checksum_adler32(_per_chunk_checksum, buf, available);
-                _full_checksum = checksum_adler32_combine(_full_checksum, _per_chunk_checksum, _c.chunk_size);
-                _c.checksums.push_back(_per_chunk_checksum);
-                _per_chunk_checksum = init_checksum_adler32();
-                buf += available;
-                remaining -= available;
-            }
-        }
-    }
 public:
     checksummed_file_writer(file f, size_t buffer_size = 8192, bool checksum_file = false)
-            : file_writer(std::move(f), buffer_size) {
-        _checksum_file = checksum_file;
-        _c.chunk_size = DEFAULT_CHUNK_SIZE;
-        _per_chunk_checksum = init_checksum_adler32();
-        _full_checksum = init_checksum_adler32();
-    }
+            : file_writer(make_checksummed_file_output_stream(std::move(f), buffer_size, _c, _full_checksum, checksum_file))
+            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size))})
+            , _full_checksum(init_checksum_adler32()) {}
 
-    virtual future<> write(const char* buf, size_t n) {
-        compute_checksum(buf, n);
-        return _out.write(buf, n);
-    }
-    virtual future<> write(const bytes& s) {
-        compute_checksum(reinterpret_cast<const char*>(s.c_str()), s.size());
-        return _out.write(s);
-    }
+    // Since we are exposing a reference to _full_checksum, we delete the move
+    // constructor.  If it is moved, the reference will refer to the old
+    // location.
+    checksummed_file_writer(checksummed_file_writer&&) = delete;
+    checksummed_file_writer(const checksummed_file_writer&) = default;
+
     checksum& finalize_checksum() {
-        close_checksum();
         return _c;
     }
     uint32_t full_checksum() {
-        if (!_checksum_file) {
-            return _full_checksum;
-        }
-        return checksum_adler32_combine(_full_checksum, _per_chunk_checksum, _offset % _c.chunk_size);
+        return _full_checksum;
     }
 };
+
+class checksummed_file_data_sink_impl : public data_sink_impl {
+    output_stream<char> _out;
+    struct checksum& _c;
+    uint32_t& _full_checksum;
+    bool _checksum_file;
+public:
+    checksummed_file_data_sink_impl(file f, size_t buffer_size, struct checksum& c, uint32_t& full_file_checksum, bool checksum_file)
+            : _out(make_file_output_stream(std::move(f), buffer_size))
+            , _c(c)
+            , _full_checksum(full_file_checksum)
+            , _checksum_file(checksum_file)
+            {}
+
+    future<> put(net::packet data) { abort(); }
+    virtual future<> put(temporary_buffer<char> buf) override {
+        // bufs will usually be a multiple of chunk size, but this won't be the case for
+        // the last buffer being flushed.
+
+        if (!_checksum_file) {
+            _full_checksum = checksum_adler32(_full_checksum, buf.begin(), buf.size());
+        } else {
+            for (size_t offset = 0; offset < buf.size(); offset += _c.chunk_size) {
+                size_t size = std::min(size_t(_c.chunk_size), buf.size() - offset);
+                uint32_t per_chunk_checksum = init_checksum_adler32();
+
+                per_chunk_checksum = checksum_adler32(per_chunk_checksum, buf.begin() + offset, size);
+                _full_checksum = checksum_adler32_combine(_full_checksum, per_chunk_checksum, size);
+                _c.checksums.push_back(per_chunk_checksum);
+            }
+        }
+        return _out.write(buf.begin(), buf.size());
+    }
+
+    virtual future<> close() {
+        // Nothing to do, because close at the file_stream level will call flush on us.
+        return _out.close();
+    }
+};
+
+class checksummed_file_data_sink : public data_sink {
+public:
+    checksummed_file_data_sink(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file)
+        : data_sink(std::make_unique<checksummed_file_data_sink_impl>(std::move(f), buffer_size, cinfo, full_file_checksum, checksum_file)) {}
+};
+
+inline
+output_stream<char> make_checksummed_file_output_stream(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file) {
+    return output_stream<char>(checksummed_file_data_sink(std::move(f), buffer_size, cinfo, full_file_checksum, checksum_file), buffer_size, true);
+}
 
 // compressed_file_data_sink_impl works as a filter for a file output stream,
 // where the buffer flushed will be compressed and its checksum computed, then

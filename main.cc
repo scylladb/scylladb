@@ -92,7 +92,7 @@ int main(int ac, char** av) {
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
 
-    return app.run(ac, av, [&] {
+    return app.run_deprecated(ac, av, [&] {
         if (help_loggers) {
             do_help_loggers();
             engine().exit(1);

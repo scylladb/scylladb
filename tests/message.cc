@@ -139,7 +139,7 @@ int main(int ac, char ** av) {
 
     distributed<database> db;
 
-    return app.run(ac, av, [&app] {
+    return app.run_deprecated(ac, av, [&app] {
         auto config = app.configuration();
         uint16_t api_port = config["api-port"].as<uint16_t>();
         bool stay_alive = config["stay-alive"].as<bool>();

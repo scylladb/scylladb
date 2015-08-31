@@ -25,7 +25,12 @@ public:
 
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
-int repair_start(seastar::sharded<database>& db, sstring keyspace,
+// repair_start() starts the requested repair on this node. It returns an
+// integer id which can be used to query the repair's status with
+// repair_get_status(). The returned future<int> becomes available quickly,
+// as soon as repair_get_status() can be used - it doesn't wait for the
+// repair to complete.
+future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options);
 
 // TODO: Have repair_progress contains a percentage progress estimator

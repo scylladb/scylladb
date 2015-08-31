@@ -18,6 +18,13 @@ namespace api {
 namespace ss = httpd::storage_service_json;
 using namespace json;
 
+static sstring validate_keyspace(http_context& ctx, const parameters& param) {
+    if (ctx.db.local().has_keyspace(param["keyspace"])) {
+        return param["keyspace"];
+    }
+    throw bad_param_exception("Keyspace " + param["keyspace"] + " Does not exist");
+}
+
 void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
@@ -87,23 +94,23 @@ void set_storage_service(http_context& ctx, routes& r) {
         return ctx.db.local().get_config().saved_caches_directory();
     });
 
-    ss::get_range_to_endpoint_map.set(r, [](std::unique_ptr<request> req) {
+    ss::get_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::get_pending_range_to_endpoint_map.set(r, [](std::unique_ptr<request> req) {
+    ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::describe_ring_jmx.set(r, [](std::unique_ptr<request> req) {
+    ss::describe_ring_jmx.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
@@ -132,9 +139,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_natural_endpoints.set(r, [](std::unique_ptr<request> req) {
+    ss::get_natural_endpoints.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto key = req->get_query_param("key");
 
@@ -169,7 +176,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = split_cf(req->get_query_param("cf"));
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
@@ -187,32 +194,32 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::force_keyspace_cleanup.set(r, [](std::unique_ptr<request> req) {
+    ss::force_keyspace_cleanup.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::scrub.set(r, [](std::unique_ptr<request> req) {
+    ss::scrub.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto disable_snapshot = req->get_query_param("disable_snapshot");
         auto skip_corrupted = req->get_query_param("skip_corrupted");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::upgrade_sstables.set(r, [](std::unique_ptr<request> req) {
+    ss::upgrade_sstables.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto exclude_current_version = req->get_query_param("exclude_current_version");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_families = split_cf(req->get_query_param("cf"));
         if (column_families.empty()) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
@@ -226,14 +233,15 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::repair_async.set(r, [&ctx](const_req req) {
+
+    ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
         // Currently, we get all the repair options encoded in a single
         // "options" option, and split it to a map using the "," and ":"
         // delimiters. TODO: consider if it doesn't make more sense to just
         // take all the query parameters as this map and pass it to the repair
         // function.
         std::unordered_map<sstring, sstring> options_map;
-        for (auto s : split(req.get_query_param("options"), ",")) {
+        for (auto s : split(req->get_query_param("options"), ",")) {
             auto kv = split(s, ":");
             if (kv.size() != 2) {
                 throw httpd::bad_param_exception("malformed async repair options");
@@ -245,7 +253,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         // returns immediately, not waiting for the repair to finish. The user
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
-        return repair_start(ctx.db, req.param["keyspace"], options_map);
+        return repair_start(ctx.db, validate_keyspace(ctx, req->param),
+                options_map).then([] (int i) {
+                    return make_ready_future<json::json_return_type>(i);
+                });
     });
 
     ss::repair_async_status.set(r, [&ctx](std::unique_ptr<request> req) {
@@ -324,9 +335,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         //TBD
         return make_ready_future<json::json_return_type>(json_void());
     });
-    ss::truncate.set(r, [](std::unique_ptr<request> req) {
+    ss::truncate.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -465,9 +476,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::load_new_ss_tables.set(r, [](std::unique_ptr<request> req) {
+    ss::load_new_ss_tables.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -494,16 +505,16 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::enable_auto_compaction.set(r, [](std::unique_ptr<request> req) {
+    ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    ss::disable_auto_compaction.set(r, [](std::unique_ptr<request> req) {
+    ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        auto keyspace = req->param["keyspace"];
+        auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -589,9 +600,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         return map_to_key_value(tokens, res);
     });
 
-    ss::get_effective_ownership.set(r, [](const_req req) {
+    ss::get_effective_ownership.set(r, [&ctx](const_req req) {
         auto tokens = service::get_local_storage_service().effective_ownership(
-                (req.param["keyspace"] == "null")? "" : req.param["keyspace"]);
+                (req.param["keyspace"] == "null")? "" : validate_keyspace(ctx, req.param));
         std::vector<storage_service_json::mapper> res;
         return map_to_key_value(tokens, res);
     });

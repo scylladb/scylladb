@@ -731,7 +731,7 @@ SEASTAR_TEST_CASE(full_index_search) {
         return sstables::test(sstp).read_indexes(0).then([sstp] (auto index_list) {
             int idx = 0;
             for (auto& ie: index_list) {
-                auto key = key::from_bytes(ie.key.value);
+                auto key = key::from_bytes(to_bytes(ie.get_key_bytes()));
                 BOOST_REQUIRE(sstables::test(sstp).binary_search(index_list, key) == idx++);
             }
         });

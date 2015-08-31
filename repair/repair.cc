@@ -8,6 +8,10 @@
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
 
+#include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 static logging::logger logger("repair");
 
 static std::vector<sstring> list_column_families(const database& db, const sstring& keyspace) {
@@ -115,9 +119,6 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
 #endif
 }
 
-// Each repair_start() call returns a unique integer which the user can later
-// use to follow the status of this repair with the repair_status() function.
-static std::atomic<int> next_repair_command {0};
 
 // The repair_tracker tracks ongoing repair operations and their progress.
 // A repair which has already finished successfully is dropped from this
@@ -127,8 +128,11 @@ static std::atomic<int> next_repair_command {0};
 // This object is not thread safe, and must be used by only one cpu.
 static class {
 private:
+    // Each repair_start() call returns a unique int which the user can later
+    // use to follow the status of this repair with repair_status().
+    int _next_repair_command = 0;
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
-    // Successfully-finished repairs are those with id < next_repair_command
+    // Successfully-finished repairs are those with id < _next_repair_command
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
 public:
@@ -143,7 +147,7 @@ public:
         }
     }
     repair_status get(int id) {
-        if (id >= next_repair_command.load(std::memory_order_relaxed)) {
+        if (id >= _next_repair_command) {
             throw std::runtime_error(sprint("unknown repair id %d", id));
         }
         auto it = _status.find(id);
@@ -152,6 +156,9 @@ public:
         } else {
             return it->second;
         }
+    }
+    int next_repair_command() {
+        return _next_repair_command++;
     }
 } repair_tracker;
 
@@ -198,11 +205,94 @@ static std::vector<query::range<dht::token>> get_local_ranges(
     return get_ranges_for_endpoint(db, keyspace, utils::fb_utilities::get_broadcast_address());
 }
 
+static std::vector<query::range<dht::token>> get_primary_ranges_for_endpoint(
+        database& db, sstring keyspace, gms::inet_address ep) {
+    auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
+    return rs.get_primary_ranges(ep);
+}
 
-static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
-        std::unordered_map<sstring, sstring> options, int id) {
+static std::vector<query::range<dht::token>> get_primary_ranges(
+        database& db, sstring keyspace) {
+    return get_primary_ranges_for_endpoint(db, keyspace,
+            utils::fb_utilities::get_broadcast_address());
+}
 
-    logger.info("starting user-requested repair for keyspace {}", keyspace);
+
+struct repair_options {
+    // If primary_range is true, we should perform repair only on this node's
+    // primary ranges. The default of false means perform repair on all ranges
+    // held by the node. primary_range=true is useful if the user plans to
+    // repair all nodes.
+    bool primary_range = false;
+    // If ranges is not empty, it overrides the repair's default heuristics
+    // for determining the list of ranges to repair. In particular, "ranges"
+    // overrides the setting of "primary_range".
+    std::vector<query::range<dht::token>> ranges;
+
+    repair_options(const std::unordered_map<sstring, sstring>& options) {
+        bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
+        ranges_opt(ranges, options, RANGES_KEY);
+    }
+
+    static constexpr const char* PRIMARY_RANGE_KEY = "primaryRange";
+    static constexpr const char* PARALLELISM_KEY = "parallelism"; // TODO
+    static constexpr const char* INCREMENTAL_KEY = "incremental"; // TODO
+    static constexpr const char* JOB_THREADS_KEY = "jobThreads"; // TODO
+    static constexpr const char* RANGES_KEY = "ranges";
+    static constexpr const char* COLUMNFAMILIES_KEY = "columnFamilies"; // TODO
+    static constexpr const char* DATACENTERS_KEY = "dataCenters"; // TODO
+    static constexpr const char* HOSTS_KEY = "hosts"; // TODO
+    static constexpr const char* TRACE_KEY = "trace"; // TODO
+
+private:
+    static void bool_opt(bool& var,
+            const std::unordered_map<sstring, sstring>& options,
+            const sstring& key) {
+        auto it = options.find(key);
+        if (it != options.end()) {
+            // Same parsing as Boolean.parseBoolean does:
+            if (boost::algorithm::iequals(it->second, "true")) {
+                var = true;
+            } else {
+                var = false;
+            }
+        }
+    }
+
+    // A range is expressed as start_token:end token and multiple ranges can
+    // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
+    static void ranges_opt(std::vector<query::range<dht::token>> var,
+            const std::unordered_map<sstring, sstring>& options,
+                        const sstring& key) {
+        auto it = options.find(key);
+        if (it == options.end()) {
+            return;
+        }
+        std::vector<sstring> range_strings;
+        boost::split(range_strings, it->second, boost::algorithm::is_any_of(","));
+        for (auto range : range_strings) {
+            std::vector<sstring> token_strings;
+            boost::split(token_strings, range, boost::algorithm::is_any_of(":"));
+            if (token_strings.size() != 2) {
+                throw(std::runtime_error("range must have two components "
+                        "separated by ':', got '" + range + "'"));
+            }
+            auto tok_start = dht::global_partitioner().from_sstring(token_strings[0]);
+            auto tok_end = dht::global_partitioner().from_sstring(token_strings[1]);
+            var.emplace_back(
+                    ::range<dht::token>::bound(tok_start, false),
+                    ::range<dht::token>::bound(tok_end, true));
+        }
+    }
+};
+
+static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
+        std::unordered_map<sstring, sstring> options_map) {
+
+    repair_options options(options_map);
+
+    int id = repair_tracker.next_repair_command();
+    logger.info("starting user-requested repair for keyspace {}, repair id {}", keyspace, id);
 
     repair_tracker.start(id);
 
@@ -211,24 +301,30 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
     std::vector<query::range<dht::token>> ranges;
-    // FIXME: if the "ranges" options exists, use that instead of
-    // get_local_ranges() below. Also, translate the following Origin code:
-
+    if (options.ranges.size()) {
+        ranges = options.ranges;
+    } else if (options.primary_range) {
+        logger.info("primary-range repair");
+        // when "primary_range" option is on, neither data_centers nor hosts
+        // may be set, except data_centers may contain only local DC (-local)
 #if 0
-         if (option.isPrimaryRange())
-         {
-             // when repairing only primary range, neither dataCenters nor hosts can be set
-             if (option.getDataCenters().isEmpty() && option.getHosts().isEmpty())
-                 option.getRanges().addAll(getPrimaryRanges(keyspace));
-                 // except dataCenters only contain local DC (i.e. -local)
-             else if (option.getDataCenters().size() == 1 && option.getDataCenters().contains(DatabaseDescriptor.getLocalDataCenter()))
-                 option.getRanges().addAll(getPrimaryRangesWithinDC(keyspace));
-             else
-                 throw new IllegalArgumentException("You need to run primary range repair on all nodes in the cluster.");
-         }
-         else
+        if (options.data_centers.size() == 1 &&
+                options.data_centers[0] == DatabaseDescriptor.getLocalDataCenter()) {
+            ranges = get_primary_ranges_within_dc(db.local(), keyspace);
+        } else
 #endif
-    ranges = get_local_ranges(db.local(), keyspace);
+#if 0
+        if (options.data_centers.size() > 0 || options.hosts.size() > 0) {
+            throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
+        } else {
+#endif
+            ranges = get_primary_ranges(db.local(), keyspace);
+#if 0
+        }
+#endif
+    } else {
+        ranges = get_local_ranges(db.local(), keyspace);
+    }
 
     // FIXME: let the cfs be overriden by an option
     std::vector<sstring> cfs = list_column_families(db.local(), keyspace);
@@ -250,15 +346,15 @@ static void do_repair_start(seastar::sharded<database>& db, sstring keyspace,
             repair_tracker.done(id, false);
         });
     });
+
+    return id;
 }
 
-int repair_start(seastar::sharded<database>& db, sstring keyspace,
+future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options) {
-    int i = next_repair_command++;
-    db.invoke_on(0, [i, &db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
-        do_repair_start(db, std::move(keyspace), std::move(options), i);
-    }); // Note we ignore the value of this future
-    return i;
+    return db.invoke_on(0, [&db, keyspace = std::move(keyspace), options = std::move(options)] (database& localdb) {
+        return do_repair_start(db, std::move(keyspace), std::move(options));
+    });
 }
 
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {

@@ -39,14 +39,27 @@ struct filter {
     explicit filter(int hashes, std::deque<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
-struct index_entry {
-    disk_string<uint16_t> key;
-    uint64_t position;
-    disk_string<uint32_t> promoted_index;
+class index_entry {
+    temporary_buffer<char> _key;
+    uint64_t _position;
+    temporary_buffer<char> _promoted_index;
+public:
+
+    bytes_view get_key_bytes() const {
+        return bytes_view(reinterpret_cast<const bytes::value_type *>(_key.get()), _key.size());
+    }
 
     key_view get_key() const {
-        return { bytes_view(key) };
+        return { get_key_bytes() };
     }
+
+    uint64_t position() const {
+        return _position;
+    }
+
+    index_entry(temporary_buffer<char>&& key, uint64_t position, temporary_buffer<char>&& promoted_index)
+        : _key(std::move(key)), _position(position), _promoted_index(std::move(promoted_index)) {}
+
 };
 
 struct summary_entry {

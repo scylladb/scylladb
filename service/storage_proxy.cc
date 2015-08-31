@@ -1242,7 +1242,9 @@ class digest_read_resolver : public abstract_read_resolver {
     std::vector<query::result_digest> _digest_results;
 
     virtual void on_timeout() override {
-        _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_results.size() != 0));
+        if (_cl_responses < _block_for) {
+            _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_results.size() != 0));
+        }
         // we will not need them any more
         _data_results.clear();
         _digest_results.clear();
@@ -1301,6 +1303,9 @@ public:
     }
     void add_wait_targets(size_t targets_count) {
         _targets_count += targets_count;
+    }
+    bool is_completed() {
+        return _digest_results.size() == _targets_count;
     }
 };
 
@@ -1595,11 +1600,13 @@ public:
     using abstract_read_executor::abstract_read_executor;
     virtual future<> make_requests(digest_resolver_ptr resolver) {
         _speculate_timer.set_callback([this, resolver] {
-            resolver->add_wait_targets(1); // we send one more request so wait for it too
-            future<> f = resolver->has_data() ?
-                    make_digest_requests(resolver, _targets.end() - 1, _targets.end()) :
-                    make_data_requests(resolver, _targets.end() - 1, _targets.end());
-            f.finally([exec = shared_from_this()]{});
+            if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
+                resolver->add_wait_targets(1); // we send one more request so wait for it too
+                future<> f = resolver->has_data() ?
+                        make_digest_requests(resolver, _targets.end() - 1, _targets.end()) :
+                        make_data_requests(resolver, _targets.end() - 1, _targets.end());
+                f.finally([exec = shared_from_this()]{});
+            }
         });
         // FIXME: the timeout should come from previous latency statistics for a partition
         auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(get_local_storage_proxy().get_db().local().get_config().read_request_timeout_in_ms()/2);
