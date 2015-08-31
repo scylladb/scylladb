@@ -267,6 +267,9 @@ public:
     bytes_view serialize() const {
         return _data;
     }
+    bool operator==(const atomic_cell_or_collection& other) const {
+        return _data == other._data;
+    }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };
 
