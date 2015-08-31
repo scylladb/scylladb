@@ -253,6 +253,63 @@ schema::get_column_definition(const bytes& name) const {
     return i->second;
 }
 
+std::ostream& operator<<(std::ostream& os, const schema& s) {
+    os << "org.apache.cassandra.config.CFMetaData@" << &s << "[";
+    os << "cfId=" << s._raw._id;
+    os << ",ksName=" << s._raw._ks_name;
+    os << ",cfName=" << s._raw._cf_name;
+    os << ",cfType=" << cf_type_to_sstring(s._raw._type);
+    os << ",comparator=" << cell_comparator::to_sstring(s);
+    os << ",comment=" << s._raw._comment;
+    os << ",readRepairChance=" << s._raw._read_repair_chance;
+    os << ",dcLocalReadRepairChance=" << s._raw._dc_local_read_repair_chance;
+    os << ",gcGraceSeconds=" << s._raw._gc_grace_seconds;
+    os << ",defaultValidator=" << s._raw._default_validator->name();
+    os << ",keyValidator=" << s.thrift_key_validator();
+    os << ",minCompactionThreshold=" << s._raw._min_compaction_threshold;
+    os << ",maxCompactionThreshold=" << s._raw._max_compaction_threshold;
+    os << ",columnMetadata=[";
+    int n = 0;
+    for (auto& cdef : s._raw._columns) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << cdef;
+    }
+    os << "]";
+    os << ",compactionStrategyClass=class org.apache.cassandra.db.compaction." << sstables::compaction_strategy::name(s._raw._compaction_strategy);
+    os << ",compactionStrategyOptions={";
+    n = 0;
+    for (auto& p : s._raw._compaction_strategy_options) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ",compressionParameters={";
+    n = 0;
+    for (auto& p : s._raw._compressor_params.get_options() ) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << p.first << "=" << p.second;
+    }
+    os << "}";
+    os << ",bloomFilterFpChance=" << s._raw._bloom_filter_fp_chance;
+    os << ",memtableFlushPeriod=" << s._raw._memtable_flush_period;
+    os << ",caching=" << s._raw._caching_options.to_sstring();
+    os << ",defaultTimeToLive=" << s._raw._default_time_to_live.count();
+    os << ",minIndexInterval=" << s._raw._min_index_interval;
+    os << ",maxIndexInterval=" << s._raw._max_index_interval;
+    os << ",speculativeRetry=" << s._raw._speculative_retry.to_sstring();
+    os << ",droppedColumns={}";
+    os << ",triggers=[]";
+    os << ",isDense=" << std::boolalpha << s._raw._is_dense;
+    os << "]";
+    return os;
+}
+
 const sstring&
 column_definition::name_as_text() const {
     return column_specification->name->text();

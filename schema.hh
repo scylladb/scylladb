@@ -529,6 +529,7 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
+    friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
 };
 
