@@ -62,20 +62,6 @@ public:
     }
 };
 
-class shared_file_random_access_reader : public random_access_reader {
-    file _file;
-    size_t _buffer_size;
-public:
-    virtual input_stream<char> open_at(uint64_t pos) override {
-        return make_file_input_stream(_file, pos, _buffer_size);
-    }
-    explicit shared_file_random_access_reader(file f, size_t buffer_size = 8192)
-        : _file(std::move(f)), _buffer_size(buffer_size)
-    {
-        seek(0);
-    }
-};
-
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
     { sstable::version_types::ka , "ka" },
     { sstable::version_types::la , "la" }
