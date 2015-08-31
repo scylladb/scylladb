@@ -47,6 +47,17 @@ struct compaction_stats {
     uint64_t total_keys_written = 0;
 };
 
+class sstable_reader final : public ::mutation_reader::impl {
+    shared_sstable _sst;
+    mutation_reader _reader;
+public:
+    sstable_reader(shared_sstable sst, schema_ptr schema)
+            : _sst(std::move(sst)), _reader(_sst->read_rows(schema)) {}
+    virtual future<mutation_opt> operator()() override {
+        return _reader.read();
+    }
+};
+
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
@@ -64,7 +75,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
-        readers.emplace_back([sst, r = make_lw_shared(sst->read_rows(schema))] () mutable { return r->read(); });
+        readers.emplace_back(make_mutation_reader<sstable_reader>(sst, schema));
         // FIXME: If the sstables have cardinality estimation bitmaps, use that
         // for a better estimate for the number of partitions in the merged
         // sstable than just adding up the lengths of individual sstables.
@@ -117,9 +128,15 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         });
     }).then([output_writer, done] {});
 
-    ::mutation_reader mutation_queue_reader = [output_reader] () {
-        return output_reader->read();
+    struct queue_reader final : public ::mutation_reader::impl {
+        lw_shared_ptr<seastar::pipe_reader<mutation>> pr;
+        queue_reader(lw_shared_ptr<seastar::pipe_reader<mutation>> pr) : pr(std::move(pr)) {}
+        virtual future<mutation_opt> operator()() override {
+            return pr->read();
+        }
     };
+
+    ::mutation_reader mutation_queue_reader = make_mutation_reader<queue_reader>(output_reader);
 
     newtab->get_metadata_collector().set_replay_position(rp);
 

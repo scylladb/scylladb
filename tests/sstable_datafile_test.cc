@@ -947,7 +947,7 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(sstring dir, 
 // mutation_reader for sstable keeping all the required objects alive.
 static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
     // TODO: s is probably not necessary, as the read_rows() object keeps a copy of it.
-    return [sst, s, r = make_lw_shared(sst->read_rows(s))] () mutable { return r->read(); };
+    return as_mutation_reader(sst, sst->read_rows(s));
 
 }
 

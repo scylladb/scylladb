@@ -3,6 +3,7 @@
  */
 
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <boost/range/algorithm/reverse.hpp>
 
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
@@ -19,7 +20,7 @@ move_and_disengage(std::experimental::optional<T>& opt) {
 }
 
 // Combines multiple mutation_readers into one.
-class combined_reader {
+class combined_reader final : public mutation_reader::impl {
     std::vector<mutation_reader> _readers;
     struct mutation_and_reader {
         mutation m;
@@ -74,7 +75,7 @@ public:
         : _readers(std::move(readers))
     { }
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         if (!_inited) {
             return parallel_for_each(_readers, [this] (mutation_reader& reader) {
                 return reader().then([this, &reader](mutation_opt&& m) {
@@ -96,10 +97,10 @@ public:
 
 mutation_reader
 make_combined_reader(std::vector<mutation_reader> readers) {
-    return combined_reader(std::move(readers));
+    return make_mutation_reader<combined_reader>(std::move(readers));
 }
 
-class joining_reader final {
+class joining_reader final : public mutation_reader::impl {
     std::vector<mutation_reader> _readers;
     std::vector<mutation_reader>::iterator _current;
 public:
@@ -108,7 +109,7 @@ public:
             , _current(_readers.begin()) {
     }
     joining_reader(joining_reader&&) = default;
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         if (_current == _readers.end()) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
         }
@@ -134,17 +135,17 @@ make_combined_reader(mutation_reader&& a, mutation_reader&& b) {
 
 mutation_reader
 make_joining_reader(std::vector<mutation_reader> readers) {
-    return joining_reader(std::move(readers));
+    return make_mutation_reader<joining_reader>(std::move(readers));
 }
 
-class lazy_reader final {
+class lazy_reader final : public mutation_reader::impl {
     std::function<mutation_reader ()> _make_reader;
     stdx::optional<mutation_reader> _reader;
 public:
     lazy_reader(std::function<mutation_reader ()> make_reader)
             : _make_reader(std::move(make_reader)) {
     }
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         if (!_reader) {
             _reader = _make_reader();
         }
@@ -154,32 +155,57 @@ public:
 
 mutation_reader
 make_lazy_reader(std::function<mutation_reader ()> make_reader) {
-    return lazy_reader(std::move(make_reader));
+    return make_mutation_reader<lazy_reader>(std::move(make_reader));
 }
 
-mutation_reader make_reader_returning(mutation m) {
-    return [m = std::move(m), done = false] () mutable {
-        if (done) {
+class reader_returning final : public mutation_reader::impl {
+    mutation _m;
+    bool _done = false;
+public:
+    reader_returning(mutation m) : _m(std::move(m)) {
+    }
+    virtual future<mutation_opt> operator()() override {
+        if (_done) {
             return make_ready_future<mutation_opt>();
         } else {
-            done = true;
-            return make_ready_future<mutation_opt>(std::move(m));
+            _done = true;
+            return make_ready_future<mutation_opt>(std::move(_m));
         }
-    };
+    }
+};
+
+mutation_reader make_reader_returning(mutation m) {
+    return make_mutation_reader<reader_returning>(std::move(m));
 }
 
-mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
-    std::reverse(mutations.begin(), mutations.end());
-    return [mutations = std::move(mutations)] () mutable -> future<mutation_opt> {
-        if (mutations.empty()) {
+class reader_returning_many final : public mutation_reader::impl {
+    std::vector<mutation> _m;
+    bool _done = false;
+public:
+    reader_returning_many(std::vector<mutation> m) : _m(std::move(m)) {
+        boost::range::reverse(_m);
+    }
+    virtual future<mutation_opt> operator()() override {
+        if (_m.empty()) {
             return make_ready_future<mutation_opt>();
         }
-        auto m = std::move(mutations.back());
-        mutations.pop_back();
+        auto m = std::move(_m.back());
+        _m.pop_back();
         return make_ready_future<mutation_opt>(std::move(m));
-    };
+    }
+};
+
+mutation_reader make_reader_returning_many(std::vector<mutation> mutations) {
+    return make_mutation_reader<reader_returning_many>(std::move(mutations));
 }
 
+class empty_reader final : public mutation_reader::impl {
+public:
+    virtual future<mutation_opt> operator()() override {
+        return make_ready_future<mutation_opt>();
+    }
+};
+
 mutation_reader make_empty_reader() {
-    return [] { return make_ready_future<mutation_opt>(); };
+    return make_mutation_reader<empty_reader>();
 }

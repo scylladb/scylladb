@@ -327,13 +327,9 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     });
 }
 
-::mutation_reader as_mutation_reader(sstables::mutation_reader rd) {
-    return [rd = make_lw_shared(std::move(rd))] () mutable { return rd->read(); };
-}
-
 ::mutation_source as_mutation_source(schema_ptr s, lw_shared_ptr<sstables::sstable> sst) {
     return [s, sst] (const query::partition_range& range) mutable {
-        return as_mutation_reader(sst->read_range_rows(s, range));
+        return as_mutation_reader(sst, sst->read_range_rows(s, range));
     };
 }
 
