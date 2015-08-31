@@ -250,9 +250,7 @@ future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata
 
 future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
 {
-#if 0
-    ksm.validate();
-#endif
+    ksm->validate();
     auto& proxy = get_local_storage_proxy();
     if (proxy.get_db().local().has_keyspace(ksm->name())) {
         throw exceptions::already_exists_exception{ksm->name()};
