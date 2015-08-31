@@ -33,6 +33,7 @@ public:
     partition_entry(partition_entry&& o) noexcept;
 
     const dht::decorated_key& key() const { return _key; }
+    dht::decorated_key& key() { return _key; }
     const mutation_partition& partition() const { return _p; }
     mutation_partition& partition() { return _p; }
 
