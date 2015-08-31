@@ -97,7 +97,20 @@ bool belongs_to_current_shard(const mutation& m) {
     return dht::shard_of(m.token()) == engine().cpu_id();
 }
 
-class range_sstable_reader {
+class sstable_range_wrapping_reader final : public mutation_reader::impl {
+    lw_shared_ptr<sstables::sstable> _sst;
+    sstables::mutation_reader _smr;
+public:
+    sstable_range_wrapping_reader(lw_shared_ptr<sstables::sstable> sst,
+            schema_ptr s, const query::partition_range& pr)
+            : _smr(sst->read_range_rows(std::move(s), pr)) {
+    }
+    virtual future<mutation_opt> operator()() override {
+        return _smr.read();
+    }
+};
+
+class range_sstable_reader final : public mutation_reader::impl {
     const query::partition_range& _pr;
     lw_shared_ptr<sstable_list> _sstables;
     mutation_reader _reader;
@@ -109,7 +122,7 @@ public:
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-            mutation_reader reader = [r = make_lw_shared(sst->read_range_rows(s, _pr))] () mutable { return r->read(); };
+            mutation_reader reader = make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr);
             if (sst->is_shared()) {
                 reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
             }
@@ -120,12 +133,12 @@ public:
 
     range_sstable_reader(range_sstable_reader&&) = delete; // reader takes reference to member fields
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         return _reader();
     }
 };
 
-class single_key_sstable_reader {
+class single_key_sstable_reader final : public mutation_reader::impl {
     schema_ptr _schema;
     sstables::key _key;
     mutation_opt _m;
@@ -138,7 +151,7 @@ public:
         , _sstables(std::move(sstables))
     { }
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         if (_done) {
             return make_ready_future<mutation_opt>();
         }
@@ -160,12 +173,10 @@ column_family::make_sstable_reader(const query::partition_range& pr) const {
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return single_key_sstable_reader(_schema, _sstables, *pos.key());
+        return make_mutation_reader<single_key_sstable_reader>(_schema, _sstables, *pos.key());
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return [r = make_lw_shared<range_sstable_reader>(_schema, _sstables, pr)] () mutable {
-            return (*r)();
-        };
+        return make_mutation_reader<range_sstable_reader>(_schema, _sstables, pr);
     }
 }
 

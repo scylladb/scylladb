@@ -23,30 +23,36 @@
 // single one as it is normally the same for all of them. So "mutation" might
 // not be the optimal object to use here.
 class mutation_reader final {
-    struct impl_base {
-        virtual ~impl_base() {}
+public:
+    class impl {
+    public:
+        virtual ~impl() {}
         virtual future<mutation_opt> operator()() = 0;
     };
-    template <typename Func>
-    struct impl final : public impl_base {
-        Func _func;
-        impl(Func&& func) : _func(std::move(func)) {}
-        virtual future<mutation_opt> operator()() override {
-            return _func();
-        }
+private:
+    class null_impl final : public impl {
+    public:
+        virtual future<mutation_opt> operator()() override { throw std::bad_function_call(); }
     };
 private:
-    std::unique_ptr<impl_base> _impl;
+    std::unique_ptr<impl> _impl;
 public:
-    template <typename Func>
-    mutation_reader(Func&& func) : _impl(std::make_unique<impl<Func>>(std::forward<Func>(func))) {}
-    mutation_reader() : mutation_reader([] () -> future<mutation_opt> { throw std::bad_function_call(); }) {}
+    mutation_reader(std::unique_ptr<impl> impl) noexcept : _impl(std::move(impl)) {}
+    mutation_reader() : mutation_reader(std::make_unique<null_impl>()) {}
     mutation_reader(mutation_reader&&) = default;
     mutation_reader(const mutation_reader&) = delete;
     mutation_reader& operator=(mutation_reader&&) = default;
     mutation_reader& operator=(const mutation_reader&) = delete;
     future<mutation_opt> operator()() { return _impl->operator()(); }
 };
+
+// Impl: derived from mutation_reader::impl; Args/args: arguments for Impl's constructor
+template <typename Impl, typename... Args>
+inline
+mutation_reader
+make_mutation_reader(Args&&... args) {
+    return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
+}
 
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
@@ -59,6 +65,36 @@ mutation_reader make_empty_reader();
 // when creating the reader involves disk I/O or a shard call
 mutation_reader make_lazy_reader(std::function<mutation_reader ()> make_reader);
 
+template <typename MutationFilter>
+class filtering_reader : public mutation_reader::impl {
+    mutation_reader _rd;
+    MutationFilter _filter;
+    mutation_opt _current;
+    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const mutation&)>>::value, "bad MutationFilter signature");
+public:
+    filtering_reader(mutation_reader rd, MutationFilter&& filter)
+            : _rd(std::move(rd)), _filter(std::forward<MutationFilter>(filter)) {
+    }
+    virtual future<mutation_opt> operator()() override {\
+        return repeat([this] {
+            return _rd().then([this] (mutation_opt&& mo) mutable {
+                if (!mo) {
+                    _current = std::move(mo);
+                    return stop_iteration::yes;
+                } else {
+                    if (_filter(*mo)) {
+                        _current = std::move(mo);
+                        return stop_iteration::yes;
+                    }
+                    return stop_iteration::no;
+                }
+            });
+        }).then([this] {
+            return make_ready_future<mutation_opt>(std::move(_current));
+        });
+    };
+};
+
 // Creates a mutation_reader wrapper which creates a new stream of mutations
 // with some mutations removed from the original stream.
 // MutationFilter is a callable which decides which mutations are dropped. It
@@ -66,26 +102,7 @@ mutation_reader make_lazy_reader(std::function<mutation_reader ()> make_reader);
 // stream if and only if the filter returns true.
 template <typename MutationFilter>
 mutation_reader make_filtering_reader(mutation_reader rd, MutationFilter&& filter) {
-    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const mutation&)>>::value, "bad MutationFilter signature");
-
-    return [rd = std::move(rd), filter = std::forward<MutationFilter>(filter), current = mutation_opt()] () mutable {
-        return repeat([&rd, &filter, &current] () mutable {
-            return rd().then([&filter, &current] (mutation_opt&& mo) mutable {
-                if (!mo) {
-                    current = std::move(mo);
-                    return stop_iteration::yes;
-                } else {
-                    if (filter(*mo)) {
-                        current = std::move(mo);
-                        return stop_iteration::yes;
-                    }
-                    return stop_iteration::no;
-                }
-            });
-        }).then([&current] {
-            return make_ready_future<mutation_opt>(std::move(current));
-        });
-    };
+    return make_mutation_reader<filtering_reader<MutationFilter>>(std::move(rd), std::forward<MutationFilter>(filter));
 }
 
 // Calls the consumer for each element of the reader's stream until end of stream

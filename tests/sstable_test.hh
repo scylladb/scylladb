@@ -498,3 +498,20 @@ public:
     }
 };
 }
+
+
+struct test_mutation_reader final : public ::mutation_reader::impl {
+    sstables::shared_sstable _sst;
+    sstables::mutation_reader _rd;
+public:
+    test_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd)
+            : _sst(std::move(sst)), _rd(std::move(rd)) {}
+    virtual future<mutation_opt> operator()() override {
+        return _rd.read();
+    }
+};
+
+inline
+::mutation_reader as_mutation_reader(sstables::shared_sstable sst, sstables::mutation_reader rd) {
+    return make_mutation_reader<test_mutation_reader>(std::move(sst), std::move(rd));
+}

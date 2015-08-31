@@ -76,7 +76,7 @@ memtable::slice(const query::partition_range& range) const {
     }
 }
 
-class scanning_reader {
+class scanning_reader final : public mutation_reader::impl {
     lw_shared_ptr<const memtable> _memtable;
     const query::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
@@ -118,7 +118,7 @@ public:
         , _range(range)
     { }
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         update_iterators();
         if (_i == _end) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
@@ -145,7 +145,7 @@ memtable::make_reader(const query::partition_range& range) const {
             return make_empty_reader();
         }
     } else {
-        return scanning_reader(shared_from_this(), range);
+        return make_mutation_reader<scanning_reader>(shared_from_this(), range);
     }
 }
 

@@ -82,7 +82,7 @@ const logalloc::region& cache_tracker::region() const {
 }
 
 // Reader which populates the cache using data from the delegate.
-class populating_reader {
+class populating_reader final : public mutation_reader::impl {
     row_cache& _cache;
     mutation_reader _delegate;
 public:
@@ -91,7 +91,7 @@ public:
         , _delegate(std::move(delegate))
     { }
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         return _delegate().then([this] (mutation_opt&& mo) {
             if (mo) {
                 _cache.populate(*mo);
@@ -108,7 +108,7 @@ row_cache::make_reader(const query::partition_range& range) {
 
         if (!pos.has_key()) {
             warn(unimplemented::cause::RANGE_QUERIES);
-            return populating_reader(*this, _underlying(range));
+            return make_mutation_reader<populating_reader>(*this, _underlying(range));
         }
 
         const dht::decorated_key& dk = pos.as_decorated_key();
@@ -120,12 +120,12 @@ row_cache::make_reader(const query::partition_range& range) {
             return make_reader_returning(mutation(_schema, dk, e.partition()));
         } else {
             ++_stats.misses;
-            return populating_reader(*this, _underlying(range));
+            return make_mutation_reader<populating_reader>(*this, _underlying(range));
         }
     }
 
     warn(unimplemented::cause::RANGE_QUERIES);
-    return populating_reader(*this, _underlying(range));
+    return make_mutation_reader<populating_reader>(*this, _underlying(range));
 }
 
 row_cache::~row_cache() {

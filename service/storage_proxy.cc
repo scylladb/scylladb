@@ -2585,7 +2585,7 @@ storage_proxy::stop() {
     return make_ready_future<>();
 }
 
-class shard_reader {
+class shard_reader final : public mutation_reader::impl {
     distributed<database>& _db;
     unsigned _shard;
     utils::UUID _cf_id;
@@ -2614,7 +2614,7 @@ public:
         , _range(range)
     { }
 
-    future<mutation_opt> operator()() {
+    virtual future<mutation_opt> operator()() override {
         if (!_remote) {
             return init().then([this] {
                 return (*this)();
@@ -2657,9 +2657,7 @@ storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range
     unsigned last_shard = range.end() ? dht::shard_of(range.end()->value().token()) : smp::count - 1;
     std::vector<mutation_reader> readers;
     for (auto cpu = first_shard; cpu <= last_shard; ++cpu) {
-        readers.emplace_back([reader = make_lw_shared<shard_reader>(cf_id, _db, cpu, range)] () mutable {
-            return (*reader)();
-        });
+        readers.emplace_back(make_mutation_reader<shard_reader>(cf_id, _db, cpu, range));
     }
     return make_joining_reader(std::move(readers));
 }
