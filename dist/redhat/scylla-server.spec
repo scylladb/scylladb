@@ -2,7 +2,7 @@ Name:           scylla-server
 Version:        0.00
 Release:        1%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
-Group:          Applications/Dataases
+Group:          Applications/Databases
 
 License:        Proprietary
 URL:            http://www.seastar-project.org/
@@ -23,8 +23,7 @@ Provides:       cassandra21
 %setup -q
 
 %build
-./configure.py --disable-xen --enable-dpdk --mode=release
-make -C seastar/build/dpdk %{?_smp_mflags}
+./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
 ninja-build %{?_smp_mflags}
 
 %install
@@ -52,10 +51,12 @@ install -m644 licenses/* $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
+install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf
+install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf/
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
-/usr/sbin/useradd -g scylla -s /sbin/nologin -r -d ${_sharedstatedir}/scylla scylla 2> /dev/null || :
+/usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sharedstatedir}/scylla scylla 2> /dev/null || :
 
 %post
 %systemd_post scylla-server.service
@@ -90,6 +91,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
+%{_sharedstatedir}/scylla/conf/
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

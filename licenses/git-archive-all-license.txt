@@ -1,0 +1,3 @@
+License: MIT
+
+https://github.com/Kentzo/git-archive-all
