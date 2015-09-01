@@ -24,7 +24,6 @@ Provides:       cassandra21
 
 %build
 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
-make -C seastar/build/dpdk %{?_smp_mflags}
 ninja-build %{?_smp_mflags}
 
 %install
