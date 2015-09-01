@@ -119,6 +119,8 @@ urchin_tests = [
     'tests/partitioner_test',
     'tests/frozen_mutation_test',
     'tests/perf/perf_mutation',
+    'tests/lsa_async_eviction_test',
+    'tests/lsa_sync_eviction_test',
     'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
@@ -400,9 +402,36 @@ deps = {
     'scylla': ['main.cc'] + urchin_core + api,
 }
 
+tests_not_using_seastar_test_framework = set([
+    'tests/types_test',
+    'tests/keys_test',
+    'tests/partitioner_test',
+    'tests/map_difference_test',
+    'tests/frozen_mutation_test',
+    'tests/perf/perf_mutation',
+    'tests/lsa_async_eviction_test',
+    'tests/lsa_sync_eviction_test',
+    'tests/cartesian_product_test',
+    'tests/perf/perf_hash',
+    'tests/perf/perf_cql_parser',
+    'tests/message',
+    'tests/perf/perf_simple_query',
+    'tests/test-serialization',
+    'tests/gossip',
+    'tests/compound_test',
+    'tests/range_test',
+    'tests/crc_test',
+    'tests/perf/perf_sstable',
+    'tests/managed_vector_test',
+])
+
+for t in tests_not_using_seastar_test_framework:
+    if not t in urchin_tests:
+        raise Exception("Test %s not found in urchin_tests" % (t))
+
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
-    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/gossip' and 'compound_test' not in t and 'range_test' not in t and 'crc_test' not in t and 'perf_sstable' not in t and 'managed_vector_test' not in t:
+    if t not in tests_not_using_seastar_test_framework:
         deps[t] += urchin_tests_seastar_deps
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']

@@ -15,6 +15,13 @@ struct occupancy_stats;
 class region;
 class region_impl;
 
+//
+// Frees some amount of objects from the region to which it's attached.
+//
+// Should always make forward progress unless region is empty, so this should eventually stop:
+//
+//     while (!region.empty()) { eviction_fn(); }
+//
 using eviction_fn = std::function<void()>;
 
 // Groups regions for the purpose of statistics.  Can be nested.
@@ -85,7 +92,7 @@ public:
     void full_compaction();
 
     // Returns aggregate statistics for all pools.
-    occupancy_stats occupancy() const;
+    occupancy_stats occupancy();
 };
 
 tracker& shard_tracker();
@@ -209,6 +216,23 @@ public:
     void make_evictable(eviction_fn);
 
     friend class region_group;
+};
+
+// Disables compaction of given region as long as this object is live,
+// so that any references into the region remain valid.
+// Can be nested.
+struct compaction_lock {
+    region& _region;
+    bool _prev;
+    compaction_lock(region& r)
+        : _region(r)
+        , _prev(r.compaction_enabled())
+    {
+        _region.set_compaction_enabled(false);
+    }
+    ~compaction_lock() {
+        _region.set_compaction_enabled(_prev);
+    }
 };
 
 }

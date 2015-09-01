@@ -26,7 +26,24 @@ static thread_local tracker tracker_instance;
 class tracker::impl {
     std::vector<region::impl*> _regions;
     scollectd::registrations _collectd_registrations;
+    bool _reclaiming_enabled = true;
 private:
+    // Prevents tracker's reclaimer from running while live. Reclaimer may be
+    // invoked synchronously with allocator. This guard ensures that this
+    // object is not re-entered while inside one of the tracker's methods.
+    struct reclaiming_lock {
+        impl& _ref;
+        bool _prev;
+        reclaiming_lock(impl& ref)
+            : _ref(ref)
+            , _prev(ref._reclaiming_enabled)
+        {
+            _ref._reclaiming_enabled = false;
+        }
+        ~reclaiming_lock() {
+            _ref._reclaiming_enabled = _prev;
+        }
+    };
     void register_collectd_metrics();
 public:
     impl() {
@@ -39,16 +56,16 @@ public:
     void unregister_region(region::impl*);
     size_t reclaim(size_t bytes);
     void full_compaction();
-    occupancy_stats occupancy() const;
+    occupancy_stats occupancy();
 };
 
 tracker::tracker()
     : _impl(std::make_unique<impl>())
-    , _reclaimer([this] {
-        reclaim(10*1024*1024);
-        // FIXME: be accurate
-        return memory::reclaiming_result::reclaimed_something;
-    })
+    , _reclaimer([this] () {
+            return reclaim(10*1024*1024)
+                   ? memory::reclaiming_result::reclaimed_something
+                   : memory::reclaiming_result::reclaimed_nothing;
+        }, memory::reclaimer_scope::sync)
 { }
 
 tracker::~tracker() {
@@ -58,7 +75,7 @@ size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes);
 }
 
-occupancy_stats tracker::occupancy() const {
+occupancy_stats tracker::occupancy() {
     return _impl->occupancy();
 }
 
@@ -508,6 +525,19 @@ private:
     uint64_t _compaction_counter = 0;
     eviction_fn _eviction_fn;
 private:
+    struct compaction_lock {
+        region_impl& _region;
+        bool _prev;
+        compaction_lock(region_impl& r)
+            : _region(r)
+            , _prev(r._compaction_enabled)
+        {
+            _region._compaction_enabled = false;
+        }
+        ~compaction_lock() {
+            _region._compaction_enabled = _prev;
+        }
+    };
     void* alloc_small(allocation_strategy::migrate_fn migrator, segment::size_type size, size_t alignment) {
         assert(alignment < obj_flags::max_alignment);
 
@@ -678,6 +708,7 @@ public:
     }
 
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
+        compaction_lock _(*this);
         if (size > max_managed_object_size) {
             return standard_allocator().alloc(migrator, size, alignment);
         } else {
@@ -686,6 +717,7 @@ public:
     }
 
     virtual void free(void* obj) override {
+        compaction_lock _(*this);
         segment* seg = shard_segment_pool.containing_segment(obj);
 
         if (!seg) {
@@ -718,6 +750,8 @@ public:
     // Merges another region into this region. The other region is left empty.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) {
+        compaction_lock dct1(*this);
+        compaction_lock dct2(other);
         degroup_temporarily dgt1(this);
         degroup_temporarily dgt2(&other);
 
@@ -753,6 +787,8 @@ public:
             return;
         }
 
+        compaction_lock _(*this);
+
         auto in_use = shard_segment_pool.segments_in_use();
 
         while (shard_segment_pool.segments_in_use() >= in_use) {
@@ -767,6 +803,7 @@ public:
     // Compacts everything. Mainly for testing.
     // Invalidates references to allocated objects.
     void full_compaction() {
+        compaction_lock _(*this);
         logger.debug("Full compaction, {}", occupancy());
         close_and_open();
         segment_heap all;
@@ -796,12 +833,7 @@ public:
         return _compaction_enabled;
     }
 
-    //
-    // Returns true if this pool is evictable and evict_some() will make some forward progress, so
-    // this will eventually stop:
-    //
-    //     while (evictable()) { evict_some(); }
-    //
+    // Returns true if this pool is evictable, so that evict_some() can be called.
     bool is_evictable() const {
         return _evictable;
     }
@@ -875,7 +907,8 @@ std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
-occupancy_stats tracker::impl::occupancy() const {
+occupancy_stats tracker::impl::occupancy() {
+    reclaiming_lock _(*this);
     occupancy_stats total{};
     for (auto&& r: _regions) {
         total += r->occupancy();
@@ -884,6 +917,8 @@ occupancy_stats tracker::impl::occupancy() const {
 }
 
 void tracker::impl::full_compaction() {
+    reclaiming_lock _(*this);
+
     logger.debug("Full compaction on all regions, {}", occupancy());
 
     for (region_impl* r : _regions) {
@@ -942,6 +977,19 @@ size_t tracker::impl::reclaim(size_t bytes) {
     // When compaction is not sufficient to reclaim space, we evict data from
     // evictable regions.
     //
+
+    // This may run synchronously with allocation, so we should not allocate
+    // memory, otherwise we may get std::bad_alloc. Currently we only allocate
+    // in the logger when debug level is enabled. It's disabled during normal
+    // operation. Having it is still valuable during testing and in most cases
+    // should work just fine even if allocates.
+
+    if (!_reclaiming_enabled) {
+        return 0;
+    }
+
+    reclaiming_lock _(*this);
+
     size_t in_use = shard_segment_pool.segments_in_use();
 
     constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
@@ -1007,11 +1055,13 @@ size_t tracker::impl::reclaim(size_t bytes) {
 }
 
 void tracker::impl::register_region(region::impl* r) {
+    reclaiming_lock _(*this);
     _regions.push_back(r);
     logger.debug("Registered region @{} with id={}", r, r->id());
 }
 
 void tracker::impl::unregister_region(region::impl* r) {
+    reclaiming_lock _(*this);
     logger.debug("Unregistering region, id={}", r->id());
     _regions.erase(std::remove(_regions.begin(), _regions.end(), r));
 }

@@ -9,6 +9,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
+#include <deque>
 
 #include "utils/logalloc.hh"
 #include "utils/managed_ref.hh"
@@ -271,6 +272,52 @@ SEASTAR_TEST_CASE(test_merging) {
 
         with_allocator(reg2.allocator(), [&] {
             refs.clear();
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_compaction_lock) {
+    return seastar::async([] {
+        region reg;
+        with_allocator(reg.allocator(), [&] {
+            std::deque<managed_bytes> refs;
+
+            for (int i = 0; i < 1024 * 10; ++i) {
+                refs.push_back(managed_bytes(managed_bytes::initialized_later(), 1024));
+            }
+
+            // Evict 30% so that region is compactible, but do it randomly so that
+            // segments are not released into the standard allocator without compaction.
+            std::random_shuffle(refs.begin(), refs.end());
+            for (size_t i = 0; i < refs.size() * 0.3; ++i) {
+                refs.pop_back();
+            }
+
+            std::deque<bytes> objects;
+
+            auto counter = reg.compaction_counter();
+
+            // Verify that with compaction lock we rather run out of memory
+            // than compact it
+            {
+                BOOST_REQUIRE(reg.compaction_enabled());
+
+                logalloc::compaction_lock _(reg);
+
+                BOOST_REQUIRE(!reg.compaction_enabled());
+
+                try {
+                    while (true) {
+                        objects.push_back(bytes(bytes::initialized_later(), 1024*1024));
+                    }
+                } catch (const std::bad_alloc&) {
+                    // expected
+                }
+
+                BOOST_REQUIRE(reg.compaction_counter() == counter);
+            }
+
+            BOOST_REQUIRE(reg.compaction_enabled());
         });
     });
 }

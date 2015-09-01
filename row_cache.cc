@@ -41,6 +41,11 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "bytes", "total")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _region.occupancy().total_space(); })
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "hits")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _hits)
         ),
@@ -117,6 +122,7 @@ row_cache::make_reader(const query::partition_range& range) {
             cache_entry& e = *i;
             _tracker.touch(e);
             ++_stats.hits;
+            logalloc::compaction_lock lock(_tracker.region());
             return make_reader_returning(mutation(_schema, dk, e.partition()));
         } else {
             ++_stats.misses;
@@ -136,6 +142,7 @@ row_cache::~row_cache() {
 
 void row_cache::populate(const mutation& m) {
     with_allocator(_tracker.allocator(), [this, &m] {
+        logalloc::compaction_lock _(_tracker.region());
         auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
         if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
             cache_entry* entry = current_allocator().construct<cache_entry>(m.decorated_key(), m.partition());
@@ -153,6 +160,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
     return repeat([this, &m, presence_checker = std::move(presence_checker)] () mutable {
         return with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
+            logalloc::compaction_lock _(_tracker.region());
             unsigned quota = 30;
             auto i = m.partitions.begin();
             const schema& s = *m.schema();
