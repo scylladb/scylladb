@@ -93,7 +93,7 @@ db::commitlog::descriptor::descriptor(sstring filename)
                 std::regex rx("(?:.*/)?" + FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
                 std::string sfilename = filename;
                 if (!std::regex_match(sfilename, m, rx)) {
-                    throw std::runtime_error("Cannot parse the version of the file: " + filename);
+                    throw std::domain_error("Cannot parse the version of the file: " + filename);
                 }
                 if (m[3].length() == 0) {
                     // CMH. Can most likely ignore this
@@ -166,22 +166,6 @@ public:
 
     uint64_t next_id() {
         return ++_ids;
-    }
-
-    future<> process(directory_entry de) {
-        auto entry_type = [this](const directory_entry & de) {
-            if (!de.type && !de.name.empty()) {
-                return engine().file_type(cfg.commit_log_location + "/" + de.name);
-            }
-            return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
-        };
-        return entry_type(de).then([de, this](auto type) {
-            if (type == directory_entry_type::regular) {
-                descriptor d(de.name);
-                _ids = std::max(_ids, d.id);
-            }
-            return make_ready_future<>();
-        });
     }
 
     future<> init();
@@ -594,10 +578,11 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
                 return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
             };
             return entry_type(de).then([this, de](auto type) {
-                if (type == directory_entry_type::regular) {
+                if (type == directory_entry_type::regular && de.name[0] != '.') {
                     try {
                         _result.emplace_back(de.name);
-                    } catch (std::domain_error &) {
+                    } catch (std::domain_error& e) {
+                        logger.warn(e.what());
                     }
                 }
                 return make_ready_future<>();
