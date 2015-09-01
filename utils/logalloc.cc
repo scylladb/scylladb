@@ -21,7 +21,10 @@ namespace logalloc {
 struct segment;
 
 static logging::logger logger("lsa");
+static logging::logger timing_logger("lsa-timing");
 static thread_local tracker tracker_instance;
+
+using clock = std::chrono::high_resolution_clock;
 
 class tracker::impl {
     std::vector<region::impl*> _regions;
@@ -965,6 +968,26 @@ static void reclaim_from_evictable(region::impl& r, size_t target_segments_in_us
     }
 }
 
+struct reclaim_timer {
+    clock::time_point start;
+    bool enabled;
+    reclaim_timer() {
+        if (timing_logger.is_enabled(logging::log_level::debug)) {
+            start = clock::now();
+            enabled = true;
+        } else {
+            enabled = false;
+        }
+    }
+    ~reclaim_timer() {
+        if (enabled) {
+            auto duration = clock::now() - start;
+            timing_logger.debug("Reclamation cycle took {} us.",
+                std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(duration).count());
+        }
+    }
+};
+
 size_t tracker::impl::reclaim(size_t bytes) {
     //
     // Algorithm outline.
@@ -990,6 +1013,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
     }
 
     reclaiming_lock _(*this);
+    reclaim_timer timing_guard;
 
     size_t in_use = shard_segment_pool.segments_in_use();
 
@@ -1052,6 +1076,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
     auto nr_released = in_use - shard_segment_pool.segments_in_use();
     logger.debug("Released {} segments (wanted {}), {} during compaction.",
         nr_released, segments_to_release, released_during_compaction);
+
     return nr_released * segment::size;
 }
 
