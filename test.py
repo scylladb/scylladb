@@ -83,7 +83,6 @@ if __name__ == "__main__":
         for test in boost_tests:
             test_to_run.append((os.path.join(prefix, test),'boost'))
     test_to_run.append(('build/release/tests/lsa_async_eviction_test -c1 -m200M --size 1024 --batch 3000 --count 2000000','other'))
-    test_to_run.append(('build/release/tests/lsa_async_eviction_test -c1 -m200M --size 1024 --batch 30000 --count 2000000','other'))
     test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m100M --count 10 --standard-object-size 3000000','other'))
     test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m100M --count 24000 --standard-object-size 2048','other'))
     test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m1G --count 4000000 --standard-object-size 128','other'))
