@@ -143,6 +143,9 @@ public:
         uint64_t bytes_slack = 0;
         uint64_t segments_created = 0;
         uint64_t segments_destroyed = 0;
+        uint64_t pending_operations = 0;
+        uint64_t total_size = 0;
+        uint64_t buffer_list_bytes = 0;
     };
 
     stats totals;
@@ -266,6 +269,7 @@ public:
     ~segment() {
         logger.debug("Segment {} is no longer active and will be deleted now", *this);
         ++_segment_manager->totals.segments_destroyed;
+        _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
         ::unlink(
                 (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
     }
@@ -315,6 +319,7 @@ public:
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
                     _sync_time = clock_type::now();
+                    ++_segment_manager->totals.pending_operations;
                     return _file.flush().handle_exception([](auto ex) {
                                 try {
                                     std::rethrow_exception(ex);
@@ -331,6 +336,8 @@ public:
                                 _flush_pos = std::max(pos, _flush_pos);
                                 ++_segment_manager->totals.flush_count;
                                 return make_ready_future<sseg_ptr>(std::move(me));
+                            }).finally([this] {
+                                --_segment_manager->totals.pending_operations;
                             });
                 });
     }
@@ -373,6 +380,7 @@ public:
             _buf_pos = overhead;
             auto * p = reinterpret_cast<uint32_t *>(_buffer.get_write());
             std::fill(p, p + overhead, 0);
+            _segment_manager->totals.total_size += k;
         }
         auto me = shared_from_this();
         if (size == 0) {
@@ -409,6 +417,7 @@ public:
 
         // acquire read lock
         return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me]() mutable {
+            ++_segment_manager->totals.pending_operations;
             auto written = make_lw_shared<size_t>(0);
             auto p = buf.get();
             return repeat([this, size, off, written, p]() mutable {
@@ -442,6 +451,7 @@ public:
         }).then([me] {
             return make_ready_future<sseg_ptr>(std::move(me));
         }).finally([me, this]() {
+            --_segment_manager->totals.pending_operations;
             _dwrite.read_unlock(); // release
         });
     }
@@ -670,11 +680,24 @@ scollectd::registrations db::commitlog::segment_manager::create_counters() {
 
         add_polled_metric(type_instance_id("commitlog"
                         , per_cpu_plugin_instance, "total_bytes", "written")
-                , make_typed(data_type::GAUGE, totals.bytes_written)
+                , make_typed(data_type::DERIVE, totals.bytes_written)
         ),
         add_polled_metric(type_instance_id("commitlog"
                         , per_cpu_plugin_instance, "total_bytes", "slack")
-                , make_typed(data_type::GAUGE, totals.bytes_slack)
+                , make_typed(data_type::DERIVE, totals.bytes_slack)
+        ),
+
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "queue_length", "pending_operations")
+                , make_typed(data_type::GAUGE, totals.pending_operations)
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "memory", "total_size")
+                , make_typed(data_type::GAUGE, totals.total_size)
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "memory", "buffer_list_bytes")
+                , make_typed(data_type::GAUGE, totals.buffer_list_bytes)
         ),
     };
 }
@@ -805,6 +828,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
         if (i->size() >= s) {
             auto r = std::move(*i);
             _temp_buffers.erase(i);
+            totals.buffer_list_bytes -= r.size();
             return r;
         }
         ++i;
@@ -827,6 +851,8 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
     if (_temp_buffers.size() > max_temp_buffers) {
         _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
     }
+    totals.buffer_list_bytes = std::accumulate(_temp_buffers.begin(),
+            _temp_buffers.end(), size_t(0), std::plus<size_t>());
 }
 
 /**
@@ -1045,6 +1071,18 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
 
 std::vector<sstring> db::commitlog::get_active_segment_names() const {
     return _segment_manager->get_active_names();
+}
+
+uint64_t db::commitlog::get_total_size() const {
+    return _segment_manager->totals.total_size;
+}
+
+uint64_t db::commitlog::get_completed_tasks() const {
+    return _segment_manager->totals.allocation_count;
+}
+
+uint64_t db::commitlog::get_pending_tasks() const {
+    return _segment_manager->totals.pending_operations;
 }
 
 future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors() const {

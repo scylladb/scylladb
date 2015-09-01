@@ -175,6 +175,10 @@ public:
      */
     std::vector<sstring> get_active_segment_names() const;
 
+    uint64_t get_total_size() const;
+    uint64_t get_completed_tasks() const;
+    uint64_t get_pending_tasks() const;
+
     /**
      * Returns the largest amount of data that can be written in a single "mutation".
      */
