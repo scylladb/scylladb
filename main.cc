@@ -19,6 +19,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "utils/runtime.hh"
+#include "utils/file_lock.hh"
 #include "dns.hh"
 #include "log.hh"
 #include "debug.hh"
@@ -66,8 +67,49 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
     logging::logger::set_syslog_enabled(log_to_syslog);
 }
 
-
 logging::logger startlog("init");
+
+class directories {
+public:
+    future<> touch_and_lock(sstring path) {
+        return recursive_touch_directory(path).then_wrapped([this, path] (future<> f) {
+            try {
+                f.get();
+                return utils::file_lock::acquire(path + "/.lock").then([this](utils::file_lock lock) {
+                   _locks.emplace_back(std::move(lock));
+                }).handle_exception([path](auto ep) {
+                    // only do this because "normal" unhandled exception exit in seastar
+                    // _drops_ system_error message ("what()") and thus does not quite deliver
+                    // the relevant info to the user
+                    try {
+                        std::rethrow_exception(ep);
+                    } catch (std::exception& e) {
+                        startlog.error("Could not initialize {}: {}", path, e.what());
+                        throw;
+                    } catch (...) {
+                        throw;
+                    }
+                });
+            } catch (std::system_error& e) {
+                startlog.error("Directory '{}' not found. Tried to created it but failed: {}", path, e.what());
+                throw;
+            }
+        });
+    }
+    template<typename _Iter>
+    future<> touch_and_lock(_Iter i, _Iter e) {
+        return parallel_for_each(i, e, [this](sstring path) {
+           return touch_and_lock(std::move(path));
+        });
+    }
+    template<typename _Range>
+    future<> touch_and_lock(_Range&& r) {
+        return touch_and_lock(std::begin(r), std::end(r));
+    }
+private:
+    std::vector<utils::file_lock>
+        _locks;
+};
 
 int main(int ac, char** av) {
     runtime::init_uptime();
@@ -93,6 +135,7 @@ int main(int ac, char** av) {
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
+    directories dirs;
 
     return app.run_deprecated(ac, av, [&] {
         if (help_loggers) {
@@ -102,7 +145,7 @@ int main(int ac, char** av) {
         }
         auto&& opts = app.configuration();
 
-        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts]() {
+        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             dht::set_global_partitioner(cfg->partitioner());
@@ -143,27 +186,10 @@ int main(int ac, char** av) {
                 return db::get_batchlog_manager().start(std::ref(qp)).then([] {
                    engine().at_exit([] { return db::get_batchlog_manager().stop(); });
                 });
-            }).then([&db] {
-                return parallel_for_each(db.local().get_config().data_file_directories(), [] (sstring datadir) {
-                    return recursive_touch_directory(datadir).then_wrapped([datadir] (future<> f) {
-                        try {
-                            f.get();
-                        } catch (std::system_error& e) {
-                            startlog.error("Directory '{}' not found. Tried to created it but failed: {}", datadir, e.what());
-                            throw;
-                        }
-                    });
-                });
-            }).then([&db] {
-                sstring commitlog = db.local().get_config().commitlog_directory();
-                return recursive_touch_directory(commitlog).then_wrapped([commitlog] (future<> f) {
-                    try {
-                        f.get();
-                    } catch (std::system_error& e) {
-                        startlog.error("commitlog directory '{}' not found. Tried to created it but failed: {}", commitlog, e.what());
-                        throw;
-                    }
-                });
+            }).then([&db, &dirs] {
+                return dirs.touch_and_lock(db.local().get_config().data_file_directories());
+            }).then([&db, &dirs] {
+                return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
             }).then([&db] {
                 return db.invoke_on_all([] (database& db) {
                     return db.init_system_keyspace();
