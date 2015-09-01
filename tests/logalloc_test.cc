@@ -276,6 +276,7 @@ SEASTAR_TEST_CASE(test_merging) {
     });
 }
 
+#ifndef DEFAULT_ALLOCATOR
 SEASTAR_TEST_CASE(test_compaction_lock) {
     return seastar::async([] {
         region reg;
@@ -321,3 +322,4 @@ SEASTAR_TEST_CASE(test_compaction_lock) {
         });
     });
 }
+#endif
