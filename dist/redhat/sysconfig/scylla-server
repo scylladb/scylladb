@@ -4,6 +4,9 @@ DATA_DIR=/var/lib/scylla/data
 # path for commitlog-directory
 COMMITLOG_DIR=/var/lib/scylla/commitlog
 
+# path for options file:
+OPTS_FILE=/var/lib/scylla/conf/scylla.yaml
+
 # choose following mode: virtio, dpdk, posix
 NETWORK_MODE=posix
 
