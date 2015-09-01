@@ -1078,7 +1078,7 @@ void tracker::impl::register_collectd_metrics() {
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "non_lsa_used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return memory::stats().allocated_memory() - occupancy().used_space(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return memory::stats().allocated_memory() - occupancy().total_space(); })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "percent", "occupancy"),
