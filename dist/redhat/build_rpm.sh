@@ -9,11 +9,7 @@ if [ ! -e dist/redhat/build_rpm.sh ]; then
 fi
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 sudo yum install -y yum-utils git rpm-build rpmdevtools
-cp -a ./ /var/tmp/scylla-server-$SCYLLA_VER
-cd /var/tmp
-tar --exclude-vcs --exclude-vcs-ignores --exclude="scylla-server-$SCYLLA_VER/build" --exclude="scylla-server-$SCYLLA_VER/seastar/build" -cpf $RPMBUILD/SOURCES/scylla-server-$SCYLLA_VER.tar scylla-server-$SCYLLA_VER
-cp scylla-server-$SCYLLA_VER/dist/redhat/scylla-server.spec $RPMBUILD/SPECS
-rm -rf scylla-server-$SCYLLA_VER
-cd -
+./scripts/git-archive-all --prefix scylla-server-$SCYLLA_VER $RPMBUILD/SOURCES/scylla-server-$SCYLLA_VER.tar
+cp dist/redhat/scylla-server.spec $RPMBUILD/SPECS
 sudo yum-builddep -y $RPMBUILD/SPECS/scylla-server.spec
 rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/scylla-server.spec
