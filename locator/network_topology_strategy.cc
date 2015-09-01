@@ -183,11 +183,11 @@ network_topology_strategy::calculate_natural_endpoints(
 
 void network_topology_strategy::validate_options() const {
     for (auto& c : _config_options) {
-        if (c.first == sstring("replication_factor"))
+        if (c.first == sstring("replication_factor")) {
             throw exceptions::configuration_exception(
                 "replication_factor is an option for simple_strategy, not "
                 "network_topology_strategy");
-
+        }
         validate_replication_factor(c.second);
     }
 }
