@@ -33,14 +33,14 @@ SEASTAR_TEST_CASE(test_compaction) {
 
             // Allocate several segments
 
-            auto compaction_counter_1 = reg.compaction_counter();
+            auto compaction_counter_1 = reg.reclaim_counter();
 
             for (int i = 0; i < 32 * 1024 * 4; i++) {
                 _allocated.push_back(make_managed<int>());
             }
 
             // Allocation should not invalidate references
-            BOOST_REQUIRE_EQUAL(reg.compaction_counter(), compaction_counter_1);
+            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), compaction_counter_1);
 
             // Free 1/3 randomly
 
@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_compaction) {
             }
 
             // Freeing should not invalidate references
-            BOOST_REQUIRE_EQUAL(reg.compaction_counter(), compaction_counter_1);
+            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), compaction_counter_1);
 
             // Try to reclaim
 
@@ -61,7 +61,7 @@ SEASTAR_TEST_CASE(test_compaction) {
             BOOST_REQUIRE(shard_tracker().reclaim(target) >= target);
 
             // There must have been some compaction during such reclaim
-            BOOST_REQUIRE(reg.compaction_counter() != compaction_counter_1);
+            BOOST_REQUIRE(reg.reclaim_counter() != compaction_counter_1);
         });
     });
 }
@@ -277,7 +277,7 @@ SEASTAR_TEST_CASE(test_merging) {
 }
 
 #ifndef DEFAULT_ALLOCATOR
-SEASTAR_TEST_CASE(test_compaction_lock) {
+SEASTAR_TEST_CASE(test_region_lock) {
     return seastar::async([] {
         region reg;
         with_allocator(reg.allocator(), [&] {
@@ -294,18 +294,27 @@ SEASTAR_TEST_CASE(test_compaction_lock) {
                 refs.pop_back();
             }
 
+            reg.make_evictable([&refs] {
+                if (refs.empty()) {
+                    return memory::reclaiming_result::reclaimed_nothing;
+                }
+                refs.pop_back();
+                return memory::reclaiming_result::reclaimed_something;
+            });
+
             std::deque<bytes> objects;
 
-            auto counter = reg.compaction_counter();
+            auto counter = reg.reclaim_counter();
 
             // Verify that with compaction lock we rather run out of memory
             // than compact it
             {
-                BOOST_REQUIRE(reg.compaction_enabled());
+                BOOST_REQUIRE(reg.reclaiming_enabled());
 
-                logalloc::compaction_lock _(reg);
+                logalloc::reclaim_lock _(reg);
 
-                BOOST_REQUIRE(!reg.compaction_enabled());
+                BOOST_REQUIRE(!reg.reclaiming_enabled());
+                auto used_before = reg.occupancy().used_space();
 
                 try {
                     while (true) {
@@ -315,10 +324,11 @@ SEASTAR_TEST_CASE(test_compaction_lock) {
                     // expected
                 }
 
-                BOOST_REQUIRE(reg.compaction_counter() == counter);
+                BOOST_REQUIRE(reg.reclaim_counter() == counter);
+                BOOST_REQUIRE(reg.occupancy().used_space() == used_before); // eviction is also disabled
             }
 
-            BOOST_REQUIRE(reg.compaction_enabled());
+            BOOST_REQUIRE(reg.reclaiming_enabled());
         });
     });
 }

@@ -196,19 +196,18 @@ public:
     // Invalidates references to allocated objects.
     void full_compaction();
 
-    // Changes the compactibility state of this region. When region is not
-    // compactible, it won't be considered by tracker::reclaim(). By default region is
-    // compactible after construction.
-    void set_compaction_enabled(bool);
+    // Changes the reclaimability state of this region. When region is not
+    // reclaimable, it won't be considered by tracker::reclaim(). By default region is
+    // reclaimable after construction.
+    void set_reclaiming_enabled(bool);
 
-    // Returns the compactibility state of this region.
-    bool compaction_enabled() const;
+    // Returns the reclaimability state of this region.
+    bool reclaiming_enabled() const;
 
-    // Returns a value which is increased when this region is compacted.
-    // Can be used to determine if references into this region were invalidated
-    // between two points in execution. When this value doesn't change, references
-    // remain valid.
-    uint64_t compaction_counter() const;
+    // Returns a value which is increased when this region is either compacted or
+    // evicted from, which invalidates references into the region.
+    // When the value returned by this method doesn't change, references remain valid.
+    uint64_t reclaim_counter() const;
 
     // Makes this region an evictable region. Supplied function will be called
     // when data from this region needs to be evicted in order to reclaim space.
@@ -218,20 +217,20 @@ public:
     friend class region_group;
 };
 
-// Disables compaction of given region as long as this object is live,
-// so that any references into the region remain valid.
+// Forces references into the region to remain valid as long as this guard is
+// live by disabling compaction and eviction.
 // Can be nested.
-struct compaction_lock {
+struct reclaim_lock {
     region& _region;
     bool _prev;
-    compaction_lock(region& r)
+    reclaim_lock(region& r)
         : _region(r)
-        , _prev(r.compaction_enabled())
+        , _prev(r.reclaiming_enabled())
     {
-        _region.set_compaction_enabled(false);
+        _region.set_reclaiming_enabled(false);
     }
-    ~compaction_lock() {
-        _region.set_compaction_enabled(_prev);
+    ~reclaim_lock() {
+        _region.set_reclaiming_enabled(_prev);
     }
 };
 

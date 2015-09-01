@@ -21,7 +21,7 @@ memtable::~memtable() {
 
 mutation_partition&
 memtable::find_or_create_partition_slow(partition_key_view key) {
-    assert(!_region.compaction_enabled());
+    assert(!_region.reclaiming_enabled());
 
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
     // to avoid unconditional copy of the partition key.
@@ -39,7 +39,7 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
 
 mutation_partition&
 memtable::find_or_create_partition(const dht::decorated_key& key) {
-    assert(!_region.compaction_enabled());
+    assert(!_region.reclaiming_enabled());
 
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key, partition_entry::compare(_schema));
@@ -98,7 +98,7 @@ private:
     }
     void update_iterators() {
         // We must be prepared that iterators may get invalidated during compaction.
-        auto current_compaction_counter = _memtable->_region.compaction_counter();
+        auto current_compaction_counter = _memtable->_region.reclaim_counter();
         auto cmp = partition_entry::compare(_memtable->_schema);
         if (_last) {
             if (current_compaction_counter != _last_compaction_counter) {
@@ -123,7 +123,7 @@ public:
     { }
 
     virtual future<mutation_opt> operator()() override {
-        logalloc::compaction_lock _(_memtable->_region);
+        logalloc::reclaim_lock _(_memtable->_region);
         update_iterators();
         if (_i == _end) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
@@ -145,7 +145,7 @@ memtable::make_reader(const query::partition_range& range) const {
         const query::ring_position& pos = range.start()->value();
         auto i = partitions.find(pos, partition_entry::compare(_schema));
         if (i != partitions.end()) {
-            logalloc::compaction_lock _(_region);
+            logalloc::reclaim_lock _(_region);
             return make_reader_returning(mutation(_schema, i->key(), i->partition()));
         } else {
             return make_empty_reader();
@@ -165,7 +165,7 @@ memtable::update(const db::replay_position& rp) {
 void
 memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
-        logalloc::compaction_lock _(_region);
+        logalloc::reclaim_lock _(_region);
         mutation_partition& p = find_or_create_partition(m.decorated_key());
         p.apply(*_schema, m.partition());
     });
@@ -175,7 +175,7 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
 void
 memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
-        logalloc::compaction_lock _(_region);
+        logalloc::reclaim_lock _(_region);
         mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
         p.apply(*_schema, m.partition());
     });
