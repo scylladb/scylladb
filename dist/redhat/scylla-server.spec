@@ -2,7 +2,7 @@ Name:           scylla-server
 Version:        0.00
 Release:        1%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
-Group:          Applications/Dataases
+Group:          Applications/Databases
 
 License:        Proprietary
 URL:            http://www.seastar-project.org/
