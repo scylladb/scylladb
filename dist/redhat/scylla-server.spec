@@ -52,6 +52,8 @@ install -m644 licenses/* $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
+install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf
+install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf/
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -90,6 +92,7 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
+%{_sharedstatedir}/scylla/conf/
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
