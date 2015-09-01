@@ -199,73 +199,21 @@ public:
 
     // should only be called via JMX
     bool is_gossip_running();
-#if 0
 
     // should only be called via JMX
-    public void startRPCServer()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        daemon.thriftServer.start();
-    }
+    future<> start_rpc_server();
 
-    public void stopRPCServer()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        if (daemon.thriftServer != null)
-            daemon.thriftServer.stop();
-    }
+    future<> stop_rpc_server();
 
-    public boolean isRPCServerRunning()
-    {
-        if ((daemon == null) || (daemon.thriftServer == null))
-        {
-            return false;
-        }
-        return daemon.thriftServer.isRunning();
-    }
+    bool is_rpc_server_running();
 
-    public void startNativeTransport()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
+    future<> start_native_transport();
 
-        try
-        {
-            daemon.nativeServer.start();
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException("Error starting native transport: " + e.getMessage());
-        }
-    }
+    future<> stop_native_transport();
 
-    public void stopNativeTransport()
-    {
-        if (daemon == null)
-        {
-            throw new IllegalStateException("No configured daemon");
-        }
-        if (daemon.nativeServer != null)
-            daemon.nativeServer.stop();
-    }
+    bool is_native_transport_running();
 
-    public boolean isNativeTransportRunning()
-    {
-        if ((daemon == null) || (daemon.nativeServer == null))
-        {
-            return false;
-        }
-        return daemon.nativeServer.isRunning();
-    }
-
+#if 0
     public void stopTransports()
     {
         if (isInitialized())
@@ -356,35 +304,10 @@ public:
     bool is_joined() {
         return _joined;
     }
+
+    future<> rebuild(sstring source_dc);
+
 #if 0
-    public void rebuild(String sourceDc)
-    {
-        logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
-
-        RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
-        streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
-        if (sourceDc != null)
-            streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
-
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-            streamer.addRanges(keyspaceName, getLocalRanges(keyspaceName));
-
-        try
-        {
-            streamer.fetchAsync().get();
-        }
-        catch (InterruptedException e)
-        {
-            throw new RuntimeException("Interrupted while waiting on rebuild streaming");
-        }
-        catch (ExecutionException e)
-        {
-            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-            logger.error("Error while rebuilding node", e.getCause());
-            throw new RuntimeException("Error while rebuilding node: " + e.getCause().getMessage());
-        }
-    }
-
     public void setStreamThroughputMbPerSec(int value)
     {
         DatabaseDescriptor.setStreamThroughputOutboundMegabitsPerSec(value);
@@ -1015,39 +938,16 @@ private:
 
         return changedRanges;
     }
-
+#endif
+public:
     /** raw load value */
-    public double getLoad()
-    {
-        double bytes = 0;
-        for (String keyspaceName : Schema.instance.getKeyspaces())
-        {
-            Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
-            if (keyspace == null)
-                continue;
-            for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                bytes += cfs.getLiveDiskSpaceUsed();
-        }
-        return bytes;
-    }
+    double get_load();
 
-    public String getLoadString()
-    {
-        return FileUtils.stringifyFileSize(getLoad());
-    }
+    sstring get_load_string();
 
-    public Map<String, String> getLoadMap()
-    {
-        Map<String, String> map = new HashMap<>();
-        for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
-        {
-            map.put(entry.getKey().getHostAddress(), FileUtils.stringifyFileSize(entry.getValue()));
-        }
-        // gossiper doesn't see its own updates, so we need to special-case the local node
-        map.put(FBUtilities.getBroadcastAddress().getHostAddress(), getLoadString());
-        return map;
-    }
+    std::map<sstring, sstring> get_load_map();
 
+#if 0
     public final void deliverHints(String host) throws UnknownHostException
     {
         HintedHandOffManager.instance.scheduleHintDelivery(host);
@@ -2150,43 +2050,11 @@ public:
         _token_metadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
         PendingRangeCalculatorService.instance.update();
     }
+#endif
 
-    public void decommission() throws InterruptedException
-    {
-        if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
-            throw new UnsupportedOperationException("local node is not a member of the token ring yet");
-        if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
-            throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
+    future<> decommission();
 
-        PendingRangeCalculatorService.instance.blockUntilFinished();
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
-                throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
-        }
-
-        if (logger.isDebugEnabled())
-            logger.debug("DECOMMISSIONING");
-        startLeaving();
-        long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-        setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
-        Thread.sleep(timeout);
-
-        Runnable finishLeaving = new Runnable()
-        {
-            public void run()
-            {
-                shutdownClientServers();
-                Gossiper.instance.stop();
-                MessagingService.instance().shutdown();
-                StageManager.shutdownNow();
-                setMode(Mode.DECOMMISSIONED, true);
-                // let op be responsible for killing the process
-            }
-        };
-        unbootstrap(finishLeaving);
-    }
-
+#if 0
     private void leaveRing()
     {
         SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.NEEDS_BOOTSTRAP);
@@ -2550,7 +2418,7 @@ public:
             logger.warn("No tokens to force removal on, call 'removenode' first");
         }
     }
-
+#endif
     /**
      * Remove a node that has died, attempting to restore the replica count.
      * If the node is alive, decommission should be attempted.  If decommission
@@ -2560,77 +2428,9 @@ public:
      *
      * @param hostIdString token for the node
      */
-    public void removeNode(String hostIdString)
-    {
-        InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        UUID localHostId = _token_metadata.getHostId(myAddress);
-        UUID hostId = UUID.fromString(hostIdString);
-        InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
+    future<> remove_node(sstring host_id_string);
 
-        if (endpoint == null)
-            throw new UnsupportedOperationException("Host ID not found.");
-
-        Collection<Token> tokens = _token_metadata.getTokens(endpoint);
-
-        if (endpoint.equals(myAddress))
-             throw new UnsupportedOperationException("Cannot remove self");
-
-        if (Gossiper.instance.getLiveMembers().contains(endpoint))
-            throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
-
-        // A leaving endpoint that is dead is already being removed.
-        if (_token_metadata.isLeaving(endpoint))
-            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-
-        if (!replicatingNodes.isEmpty())
-            throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-
-        // Find the endpoints that are going to become responsible for data
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-            if (Keyspace.open(keyspaceName).getReplicationStrategy().getReplicationFactor() == 1)
-                continue;
-
-            // get all ranges that change ownership (that is, a node needs
-            // to take responsibility for new range)
-            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-            IFailureDetector failureDetector = FailureDetector.instance;
-            for (InetAddress ep : changedRanges.values())
-            {
-                if (failureDetector.isAlive(ep))
-                    replicatingNodes.add(ep);
-                else
-                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
-            }
-        }
-        removingNode = endpoint;
-
-        _token_metadata.addLeavingEndpoint(endpoint);
-        PendingRangeCalculatorService.instance.update();
-
-        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-        // we add our own token so other nodes to let us know when they're done
-        Gossiper.instance.advertiseRemoving(endpoint, hostId, localHostId);
-
-        // kick off streaming commands
-        restoreReplicaCount(endpoint, myAddress);
-
-        // wait for ReplicationFinishedVerbHandler to signal we're done
-        while (!replicatingNodes.isEmpty())
-        {
-            Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-        }
-
-        excise(tokens, endpoint);
-
-        // gossiper will indicate the token has left
-        Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
-
-        replicatingNodes.clear();
-        removingNode = null;
-    }
-
+#if 0
     public void confirmReplication(InetAddress node)
     {
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
@@ -2654,6 +2454,7 @@ public:
     {
         return String.format("Drained %s/%s ColumnFamilies", remainingCFs, totalCFs);
     }
+#endif
 
     /**
      * Shuts node off to writes, empties memtables and the commit log.
@@ -2661,80 +2462,9 @@ public:
      * - Drain waits for in-progress streaming to complete
      * - Drain flushes *all* columnfamilies (shutdown hook only flushes non-durable CFs)
      */
-    public synchronized void drain() throws IOException, InterruptedException, ExecutionException
-    {
-        ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-        ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-        if (mutationStage.isTerminated() && counterMutationStage.isTerminated())
-        {
-            logger.warn("Cannot drain node (did it already happen?)");
-            return;
-        }
-        setMode(Mode.DRAINING, "starting drain process", true);
-        shutdownClientServers();
-        ScheduledExecutors.optionalTasks.shutdown();
-        Gossiper.instance.stop();
+    future<> drain();
 
-        setMode(Mode.DRAINING, "shutting down MessageService", false);
-        MessagingService.instance().shutdown();
-
-        setMode(Mode.DRAINING, "clearing mutation stage", false);
-        counterMutationStage.shutdown();
-        mutationStage.shutdown();
-        counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-        mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-
-        StorageProxy.instance.verifyNoHintsInProgress();
-
-        setMode(Mode.DRAINING, "flushing column families", false);
-        // count CFs first, since forceFlush could block for the flushWriter to get a queue slot empty
-        totalCFs = 0;
-        for (Keyspace keyspace : Keyspace.nonSystem())
-            totalCFs += keyspace.getColumnFamilyStores().size();
-        remainingCFs = totalCFs;
-        // flush
-        List<Future<?>> flushes = new ArrayList<>();
-        for (Keyspace keyspace : Keyspace.nonSystem())
-        {
-            for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                flushes.add(cfs.forceFlush());
-        }
-        // wait for the flushes.
-        // TODO this is a godawful way to track progress, since they flush in parallel.  a long one could
-        // thus make several short ones "instant" if we wait for them later.
-        for (Future f : flushes)
-        {
-            FBUtilities.waitOnFuture(f);
-            remainingCFs--;
-        }
-        // flush the system ones after all the rest are done, just in case flushing modifies any system state
-        // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-        flushes.clear();
-        for (Keyspace keyspace : Keyspace.system())
-        {
-            for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                flushes.add(cfs.forceFlush());
-        }
-        FBUtilities.waitOnFutures(flushes);
-
-        BatchlogManager.shutdown();
-
-        // whilst we've flushed all the CFs, which will have recycled all completed segments, we want to ensure
-        // there are no segments to replay, so we force the recycling of any remaining (should be at most one)
-        CommitLog.instance.forceRecycleAllSegments();
-
-        ColumnFamilyStore.shutdownPostFlushExecutor();
-
-        CommitLog.instance.shutdownBlocking();
-
-        // wait for miscellaneous tasks like sstable and commitlog segment deletion
-        ScheduledExecutors.nonPeriodicTasks.shutdown();
-        if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-            logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
-
-        setMode(Mode.DRAINED, true);
-    }
-
+#if 0
     // Never ever do this at home. Used by tests.
     IPartitioner setPartitionerUnsafe(IPartitioner newPartitioner)
     {
@@ -3059,12 +2789,9 @@ public:
         SSTableLoader loader = new SSTableLoader(dir, client, new OutputHandler.LogOutput());
         return loader.stream();
     }
-
-    public int getExceptionCount()
-    {
-        return (int)StorageMetrics.exceptions.count();
-    }
-
+#endif
+    int32_t get_exception_count();
+#if 0
     public void rescheduleFailedDeletions()
     {
         SSTableDeletingTask.rescheduleFailedTasks();

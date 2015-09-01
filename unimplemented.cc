@@ -40,6 +40,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::HINT: return out << "HINT";
         case cause::SUPER: return out << "SUPER";
         case cause::WRAP_AROUND: return out << "WRAP_AROUND";
+        case cause::STORAGE_SERVICE: return out << "STORAGE_SERVICE";
     }
     assert(0);
 }

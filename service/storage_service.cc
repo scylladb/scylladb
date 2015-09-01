@@ -35,6 +35,7 @@
 #include <algorithm>
 #include "locator/local_strategy.hh"
 #include "version.hh"
+#include "unimplemented.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1203,6 +1204,351 @@ future<> storage_service::stop_gossiping() {
         });
     }
     return make_ready_future<>();
+}
+
+future<> storage_service::start_rpc_server() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+    daemon.thriftServer.start();
+#endif
+    return make_ready_future<>();
+}
+
+future<> storage_service::stop_rpc_server() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+    if (daemon.thriftServer != null)
+        daemon.thriftServer.stop();
+#endif
+    return make_ready_future<>();
+}
+
+bool storage_service::is_rpc_server_running() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if ((daemon == null) || (daemon.thriftServer == null))
+    {
+        return false;
+    }
+    return daemon.thriftServer.isRunning();
+#endif
+    return true;
+}
+
+future<> storage_service::start_native_transport() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+
+    try
+    {
+        daemon.nativeServer.start();
+    }
+    catch (Exception e)
+    {
+        throw new RuntimeException("Error starting native transport: " + e.getMessage());
+    }
+#endif
+    return make_ready_future<>();
+}
+
+future<> storage_service::stop_native_transport() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if (daemon == null)
+    {
+        throw new IllegalStateException("No configured daemon");
+    }
+    if (daemon.nativeServer != null)
+        daemon.nativeServer.stop();
+#endif
+    return make_ready_future<>();
+}
+
+bool storage_service::is_native_transport_running() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if ((daemon == null) || (daemon.nativeServer == null))
+    {
+        return false;
+    }
+    return daemon.nativeServer.isRunning();
+#endif
+    return false;
+}
+
+future<> storage_service::decommission() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
+        throw new UnsupportedOperationException("local node is not a member of the token ring yet");
+    if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
+        throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
+
+    PendingRangeCalculatorService.instance.blockUntilFinished();
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+    {
+        if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
+            throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
+    }
+
+    if (logger.isDebugEnabled())
+        logger.debug("DECOMMISSIONING");
+    startLeaving();
+    long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
+    setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
+    Thread.sleep(timeout);
+
+    Runnable finishLeaving = new Runnable()
+    {
+        public void run()
+        {
+            shutdownClientServers();
+            Gossiper.instance.stop();
+            MessagingService.instance().shutdown();
+            StageManager.shutdownNow();
+            setMode(Mode.DECOMMISSIONED, true);
+            // let op be responsible for killing the process
+        }
+    };
+    unbootstrap(finishLeaving);
+#endif
+    return make_ready_future<>();
+}
+
+future<> storage_service::remove_node(sstring host_id_string) {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    InetAddress myAddress = FBUtilities.getBroadcastAddress();
+    UUID localHostId = _token_metadata.getHostId(myAddress);
+    UUID hostId = UUID.fromString(hostIdString);
+    InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
+
+    if (endpoint == null)
+        throw new UnsupportedOperationException("Host ID not found.");
+
+    Collection<Token> tokens = _token_metadata.getTokens(endpoint);
+
+    if (endpoint.equals(myAddress))
+         throw new UnsupportedOperationException("Cannot remove self");
+
+    if (Gossiper.instance.getLiveMembers().contains(endpoint))
+        throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
+
+    // A leaving endpoint that is dead is already being removed.
+    if (_token_metadata.isLeaving(endpoint))
+        logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+
+    if (!replicatingNodes.isEmpty())
+        throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
+
+    // Find the endpoints that are going to become responsible for data
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+    {
+        // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+        if (Keyspace.open(keyspaceName).getReplicationStrategy().getReplicationFactor() == 1)
+            continue;
+
+        // get all ranges that change ownership (that is, a node needs
+        // to take responsibility for new range)
+        Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
+        IFailureDetector failureDetector = FailureDetector.instance;
+        for (InetAddress ep : changedRanges.values())
+        {
+            if (failureDetector.isAlive(ep))
+                replicatingNodes.add(ep);
+            else
+                logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+        }
+    }
+    removingNode = endpoint;
+
+    _token_metadata.addLeavingEndpoint(endpoint);
+    PendingRangeCalculatorService.instance.update();
+
+    // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+    // we add our own token so other nodes to let us know when they're done
+    Gossiper.instance.advertiseRemoving(endpoint, hostId, localHostId);
+
+    // kick off streaming commands
+    restoreReplicaCount(endpoint, myAddress);
+
+    // wait for ReplicationFinishedVerbHandler to signal we're done
+    while (!replicatingNodes.isEmpty())
+    {
+        Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+    }
+
+    excise(tokens, endpoint);
+
+    // gossiper will indicate the token has left
+    Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
+
+    replicatingNodes.clear();
+    removingNode = null;
+#endif
+    return make_ready_future<>();
+}
+
+future<> storage_service::drain() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
+    ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
+    if (mutationStage.isTerminated() && counterMutationStage.isTerminated())
+    {
+        logger.warn("Cannot drain node (did it already happen?)");
+        return;
+    }
+    setMode(Mode.DRAINING, "starting drain process", true);
+    shutdownClientServers();
+    ScheduledExecutors.optionalTasks.shutdown();
+    Gossiper.instance.stop();
+
+    setMode(Mode.DRAINING, "shutting down MessageService", false);
+    MessagingService.instance().shutdown();
+
+    setMode(Mode.DRAINING, "clearing mutation stage", false);
+    counterMutationStage.shutdown();
+    mutationStage.shutdown();
+    counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+    mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
+
+    StorageProxy.instance.verifyNoHintsInProgress();
+
+    setMode(Mode.DRAINING, "flushing column families", false);
+    // count CFs first, since forceFlush could block for the flushWriter to get a queue slot empty
+    totalCFs = 0;
+    for (Keyspace keyspace : Keyspace.nonSystem())
+        totalCFs += keyspace.getColumnFamilyStores().size();
+    remainingCFs = totalCFs;
+    // flush
+    List<Future<?>> flushes = new ArrayList<>();
+    for (Keyspace keyspace : Keyspace.nonSystem())
+    {
+        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+            flushes.add(cfs.forceFlush());
+    }
+    // wait for the flushes.
+    // TODO this is a godawful way to track progress, since they flush in parallel.  a long one could
+    // thus make several short ones "instant" if we wait for them later.
+    for (Future f : flushes)
+    {
+        FBUtilities.waitOnFuture(f);
+        remainingCFs--;
+    }
+    // flush the system ones after all the rest are done, just in case flushing modifies any system state
+    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
+    flushes.clear();
+    for (Keyspace keyspace : Keyspace.system())
+    {
+        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+            flushes.add(cfs.forceFlush());
+    }
+    FBUtilities.waitOnFutures(flushes);
+
+    BatchlogManager.shutdown();
+
+    // whilst we've flushed all the CFs, which will have recycled all completed segments, we want to ensure
+    // there are no segments to replay, so we force the recycling of any remaining (should be at most one)
+    CommitLog.instance.forceRecycleAllSegments();
+
+    ColumnFamilyStore.shutdownPostFlushExecutor();
+
+    CommitLog.instance.shutdownBlocking();
+
+    // wait for miscellaneous tasks like sstable and commitlog segment deletion
+    ScheduledExecutors.nonPeriodicTasks.shutdown();
+    if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
+        logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
+
+    setMode(Mode.DRAINED, true);
+#endif
+    return make_ready_future<>();
+}
+
+double storage_service::get_load() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+    double bytes = 0;
+#if 0
+    for (String keyspaceName : Schema.instance.getKeyspaces())
+    {
+        Keyspace keyspace = Schema.instance.getKeyspaceInstance(keyspaceName);
+        if (keyspace == null)
+            continue;
+        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
+            bytes += cfs.getLiveDiskSpaceUsed();
+    }
+#endif
+    return bytes;
+}
+
+sstring storage_service::get_load_string() {
+    return sprint("%f", get_load());
+}
+
+std::map<sstring, sstring> storage_service::get_load_map() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    Map<String, String> map = new HashMap<>();
+    for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
+    {
+        map.put(entry.getKey().getHostAddress(), FileUtils.stringifyFileSize(entry.getValue()));
+    }
+    // gossiper doesn't see its own updates, so we need to special-case the local node
+    map.put(FBUtilities.getBroadcastAddress().getHostAddress(), getLoadString());
+    return map;
+#endif
+    return std::map<sstring, sstring>();
+}
+
+
+future<> storage_service::rebuild(sstring source_dc) {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+#if 0
+    logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
+
+    RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
+    streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
+    if (sourceDc != null)
+        streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
+
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+        streamer.addRanges(keyspaceName, getLocalRanges(keyspaceName));
+
+    try
+    {
+        streamer.fetchAsync().get();
+    }
+    catch (InterruptedException e)
+    {
+        throw new RuntimeException("Interrupted while waiting on rebuild streaming");
+    }
+    catch (ExecutionException e)
+    {
+        // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+        logger.error("Error while rebuilding node", e.getCause());
+        throw new RuntimeException("Error while rebuilding node: " + e.getCause().getMessage());
+    }
+#endif
+    return make_ready_future<>();
+}
+
+int32_t storage_service::get_exception_count() {
+    fail(unimplemented::cause::STORAGE_SERVICE);
+    //return (int)StorageMetrics.exceptions.count();
+    return 0;
 }
 
 } // namespace service
