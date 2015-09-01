@@ -1,0 +1,62 @@
+{
+  "builders": [
+    {
+      "type": "amazon-ebs",
+      "access_key": "{{user `access_key`}}",
+      "secret_key": "{{user `secret_key`}}",
+      "subnet_id": "{{user `subnet_id`}}",
+      "security_group_id": "{{user `security_group_id`}}",
+      "region": "{{user `region`}}",
+      "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
+      "source_ami": "ami-76dfc41e",
+      "instance_type": "{{user `instance_type`}}",
+      "ssh_username": "fedora",
+      "ssh_timeout": "5m",
+      "ami_name": "scylla_{{isotime | clean_ami_name}}"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "file",
+      "source": "files/scylla-server.rpm",
+      "destination": "/home/fedora/scylla-server.rpm"
+    },
+    {
+      "type": "file",
+      "source": "files/scylla-setup.sh",
+      "destination": "/home/fedora/scylla-setup.sh"
+    },
+    {
+      "type": "file",
+      "source": "files/scylla-setup.service",
+      "destination": "/home/fedora/scylla-setup.service"
+    },
+    {
+      "type": "file",
+      "source": "files/scylla-server",
+      "destination": "/home/fedora/scylla-server"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sudo dnf update -y",
+        "sudo dnf install -y /home/fedora/scylla-server.rpm",
+        "sudo dnf install -y mdadm xfsprogs",
+        "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",
+        "sudo mv /home/fedora/scylla-setup.sh /usr/lib/scylla",
+        "sudo chmod a+rx /usr/lib/scylla/scylla-setup.sh",
+        "sudo cp scylla-server /etc/sysconfig",
+        "sudo systemctl enable scylla-setup.service"
+      ]
+    }
+  ],
+  "variables": {
+    "access_key": "",
+    "secret_key": "",
+    "subnet_id": "",
+    "security_group_id": "",
+    "region": "",
+    "associate_public_ip_address": "",
+    "instance_type": ""
+  }
+}
