@@ -55,7 +55,7 @@ install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
-/usr/sbin/useradd -g scylla -s /sbin/nologin -r -d ${_sharedstatedir}/scylla scylla 2> /dev/null || :
+/usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sharedstatedir}/scylla scylla 2> /dev/null || :
 
 %post
 %systemd_post scylla-server.service
