@@ -179,6 +179,16 @@ static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
     auto neighbors = get_neighbors(db.local(), keyspace, range);
     logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
     for (auto peer : neighbors) {
+        // FIXME: obviously, we'll need Merkel trees or another alternative
+        // method to decide which parts of the data we need to stream instead
+        // of streaming everything like we do now. So this logging is kind of
+        // silly, and we never log the corresponding "... is consistent with"
+        // message: see SyncTask.run() in Origin for the original messages.
+        auto me = utils::fb_utilities::get_broadcast_address();
+        for (auto &&cf : cfs) {
+            logger.info("[repair #{}] Endpoints {} and {} have {} range(s) out of sync for {}", id, me, peer, 1, cf);
+        }
+
         // FIXME: think: if we have several neighbors, perhaps we need to
         // request ranges from all of them and only later transfer ranges to
         // all of them? Otherwise, we won't necessarily fully repair the
