@@ -13,6 +13,7 @@
 #include "database.hh"
 #include "timestamp.hh"
 #include "schema_builder.hh"
+#include "mutation_reader.hh"
 #include "mutation_reader_assertions.hh"
 #include "mutation_source_test.hh"
 #include "tmpdir.hh"
@@ -406,6 +407,52 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
                 auto row = mp.clustered_row(clustering);
                 match_live_cell(row.cells(), *s, "cl3", boost::any(to_bytes("cl3")));
                 return make_ready_future<>();
+            });
+        });
+    });
+}
+
+// We recently had an issue, documented at #188, where range-reading from an
+// sstable would break if collections were used.
+//
+// Make sure we don't regress on that.
+SEASTAR_TEST_CASE(broken_ranges_collection) {
+    class sstable_range_wrapping_reader final : public ::mutation_reader::impl {
+        sstable_ptr _sst;
+        sstables::mutation_reader _smr;
+    public:
+        sstable_range_wrapping_reader(sstable_ptr sst, schema_ptr s)
+                : _sst(sst)
+                , _smr(sst->read_rows(std::move(s))) {}
+        virtual future<mutation_opt> operator()() override {
+            return _smr.read();
+        }
+    };
+
+    return reusable_sst("tests/sstables/broken_ranges", 2).then([] (auto sstp) {
+        auto s = peers_schema();
+        auto reader = make_lw_shared<::mutation_reader>(make_mutation_reader<sstable_range_wrapping_reader>(sstp, s));
+        return repeat([s, reader] {
+            return (*reader)().then([s, reader] (mutation_opt mut) {
+                auto key_equal = [s, &mut] (sstring ip) {
+                    return mut->key().representation() == partition_key::from_deeply_exploded(*s, { boost::any(net::ipv4_address(ip)) }).representation();
+                };
+
+                if (!mut) {
+                    return stop_iteration::yes;
+                } else if (key_equal("127.0.0.1")) {
+                    auto row = mut->partition().clustered_row(clustering_key::make_empty(*s));
+                    match_absent(row.cells(), *s, "tokens");
+                } else if (key_equal("127.0.0.3")) {
+                    auto row = mut->partition().clustered_row(clustering_key::make_empty(*s));
+                    auto tokens = match_collection(row.cells(), *s, "tokens", tombstone(deletion_time{0x55E5F2D5, 0x051EB3FC99715Dl }));
+                    match_collection_element<status::live>(tokens.cells[0], to_bytes("-8180144272884242102"), bytes_opt{});
+                } else {
+                    BOOST_REQUIRE(key_equal("127.0.0.2"));
+                    auto t = mut->partition().partition_tombstone();
+                    BOOST_REQUIRE(t.timestamp == 0x051EB3FB016850l);
+                }
+                return stop_iteration::no;
             });
         });
     });

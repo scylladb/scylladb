@@ -344,6 +344,40 @@ inline schema_ptr compact_sparse_schema() {
     return s;
 }
 
+// This is "imported" from system_keyspace.cc. But we will copy it for two reasons:
+// 1) This is private there, and for good reason.
+// 2) If the schema for the peers table ever change (it does from ka to la), we want to make
+//    sure we are testing the exact some one we have in our test dir.
+inline schema_ptr peers_schema() {
+    static thread_local auto peers = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("system", "peers"), "system", "peers",
+        // partition key
+        {{"peer", inet_addr_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+                {"data_center", utf8_type},
+                {"host_id", uuid_type},
+                {"preferred_ip", inet_addr_type},
+                {"rack", utf8_type},
+                {"release_version", utf8_type},
+                {"rpc_address", inet_addr_type},
+                {"schema_version", uuid_type},
+                {"tokens", set_type_impl::get_instance(utf8_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "information about known peers in the cluster"
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return peers;
+}
+
 enum class status {
     dead,
     live,
