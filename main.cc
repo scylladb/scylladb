@@ -27,14 +27,34 @@
 #include "release.hh"
 #include <cstdio>
 
+logging::logger startlog("init");
+
 namespace bpo = boost::program_options;
 
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
-    if (opts.count("options-file") == 0) {
-        return make_ready_future<>();
+    sstring file;
+
+    if (opts.count("options-file") > 0) {
+        file = opts["options-file"].as<sstring>();
+    } else {
+        sstring confdir;
+        auto* cd = std::getenv("SCYLLA_CONF");
+        if (cd != nullptr) {
+            confdir = cd;
+        } else {
+            auto* p = std::getenv("SCYLLA_HOME");
+            if (p != nullptr) {
+                confdir = sstring(p) + "/";
+            }
+            confdir += "conf";
+        }
+        file = confdir + "/scylla.yaml";
     }
-    return cfg.read_from_file(opts["options-file"].as<sstring>());
+    return cfg.read_from_file(file).handle_exception([file](auto ep) {
+        startlog.error("Could not read configuration file {}: {}", file, ep);
+        return make_exception_future<>(ep);
+    });
 }
 
 static void do_help_loggers() {
@@ -67,8 +87,6 @@ static void apply_logger_settings(sstring default_level, db::config::string_map 
     logging::logger::set_stdout_enabled(log_to_stdout);
     logging::logger::set_syslog_enabled(log_to_syslog);
 }
-
-logging::logger startlog("init");
 
 class directories {
 public:
@@ -122,7 +140,7 @@ int main(int ac, char** av) {
     bool help_loggers = false;
     cfg->add_options(opt_add)
         // TODO : default, always read?
-        ("options-file", bpo::value<sstring>()->default_value("conf/scylla.yaml"), "scylla.yaml file to read options from")
+        ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
         ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
         ;
 
