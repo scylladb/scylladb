@@ -202,18 +202,18 @@ class mp_row_consumer : public row_consumer {
             }
         }
     };
-    collection_mutation _pending_collection;
+    std::experimental::optional<collection_mutation> _pending_collection = {};
 
     collection_mutation& pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef) {
-        if (_pending_collection.is_new_collection(clustering_prefix, cdef)) {
-            _pending_collection.flush(*_schema, *mut);
+        if (!_pending_collection || _pending_collection->is_new_collection(clustering_prefix, cdef)) {
+            flush_pending_collection(*_schema, *mut);
 
             if (!cdef->type->is_multi_cell()) {
                 throw malformed_sstable_exception("frozen set should behave like a cell\n");
             }
             _pending_collection = collection_mutation(clustering_prefix, cdef);
         }
-        return _pending_collection;
+        return *_pending_collection;
     }
 
     void update_pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef,
@@ -225,6 +225,12 @@ class mp_row_consumer : public row_consumer {
         pending_collection(clustering_prefix, cdef).cm.tomb = std::move(t);
     }
 
+    void flush_pending_collection(const schema& s, mutation& mut) {
+        if (_pending_collection) {
+            _pending_collection->flush(s, mut);
+            _pending_collection = {};
+        }
+    }
 public:
     mutation_opt mut;
 
@@ -317,7 +323,7 @@ public:
     }
     virtual proceed consume_row_end() override {
         if (mut) {
-            _pending_collection.flush(*_schema, *mut);
+            flush_pending_collection(*_schema, *mut);
         }
         return proceed::no;
     }
