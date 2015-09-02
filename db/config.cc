@@ -352,7 +352,7 @@ void db::config::read_from_yaml(const char* yaml) {
             logger.warn("Option {} is not applicable. Ignoring.", label);
             continue;
         case value_status::Unused:
-            logger.debug("Option {} is not (yet) used.", label);
+            logger.warn("Option {} is not (yet) used.", label);
             break;
         default:
             break;
