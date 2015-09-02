@@ -653,7 +653,12 @@ row::row(const row& o)
             return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
         };
         new (&_storage.set) map_type;
-        _storage.set.clone_from(o._storage.set, cloner, current_deleter<cell_entry>());
+        try {
+            _storage.set.clone_from(o._storage.set, cloner, current_deleter<cell_entry>());
+        } catch (...) {
+            _storage.set.~map_type();
+            throw;
+        }
     }
 }
 
