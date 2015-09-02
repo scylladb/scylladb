@@ -692,7 +692,12 @@ public:
     virtual ~region_impl() {
         tracker_instance._impl->unregister_region(this);
 
-        assert(_segments.empty());
+        while (!_segments.empty()) {
+            segment* seg = _segments.top();
+            _segments.pop();
+            assert(seg->is_empty());
+            free_segment(seg);
+        }
         if (_active) {
             assert(_active->is_empty());
             free_segment(_active);
