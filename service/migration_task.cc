@@ -48,7 +48,7 @@ future<> migration_task::run_may_throw(service::storage_proxy& proxy, const gms:
                 schema_ptr s = proxy.get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
-            return db::schema_tables::merge_schema(proxy, schema);
+            return db::schema_tables::merge_schema(proxy, std::move(schema));
         } catch (const exceptions::configuration_exception& e) {
             logger.error("Configuration exception merging remote schema: {}", e.what());
         }
