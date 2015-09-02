@@ -1229,8 +1229,9 @@ public:
     future<> done() {
         return _done_promise.get_future();
     }
-    virtual void error(gms::inet_address ep) {
-        // do nothing for now, request will timeout eventually
+    virtual void error(gms::inet_address ep, sstring why) {
+        // do nothing other than log for now, request will timeout eventually
+        logger.error("Exception when communicating with {}: {}", ep, why);
     }
 };
 
@@ -1431,6 +1432,16 @@ public:
     virtual ~abstract_read_executor() {};
 
 protected:
+    static sstring error_sstring(std::exception_ptr eptr) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch(std::exception& e) {
+            return sstring(e.what());
+        } catch(...) {
+            return sstring("Unknown exception");
+        }
+    }
+
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
         if (is_me(ep)) {
             return get_local_storage_proxy().query_mutations_locally(cmd, _partition_range);
@@ -1465,7 +1476,7 @@ protected:
                 try {
                     resolver->add_mutate_data(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep);
+                    resolver->error(ep, error_sstring(std::current_exception()));
                 }
             });
         });
@@ -1476,7 +1487,7 @@ protected:
                 try {
                     resolver->add_data(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep);
+                    resolver->error(ep, error_sstring(std::current_exception()));
                 }
             });
         });
@@ -1487,7 +1498,7 @@ protected:
                 try {
                     resolver->add_digest(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep);
+                    resolver->error(ep, error_sstring(std::current_exception()));
                 }
             });
         });
