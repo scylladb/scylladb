@@ -120,6 +120,20 @@ class scylla_memory(gdb.Command):
             gdb.write('{objsize:5} {span_size:6} {use_count:10} {memory:12} {wasted_percent:5.1f}\n'
                   .format(objsize=object_size, span_size=span_size, use_count=use_count, memory=memory, wasted_percent=wasted_percent))
 
+        gdb.write('Page spans:\n')
+        gdb.write('{index:5} {size:>13} {total}\n'.format(index="index", size="size [B]", total="free [B]"))
+        for index in range(int(cpu_mem['nr_span_lists'])):
+            span_list = cpu_mem['fsu']['free_spans'][index]
+            front = int(span_list['_front'])
+            pages = cpu_mem['pages']
+            total = 0
+            while front:
+                span = pages[front]
+                total += int(span['span_size'])
+                front = int(span['link']['_next'])
+            gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
+
+
 scylla()
 scylla_databases()
 scylla_keyspaces()
