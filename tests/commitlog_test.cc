@@ -293,24 +293,28 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
     cfg.commitlog_segment_size_in_mb = 2;
     cfg.commitlog_total_space_in_mb = 1;
     return make_commitlog(cfg).then([](tmplog_ptr log) {
-            auto state = make_lw_shared(false);
+            // add a flush handler that simply says we're done with the range.
+            auto r = log->second.add_flush_handler([log](cf_id_type id, replay_position pos) {
+                log->second.discard_completed_segments(id, pos);
+                return make_ready_future<>();
+            });
+            auto set = make_lw_shared<std::set<segment_id_type>>();
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([state]() {return *state;},
-                    [log, state, uuid]() {
+            return do_until([set]() {return set->size() > 1;},
+                    [log, set, uuid]() {
                         sstring tmp = "hej bubba cow";
                         return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
                                     dst.write(tmp.begin(), tmp.end());
-                                }).then([log, state](replay_position rp) {
+                                }).then([log, set](replay_position rp) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
-                                    *state = rp.id > 1;
+                                    set->insert(rp.id);
                                 });
-
                     }).then([log]() {
                         return count_files(log->first.path).then([](size_t n) {
                                     BOOST_REQUIRE(n > 0);
                                     BOOST_REQUIRE(n < 2);
                                 });
-                    }).finally([log]() {
+                    }).finally([log, r = std::move(r)]() {
                         return log->second.clear().then([log] {});
                     });
         }).then([]{});

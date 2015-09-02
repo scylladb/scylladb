@@ -27,6 +27,8 @@
 #include <malloc.h>
 #include <regex>
 #include <boost/range/adaptor/map.hpp>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "core/align.hh"
 #include "core/reactor.hh"
@@ -149,6 +151,7 @@ public:
         uint64_t pending_operations = 0;
         uint64_t total_size = 0;
         uint64_t buffer_list_bytes = 0;
+        uint64_t total_size_on_disk = 0;
     };
 
     stats totals;
@@ -201,10 +204,24 @@ public:
 
     future<std::vector<descriptor>> list_descriptors(sstring dir);
 
+    flush_handler_id add_flush_handler(flush_handler h) {
+        auto id = ++_flush_ids;
+        _flush_handlers[id] = std::move(h);
+        return id;
+    }
+    void remove_flush_handler(flush_handler_id id) {
+        _flush_handlers.erase(id);
+    }
+
+    future<> flush_segments(bool = false);
+
 private:
     segment_id_type _ids = 0;
     std::vector<sseg_ptr> _segments;
     std::vector<buffer_type> _temp_buffers;
+    std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
+    flush_handler_id _flush_ids = 0;
+    replay_position _flush_position;
     timer<clock_type> _timer;
 };
 
@@ -236,6 +253,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     time_point _sync_time;
 
     friend std::ostream& operator<<(std::ostream&, const segment&);
+    friend class segment_manager;
 public:
     struct cf_mark {
         const segment& s;
@@ -262,7 +280,9 @@ public:
     ~segment() {
         logger.debug("Segment {} is no longer active and will be deleted now", *this);
         ++_segment_manager->totals.segments_destroyed;
-        _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
+        _segment_manager->totals.total_size_on_disk -= size_on_disk();
+        _segment_manager->totals.total_size -=
+                (size_on_disk() + _buffer.size());
         ::unlink(
                 (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
     }
@@ -419,6 +439,7 @@ public:
                         auto bytes = std::get<0>(f.get());
                         *written += bytes;
                         _segment_manager->totals.bytes_written += bytes;
+                        _segment_manager->totals.total_size_on_disk += bytes;
                         ++_segment_manager->totals.cycle_count;
                         if (*written == size) {
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -696,34 +717,62 @@ scollectd::registrations db::commitlog::segment_manager::create_counters() {
     };
 }
 
+future<> db::commitlog::segment_manager::flush_segments(bool force) {
+    if (_segments.empty()) {
+        return make_ready_future<>();
+    }
+    // defensive copy.
+    auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
+    auto& active = _segments.back();
+
+    // RP at "start" of segment we leave untouched.
+    replay_position high(active->_desc.id, 0);
+
+    // But if all segments are closed or we force-flush,
+    // include all.
+    if (force || !active->is_still_allocating()) {
+        high = replay_position(high.id + 1, 0);
+    }
+
+    // Now get a set of used CF ids:
+    std::unordered_set<cf_id_type> ids;
+    std::for_each(_segments.begin(), _segments.end() - 1, [&ids](sseg_ptr& s) {
+        for (auto& id : s->_cf_dirty | boost::adaptors::map_keys) {
+            ids.insert(id);
+        }
+    });
+
+    logger.debug("Flushing ({}) to {}", force, high);
+
+    // For each CF id: for each callback c: call c(id, high)
+    return do_with(std::move(callbacks), [ids = std::move(ids), high](auto& callbacks) {
+        return parallel_for_each(callbacks, [ids, high](auto& f) {
+            return parallel_for_each(ids, [&f, high](auto id) {
+                try {
+                    return f(id, high);
+                } catch (...) {
+                    logger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+                    return make_ready_future<>(); // swallow it and go on.
+                }
+            });
+        });
+    });
+}
+
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
     descriptor d(next_id());
-    return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo|open_flags::create).then(
-            [this, d](file f) {
-                if (max_disk_size != 0) {
-                    auto i = _segments.rbegin();
-                    auto e = _segments.rend();
-                    size_t s = 0, n = 0;
-
-                    while (i != e) {
-                        auto& seg = *i;
-                        s += seg->size_on_disk();
-                        if (!seg->is_still_allocating() && s >= max_disk_size) {
-                            seg->mark_clean();
-                            ++n;
-                        }
-                        ++i;
-                    }
-
-                    if (n > 0) {
-                        discard_unused_segments();
-                    }
-                }
-
-                _segments.emplace_back(make_lw_shared<segment>(this, d, std::move(f)));
-                return make_ready_future<sseg_ptr>(_segments.back());
-            });
-
+    return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d](file f) {
+        _segments.emplace_back(make_lw_shared<segment>(this, d, std::move(f)));
+        auto max = max_disk_size;
+        auto cur = totals.total_size_on_disk;
+        if (max != 0 && cur >= max) {
+            logger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+            return flush_segments();
+        }
+        return make_ready_future<>();
+    }).then([this] {
+        return make_ready_future<sseg_ptr>(_segments.back());
+    });
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment() {
@@ -784,11 +833,13 @@ void db::commitlog::segment_manager::discard_unused_segments() {
  * (Assumes you have barriered adding ops!)
  */
 future<> db::commitlog::segment_manager::clear() {
-    return do_until([this]() {return _segments.empty();}, [this]() {
-        auto s = _segments.front();
-        _segments.erase(_segments.begin());
-        return s->sync().then([](sseg_ptr) {
-                });
+    logger.debug("Clearing all segments");
+    return flush_segments(true).then([this] {
+        return do_until([this]() {return _segments.empty();}, [this]() {
+            auto s = _segments.front();
+            _segments.erase(_segments.begin());
+            return s->sync().then([](sseg_ptr) {});
+        });
     });
 }
 /**
@@ -876,6 +927,41 @@ future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     return f.then([c = std::move(c)]() mutable {
         return make_ready_future<commitlog>(std::move(c));
     });
+}
+
+db::commitlog::flush_handler_anchor::flush_handler_anchor(flush_handler_anchor&& f)
+    : _cl(f._cl), _id(f._id)
+{
+    f._id = 0;
+}
+
+db::commitlog::flush_handler_anchor::flush_handler_anchor(commitlog& cl, flush_handler_id id)
+    : _cl(cl), _id(id)
+{}
+
+db::commitlog::flush_handler_anchor::~flush_handler_anchor() {
+    unregister();
+}
+
+db::commitlog::flush_handler_id db::commitlog::flush_handler_anchor::release() {
+    flush_handler_id id = 0;
+    std::swap(_id, id);
+    return id;
+}
+
+void db::commitlog::flush_handler_anchor::unregister() {
+    auto id = release();
+    if (id != 0) {
+        _cl.remove_flush_handler(id);
+    }
+}
+
+db::commitlog::flush_handler_anchor db::commitlog::add_flush_handler(flush_handler h) {
+    return flush_handler_anchor(*this, _segment_manager->add_flush_handler(std::move(h)));
+}
+
+void db::commitlog::remove_flush_handler(flush_handler_id id) {
+    _segment_manager->remove_flush_handler(id);
 }
 
 void db::commitlog::discard_completed_segments(const cf_id_type& id,
