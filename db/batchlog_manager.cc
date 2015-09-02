@@ -75,11 +75,11 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     });
 }
 
-mutation db::batchlog_manager::get_batch_log_mutation_for(std::vector<mutation> mutations, const utils::UUID& id, int32_t version) {
-    return get_batch_log_mutation_for(std::move(mutations), id, version, db_clock::now());
+mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version) {
+    return get_batch_log_mutation_for(mutations, id, version, db_clock::now());
 }
 
-mutation db::batchlog_manager::get_batch_log_mutation_for(std::vector<mutation> mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
     auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
     auto timestamp = db_clock::now_in_usecs();
