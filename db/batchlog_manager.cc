@@ -184,7 +184,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             // in both cases.
             // FIXME: verify that the above is reasonably true.
             return limiter->reserve(size).then([this, mutations, id] {
-                return _qp.proxy().local().mutate(*mutations, db::consistency_level::ANY);
+                return _qp.proxy().local().mutate(std::move(*mutations), db::consistency_level::ANY);
             });
         }).then([this, id] {
             // delete batch

@@ -283,7 +283,7 @@ future<> save_system_keyspace_schema() {
     }).then([ksm] {
         // (+1 to timestamp to make sure we don't get shadowed by the tombstones we just added)
         auto mvec  = make_create_keyspace_mutations(ksm, qctx->next_timestamp(), true);
-        return qctx->proxy().mutate_locally(mvec);
+        return qctx->proxy().mutate_locally(std::move(mvec));
     });
 }
 
