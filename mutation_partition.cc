@@ -15,7 +15,12 @@ mutation_partition::mutation_partition(const mutation_partition& x)
         return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
     };
     _rows.clone_from(x._rows, cloner, current_deleter<rows_entry>());
-    _row_tombstones.clone_from(x._row_tombstones, cloner, current_deleter<row_tombstones_entry>());
+    try {
+        _row_tombstones.clone_from(x._row_tombstones, cloner, current_deleter<row_tombstones_entry>());
+    } catch (...) {
+        _rows.clear_and_dispose(current_deleter<rows_entry>());
+        throw;
+    }
 }
 
 mutation_partition::~mutation_partition() {
