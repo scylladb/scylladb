@@ -91,10 +91,10 @@ public:
     }
 
     managed_vector& operator=(const managed_vector& other) {
-        // FIXME: not exception safe
         if (this != &other) {
+            managed_vector tmp(other);
             this->~managed_vector();
-            new (this) managed_vector(other);
+            new (this) managed_vector(std::move(tmp));
         }
         return *this;
     }
