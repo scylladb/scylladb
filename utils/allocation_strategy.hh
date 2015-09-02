@@ -71,7 +71,13 @@ public:
     // requirement.
     template<typename T, typename... Args>
     T* construct(Args&&... args) {
-        return new (alloc(standard_migrator<T>, sizeof(T), alignof(T))) T(std::forward<Args>(args)...);
+        void* storage = alloc(standard_migrator<T>, sizeof(T), alignof(T));
+        try {
+            return new (storage) T(std::forward<Args>(args)...);
+        } catch (...) {
+            free(storage);
+            throw;
+        }
     }
 
     // Destroys T and releases its storage.
