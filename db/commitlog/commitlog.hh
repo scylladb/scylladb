@@ -91,7 +91,7 @@ public:
         config(const db::config&);
 
         sstring commit_log_location;
-        uint64_t commitlog_total_space_in_mb = 0; // TODO: not respected yet.
+        uint64_t commitlog_total_space_in_mb = 0;
         uint64_t commitlog_segment_size_in_mb = 32;
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
 

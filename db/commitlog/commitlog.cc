@@ -126,6 +126,9 @@ public:
     config cfg;
     const uint64_t max_size;
     const uint64_t max_mutation_size;
+    // Divide the size-on-disk threshold by #cpus used, since we assume
+    // we distribute stuff more or less equally across shards.
+    const uint64_t max_disk_size; // per-shard
 
     semaphore _new_segment_semaphore;
     scollectd::registrations _regs;
@@ -150,17 +153,23 @@ public:
 
     stats totals;
 
-    segment_manager(config cfg)
-            : cfg(cfg), max_size(
+    segment_manager(config c)
+            : cfg(c), max_size(
                     std::min<size_t>(std::numeric_limits<position_type>::max(),
                             std::max<size_t>(cfg.commitlog_segment_size_in_mb,
                                     1) * 1024 * 1024)), max_mutation_size(
-                    max_size >> 1)
+                    max_size >> 1), max_disk_size(
+                    size_t(
+                            std::ceil(
+                                    cfg.commitlog_total_space_in_mb
+                                            / double(smp::count))) * 1024 * 1024)
     {
         assert(max_size > 0);
         if (cfg.commit_log_location.empty()) {
             cfg.commit_log_location = "/var/lib/scylla/commitlog";
         }
+        logger.trace("Commitlog maximum disk size: {} MB / cpu ({} cpus)",
+                max_disk_size / (1024*1024));
         _regs = create_counters();
     }
 
@@ -691,7 +700,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     descriptor d(next_id());
     return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo|open_flags::create).then(
             [this, d](file f) {
-                if (cfg.commitlog_total_space_in_mb != 0) {
+                if (max_disk_size != 0) {
                     auto i = _segments.rbegin();
                     auto e = _segments.rend();
                     size_t s = 0, n = 0;
@@ -699,7 +708,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                     while (i != e) {
                         auto& seg = *i;
                         s += seg->size_on_disk();
-                        if (!seg->is_still_allocating() && s >= cfg.commitlog_total_space_in_mb) {
+                        if (!seg->is_still_allocating() && s >= max_disk_size) {
                             seg->mark_clean();
                             ++n;
                         }
