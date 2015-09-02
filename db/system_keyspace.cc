@@ -432,6 +432,8 @@ static future<> build_dc_rack_info() {
             return _local_cache.invoke_on_all([gms_addr = std::move(gms_addr), element = std::move(element)] (local_cache& lc) {
                 lc._cached_dc_rack_info.emplace(gms_addr, element);
             });
+        }).then([msg] {
+            // Keep msg alive.
         });
     });
 }
