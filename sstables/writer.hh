@@ -98,7 +98,8 @@ public:
                 _c.checksums.push_back(per_chunk_checksum);
             }
         }
-        return _out.write(buf.begin(), buf.size());
+        auto f = _out.write(buf.begin(), buf.size());
+        return f.then([buf = std::move(buf)] {});
     }
 
     virtual future<> close() {
