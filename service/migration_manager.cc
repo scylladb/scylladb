@@ -452,7 +452,7 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema)
 {
-    return gms::get_live_members().then([schema = std::move(schema)](std::set<gms::inet_address> live_members) {
+    return gms::get_live_members().then([schema = std::move(schema)](std::set<gms::inet_address> live_members) mutable {
         return do_with(std::move(schema), [live_members] (auto&& schema) {
             return parallel_for_each(live_members.begin(), live_members.end(), [&schema] (auto& endpoint) {
                 // only push schema to nodes with known and equal versions
