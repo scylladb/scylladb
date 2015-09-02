@@ -56,12 +56,23 @@ private:
         auto new_capacity = std::max({ _capacity + std::min(_capacity, size_type(1024)), new_size, size_type(InternalSize + 8) });
         reserve(new_capacity);
     }
+    void clear_and_release() noexcept {
+        clear();
+        if (is_external()) {
+            current_allocator().free(get_external());
+        }
+    }
 public:
     managed_vector() = default;
     managed_vector(const managed_vector& other) {
         reserve(other._size);
-        for (const auto& v : other) {
-            push_back(v);
+        try {
+            for (const auto& v : other) {
+                push_back(v);
+            }
+        } catch (...) {
+            clear_and_release();
+            throw;
         }
     }
     managed_vector(managed_vector&& other) noexcept : _size(other._size), _capacity(other._capacity) {
@@ -96,10 +107,7 @@ public:
     }
 
     ~managed_vector() {
-        clear();
-        if (is_external()) {
-            current_allocator().free(get_external());
-        }
+        clear_and_release();
     }
 
     T& at(size_type pos) {
