@@ -196,6 +196,13 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     });
 }
 
+void row_cache::touch(const dht::decorated_key& dk) {
+    auto i = _partitions.find(dk, cache_entry::compare(_schema));
+    if (i != _partitions.end()) {
+        _tracker.touch(*i);
+    }
+}
+
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_tracker& tracker)
     : _tracker(tracker)
     , _schema(std::move(s))

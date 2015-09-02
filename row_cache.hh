@@ -150,6 +150,10 @@ public:
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
     future<> update(memtable&, partition_presence_checker underlying_negative);
+
+    // Moves given partition to the front of LRU if present in cache.
+    void touch(const dht::decorated_key&);
+
     auto num_entries() const {
         return _partitions.size();
     }
