@@ -229,9 +229,14 @@ struct repair_options {
     // overrides the setting of "primary_range".
     std::vector<query::range<dht::token>> ranges;
 
-    repair_options(const std::unordered_map<sstring, sstring>& options) {
+    repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
+        // The parsing code above removed from the map options we have parsed.
+        // If anything is left there in the end, it's an unsupported option.
+        if (!options.empty()) {
+            throw std::runtime_error("unsupported repair option");
+        }
     }
 
     static constexpr const char* PRIMARY_RANGE_KEY = "primaryRange";
@@ -246,7 +251,7 @@ struct repair_options {
 
 private:
     static void bool_opt(bool& var,
-            const std::unordered_map<sstring, sstring>& options,
+            std::unordered_map<sstring, sstring>& options,
             const sstring& key) {
         auto it = options.find(key);
         if (it != options.end()) {
@@ -256,13 +261,14 @@ private:
             } else {
                 var = false;
             }
+            options.erase(it);
         }
     }
 
     // A range is expressed as start_token:end token and multiple ranges can
     // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
     static void ranges_opt(std::vector<query::range<dht::token>> var,
-            const std::unordered_map<sstring, sstring>& options,
+            std::unordered_map<sstring, sstring>& options,
                         const sstring& key) {
         auto it = options.find(key);
         if (it == options.end()) {
@@ -283,6 +289,7 @@ private:
                     ::range<dht::token>::bound(tok_start, false),
                     ::range<dht::token>::bound(tok_end, true));
         }
+        options.erase(it);
     }
 };
 
