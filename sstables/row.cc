@@ -21,6 +21,7 @@ private:
         ATOM_START_2,
         ATOM_NAME_BYTES,
         ATOM_MASK,
+        ATOM_MASK_2,
         EXPIRING_CELL,
         EXPIRING_CELL_2,
         EXPIRING_CELL_3,
@@ -56,6 +57,7 @@ public:
         return (((_state == state::DELETION_TIME_3)
                 || (_state == state::CELL_VALUE_BYTES_2)
                 || (_state == state::ATOM_START_2)
+                || (_state == state::ATOM_MASK_2)
                 || (_state == state::EXPIRING_CELL_3)) && (_prestate == prestate::NONE));
     }
 
@@ -150,8 +152,14 @@ public:
                 _state = state::ATOM_MASK;
                 break;
             }
-        case state::ATOM_MASK: {
-            auto mask = consume_be<uint8_t>(data);
+        case state::ATOM_MASK:
+            if (read_8(data) != read_status::ready) {
+                _state = state::ATOM_MASK_2;
+                break;
+            }
+            // fallthrough
+        case state::ATOM_MASK_2: {
+            auto mask = _u8;
             enum mask_type {
                 DELETION_MASK = 0x01,
                 EXPIRATION_MASK = 0x02,

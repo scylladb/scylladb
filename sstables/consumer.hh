@@ -34,6 +34,7 @@ protected:
     // state machine progress:
     enum class prestate {
         NONE,
+        READING_U8,
         READING_U16,
         READING_U32,
         READING_U64,
@@ -42,7 +43,8 @@ protected:
 
     // state for non-NONE prestates
     uint32_t _pos;
-    // state for READING_U16, READING_U32, READING_U64 prestate
+    // state for READING_U8, READING_U16, READING_U32, READING_U64 prestate
+    uint8_t  _u8;
     uint16_t _u16;
     uint32_t _u32;
     uint64_t _u64;
@@ -51,12 +53,23 @@ protected:
         uint64_t uint64;
         uint32_t uint32;
         uint16_t uint16;
+        uint8_t  uint8;
     } _read_int;
     // state for READING_BYTES prestate
     temporary_buffer<char> _read_bytes;
     temporary_buffer<char>* _read_bytes_where; // which temporary_buffer to set, _key or _val?
 
     enum class read_status { ready, waiting };
+    inline read_status read_8(temporary_buffer<char>& data) {
+        if (data.size() >= sizeof(uint8_t)) {
+            _u8 = consume_be<uint8_t>(data);
+            return read_status::ready;
+        } else {
+            _pos = 0;
+            _prestate = prestate::READING_U8;
+            return read_status::waiting;
+        }
+    }
     // Read a 16-bit integer into _u16. If the whole thing is in the buffer
     // (this is the common case), do this immediately. Otherwise, remember
     // what we have in the buffer, and remember to continue later by using
@@ -140,6 +153,9 @@ private:
             // in the middle of reading an integer
             unsigned len;
             switch (_prestate) {
+            case prestate::READING_U8:
+                len = sizeof(uint8_t);
+                break;
             case prestate::READING_U16:
                 len = sizeof(uint16_t);
                 break;
@@ -158,8 +174,11 @@ private:
             data.trim_front(n);
             _pos += n;
             if (_pos == len) {
-                // done reading the integer, store it in _u16, _u32 or _u64:
+                // done reading the integer, store it in _u8, _u16, _u32 or _u64:
                 switch (_prestate) {
+                case prestate::READING_U8:
+                    _u8 = _read_int.uint8;
+                    break;
                 case prestate::READING_U16:
                     _u16 = net::ntoh(_read_int.uint16);
                     break;
