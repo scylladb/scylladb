@@ -24,7 +24,7 @@ Provides:       cassandra21
 
 %build
 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
-ninja-build %{?_smp_mflags}
+ninja-build -j2 
 
 %install
 rm -rf $RPM_BUILD_ROOT
