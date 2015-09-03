@@ -237,7 +237,7 @@ int main(int ac, char** av) {
                     });
                     server->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, cql_port});
                 }).then([rpc_address, cql_port] {
-                    print("CQL server listening on %s:%s ...\n", rpc_address, cql_port);
+                    print("Starting listening for CQL clients on %s:%s...\n", rpc_address, cql_port);
                 });
                 auto tserver = new distributed<thrift_server>;
                 tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address, ip] () mutable {
