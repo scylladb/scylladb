@@ -283,7 +283,7 @@ future<> save_system_keyspace_schema() {
     }).then([ksm] {
         // (+1 to timestamp to make sure we don't get shadowed by the tombstones we just added)
         auto mvec  = make_create_keyspace_mutations(ksm, qctx->next_timestamp(), true);
-        return qctx->proxy().mutate_locally(mvec);
+        return qctx->proxy().mutate_locally(std::move(mvec));
     });
 }
 
@@ -492,7 +492,7 @@ future<> save_system_keyspace_schema() {
      */
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
     {
-        return merge_lock().then([&proxy, mutations = std::move(mutations)] {
+        return merge_lock().then([&proxy, mutations = std::move(mutations)] () mutable {
             return do_merge_schema(proxy, std::move(mutations), true).then([&proxy] {
                 return update_schema_version_and_announce(proxy);
             });
@@ -503,7 +503,7 @@ future<> save_system_keyspace_schema() {
 
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     { 
-        return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] {
+        return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] () mutable {
             return do_merge_schema(proxy, std::move(mutations), do_flush);
         }).finally([] {
             return merge_unlock();
@@ -512,7 +512,7 @@ future<> save_system_keyspace_schema() {
 
     future<> do_merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     {
-       return seastar::async([&proxy, mutations = std::move(mutations), do_flush] {
+       return seastar::async([&proxy, mutations = std::move(mutations), do_flush] () mutable {
            schema_ptr s = keyspaces();
            // compare before/after schemas of the affected keyspaces only
            std::set<sstring> keyspaces;

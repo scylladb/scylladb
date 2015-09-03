@@ -398,7 +398,7 @@ modification_statement::execute_internal(distributed<service::storage_proxy>& pr
     }
     return get_mutations(proxy, options, true, options.get_timestamp(qs)).then(
             [&proxy] (auto mutations) {
-                return proxy.local().mutate_locally(mutations);
+                return proxy.local().mutate_locally(std::move(mutations));
             }).then(
             [] {
                 return make_ready_future<::shared_ptr<transport::messages::result_message>>(

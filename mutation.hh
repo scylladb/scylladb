@@ -13,15 +13,35 @@
 
 class mutation final {
 private:
-    schema_ptr _schema;
-    dht::decorated_key _dk;
-    mutation_partition _p;
+    struct data {
+        schema_ptr _schema;
+        dht::decorated_key _dk;
+        mutation_partition _p;
+
+        data(dht::decorated_key&& key, schema_ptr&& schema);
+        data(partition_key&& key, schema_ptr&& schema);
+        data(schema_ptr&& schema, dht::decorated_key&& key, const mutation_partition& mp);
+        data(schema_ptr&& schema, dht::decorated_key&& key, mutation_partition&& mp);
+    };
+    std::unique_ptr<data> _ptr;
 public:
-    mutation(dht::decorated_key key, schema_ptr schema);
-    mutation(partition_key key, schema_ptr schema);
-    mutation(schema_ptr schema, dht::decorated_key key, mutation_partition mp);
+    mutation(dht::decorated_key key, schema_ptr schema)
+        : _ptr(std::make_unique<data>(std::move(key), std::move(schema)))
+    { }
+    mutation(partition_key key_, schema_ptr schema)
+        : _ptr(std::make_unique<data>(std::move(key_), std::move(schema)))
+    { }
+    mutation(schema_ptr schema, dht::decorated_key key, const mutation_partition& mp)
+        : _ptr(std::make_unique<data>(std::move(schema), std::move(key), mp))
+    { }
+    mutation(schema_ptr schema, dht::decorated_key key, mutation_partition&& mp)
+        : _ptr(std::make_unique<data>(std::move(schema), std::move(key), std::move(mp)))
+    { }
+    mutation(const mutation& m)
+        : _ptr(std::make_unique<data>(schema_ptr(m.schema()), dht::decorated_key(m.decorated_key()), m.partition()))
+    { }
+
     mutation(mutation&&) = default;
-    mutation(const mutation&) = default;
     mutation& operator=(mutation&& x) = default;
 
     void set_static_cell(const column_definition& def, atomic_cell_or_collection&& value);
@@ -32,13 +52,13 @@ public:
     void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
     std::experimental::optional<atomic_cell_or_collection> get_cell(const clustering_key& rkey, const column_definition& def) const;
-    const partition_key& key() const { return _dk._key; };
-    const dht::decorated_key& decorated_key() const { return _dk; };
-    const dht::token& token() const { return _dk._token; }
-    const schema_ptr& schema() const { return _schema; }
-    const mutation_partition& partition() const { return _p; }
-    mutation_partition& partition() { return _p; }
-    const utils::UUID& column_family_id() const { return _schema->id(); }
+    const partition_key& key() const { return _ptr->_dk._key; };
+    const dht::decorated_key& decorated_key() const { return _ptr->_dk; };
+    const dht::token& token() const { return _ptr->_dk._token; }
+    const schema_ptr& schema() const { return _ptr->_schema; }
+    const mutation_partition& partition() const { return _ptr->_p; }
+    mutation_partition& partition() { return _ptr->_p; }
+    const utils::UUID& column_family_id() const { return _ptr->_schema->id(); }
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:

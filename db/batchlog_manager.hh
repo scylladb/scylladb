@@ -71,8 +71,8 @@ public:
     size_t get_total_batches_replayed() const {
         return _total_batches_replayed;
     }
-    mutation get_batch_log_mutation_for(std::vector<mutation>, const utils::UUID&, int32_t);
-    mutation get_batch_log_mutation_for(std::vector<mutation>, const utils::UUID&, int32_t, db_clock::time_point);
+    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t);
+    mutation get_batch_log_mutation_for(const std::vector<mutation>&, const utils::UUID&, int32_t, db_clock::time_point);
     db_clock::duration get_batch_log_timeout() const;
 
     std::unordered_set<gms::inet_address> endpoint_filter(const sstring&, const std::unordered_map<sstring, std::unordered_set<gms::inet_address>>&);

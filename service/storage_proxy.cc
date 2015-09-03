@@ -1398,9 +1398,9 @@ public:
 
         // traverse backwards since large keys are at the start
         boost::range::transform(boost::make_iterator_range(versions.rbegin(), versions.rend()), std::back_inserter(reconciliated_partitions), [this, &row_count, schema] (std::vector<version>& v) {
-            mutation m = boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
+            mutation m = std::accumulate(std::begin(v), std::end(v), mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
                 m.partition().apply(*schema, ver.par.mut().partition());
-                return m;
+                return std::move(m);
             });
             auto count = m.live_row_count();
             row_count += count;
@@ -2421,7 +2421,7 @@ void storage_proxy::init_messaging_service() {
                 schema_ptr s = get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
-            return db::schema_tables::merge_schema(*this, schema);
+            return db::schema_tables::merge_schema(*this, std::move(schema));
         }).discard_result();
         return net::messaging_service::no_wait();
     });
