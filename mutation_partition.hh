@@ -91,7 +91,7 @@ public:
             new (&_storage.set) map_type(std::move(other._storage.set));
         }
     }
-    row& operator=(row&& other) {
+    row& operator=(row&& other) noexcept {
         if (this != &other) {
             this->~row();
             new (this) row(std::move(other));
