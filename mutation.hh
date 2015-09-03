@@ -19,7 +19,8 @@ private:
 public:
     mutation(dht::decorated_key key, schema_ptr schema);
     mutation(partition_key key, schema_ptr schema);
-    mutation(schema_ptr schema, dht::decorated_key key, mutation_partition mp);
+    mutation(schema_ptr schema, dht::decorated_key key, const mutation_partition& mp);
+    mutation(schema_ptr schema, dht::decorated_key key, mutation_partition&& mp);
     mutation(mutation&&) = default;
     mutation(const mutation&) = default;
     mutation& operator=(mutation&& x) = default;

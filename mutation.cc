@@ -16,9 +16,17 @@ mutation::mutation(partition_key key_, schema_ptr schema)
     , _p(_schema)
 { }
 
-mutation::mutation(schema_ptr schema, dht::decorated_key key, mutation_partition mp)
-        : _schema(std::move(schema)), _dk(std::move(key)), _p(std::move(mp)) {
-}
+mutation::mutation(schema_ptr schema, dht::decorated_key key, const mutation_partition& mp)
+    : _schema(std::move(schema))
+    , _dk(std::move(key))
+    , _p(mp)
+{ }
+
+mutation::mutation(schema_ptr schema, dht::decorated_key key, mutation_partition&& mp)
+    : _schema(std::move(schema))
+    , _dk(std::move(key))
+    , _p(std::move(mp))
+{ }
 
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection&& value) {
     _p.static_row().apply(def, std::move(value));
