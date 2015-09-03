@@ -16,6 +16,9 @@ class region;
 class region_impl;
 class allocating_section;
 
+constexpr int segment_size_shift = 18; // 256K; see #151, #152
+constexpr size_t segment_size = 1 << segment_size_shift;
+
 //
 // Frees some amount of objects from the region to which it's attached.
 //
