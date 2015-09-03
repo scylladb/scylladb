@@ -546,7 +546,17 @@ public:
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
+    //
+    // Applies p to current object.
+    //
+    // Basic exception guarantees. If apply() throws after being called in
+    // some entry state p0, the object is left in some consistent state p1 and
+    // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
+    //
+    // FIXME: make stronger exception guarantees (p1 = p0).
+    //
     void apply(const schema& schema, const mutation_partition& p);
+    // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 public:
     // Performs the following:
