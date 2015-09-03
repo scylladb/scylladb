@@ -168,6 +168,31 @@ struct segment_descriptor {
 
 #ifndef DEFAULT_ALLOCATOR
 
+struct free_segment {
+    free_segment* next;
+} __attribute__((packed));
+
+class segment_stack {
+    free_segment* _head = nullptr;
+    size_t _size = 0;
+public:
+    segment* pop() noexcept {
+        segment* seg = reinterpret_cast<segment*>(_head);
+        _head = _head->next;
+        --_size;
+        return seg;
+    }
+    void push(segment* seg) noexcept {
+        free_segment* fs = reinterpret_cast<free_segment*>(seg);
+        fs->next = _head;
+        _head = fs;
+        ++_size;
+    }
+    size_t size() const {
+        return _size;
+    }
+};
+
 // Segment pool implementation for the seastar allocator.
 // Stores segment descriptors in a vector which is indexed using most significant
 // bits of segment address.
@@ -178,18 +203,18 @@ class segment_pool {
     size_t _segments_in_use{};
     memory::memory_layout _layout;
     size_t _current_emergeny_reserve_goal = 1;
-    std::stack<std::unique_ptr<segment>> _emergency_reserve;
+    segment_stack _emergency_reserve;
 private:
     segment* allocate_or_fallback_to_reserve();
-    void free_or_restore_to_reserve(segment* seg);
+    void free_or_restore_to_reserve(segment* seg) noexcept;
 public:
     segment_pool();
     segment* new_segment();
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
     segment* containing_segment(void* obj) const;
-    void free_segment(segment*);
-    void free_segment(segment*, segment_descriptor&);
+    void free_segment(segment*) noexcept;
+    void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
     size_t current_emergency_reserve_goal() const { return _current_emergeny_reserve_goal; }
     void set_current_emergency_reserve_goal(size_t goal) { _current_emergeny_reserve_goal = goal; }
@@ -239,12 +264,12 @@ segment_pool::allocate_or_fallback_to_reserve() {
 }
 
 void
-segment_pool::free_or_restore_to_reserve(segment* seg) {
-    auto s = std::unique_ptr<segment>(seg);
+segment_pool::free_or_restore_to_reserve(segment* seg) noexcept {
     if (_emergency_reserve.size() < emergency_reserve_max()) {
-        _emergency_reserve.push(std::move(s));
+        _emergency_reserve.push(seg);
+    } else {
+        delete seg;
     }
-    // will auto-free if push failed or if we didn't push at all
 }
 
 segment*
@@ -258,11 +283,11 @@ segment_pool::new_segment() {
     return seg;
 }
 
-void segment_pool::free_segment(segment* seg) {
+void segment_pool::free_segment(segment* seg) noexcept {
     free_segment(seg, descriptor(seg));
 }
 
-void segment_pool::free_segment(segment* seg, segment_descriptor& desc) {
+void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept {
     logger.trace("Releasing segment {}", seg);
     desc._lsa_managed = false;
     free_or_restore_to_reserve(seg);
@@ -275,7 +300,7 @@ segment_pool::segment_pool()
     _segments_base = align_down(_layout.start, (uintptr_t)segment::size);
     _segments.resize((_layout.end - _segments_base) / segment::size);
     for (size_t i = 0; i < _current_emergeny_reserve_goal; ++i) {
-        _emergency_reserve.push(std::make_unique<segment>());
+        _emergency_reserve.push(new segment);
     }
 }
 
@@ -601,7 +626,7 @@ private:
         _active = nullptr;
     }
 
-    void free_segment(segment* seg) {
+    void free_segment(segment* seg) noexcept {
         shard_segment_pool.free_segment(seg);
         if (_group) {
             _group->update(-segment::size);
@@ -719,7 +744,7 @@ public:
         }
     }
 
-    virtual void free(void* obj) override {
+    virtual void free(void* obj) noexcept override {
         compaction_lock _(*this);
         segment* seg = shard_segment_pool.containing_segment(obj);
 
