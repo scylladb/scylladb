@@ -1062,17 +1062,31 @@ size_t tracker::impl::reclaim(size_t bytes) {
     // operation. Having it is still valuable during testing and in most cases
     // should work just fine even if allocates.
 
+    constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
+    auto segments_to_release = align_up(std::min(max_bytes, bytes), segment::size) >> segment::size_shift;
+    size_t nr_released = 0;
+
+    size_t released_from_reserve = shard_segment_pool.trim_emergency_reserve_to_max();
+    nr_released += released_from_reserve;
+    if (nr_released >= segments_to_release) {
+        return nr_released * segment::size;
+    }
+
     if (!_reclaiming_enabled) {
-        return 0;
+        return nr_released * segment::size;
     }
 
     reclaiming_lock _(*this);
     reclaim_timer timing_guard;
 
     size_t in_use = shard_segment_pool.segments_in_use();
+    auto target = in_use - std::min(in_use, segments_to_release - nr_released);
 
-    constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
-    auto segments_to_release = std::min(in_use, align_up(std::min(max_bytes, bytes), segment::size) >> segment::size_shift);
+    logger.debug("Compacting, requested {} ({} B), {} segments in use ({} B), target is {}",
+        segments_to_release, bytes, in_use, in_use * segment::size, target);
+
+    // Allow dipping into reserves while compacting
+    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
 
     auto cmp = [] (region::impl* c1, region::impl* c2) {
         if (c1->is_compactible() != c2->is_compactible()) {
@@ -1080,14 +1094,6 @@ size_t tracker::impl::reclaim(size_t bytes) {
         }
         return c2->min_occupancy() < c1->min_occupancy();
     };
-
-    auto target = in_use - segments_to_release;
-
-    logger.debug("Compacting, {} segments in use ({} B), trying to release {} ({} B).",
-        in_use, in_use * segment::size, segments_to_release, segments_to_release * segment::size);
-
-    // Allow dipping into reserves while compacting
-    segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
 
     boost::range::make_heap(_regions, cmp);
 
@@ -1114,7 +1120,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
 
     auto released_during_compaction = in_use - shard_segment_pool.segments_in_use();
 
-    if (released_during_compaction < segments_to_release) {
+    if (shard_segment_pool.segments_in_use() > target) {
         logger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
@@ -1127,9 +1133,10 @@ size_t tracker::impl::reclaim(size_t bytes) {
         }
     }
 
-    auto nr_released = in_use - shard_segment_pool.segments_in_use();
-    logger.debug("Released {} segments (wanted {}), {} during compaction.",
-        nr_released, segments_to_release, released_during_compaction);
+    nr_released += in_use - shard_segment_pool.segments_in_use();
+
+    logger.debug("Released {} segments (wanted {}), {} during compaction, {} from reserve",
+        nr_released, segments_to_release, released_during_compaction, released_from_reserve);
 
     return nr_released * segment::size;
 }
