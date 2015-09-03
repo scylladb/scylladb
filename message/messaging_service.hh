@@ -379,7 +379,7 @@ struct shard_id {
     };
 };
 
-class messaging_service {
+class messaging_service : public seastar::async_sharded_service<messaging_service> {
 public:
     using shard_id = net::shard_id;
     using inet_address = gms::inet_address;

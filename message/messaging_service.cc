@@ -290,7 +290,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
     auto rpc_client_ptr = ms->get_rpc_client(id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
-    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms, id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
+    return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
             if (f.failed()) {
                 ms->increment_dropped_messages(verb);
