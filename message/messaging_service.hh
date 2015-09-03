@@ -19,7 +19,6 @@
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
-#include "core/gate.hh"
 
 // forward declarations
 namespace streaming { namespace messages {
@@ -419,14 +418,12 @@ private:
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
-    seastar::gate _in_flight_gate;
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
     ~messaging_service();
 public:
     uint16_t port();
     gms::inet_address listen_address();
-    seastar::gate& gate() { return _in_flight_gate; }
     future<> stop();
     static rpc::no_wait_type no_wait();
 public:
