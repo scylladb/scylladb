@@ -123,7 +123,7 @@ struct segment {
 
     void set_heap_handle(segment_heap::handle_type);
     const segment_heap::handle_type& heap_handle();
-} __attribute__((__aligned__(segment::size)));
+};
 
 inline bool
 segment_occupancy_descending_less_compare::operator()(segment* s1, segment* s2) const {
