@@ -197,13 +197,14 @@ public:
 // Stores segment descriptors in a vector which is indexed using most significant
 // bits of segment address.
 class segment_pool {
-    static constexpr size_t emergency_reserve_max() { return 30; }
     std::vector<segment_descriptor> _segments;
     uintptr_t _segments_base; // The address of the first segment
     size_t _segments_in_use{};
     memory::memory_layout _layout;
     size_t _current_emergeny_reserve_goal = 1;
+    size_t _emergency_reserve_max = 30;
     segment_stack _emergency_reserve;
+    bool _allocation_failure_flag = false;
 private:
     segment* allocate_or_fallback_to_reserve();
     void free_or_restore_to_reserve(segment* seg) noexcept;
@@ -217,9 +218,31 @@ public:
     void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
     size_t current_emergency_reserve_goal() const { return _current_emergeny_reserve_goal; }
+    void set_emergency_reserve_max(size_t new_size) { _emergency_reserve_max = new_size; }
+    size_t emergency_reserve_max() { return _emergency_reserve_max; }
     void set_current_emergency_reserve_goal(size_t goal) { _current_emergeny_reserve_goal = goal; }
+    void clear_allocation_failure_flag() { _allocation_failure_flag = false; }
+    bool allocation_failure_flag() { return _allocation_failure_flag; }
+    void refill_emergency_reserve();
+    size_t trim_emergency_reserve_to_max();
     struct reservation_goal;
 };
+
+void segment_pool::refill_emergency_reserve() {
+    while (_emergency_reserve.size() < _emergency_reserve_max) {
+        auto seg = new segment;
+        _emergency_reserve.push(seg);
+    }
+}
+
+size_t segment_pool::trim_emergency_reserve_to_max() {
+    size_t n_released = 0;
+    while (_emergency_reserve.size() > _emergency_reserve_max) {
+        _emergency_reserve.pop();
+        ++n_released;
+    }
+    return n_released;
+}
 
 segment_descriptor&
 segment_pool::descriptor(const segment* seg) {
@@ -251,16 +274,15 @@ segment_pool::containing_segment(void* obj) const {
 
 segment*
 segment_pool::allocate_or_fallback_to_reserve() {
-    try {
-        return new segment;
-    } catch (std::bad_alloc&) {
-        if (_emergency_reserve.size() <= _current_emergeny_reserve_goal) {
+    if (_emergency_reserve.size() <= _current_emergeny_reserve_goal) {
+        try {
+            return new segment;
+        } catch (const std::bad_alloc&) {
+            _allocation_failure_flag = true;
             throw;
         }
-        auto s = std::move(_emergency_reserve.top());
-        _emergency_reserve.pop();
-        return s.release();
     }
+    return _emergency_reserve.pop();
 }
 
 void
@@ -353,6 +375,8 @@ public:
     size_t segments_in_use() const;
     size_t current_emergency_reserve_goal() const { return 0; }
     void set_current_emergency_reserve_goal(size_t goal) { }
+    void refill_emergency_reserve() {}
+    size_t trim_emergency_reserve_to_max() {}
 public:
     class reservation_goal;
 };
@@ -1181,6 +1205,41 @@ void
 region_group::del(region_impl* child) {
     _regions.erase(boost::range::remove(_regions, child), _regions.end());
     update(-child->occupancy().total_space());
+}
+
+allocating_section::guard::guard()
+    : _prev(shard_segment_pool.emergency_reserve_max())
+{ }
+
+allocating_section::guard::~guard() {
+    shard_segment_pool.set_emergency_reserve_max(_prev);
+}
+
+void allocating_section::guard::enter(allocating_section& self) {
+    shard_segment_pool.set_emergency_reserve_max(std::max(self._lsa_reserve, _prev));
+    shard_segment_pool.refill_emergency_reserve();
+
+    while (true) {
+        size_t free = memory::stats().free_memory();
+        if (free >= self._std_reserve) {
+            break;
+        }
+        if (!tracker_instance.reclaim(self._std_reserve - free)) {
+            throw std::bad_alloc();
+        }
+    }
+
+    shard_segment_pool.clear_allocation_failure_flag();
+}
+
+void allocating_section::on_alloc_failure() {
+    if (shard_segment_pool.allocation_failure_flag()) {
+        _lsa_reserve *= 2; // FIXME: decay?
+        logger.debug("LSA allocation failure, increasing reserve in section {} to {} segments", this, _lsa_reserve);
+    } else {
+        _std_reserve *= 2; // FIXME: decay?
+        logger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
+    }
 }
 
 }
