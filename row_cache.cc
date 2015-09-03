@@ -189,6 +189,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             }
             return make_ready_future<stop_iteration>(m.partitions.empty() ? stop_iteration::yes : stop_iteration::no);
         });
+    }).finally([&m, this] {
+        with_allocator(_tracker.allocator(), [&m] () {
+            m.partitions.clear_and_dispose(current_deleter<partition_entry>());
+        });
     });
 }
 
