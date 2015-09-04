@@ -201,6 +201,8 @@ future<> init_once(shared_ptr<distributed<database>> db) {
         new shared_ptr<distributed<database>>(db);
         return init_storage_service(*db).then([] {
             return init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
+        }).then([] {
+            return db::system_keyspace::init_local_cache();
         });
     } else {
         return make_ready_future();
@@ -225,8 +227,6 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
                 proxy.start(std::ref(*db)).get();
                 mm.start().get();
                 qp->start(std::ref(proxy), std::ref(*db)).get();
-
-                db::system_keyspace::init_local_cache().get();
 
                 auto& ss = service::get_local_storage_service();
                 static bool storage_service_started = false;
