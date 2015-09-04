@@ -26,7 +26,8 @@ public:
             ::unlink(_path.c_str());
         }
         assert(_fd.get() != -1);
-        ::lockf(_fd.get(), F_ULOCK, 0);
+        auto r = ::lockf(_fd.get(), F_ULOCK, 0);
+        assert(r == 0);
     }
     sstring
         _path;
