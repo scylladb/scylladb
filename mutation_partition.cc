@@ -709,7 +709,7 @@ bool row::operator==(const row& other) const {
     }
 
     auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
-        return c1.first == c2.first && c2.second == c2.second;
+        return c1.first == c2.first && c1.second == c2.second;
     };
     if (_type == storage_type::vector) {
         if (other._type == storage_type::vector) {
