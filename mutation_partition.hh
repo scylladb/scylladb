@@ -164,7 +164,30 @@ public:
             }
         } else {
             for (auto& cell : _storage.set) {
-                if (func(cell.id(), cell.cell()) == stop_iteration::yes) {
+                const auto& c = cell.cell();
+                if (c && func(cell.id(), c) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        }
+    }
+
+    template<typename Func>
+    void for_each_cell_until(Func&& func) {
+        if (_type == storage_type::vector) {
+            for (unsigned i = 0; i < _storage.vector.size(); i++) {
+                auto& cell = _storage.vector[i];
+                if (!bool(cell)) {
+                    continue;
+                }
+                if (func(i, cell) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                auto& c = cell.cell();
+                if (c && func(cell.id(), c) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -172,12 +195,26 @@ public:
     }
 
     // Merges cell's value into the row.
-    void apply(const column_definition& column, atomic_cell_or_collection cell);
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell);
+
+    //
+    // Merges cell's value into the row.
+    //
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    //
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell);
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
     void merge(const schema& s, column_kind kind, const row& other);
+
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    void merge(const schema& s, column_kind kind, row&& other);
 
     // Expires cells based on query_time. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
@@ -490,6 +527,7 @@ public:
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
+    void apply_row_tombstone(const schema&, row_tombstones_entry*) noexcept;
     //
     // Applies p to current object.
     //
@@ -500,6 +538,14 @@ public:
     // FIXME: make stronger exception guarantees (p1 = p0).
     //
     void apply(const schema& schema, const mutation_partition& p);
+    //
+    // Same guarantees as for apply(const schema&, const mutation_partition&).
+    //
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    //
+    void apply(const schema& schema, mutation_partition&& p);
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 public:

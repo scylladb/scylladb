@@ -42,7 +42,12 @@ public:
     friend class row_cache;
     friend class cache_tracker;
 
-    cache_entry(dht::decorated_key key, mutation_partition p)
+    cache_entry(const dht::decorated_key& key, const mutation_partition& p)
+        : _key(key)
+        , _p(p)
+    { }
+
+    cache_entry(dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _key(std::move(key))
         , _p(std::move(p))
     { }

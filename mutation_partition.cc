@@ -46,8 +46,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
     _static_row.merge(schema, column_kind::static_column, p._static_row);
 
     for (auto&& entry : p._rows) {
-        auto& key = entry.key();
-        auto i = _rows.find(key, rows_entry::compare(schema));
+        auto i = _rows.find(entry);
         if (i == _rows.end()) {
             auto e = current_allocator().construct<rows_entry>(entry);
             _rows.insert(i, *e);
@@ -55,6 +54,33 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
             i->row().cells().merge(schema, column_kind::regular_column, entry.row().cells());
+        }
+    }
+}
+
+void
+mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    _tombstone.apply(p._tombstone);
+
+    p._row_tombstones.clear_and_dispose([this, &s] (row_tombstones_entry* e) {
+        apply_row_tombstone(s, e);
+    });
+
+    _static_row.merge(s, column_kind::static_column, std::move(p._static_row));
+
+    auto p_i = p._rows.begin();
+    auto p_end = p._rows.end();
+    while (p_i != p_end) {
+        rows_entry& entry = *p_i;
+        auto i = _rows.find(entry);
+        if (i == _rows.end()) {
+            p_i = p._rows.erase(p_i);
+            _rows.insert(i, entry);
+        } else {
+            i->row().apply(entry.row().deleted_at());
+            i->row().apply(entry.row().marker());
+            i->row().cells().merge(s, column_kind::regular_column, std::move(entry.row().cells()));
+            p_i = p._rows.erase_and_dispose(p_i, current_deleter<rows_entry>());
         }
     }
 }
@@ -115,6 +141,17 @@ mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_pre
         _row_tombstones.insert(i, *e);
     } else {
         i->apply(t);
+    }
+}
+
+void
+mutation_partition::apply_row_tombstone(const schema& s, row_tombstones_entry* e) noexcept {
+    auto i = _row_tombstones.lower_bound(*e);
+    if (i == _row_tombstones.end() || !e->prefix().equal(s, i->prefix())) {
+        _row_tombstones.insert(i, *e);
+    } else {
+        i->apply(e->t());
+        current_allocator().destroy(e);
     }
 }
 
@@ -449,7 +486,14 @@ merge_column(const column_definition& def,
 }
 
 void
-row::apply(const column_definition& column, atomic_cell_or_collection value) {
+row::apply(const column_definition& column, const atomic_cell_or_collection& value) {
+    // FIXME: Optimize
+    atomic_cell_or_collection tmp(value);
+    apply(column, std::move(tmp));
+}
+
+void
+row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
     // our mutations are not yet immutable
     auto id = column.id;
     if (_type == storage_type::vector && id < max_vector_size) {
@@ -755,6 +799,19 @@ void row::merge(const schema& s, column_kind kind, const row& other) {
     }
     other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
         apply(s.column_at(kind, id), cell);
+    });
+}
+
+void row::merge(const schema& s, column_kind kind, row&& other) {
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    // FIXME: Optimize when 'other' is a set. We could move whole entries, not only cells.
+    other.for_each_cell_until([&] (column_id id, atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), std::move(cell));
+        return stop_iteration::no;
     });
 }
 
