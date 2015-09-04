@@ -43,10 +43,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         apply_row_tombstone(schema, e.prefix(), e.t());
     }
 
-    auto find_static_column_def = [&schema] (auto col) -> const column_definition& { return schema.static_column_at(col); };
-    auto find_regular_column_def = [&schema] (auto col) -> const column_definition& { return schema.regular_column_at(col); };
-
-    _static_row.merge(p._static_row, find_static_column_def);
+    _static_row.merge(schema, column_kind::static_column, p._static_row);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.key();
@@ -57,7 +54,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         } else {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
-            i->row().cells().merge(entry.row().cells(), find_regular_column_def);
+            i->row().cells().merge(schema, column_kind::regular_column, entry.row().cells());
         }
     }
 }
@@ -230,15 +227,20 @@ void mutation_partition::for_each_row(const schema& schema, const query::range<c
     }
 }
 
-template <typename ColumnDefResolver>
-static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
-        ColumnDefResolver&& id_to_def, gc_clock::time_point now, query::result::row_writer& writer) {
+static void get_row_slice(const schema& s,
+    column_kind kind,
+    const row& cells,
+    const std::vector<column_id>& columns,
+    tombstone tomb,
+    gc_clock::time_point now,
+    query::result::row_writer& writer)
+{
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
             writer.add_empty();
         } else {
-            auto&& def = id_to_def(id);
+            auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb, now)) {
@@ -262,11 +264,10 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
     }
 }
 
-template <typename ColumnDefResolver>
-bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def, gc_clock::time_point now) {
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
-        const column_definition& def = id_to_def(id);
+        const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
             if (c.is_live(tomb, now)) {
@@ -294,23 +295,14 @@ mutation_partition::query(query::result::partition_writer& pw,
 {
     const query::partition_slice& slice = pw.slice();
 
-    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.regular_column_at(id);
-    };
-
     // To avoid retraction of the partition entry in case of limit == 0.
     assert(limit > 0);
 
-    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.static_column_at(id);
-    };
-
-    bool any_live = has_any_live_data(static_row(), _tombstone, static_column_resolver, now);
+    bool any_live = has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, now);
 
     if (!slice.static_columns.empty()) {
         auto row_builder = pw.add_static_row();
-        get_row_slice(static_row(), slice.static_columns, partition_tombstone(),
-            static_column_resolver, now, row_builder);
+        get_row_slice(s, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(), now, row_builder);
         row_builder.finish();
     }
 
@@ -330,7 +322,7 @@ mutation_partition::query(query::result::partition_writer& pw,
             if (row.is_live(s, row_tombstone, now)) {
                 any_live = true;
                 auto row_builder = pw.add_row(e.key());
-                get_row_slice(row.cells(), slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
+                get_row_slice(s, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
                     return stop_iteration::yes;
@@ -529,8 +521,7 @@ mutation_partition::compact_for_query(
 
     // FIXME: drop GC'able tombstones
 
-    bool static_row_live = _static_row.compact_and_expire(
-        _tombstone, query_time, std::bind1st(std::mem_fn(&schema::static_column_at), &s));
+    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone, query_time);
 
     uint32_t row_count = 0;
 
@@ -549,9 +540,7 @@ mutation_partition::compact_for_query(
 
             tombstone tomb = tombstone_for_row(s, e);
 
-            bool is_live = row.cells().compact_and_expire(
-                tomb, query_time, std::bind1st(std::mem_fn(&schema::regular_column_at), &s));
-
+            bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time);
             is_live |= row.marker().compact_and_expire(tomb, query_time);
 
             // when row_limit is reached, do not exit immediately,
@@ -582,26 +571,18 @@ mutation_partition::compact_for_query(
 
 bool
 deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
-    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.regular_column_at(id);
-    };
-
     // _created_at corresponds to the row marker cell, present for rows
     // created with the 'insert' statement. If row marker is live, we know the
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at);
     return _marker.is_live(base_tombstone, query_time)
-           || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
+           || has_any_live_data(s, column_kind::regular_column, _cells, base_tombstone, query_time);
 }
 
 bool
 mutation_partition::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
-    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.static_column_at(id);
-    };
-
-    return has_any_live_data(static_row(), _tombstone, static_column_resolver, query_time);
+    return has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, query_time);
 }
 
 size_t

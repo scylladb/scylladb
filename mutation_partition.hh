@@ -21,6 +21,10 @@
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
+// All cells must belong to a single column_kind. The kind is not stored
+// for space-efficiency reasons. Whenever a method accepts a column_kind,
+// the caller must always supply the same column_kind.
+//
 // Can be used as a range of row::cell_entry.
 //
 class row {
@@ -187,32 +191,24 @@ public:
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
-    // Merges given cell into the row.
-    template <typename ColumnDefinitionResolver>
-    void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
-        apply(resolver(id), std::move(cell));
-    }
-
-    template <typename ColumnDefinitionResolver>
-    void merge(const row& other, ColumnDefinitionResolver&& resolver) {
+    void merge(const schema& s, column_kind kind, const row& other) {
         if (other._type == storage_type::vector) {
             reserve(other._storage.vector.size() - 1);
         } else {
             reserve(other._storage.set.rbegin()->id());
         }
         other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-            apply(id, cell, std::forward<ColumnDefinitionResolver>(resolver));
+            apply(s.column_at(kind, id), cell);
         });
     }
 
     // Expires cells based on query_time. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    template <typename ColumnDefinitionResolver>
-    bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time, ColumnDefinitionResolver&& resolver) {
+    bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time) {
         bool any_live = false;
         remove_if([&] (column_id id, atomic_cell_or_collection& c) {
             bool erase = false;
-            const column_definition& def = resolver(id);
+            const column_definition& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 atomic_cell_view cell = c.as_atomic_cell();
                 if (cell.is_covered_by(tomb)) {
