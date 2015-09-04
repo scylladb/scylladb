@@ -131,6 +131,8 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
+    logalloc::allocating_section _update_section;
+    logalloc::allocating_section _read_section;
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&);

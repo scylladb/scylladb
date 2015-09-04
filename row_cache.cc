@@ -119,18 +119,19 @@ row_cache::make_reader(const query::partition_range& range) {
             return make_mutation_reader<populating_reader>(*this, _underlying(range));
         }
 
+        return _read_section(_tracker.region(), [&] {
         const dht::decorated_key& dk = pos.as_decorated_key();
         auto i = _partitions.find(dk, cache_entry::compare(_schema));
         if (i != _partitions.end()) {
             cache_entry& e = *i;
             _tracker.touch(e);
             ++_stats.hits;
-            logalloc::reclaim_lock lock(_tracker.region());
             return make_reader_returning(mutation(_schema, dk, e.partition()));
         } else {
             ++_stats.misses;
             return make_mutation_reader<populating_reader>(*this, _underlying(range));
         }
+        });
     }
 
     warn(unimplemented::cause::RANGE_QUERIES);
@@ -163,11 +164,12 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
     return repeat([this, &m, presence_checker = std::move(presence_checker)] () mutable {
         return with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
-            logalloc::reclaim_lock _(_tracker.region());
             unsigned quota = 30;
+            try {
+            _update_section(_tracker.region(), [&] {
             auto i = m.partitions.begin();
             const schema& s = *m.schema();
-            while (i != m.partitions.end() && quota-- != 0) {
+            while (i != m.partitions.end() && quota) {
                 partition_entry& mem_e = *i;
                 // FIXME: Optimize knowing we lookup in-order.
                 auto cache_i = _partitions.lower_bound(mem_e.key(), cache_entry::compare(_schema));
@@ -186,8 +188,21 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 }
                 i = m.partitions.erase(i);
                 current_allocator().destroy(&mem_e);
+                --quota;
             }
-            return make_ready_future<stop_iteration>(m.partitions.empty() ? stop_iteration::yes : stop_iteration::no);
+            });
+            return m.partitions.empty() ? stop_iteration::yes : stop_iteration::no;
+            } catch (const std::bad_alloc&) {
+                // Cache entry may be in an incomplete state if
+                // _update_section fails due to weak exception guarantees of
+                // mutation_partition::apply().
+                auto i = m.partitions.begin();
+                auto cache_i = _partitions.find(i->key(), cache_entry::compare(_schema));
+                if (cache_i != _partitions.end()) {
+                    _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
+                }
+                throw;
+            }
         });
     }).finally([&m, this] {
         with_allocator(_tracker.allocator(), [&m] () {
