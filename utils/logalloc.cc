@@ -201,7 +201,7 @@ class segment_pool {
     uintptr_t _segments_base; // The address of the first segment
     size_t _segments_in_use{};
     memory::memory_layout _layout;
-    size_t _current_emergeny_reserve_goal = 1;
+    size_t _current_emergency_reserve_goal = 1;
     size_t _emergency_reserve_max = 30;
     segment_stack _emergency_reserve;
     bool _allocation_failure_flag = false;
@@ -217,10 +217,10 @@ public:
     void free_segment(segment*) noexcept;
     void free_segment(segment*, segment_descriptor&) noexcept;
     size_t segments_in_use() const;
-    size_t current_emergency_reserve_goal() const { return _current_emergeny_reserve_goal; }
+    size_t current_emergency_reserve_goal() const { return _current_emergency_reserve_goal; }
     void set_emergency_reserve_max(size_t new_size) { _emergency_reserve_max = new_size; }
     size_t emergency_reserve_max() { return _emergency_reserve_max; }
-    void set_current_emergency_reserve_goal(size_t goal) { _current_emergeny_reserve_goal = goal; }
+    void set_current_emergency_reserve_goal(size_t goal) { _current_emergency_reserve_goal = goal; }
     void clear_allocation_failure_flag() { _allocation_failure_flag = false; }
     bool allocation_failure_flag() { return _allocation_failure_flag; }
     void refill_emergency_reserve();
@@ -274,7 +274,7 @@ segment_pool::containing_segment(void* obj) const {
 
 segment*
 segment_pool::allocate_or_fallback_to_reserve() {
-    if (_emergency_reserve.size() <= _current_emergeny_reserve_goal) {
+    if (_emergency_reserve.size() <= _current_emergency_reserve_goal) {
         try {
             return new segment;
         } catch (const std::bad_alloc&) {
@@ -321,7 +321,7 @@ segment_pool::segment_pool()
 {
     _segments_base = align_down(_layout.start, (uintptr_t)segment::size);
     _segments.resize((_layout.end - _segments_base) / segment::size);
-    for (size_t i = 0; i < _current_emergeny_reserve_goal; ++i) {
+    for (size_t i = 0; i < _current_emergency_reserve_goal; ++i) {
         _emergency_reserve.push(new segment);
     }
 }
