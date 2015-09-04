@@ -725,3 +725,66 @@ bool row::operator==(const row& other) const {
         }
     }
 }
+
+row::row() {
+    new (&_storage.vector) vector_type;
+}
+
+row::row(row&& other)
+    : _type(other._type), _size(other._size) {
+    if (_type == storage_type::vector) {
+        new (&_storage.vector) vector_type(std::move(other._storage.vector));
+    } else {
+        new (&_storage.set) map_type(std::move(other._storage.set));
+    }
+}
+
+row& row::operator=(row&& other) {
+    if (this != &other) {
+        this->~row();
+        new (this) row(std::move(other));
+    }
+    return *this;
+}
+
+void row::merge(const schema& s, column_kind kind, const row& other) {
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), cell);
+    });
+}
+
+bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time) {
+    bool any_live = false;
+    remove_if([&] (column_id id, atomic_cell_or_collection& c) {
+        bool erase = false;
+        const column_definition& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            atomic_cell_view cell = c.as_atomic_cell();
+            if (cell.is_covered_by(tomb)) {
+                erase = true;
+            } else if (cell.has_expired(query_time)) {
+                c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+            } else {
+                any_live |= cell.is_live();
+            }
+        } else {
+            auto&& cell = c.as_collection_mutation();
+            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            auto m_view = ctype->deserialize_mutation_form(cell);
+            collection_type_impl::mutation m = m_view.materialize();
+            any_live |= m.compact_and_expire(tomb, query_time);
+            if (m.cells.empty() && m.tomb <= tomb) {
+                erase = true;
+            } else {
+                c = ctype->serialize_mutation_form(m);
+            }
+        }
+        return erase;
+    });
+    return any_live;
+}
