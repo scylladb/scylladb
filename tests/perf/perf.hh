@@ -14,7 +14,7 @@
 
 template <typename Func>
 static
-void time_it(Func func, int iterations = 5) {
+void time_it(Func func, int iterations = 5, int iterations_between_clock_readings = 1000) {
     using clk = std::chrono::high_resolution_clock;
 
     for (int i = 0; i < iterations; i++) {
@@ -23,7 +23,7 @@ void time_it(Func func, int iterations = 5) {
         uint64_t count = 0;
 
         while (clk::now() < end_at) {
-            for (int i = 0; i < 10000; i++) { // amortize clock reading cost
+            for (int i = 0; i < iterations_between_clock_readings; i++) { // amortize clock reading cost
                 func();
                 count++;
             }
