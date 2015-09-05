@@ -165,6 +165,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     return repeat([this, &m, presence_checker = std::move(presence_checker)] () mutable {
         return with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
             unsigned quota = 30;
+            auto cmp = cache_entry::compare(_schema);
             try {
                 _update_section(_tracker.region(), [&] {
                     auto i = m.partitions.begin();
@@ -172,7 +173,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                     while (i != m.partitions.end() && quota) {
                         partition_entry& mem_e = *i;
                         // FIXME: Optimize knowing we lookup in-order.
-                        auto cache_i = _partitions.lower_bound(mem_e.key(), cache_entry::compare(_schema));
+                        auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
                         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
                         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
                         //        search it.
@@ -198,7 +199,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 // _update_section fails due to weak exception guarantees of
                 // mutation_partition::apply().
                 auto i = m.partitions.begin();
-                auto cache_i = _partitions.find(i->key(), cache_entry::compare(_schema));
+                auto cache_i = _partitions.find(i->key(), cmp);
                 if (cache_i != _partitions.end()) {
                     _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
                 }
