@@ -19,11 +19,11 @@ class allocating_section;
 //
 // Frees some amount of objects from the region to which it's attached.
 //
-// Should always make forward progress unless region is empty, so this should eventually stop:
+// This should eventually stop given no new objects are added:
 //
-//     while (!region.empty()) { eviction_fn(); }
+//     while (eviction_fn() == memory::reclaiming_result::reclaimed_something) ;
 //
-using eviction_fn = std::function<void()>;
+using eviction_fn = std::function<memory::reclaiming_result()>;
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {

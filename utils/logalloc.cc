@@ -895,9 +895,9 @@ public:
         return _evictable && _reclaiming_enabled;
     }
 
-    void evict_some() {
+    memory::reclaiming_result evict_some() {
         ++_reclaim_counter;
-        _eviction_fn();
+        return _eviction_fn();
     }
 
     void make_not_evictable() {
@@ -1008,7 +1008,10 @@ static void reclaim_from_evictable(region::impl& r, size_t target_segments_in_us
         auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
         logger.debug("Evicting {} bytes from region {}, occupancy={}", used - used_target, r.id(), r.occupancy());
         while (r.occupancy().used_space() > used_target || !r.is_compactible()) {
-            r.evict_some();
+            if (r.evict_some() == memory::reclaiming_result::reclaimed_nothing) {
+                logger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
+                return;
+            }
             if (shard_segment_pool.segments_in_use() <= target_segments_in_use) {
                 logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
                 return;

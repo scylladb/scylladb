@@ -20,9 +20,12 @@ cache_tracker::cache_tracker() {
     setup_collectd();
 
     _region.make_evictable([this] {
-        with_allocator(_region.allocator(), [this] {
-            assert(!_lru.empty());
+        return with_allocator(_region.allocator(), [this] {
+            if (_lru.empty()) {
+                return memory::reclaiming_result::reclaimed_nothing;
+            }
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
+            return memory::reclaiming_result::reclaimed_something;
         });
     });
 }
