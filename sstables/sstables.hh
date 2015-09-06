@@ -212,6 +212,10 @@ public:
         _marked_for_deletion = true;
     }
 
+    bool marked_for_deletion() const {
+        return _marked_for_deletion;
+    }
+
     void add_ancestor(int generation) {
         _collector.add_ancestor(generation);
     }
