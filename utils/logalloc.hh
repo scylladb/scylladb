@@ -7,6 +7,7 @@
 #include <bits/unique_ptr.h>
 #include <seastar/core/scollectd.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/shared_ptr.hh>
 #include "allocation_strategy.hh"
 
 namespace logalloc {
@@ -179,7 +180,7 @@ class region {
 public:
     using impl = region_impl;
 private:
-    std::unique_ptr<impl> _impl;
+    shared_ptr<impl> _impl;
 public:
     region();
     explicit region(region_group& group);

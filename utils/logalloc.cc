@@ -808,7 +808,8 @@ public:
         }
     }
 
-    // Merges another region into this region. The other region is left empty.
+    // Merges another region into this region. The other region is mad
+    // to refer to this region.
     // Doesn't invalidate references to allocated objects.
     void merge(region_impl& other) {
         compaction_lock dct1(*this);
@@ -832,6 +833,10 @@ public:
 
         _closed_occupancy += other._closed_occupancy;
         other._closed_occupancy = {};
+
+        // Make sure both regions will notice a future increment
+        // to the reclaim counter
+        _reclaim_counter = std::max(_reclaim_counter, other._reclaim_counter);
     }
 
     // Returns occupancy of the sparsest compactible segment.
@@ -922,11 +927,11 @@ public:
 };
 
 region::region()
-    : _impl(std::make_unique<impl>())
+    : _impl(make_shared<impl>())
 { }
 
 region::region(region_group& group)
-        : _impl(std::make_unique<impl>(&group)) {
+        : _impl(make_shared<impl>(&group)) {
 }
 
 region::~region() {
@@ -937,7 +942,10 @@ occupancy_stats region::occupancy() const {
 }
 
 void region::merge(region& other) {
-    _impl->merge(*other._impl);
+    if (_impl != other._impl) {
+        _impl->merge(*other._impl);
+        other._impl = _impl;
+    }
 }
 
 void region::full_compaction() {
