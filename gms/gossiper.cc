@@ -966,7 +966,6 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     shard_id id = get_shard_id(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
-    // FIXME: Add timeout
     ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state), ok] (auto&& f) mutable {
         try {
             f.get();

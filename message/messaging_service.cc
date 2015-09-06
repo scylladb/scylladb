@@ -392,7 +392,7 @@ void messaging_service::register_echo(std::function<future<> ()>&& func) {
     register_handler(this, messaging_verb::ECHO, std::move(func));
 }
 future<> messaging_service::send_echo(shard_id id) {
-    return send_message<void>(this, messaging_verb::ECHO, std::move(id));
+    return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 1000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
