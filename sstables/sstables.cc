@@ -1352,6 +1352,10 @@ const sstring sstable::filename(component_type f) const {
     return filename(_dir, _ks, _cf, _version, _generation, _format, f);
 }
 
+sstring sstable::toc_filename() const {
+    return filename(component_type::TOC);
+}
+
 const sstring sstable::temporary_filename(component_type f) {
     return filename(_dir, _ks, _cf, _version, _generation, _format, f, true);
 }

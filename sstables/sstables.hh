@@ -238,6 +238,7 @@ public:
     const sstring get_filename() {
         return filename(component_type::Data);
     }
+    sstring toc_filename() const;
 
     metadata_collector& get_metadata_collector() {
         return _collector;
