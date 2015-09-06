@@ -20,6 +20,8 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"
+#include "remove.hh"
+#include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <regex>
 #include <core/align.hh>
@@ -1475,17 +1477,60 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            for (auto component : _components) {
-                remove_file(filename(component)).handle_exception(
+            remove_by_toc_name(filename(component_type::TOC)).handle_exception(
                         [] (std::exception_ptr eptr) {
                             sstlog.warn("Exception when deleting sstable file: {}", eptr);
                         });
-            }
         } catch (...) {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
         }
 
     }
+}
+
+sstring
+dirname(sstring fname) {
+    return boost::filesystem::canonical(std::string(fname)).parent_path().string();
+}
+
+future<>
+fsync_directory(sstring fname) {
+    return open_directory(dirname(fname)).then([] (file f) {
+        return do_with(std::move(f), [] (file& f) {
+            return f.flush();
+        });
+    });
+}
+
+future<>
+remove_by_toc_name(sstring sstable_toc_name) {
+    return seastar::async([sstable_toc_name] {
+        auto dir = dirname(sstable_toc_name);
+        auto toc_file = open_file_dma(sstable_toc_name, open_flags::ro).get0();
+        auto in = make_file_input_stream(toc_file);
+        auto size = toc_file.size().get0();
+        auto text = in.read_exactly(size).get0();
+        in.close().get();
+        remove_file(sstable_toc_name).get();
+        fsync_directory(dir).get();
+        std::vector<sstring> components;
+        sstring all(text.begin(), text.end());
+        boost::split(components, all, boost::is_any_of("\n"));
+        auto toc_txt = sstring("TOC.txt");
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - toc_txt.size());
+        parallel_for_each(components, [prefix, toc_txt] (sstring component) {
+            if (component.empty()) {
+                // eof
+                return make_ready_future<>();
+            }
+            if (component == toc_txt) {
+                // already deleted
+                return make_ready_future<>();
+            }
+            return remove_file(prefix + component);
+        }).get();
+        fsync_directory(dir).get();
+    });
 }
 
 }
