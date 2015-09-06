@@ -38,7 +38,6 @@
 #include "log.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
-#include <seastar/core/semaphore.hh>
 #include <chrono>
 
 namespace gms {
@@ -252,9 +251,8 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
     int index = dist(_random);
     inet_address to = __live_endpoints[index];
     auto id = get_shard_id(to);
-    auto sem = make_shared<semaphore>();
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
-    ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id, sem] (auto&& f) {
+    return ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
         try {
             auto ack_msg = f.get0();
             logger.trace("Got GossipDigestSyn Reply");
@@ -266,11 +264,7 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
             logger.trace("Fail to send GossipDigestSyn to {}: {}", id, std::current_exception());
         }
         return make_ready_future<>();
-    }).then([sem] {
-        sem->signal();
-    });
-
-    return sem->wait(std::chrono::milliseconds(1000)).then([this, to] {
+    }).then([this, to] {
         return make_ready_future<bool>(_seeds.count(to));
     });
 }
@@ -972,7 +966,6 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     shard_id id = get_shard_id(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
-    // FIXME: Add timeout
     ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state), ok] (auto&& f) mutable {
         try {
             f.get();
@@ -1225,9 +1218,8 @@ future<> gossiper::do_shadow_round() {
                 std::vector<gossip_digest> digests;
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
                 auto id = get_shard_id(seed);
-                auto sem = make_shared<semaphore>(0);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
-                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id, sem] (auto&& f) {
+                ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
                     try {
                         auto ack_msg = f.get0();
                         logger.trace("Got GossipDigestSyn (ShadowRound) Reply");
@@ -1236,11 +1228,6 @@ future<> gossiper::do_shadow_round() {
                         logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, std::current_exception());
                     }
                     return make_ready_future<>();
-                }).finally([sem] {
-                    sem->signal();
-                });
-                sem->wait(std::chrono::seconds(1)).handle_exception([id] (auto ep) {
-                    logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
                 }).get();
             }
             if (clk::now() > t + storage_service_ring_delay()) {
