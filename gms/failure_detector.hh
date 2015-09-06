@@ -78,7 +78,7 @@ public:
  * "The Phi Accrual Failure Detector" by Hayashibara.
  * Check the paper and the <i>IFailureDetector</i> interface for details.
  */
-class failure_detector : public i_failure_detector {
+class failure_detector : public i_failure_detector, public seastar::async_sharded_service<failure_detector> {
 private:
     static constexpr int SAMPLE_SIZE = 1000;
     // this is useless except to provide backwards compatibility in phi_convict_threshold,

@@ -212,8 +212,8 @@ void gossiper::init_messaging_service_handler() {
                 logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
                 return make_ready_future<>();
             }
-            return seastar::async([from] {
-                get_local_failure_detector().force_conviction(from);
+            return seastar::async([from, fd = get_local_failure_detector().shared_from_this()] {
+                fd->force_conviction(from);
             });
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
@@ -394,6 +394,7 @@ void gossiper::do_status_check() {
 
     auto now = this->now();
 
+    auto fd = get_local_failure_detector().shared_from_this();
     for (auto it = endpoint_state_map.begin(); it != endpoint_state_map.end();) {
         auto endpoint = it->first;
         auto& ep_state = it->second;
@@ -404,7 +405,7 @@ void gossiper::do_status_check() {
             continue;
         }
 
-        get_local_failure_detector().interpret(endpoint);
+        fd->interpret(endpoint);
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
