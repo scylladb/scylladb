@@ -406,7 +406,7 @@ void messaging_service::register_gossip_digest_syn(std::function<future<gossip_d
     register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
 }
 future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(shard_id id, gossip_digest_syn msg) {
-    return send_message<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
+    return send_message_timeout<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), 1000ms, std::move(msg));
 }
 
 void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
