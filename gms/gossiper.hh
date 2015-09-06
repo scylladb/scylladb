@@ -59,7 +59,7 @@ class i_failure_detector;
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener, public enable_shared_from_this<gossiper> {
+class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
 public:
     using clk = std::chrono::high_resolution_clock;
 private:
