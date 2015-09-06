@@ -296,7 +296,7 @@ private:
 
     const bool has_component(component_type f);
 
-    const sstring filename(component_type f);
+    const sstring filename(component_type f) const;
     const sstring temporary_filename(component_type f);
 
     template <sstable::component_type Type, typename T>
