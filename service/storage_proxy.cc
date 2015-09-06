@@ -1755,7 +1755,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
     query::result_merger merger;
     merger.reserve(exec.size());
 
-    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd, timeout] (::shared_ptr<abstract_read_executor>& rex) {
+    auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
         return rex->execute(timeout);
     }, std::move(merger));
 
@@ -1826,7 +1826,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution
     query::result_merger merger;
     merger.reserve(exec.size());
 
-    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd, timeout] (::shared_ptr<abstract_read_executor>& rex) {
+    auto f = ::map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
         return rex->execute(timeout);
     }, std::move(merger));
 
