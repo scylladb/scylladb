@@ -1295,6 +1295,7 @@ public:
             }
         }
         if (_digest_results.size() == _targets_count) {
+            _timeout.cancel();
             _done_promise.set_value();
         }
     }
@@ -1344,6 +1345,7 @@ public:
             _max_live_count = std::max(result->row_count(), _max_live_count);
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
+                _timeout.cancel();
                 _done_promise.set_value();
             }
         }
