@@ -210,9 +210,11 @@ void gossiper::init_messaging_service_handler() {
             gossiper.set_last_processed_message_at();
             if (!gossiper.is_enabled()) {
                 logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
-                return;
+                return make_ready_future<>();
             }
-            get_local_failure_detector().force_conviction(from);
+            return seastar::async([from, fd = get_local_failure_detector().shared_from_this()] {
+                fd->force_conviction(from);
+            });
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
@@ -310,7 +312,7 @@ void gossiper::notify_failure_detector(inet_address endpoint, endpoint_state rem
 }
 
 future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) {
-    return seastar::async([this, map = std::move(map)] () mutable {
+    return seastar::async([this, g = this->shared_from_this(), map = std::move(map)] () mutable {
         for (auto& entry : map) {
             auto& ep = entry.first;
             if (ep == get_broadcast_address() && !is_in_shadow_round()) {
@@ -392,6 +394,7 @@ void gossiper::do_status_check() {
 
     auto now = this->now();
 
+    auto fd = get_local_failure_detector().shared_from_this();
     for (auto it = endpoint_state_map.begin(); it != endpoint_state_map.end();) {
         auto endpoint = it->first;
         auto& ep_state = it->second;
@@ -402,7 +405,7 @@ void gossiper::do_status_check() {
             continue;
         }
 
-        get_local_failure_detector().interpret(endpoint);
+        fd->interpret(endpoint);
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
@@ -435,7 +438,7 @@ void gossiper::do_status_check() {
 }
 
 void gossiper::run() {
-    seastar::async([this] {
+    seastar::async([this, g = this->shared_from_this()] {
         logger.trace("=== Gossip round START");
 
         //wait on messaging service to start listening
@@ -601,6 +604,7 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::convict(inet_address endpoint, double phi) {
     auto it = endpoint_state_map.find(endpoint);
     if (it == endpoint_state_map.end()) {
@@ -694,7 +698,7 @@ void gossiper::make_random_gossip_digest(std::vector<gossip_digest>& g_digests) 
 }
 
 future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, utils::UUID local_host_id) {
-    return seastar::async([this, endpoint, host_id, local_host_id] {
+    return seastar::async([this, g = this->shared_from_this(), endpoint, host_id, local_host_id] {
         auto& state = endpoint_state_map.at(endpoint);
         // remember this node's generation
         int generation = state.get_heart_beat_state().get_generation();
@@ -718,7 +722,7 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
 }
 
 future<> gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_id) {
-    return seastar::async([this, endpoint, host_id] {
+    return seastar::async([this, g = this->shared_from_this(), endpoint, host_id] {
         auto& eps = endpoint_state_map.at(endpoint);
         eps.update_timestamp(); // make sure we don't evict it too soon
         eps.get_heart_beat_state().force_newer_generation_unsafe();
@@ -738,7 +742,7 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return seastar::async([this, address] {
+    return seastar::async([this, g = this->shared_from_this(), address] {
         inet_address endpoint(address);
         auto is_exist = endpoint_state_map.count(endpoint);
         int gen = std::chrono::duration_cast<std::chrono::seconds>((now() + std::chrono::seconds(60)).time_since_epoch()).count();
@@ -1002,24 +1006,17 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
-    seastar::async([this, addr, local_state] {
-        _live_endpoints.erase(addr);
-        _unreachable_endpoints[addr] = now();
-        logger.info("inet_address {} is now DOWN", addr);
-        for (auto& subscriber : _subscribers) {
-            subscriber->on_dead(addr, local_state);
-            logger.trace("Notified {}", subscriber);
-        }
-    }).then_wrapped([addr] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            logger.warn("Fail to mark_dead={}: {}", addr, std::current_exception());
-        }
-    });
+    _live_endpoints.erase(addr);
+    _unreachable_endpoints[addr] = now();
+    logger.info("inet_address {} is now DOWN", addr);
+    for (auto& subscriber : _subscribers) {
+        subscriber->on_dead(addr, local_state);
+        logger.trace("Notified {}", subscriber);
+    }
 }
 
 // Runs inside seastar::async context
@@ -1218,7 +1215,7 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
 }
 
 future<> gossiper::do_shadow_round() {
-    return seastar::async([this] {
+    return seastar::async([this, g = this->shared_from_this()] {
         build_seeds_list();
         _in_shadow_round = true;
         auto t = clk::now();
@@ -1298,7 +1295,7 @@ void gossiper::add_saved_endpoint(inet_address ep) {
 }
 
 void gossiper::add_local_application_state(application_state state, versioned_value value) {
-    seastar::async([this, state, value = std::move(value)] () mutable {
+    seastar::async([this, g = this->shared_from_this(), state, value = std::move(value)] () mutable {
         inet_address ep_addr = get_broadcast_address();
         assert(endpoint_state_map.count(ep_addr));
         endpoint_state& ep_state = endpoint_state_map.at(ep_addr);
@@ -1329,7 +1326,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 }
 
 future<> gossiper::shutdown() {
-    return seastar::async([this] {
+    return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         _scheduled_gossip_task.cancel();
         logger.info("Announcing shutdown");
