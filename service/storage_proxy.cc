@@ -661,10 +661,11 @@ storage_proxy::mutate_locally(const frozen_mutation& m) {
 
 future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations) {
-    auto pmut = make_lw_shared(std::move(mutations));
-    return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
-        return mutate_locally(m);
-    }).finally([pmut]{});
+    return do_with(std::move(mutations), [this] (std::vector<mutation>& pmut){
+        return parallel_for_each(pmut.begin(), pmut.end(), [this] (const mutation& m) {
+            return mutate_locally(m);
+        });
+    });
 }
 
 /**
