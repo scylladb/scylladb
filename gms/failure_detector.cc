@@ -210,6 +210,7 @@ void failure_detector::report(inet_address ep) {
     }
 }
 
+// Runs inside seastar::async context
 void failure_detector::interpret(inet_address ep) {
     auto it = _arrival_samples.find(ep);
     if (it == _arrival_samples.end()) {
@@ -230,6 +231,7 @@ void failure_detector::interpret(inet_address ep) {
     }
 }
 
+// Runs inside seastar::async context
 void failure_detector::force_conviction(inet_address ep) {
     logger.debug("failure_detector: Forcing conviction of {}", ep);
     for (auto& listener : _fd_evnt_listeners) {

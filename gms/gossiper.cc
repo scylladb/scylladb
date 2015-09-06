@@ -210,9 +210,11 @@ void gossiper::init_messaging_service_handler() {
             gossiper.set_last_processed_message_at();
             if (!gossiper.is_enabled()) {
                 logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
-                return;
+                return make_ready_future<>();
             }
-            get_local_failure_detector().force_conviction(from);
+            return seastar::async([from] {
+                get_local_failure_detector().force_conviction(from);
+            });
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
@@ -601,6 +603,7 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::convict(inet_address endpoint, double phi) {
     auto it = endpoint_state_map.find(endpoint);
     if (it == endpoint_state_map.end()) {
@@ -1002,24 +1005,17 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     }
 }
 
+// Runs inside seastar::async context
 void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
-    seastar::async([this, g = this->shared_from_this(), addr, local_state] {
-        _live_endpoints.erase(addr);
-        _unreachable_endpoints[addr] = now();
-        logger.info("inet_address {} is now DOWN", addr);
-        for (auto& subscriber : _subscribers) {
-            subscriber->on_dead(addr, local_state);
-            logger.trace("Notified {}", subscriber);
-        }
-    }).then_wrapped([addr] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            logger.warn("Fail to mark_dead={}: {}", addr, std::current_exception());
-        }
-    });
+    _live_endpoints.erase(addr);
+    _unreachable_endpoints[addr] = now();
+    logger.info("inet_address {} is now DOWN", addr);
+    for (auto& subscriber : _subscribers) {
+        subscriber->on_dead(addr, local_state);
+        logger.trace("Notified {}", subscriber);
+    }
 }
 
 // Runs inside seastar::async context
