@@ -469,10 +469,12 @@ public:
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
+    void unregister_definitions_update();
     future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
 
     // Wrapper for MIGRATION_REQUEST
     void register_migration_request(std::function<future<std::vector<frozen_mutation>> (gms::inet_address reply_to, unsigned shard)>&& func);
+    void unregister_migration_request();
     future<std::vector<frozen_mutation>> send_migration_request(shard_id id, gms::inet_address reply_to, unsigned shard);
 
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
@@ -480,24 +482,29 @@ public:
     // Wrapper for MUTATION
     void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
+    void unregister_mutation();
     future<> send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id);
 
     // Wrapper for MUTATION_DONE
     void register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
+    void unregister_mutation_done();
     future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
     void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    void unregister_read_data();
     future<query::result> send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    void unregister_read_mutation_data();
     future<reconcilable_result> send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
     // Wrapper for READ_DIGEST
     void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
+    void unregister_read_digest();
     future<query::result_digest> send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
 public:

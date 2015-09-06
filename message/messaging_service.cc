@@ -419,12 +419,18 @@ future<> messaging_service::send_gossip_digest_ack2(shard_id id, gossip_digest_a
 void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func) {
     register_handler(this, net::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
 }
+void messaging_service::unregister_definitions_update() {
+    _rpc->unregister_handler(net::messaging_verb::DEFINITIONS_UPDATE);
+}
 future<> messaging_service::send_definitions_update(shard_id id, std::vector<frozen_mutation> fm) {
     return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
 void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> (gms::inet_address reply_to, unsigned shard)>&& func) {
     register_handler(this, net::messaging_verb::MIGRATION_REQUEST, std::move(func));
+}
+void messaging_service::unregister_migration_request() {
+    _rpc->unregister_handler(net::messaging_verb::MIGRATION_REQUEST);
 }
 future<std::vector<frozen_mutation>> messaging_service::send_migration_request(shard_id id, gms::inet_address reply_to, unsigned shard) {
     return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id), std::move(reply_to), std::move(shard));
@@ -433,6 +439,9 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(s
 void messaging_service::register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION, std::move(func));
+}
+void messaging_service::unregister_mutation() {
+    _rpc->unregister_handler(net::messaging_verb::MUTATION);
 }
 future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id) {
@@ -443,12 +452,18 @@ future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm
 void messaging_service::register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION_DONE, std::move(func));
 }
+void messaging_service::unregister_mutation_done() {
+    _rpc->unregister_handler(net::messaging_verb::MUTATION_DONE);
+}
 future<> messaging_service::send_mutation_done(shard_id id, unsigned shard, response_id_type response_id) {
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
 }
 
 void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
+}
+void messaging_service::unregister_read_data() {
+    _rpc->unregister_handler(net::messaging_verb::READ_DATA);
 }
 future<query::result> messaging_service::send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
     return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
@@ -457,12 +472,18 @@ future<query::result> messaging_service::send_read_data(shard_id id, query::read
 void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
 }
+void messaging_service::unregister_read_mutation_data() {
+    _rpc->unregister_handler(net::messaging_verb::READ_MUTATION_DATA);
+}
 future<reconcilable_result> messaging_service::send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
     return send_message<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
 }
 
 void messaging_service::register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
+}
+void messaging_service::unregister_read_digest() {
+    _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
 }
 future<query::result_digest> messaging_service::send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr) {
     return send_message<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
