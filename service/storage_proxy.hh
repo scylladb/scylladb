@@ -38,11 +38,12 @@ namespace service {
 class abstract_write_response_handler;
 class abstract_read_executor;
 
-class storage_proxy /*implements StorageProxyMBean*/ {
+class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
     struct rh_entry {
         std::unique_ptr<abstract_write_response_handler> handler;
+        shared_ptr<storage_proxy> proxy;
         timer<> expire_timer;
-        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
+        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, shared_ptr<storage_proxy> p, std::function<void()>&& cb);
     };
 
 public:
@@ -72,6 +73,7 @@ private:
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
 private:
     void init_messaging_service();
+    void uninit_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
     response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
