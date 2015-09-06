@@ -218,7 +218,11 @@ public:
 
     // Returns true iff this sstable contains data which belongs to many shards.
     bool is_shared() {
-        return true; // FIXME: set to false for sstables created by compaction process
+        return _shared;
+    }
+
+    void set_unshared() {
+        _shared = false;
     }
 
     uint64_t data_size();
@@ -267,6 +271,7 @@ private:
 
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
+    bool _shared = true;  // across shards; safe default
     compression _compression;
     utils::filter_ptr _filter;
     summary _summary;
