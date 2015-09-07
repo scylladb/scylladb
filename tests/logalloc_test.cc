@@ -33,14 +33,14 @@ SEASTAR_TEST_CASE(test_compaction) {
 
             // Allocate several segments
 
-            auto compaction_counter_1 = reg.reclaim_counter();
+            auto reclaim_counter_1 = reg.reclaim_counter();
 
             for (int i = 0; i < 32 * 1024 * 4; i++) {
                 _allocated.push_back(make_managed<int>());
             }
 
             // Allocation should not invalidate references
-            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), compaction_counter_1);
+            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), reclaim_counter_1);
 
             // Free 1/3 randomly
 

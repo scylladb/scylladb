@@ -86,7 +86,7 @@ class scanning_reader final : public mutation_reader::impl {
     stdx::optional<dht::decorated_key> _last;
     memtable::partitions_type::const_iterator _i;
     memtable::partitions_type::const_iterator _end;
-    uint64_t _last_compaction_counter;
+    uint64_t _last_reclaim_counter;
 private:
     memtable::partitions_type::const_iterator lookup_end() {
         auto cmp = partition_entry::compare(_memtable->_schema);
@@ -98,10 +98,10 @@ private:
     }
     void update_iterators() {
         // We must be prepared that iterators may get invalidated during compaction.
-        auto current_compaction_counter = _memtable->_region.reclaim_counter();
+        auto current_reclaim_counter = _memtable->_region.reclaim_counter();
         auto cmp = partition_entry::compare(_memtable->_schema);
         if (_last) {
-            if (current_compaction_counter != _last_compaction_counter) {
+            if (current_reclaim_counter != _last_reclaim_counter) {
                 _i = _memtable->partitions.upper_bound(*_last, cmp);
                 _end = lookup_end();
             }
@@ -114,7 +114,7 @@ private:
                  : _memtable->partitions.cbegin();
             _end = lookup_end();
         }
-        _last_compaction_counter = current_compaction_counter;
+        _last_reclaim_counter = current_reclaim_counter;
     }
 public:
     scanning_reader(lw_shared_ptr<const memtable> m, const query::partition_range& range)
