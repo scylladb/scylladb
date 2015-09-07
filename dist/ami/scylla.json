@@ -37,6 +37,11 @@
       "destination": "/home/fedora/scylla-server"
     },
     {
+      "type": "file",
+      "source": "files/setup_yaml.py",
+      "destination": "/home/fedora/setup_yaml.py"
+    },
+    {
       "type": "shell",
       "inline": [
         "sudo dnf update -y",
@@ -45,8 +50,12 @@
         "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",
         "sudo mv /home/fedora/scylla-setup.sh /usr/lib/scylla",
         "sudo chmod a+rx /usr/lib/scylla/scylla-setup.sh",
+	"sudo mv /home/fedora/setup_yaml.py /usr/lib/scylla",
+	"sudo chmod a+rx /usr/lib/scylla/setup_yaml.py",
         "sudo cp scylla-server /etc/sysconfig",
-        "sudo systemctl enable scylla-setup.service"
+        "sudo systemctl enable scylla-setup.service",
+	"sudo sed -e 's!# data_file_directories:!data_file_directories:!' -e 's!/var/lib/scylla/data!/data/data!' -e 's!# commitlog_directory: /var/lib/scylla/commitlog!commitlog_directory: /data/commitlog!' /var/lib/scylla/conf/scylla.yaml > /tmp/scylla.yaml",
+        "sudo mv /tmp/scylla.yaml /var/lib/scylla/conf"
       ]
     }
   ],
