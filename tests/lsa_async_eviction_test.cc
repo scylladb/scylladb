@@ -42,10 +42,12 @@ int main(int argc, char** argv) {
                 std::deque<managed_bytes> refs;
 
                 r.make_evictable([&] {
-                    with_allocator(r.allocator(), [&] {
-                        if (!refs.empty()) {
-                            refs.pop_front();
+                    return with_allocator(r.allocator(), [&] {
+                        if (refs.empty()) {
+                            return memory::reclaiming_result::reclaimed_nothing;
                         }
+                        refs.pop_front();
+                        return memory::reclaiming_result::reclaimed_something;
                     });
                 });
 

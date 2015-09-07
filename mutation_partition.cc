@@ -15,7 +15,12 @@ mutation_partition::mutation_partition(const mutation_partition& x)
         return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
     };
     _rows.clone_from(x._rows, cloner, current_deleter<rows_entry>());
-    _row_tombstones.clone_from(x._row_tombstones, cloner, current_deleter<row_tombstones_entry>());
+    try {
+        _row_tombstones.clone_from(x._row_tombstones, cloner, current_deleter<row_tombstones_entry>());
+    } catch (...) {
+        _rows.clear_and_dispose(current_deleter<rows_entry>());
+        throw;
+    }
 }
 
 mutation_partition::~mutation_partition() {
@@ -38,21 +43,44 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         apply_row_tombstone(schema, e.prefix(), e.t());
     }
 
-    auto find_static_column_def = [&schema] (auto col) -> const column_definition& { return schema.static_column_at(col); };
-    auto find_regular_column_def = [&schema] (auto col) -> const column_definition& { return schema.regular_column_at(col); };
-
-    _static_row.merge(p._static_row, find_static_column_def);
+    _static_row.merge(schema, column_kind::static_column, p._static_row);
 
     for (auto&& entry : p._rows) {
-        auto& key = entry.key();
-        auto i = _rows.find(key, rows_entry::compare(schema));
+        auto i = _rows.find(entry);
         if (i == _rows.end()) {
             auto e = current_allocator().construct<rows_entry>(entry);
             _rows.insert(i, *e);
         } else {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
-            i->row().cells().merge(entry.row().cells(), find_regular_column_def);
+            i->row().cells().merge(schema, column_kind::regular_column, entry.row().cells());
+        }
+    }
+}
+
+void
+mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    _tombstone.apply(p._tombstone);
+
+    p._row_tombstones.clear_and_dispose([this, &s] (row_tombstones_entry* e) {
+        apply_row_tombstone(s, e);
+    });
+
+    _static_row.merge(s, column_kind::static_column, std::move(p._static_row));
+
+    auto p_i = p._rows.begin();
+    auto p_end = p._rows.end();
+    while (p_i != p_end) {
+        rows_entry& entry = *p_i;
+        auto i = _rows.find(entry);
+        if (i == _rows.end()) {
+            p_i = p._rows.erase(p_i);
+            _rows.insert(i, entry);
+        } else {
+            i->row().apply(entry.row().deleted_at());
+            i->row().apply(entry.row().marker());
+            i->row().cells().merge(s, column_kind::regular_column, std::move(entry.row().cells()));
+            p_i = p._rows.erase_and_dispose(p_i, current_deleter<rows_entry>());
         }
     }
 }
@@ -113,6 +141,17 @@ mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_pre
         _row_tombstones.insert(i, *e);
     } else {
         i->apply(t);
+    }
+}
+
+void
+mutation_partition::apply_row_tombstone(const schema& s, row_tombstones_entry* e) noexcept {
+    auto i = _row_tombstones.lower_bound(*e);
+    if (i == _row_tombstones.end() || !e->prefix().equal(s, i->prefix())) {
+        _row_tombstones.insert(i, *e);
+    } else {
+        i->apply(e->t());
+        current_allocator().destroy(e);
     }
 }
 
@@ -225,15 +264,20 @@ void mutation_partition::for_each_row(const schema& schema, const query::range<c
     }
 }
 
-template <typename ColumnDefResolver>
-static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
-        ColumnDefResolver&& id_to_def, gc_clock::time_point now, query::result::row_writer& writer) {
+static void get_row_slice(const schema& s,
+    column_kind kind,
+    const row& cells,
+    const std::vector<column_id>& columns,
+    tombstone tomb,
+    gc_clock::time_point now,
+    query::result::row_writer& writer)
+{
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
             writer.add_empty();
         } else {
-            auto&& def = id_to_def(id);
+            auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb, now)) {
@@ -257,11 +301,10 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
     }
 }
 
-template <typename ColumnDefResolver>
-bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def, gc_clock::time_point now) {
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
-        const column_definition& def = id_to_def(id);
+        const column_definition& def = s.column_at(kind, id);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
             if (c.is_live(tomb, now)) {
@@ -289,23 +332,14 @@ mutation_partition::query(query::result::partition_writer& pw,
 {
     const query::partition_slice& slice = pw.slice();
 
-    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.regular_column_at(id);
-    };
-
     // To avoid retraction of the partition entry in case of limit == 0.
     assert(limit > 0);
 
-    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.static_column_at(id);
-    };
-
-    bool any_live = has_any_live_data(static_row(), _tombstone, static_column_resolver, now);
+    bool any_live = has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, now);
 
     if (!slice.static_columns.empty()) {
         auto row_builder = pw.add_static_row();
-        get_row_slice(static_row(), slice.static_columns, partition_tombstone(),
-            static_column_resolver, now, row_builder);
+        get_row_slice(s, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(), now, row_builder);
         row_builder.finish();
     }
 
@@ -325,7 +359,7 @@ mutation_partition::query(query::result::partition_writer& pw,
             if (row.is_live(s, row_tombstone, now)) {
                 any_live = true;
                 auto row_builder = pw.add_row(e.key());
-                get_row_slice(row.cells(), slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
+                get_row_slice(s, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
                     return stop_iteration::yes;
@@ -452,7 +486,14 @@ merge_column(const column_definition& def,
 }
 
 void
-row::apply(const column_definition& column, atomic_cell_or_collection value) {
+row::apply(const column_definition& column, const atomic_cell_or_collection& value) {
+    // FIXME: Optimize
+    atomic_cell_or_collection tmp(value);
+    apply(column, std::move(tmp));
+}
+
+void
+row::apply(const column_definition& column, atomic_cell_or_collection&& value) {
     // our mutations are not yet immutable
     auto id = column.id;
     if (_type == storage_type::vector && id < max_vector_size) {
@@ -524,8 +565,7 @@ mutation_partition::compact_for_query(
 
     // FIXME: drop GC'able tombstones
 
-    bool static_row_live = _static_row.compact_and_expire(
-        _tombstone, query_time, std::bind1st(std::mem_fn(&schema::static_column_at), &s));
+    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone, query_time);
 
     uint32_t row_count = 0;
 
@@ -544,9 +584,7 @@ mutation_partition::compact_for_query(
 
             tombstone tomb = tombstone_for_row(s, e);
 
-            bool is_live = row.cells().compact_and_expire(
-                tomb, query_time, std::bind1st(std::mem_fn(&schema::regular_column_at), &s));
-
+            bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time);
             is_live |= row.marker().compact_and_expire(tomb, query_time);
 
             // when row_limit is reached, do not exit immediately,
@@ -577,26 +615,18 @@ mutation_partition::compact_for_query(
 
 bool
 deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
-    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.regular_column_at(id);
-    };
-
     // _created_at corresponds to the row marker cell, present for rows
     // created with the 'insert' statement. If row marker is live, we know the
     // row is live. Otherwise, a row is considered live if it has any cell
     // which is live.
     base_tombstone.apply(_deleted_at);
     return _marker.is_live(base_tombstone, query_time)
-           || has_any_live_data(_cells, base_tombstone, regular_column_resolver, query_time);
+           || has_any_live_data(s, column_kind::regular_column, _cells, base_tombstone, query_time);
 }
 
 bool
 mutation_partition::is_static_row_live(const schema& s, gc_clock::time_point query_time) const {
-    auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
-        return s.static_column_at(id);
-    };
-
-    return has_any_live_data(static_row(), _tombstone, static_column_resolver, query_time);
+    return has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, query_time);
 }
 
 size_t
@@ -648,7 +678,12 @@ row::row(const row& o)
             return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
         };
         new (&_storage.set) map_type;
-        _storage.set.clone_from(o._storage.set, cloner, current_deleter<cell_entry>());
+        try {
+            _storage.set.clone_from(o._storage.set, cloner, current_deleter<cell_entry>());
+        } catch (...) {
+            _storage.set.~map_type();
+            throw;
+        }
     }
 }
 
@@ -718,7 +753,7 @@ bool row::operator==(const row& other) const {
     }
 
     auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
-        return c1.first == c2.first && c2.second == c2.second;
+        return c1.first == c2.first && c1.second == c2.second;
     };
     if (_type == storage_type::vector) {
         if (other._type == storage_type::vector) {
@@ -733,4 +768,80 @@ bool row::operator==(const row& other) const {
             return boost::equal(get_range_set(), other.get_range_set(), cells_equal);
         }
     }
+}
+
+row::row() {
+    new (&_storage.vector) vector_type;
+}
+
+row::row(row&& other)
+    : _type(other._type), _size(other._size) {
+    if (_type == storage_type::vector) {
+        new (&_storage.vector) vector_type(std::move(other._storage.vector));
+    } else {
+        new (&_storage.set) map_type(std::move(other._storage.set));
+    }
+}
+
+row& row::operator=(row&& other) {
+    if (this != &other) {
+        this->~row();
+        new (this) row(std::move(other));
+    }
+    return *this;
+}
+
+void row::merge(const schema& s, column_kind kind, const row& other) {
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), cell);
+    });
+}
+
+void row::merge(const schema& s, column_kind kind, row&& other) {
+    if (other._type == storage_type::vector) {
+        reserve(other._storage.vector.size() - 1);
+    } else {
+        reserve(other._storage.set.rbegin()->id());
+    }
+    // FIXME: Optimize when 'other' is a set. We could move whole entries, not only cells.
+    other.for_each_cell_until([&] (column_id id, atomic_cell_or_collection& cell) {
+        apply(s.column_at(kind, id), std::move(cell));
+        return stop_iteration::no;
+    });
+}
+
+bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time) {
+    bool any_live = false;
+    remove_if([&] (column_id id, atomic_cell_or_collection& c) {
+        bool erase = false;
+        const column_definition& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            atomic_cell_view cell = c.as_atomic_cell();
+            if (cell.is_covered_by(tomb)) {
+                erase = true;
+            } else if (cell.has_expired(query_time)) {
+                c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+            } else {
+                any_live |= cell.is_live();
+            }
+        } else {
+            auto&& cell = c.as_collection_mutation();
+            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            auto m_view = ctype->deserialize_mutation_form(cell);
+            collection_type_impl::mutation m = m_view.materialize();
+            any_live |= m.compact_and_expire(tomb, query_time);
+            if (m.cells.empty() && m.tomb <= tomb) {
+                erase = true;
+            } else {
+                c = ctype->serialize_mutation_form(m);
+            }
+        }
+        return erase;
+    });
+    return any_live;
 }

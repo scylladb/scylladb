@@ -22,13 +22,11 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
-        _p._static_row.apply(id, atomic_cell_or_collection(cell),
-            [this](column_id id) -> const column_definition& { return _schema.static_column_at(id); });
+        _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(cell));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation::view collection) override {
-        _p._static_row.apply(id, atomic_cell_or_collection(collection),
-            [this](column_id id) -> const column_definition& { return _schema.static_column_at(id); });
+        _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(collection));
     }
 
     virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) override {
@@ -43,12 +41,10 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        _current_row->cells().apply(id, atomic_cell_or_collection(cell),
-            [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
+        _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
-        _current_row->cells().apply(id, atomic_cell_or_collection(collection),
-            [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
+        _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(collection));
     }
 };

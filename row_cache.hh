@@ -42,7 +42,12 @@ public:
     friend class row_cache;
     friend class cache_tracker;
 
-    cache_entry(dht::decorated_key key, mutation_partition p)
+    cache_entry(const dht::decorated_key& key, const mutation_partition& p)
+        : _key(key)
+        , _p(p)
+    { }
+
+    cache_entry(dht::decorated_key&& key, mutation_partition&& p) noexcept
         : _key(std::move(key))
         , _p(std::move(p))
     { }
@@ -131,6 +136,8 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
+    logalloc::allocating_section _update_section;
+    logalloc::allocating_section _read_section;
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&);
@@ -150,6 +157,10 @@ public:
     // The memtable can be queried during the process, but must not be written.
     // After the update is complete, memtable is empty.
     future<> update(memtable&, partition_presence_checker underlying_negative);
+
+    // Moves given partition to the front of LRU if present in cache.
+    void touch(const dht::decorated_key&);
+
     auto num_entries() const {
         return _partitions.size();
     }

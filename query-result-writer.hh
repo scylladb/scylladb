@@ -18,7 +18,6 @@ class result::row_writer {
     const partition_slice& _slice;
     bytes_ostream::place_holder<uint32_t> _size_ph;
     size_t _start_pos;
-    bool _finished = false;
 public:
     row_writer(
         const partition_slice& slice,
@@ -29,10 +28,6 @@ public:
         , _size_ph(size_ph)
         , _start_pos(w.size())
     { }
-
-    ~row_writer() {
-        assert(_finished);
-    }
 
     void add_empty() {
         // FIXME: store this in a bitmap
@@ -64,7 +59,6 @@ public:
         auto row_size = _w.size() - _start_pos;
         assert((uint32_t)row_size == row_size);
         _w.set(_size_ph, (uint32_t)row_size);
-        _finished = true;
     }
 };
 
@@ -76,7 +70,6 @@ class result::partition_writer {
     bytes_ostream::position _pos;
     uint32_t _row_count = 0;
     bool _static_row_added = false;
-    bool _finished = false;
 public:
     partition_writer(
         const partition_slice& slice,
@@ -88,10 +81,6 @@ public:
         , _count_ph(count_ph)
         , _pos(pos)
     { }
-
-    ~partition_writer() {
-        assert(_finished);
-    }
 
     row_writer add_row(const clustering_key& key) {
         if (_slice.options.contains<partition_slice::option::send_clustering_key>()) {
@@ -122,13 +111,11 @@ public:
         // must be something live in the static row, which counts as one row.
         _row_count = std::max<uint32_t>(_row_count, 1);
 
-        _finished = true;
     }
 
     void retract() {
         _row_count = 0;
         _w.retract(_pos);
-        _finished = true;
     }
 
     const partition_slice& slice() const {

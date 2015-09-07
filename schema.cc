@@ -253,6 +253,11 @@ schema::get_column_definition(const bytes& name) const {
     return i->second;
 }
 
+const column_definition&
+schema::column_at(column_kind kind, column_id id) const {
+    return _raw._columns.at(column_offset(kind) + id);
+}
+
 std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << "org.apache.cassandra.config.CFMetaData@" << &s << "[";
     os << "cfId=" << s._raw._id;

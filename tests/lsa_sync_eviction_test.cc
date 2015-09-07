@@ -49,10 +49,12 @@ int main(int argc, char** argv) {
                 // Evict in random order to stress more
                 std::random_shuffle(refs.begin(), refs.end());
                 r.make_evictable([&] {
-                    with_allocator(r.allocator(), [&] {
-                        if (!refs.empty()) {
-                            refs.pop_front();
+                    return with_allocator(r.allocator(), [&] {
+                        if (refs.empty()) {
+                            return memory::reclaiming_result::reclaimed_nothing;
                         }
+                        refs.pop_front();
+                        return memory::reclaiming_result::reclaimed_something;
                     });
                 });
 

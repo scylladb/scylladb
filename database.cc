@@ -77,7 +77,7 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
                 return partition_presence_checker_result::maybe_exists;
             }
         }
-        return partition_presence_checker_result::definitely_doesnt_exists;
+        return partition_presence_checker_result::definitely_doesnt_exist;
     };
 }
 

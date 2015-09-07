@@ -21,6 +21,7 @@
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
 
+// Column ID, unique within column_kind
 using column_id = uint32_t;
 
 class schema;
@@ -401,6 +402,7 @@ public:
     }
 
     const column_definition* get_column_definition(const bytes& name) const;
+    const column_definition& column_at(column_kind, column_id) const;
     const_iterator regular_begin() const {
         return regular_columns().begin();
     }

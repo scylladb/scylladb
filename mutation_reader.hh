@@ -135,7 +135,7 @@ using mutation_source = std::function<mutation_reader(const query::partition_ran
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).
 enum class partition_presence_checker_result {
-    definitely_doesnt_exists,
+    definitely_doesnt_exist,
     maybe_exists
 };
 using partition_presence_checker = std::function<partition_presence_checker_result (const partition_key& key)>;

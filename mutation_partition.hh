@@ -21,6 +21,10 @@
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
+// All cells must belong to a single column_kind. The kind is not stored
+// for space-efficiency reasons. Whenever a method accepts a column_kind,
+// the caller must always supply the same column_kind.
+//
 // Can be used as a range of row::cell_entry.
 //
 class row {
@@ -79,25 +83,11 @@ private:
         vector_type vector;
     } _storage;
 public:
-    row() {
-        new (&_storage.vector) vector_type;
-    }
+    row();
     ~row();
     row(const row&);
-    row(row&& other) : _type(other._type), _size(other._size) {
-        if (_type == storage_type::vector) {
-            new (&_storage.vector) vector_type(std::move(other._storage.vector));
-        } else {
-            new (&_storage.set) map_type(std::move(other._storage.set));
-        }
-    }
-    row& operator=(row&& other) {
-        if (this != &other) {
-            this->~row();
-            new (this) row(std::move(other));
-        }
-        return *this;
-    }
+    row(row&& other);
+    row& operator=(row&& other);
     size_t size() const { return _size; }
 
     void reserve(column_id);
@@ -174,7 +164,30 @@ public:
             }
         } else {
             for (auto& cell : _storage.set) {
-                if (func(cell.id(), cell.cell()) == stop_iteration::yes) {
+                const auto& c = cell.cell();
+                if (c && func(cell.id(), c) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        }
+    }
+
+    template<typename Func>
+    void for_each_cell_until(Func&& func) {
+        if (_type == storage_type::vector) {
+            for (unsigned i = 0; i < _storage.vector.size(); i++) {
+                auto& cell = _storage.vector[i];
+                if (!bool(cell)) {
+                    continue;
+                }
+                if (func(i, cell) == stop_iteration::yes) {
+                    break;
+                }
+            }
+        } else {
+            for (auto& cell : _storage.set) {
+                auto& c = cell.cell();
+                if (c && func(cell.id(), c) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -182,62 +195,30 @@ public:
     }
 
     // Merges cell's value into the row.
-    void apply(const column_definition& column, atomic_cell_or_collection cell);
+    void apply(const column_definition& column, const atomic_cell_or_collection& cell);
+
+    //
+    // Merges cell's value into the row.
+    //
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    //
+    void apply(const column_definition& column, atomic_cell_or_collection&& cell);
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
-    // Merges given cell into the row.
-    template <typename ColumnDefinitionResolver>
-    void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
-        apply(resolver(id), std::move(cell));
-    }
+    void merge(const schema& s, column_kind kind, const row& other);
 
-    template <typename ColumnDefinitionResolver>
-    void merge(const row& other, ColumnDefinitionResolver&& resolver) {
-        if (other._type == storage_type::vector) {
-            reserve(other._storage.vector.size() - 1);
-        } else {
-            reserve(other._storage.set.rbegin()->id());
-        }
-        other.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-            apply(id, cell, std::forward<ColumnDefinitionResolver>(resolver));
-        });
-    }
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    void merge(const schema& s, column_kind kind, row&& other);
 
     // Expires cells based on query_time. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    template <typename ColumnDefinitionResolver>
-    bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time, ColumnDefinitionResolver&& resolver) {
-        bool any_live = false;
-        remove_if([&] (column_id id, atomic_cell_or_collection& c) {
-            bool erase = false;
-            const column_definition& def = resolver(id);
-            if (def.is_atomic()) {
-                atomic_cell_view cell = c.as_atomic_cell();
-                if (cell.is_covered_by(tomb)) {
-                    erase = true;
-                } else if (cell.has_expired(query_time)) {
-                    c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
-                } else {
-                    any_live |= cell.is_live();
-                }
-            } else {
-                auto&& cell = c.as_collection_mutation();
-                auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                auto m_view = ctype->deserialize_mutation_form(cell);
-                collection_type_impl::mutation m = m_view.materialize();
-                any_live |= m.compact_and_expire(tomb, query_time);
-                if (m.cells.empty() && m.tomb <= tomb) {
-                    erase = true;
-                } else {
-                    c = ctype->serialize_mutation_form(m);
-                }
-            }
-            return erase;
-        });
-        return any_live;
-    }
+    bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time);
 
     bool operator==(const row&) const;
 
@@ -546,7 +527,26 @@ public:
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
+    void apply_row_tombstone(const schema&, row_tombstones_entry*) noexcept;
+    //
+    // Applies p to current object.
+    //
+    // Basic exception guarantees. If apply() throws after being called in
+    // some entry state p0, the object is left in some consistent state p1 and
+    // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
+    //
+    // FIXME: make stronger exception guarantees (p1 = p0).
+    //
     void apply(const schema& schema, const mutation_partition& p);
+    //
+    // Same guarantees as for apply(const schema&, const mutation_partition&).
+    //
+    // In case of exception the current object and external object (moved-from)
+    // are both left in some valid states, such that they still will commute to
+    // a state the current object would have should the exception had not occurred.
+    //
+    void apply(const schema& schema, mutation_partition&& p);
+    // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 public:
     // Performs the following:

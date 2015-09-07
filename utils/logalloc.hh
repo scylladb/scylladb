@@ -14,15 +14,19 @@ namespace logalloc {
 struct occupancy_stats;
 class region;
 class region_impl;
+class allocating_section;
+
+constexpr int segment_size_shift = 18; // 256K; see #151, #152
+constexpr size_t segment_size = 1 << segment_size_shift;
 
 //
 // Frees some amount of objects from the region to which it's attached.
 //
-// Should always make forward progress unless region is empty, so this should eventually stop:
+// This should eventually stop given no new objects are added:
 //
-//     while (!region.empty()) { eviction_fn(); }
+//     while (eviction_fn() == memory::reclaiming_result::reclaimed_something) ;
 //
-using eviction_fn = std::function<void()>;
+using eviction_fn = std::function<memory::reclaiming_result()>;
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
@@ -215,6 +219,7 @@ public:
     void make_evictable(eviction_fn);
 
     friend class region_group;
+    friend class allocating_section;
 };
 
 // Forces references into the region to remain valid as long as this guard is
@@ -231,6 +236,55 @@ struct reclaim_lock {
     }
     ~reclaim_lock() {
         _region.set_reclaiming_enabled(_prev);
+    }
+};
+
+// Utility for running critical sections which need to lock some region and
+// also allocate LSA memory. The object learns from failures how much it
+// should reserve up front in order to not cause allocation failures.
+class allocating_section {
+    size_t _lsa_reserve = 10; // in segments
+    size_t _std_reserve = 1024; // in bytes
+private:
+    struct guard {
+        size_t _prev;
+        guard();
+        ~guard();
+        void enter(allocating_section&);
+    };
+    void on_alloc_failure();
+public:
+    //
+    // Invokes func with reclaim_lock on region r. If LSA allocation fails
+    // inside func it is retried after increasing LSA segment reserve. The
+    // memory reserves are increased with region lock off allowing for memory
+    // reclamation to take place in the region.
+    //
+    // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
+    //
+    template<typename Func>
+    auto operator()(logalloc::region& r, Func&& func) {
+        auto _prev_lsa_reserve = _lsa_reserve;
+        auto _prev_std_reserve = _std_reserve;
+        try {
+            while (true) {
+                assert(r.reclaiming_enabled());
+                guard g;
+                g.enter(*this);
+                try {
+                    logalloc::reclaim_lock _(r);
+                    return func();
+                } catch (const std::bad_alloc&) {
+                    on_alloc_failure();
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            // roll-back limits to protect against pathological requests
+            // preventing future requests from succeeding.
+            _lsa_reserve = _prev_lsa_reserve;
+            _std_reserve = _prev_std_reserve;
+            throw;
+        }
     }
 };
 
