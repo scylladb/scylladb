@@ -216,9 +216,11 @@ public:
     // a state the current object would have should the exception had not occurred.
     void merge(const schema& s, column_kind kind, row&& other);
 
-    // Expires cells based on query_time. Removes cells covered by tomb.
+    // Expires cells based on query_time. Expires tombstones based on gc_before
+    // and max_purgeable. Removes cells covered by tomb.
     // Returns true iff there are any live cells left.
-    bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time);
+    bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
+        api::timestamp_type max_purgeable, gc_clock::time_point gc_before);
 
     bool operator==(const row&) const;
 
@@ -285,7 +287,11 @@ public:
             *this = rm;
         }
     }
-    bool compact_and_expire(tombstone tomb, gc_clock::time_point now) {
+    // Expires cells and tombstones. Removes items covered by higher level
+    // tombstones.
+    // Returns true if row marker is live.
+    bool compact_and_expire(tombstone tomb, gc_clock::time_point now,
+            api::timestamp_type max_purgeable, gc_clock::time_point gc_before) {
         if (is_missing()) {
             return false;
         }
@@ -293,12 +299,14 @@ public:
             _timestamp = api::missing_timestamp;
             return false;
         }
-        if (_ttl != no_ttl && _expiry < now) {
+        if (_ttl > no_ttl && _expiry < now) {
             _expiry -= _ttl;
             _ttl = dead;
-            return false;
         }
-        return true;
+        if (_ttl == dead && _timestamp < max_purgeable && _expiry < gc_before) {
+            _timestamp = api::missing_timestamp;
+        }
+        return !is_missing() && _ttl != dead;
     }
     bool operator==(const row_marker& other) const {
         if (_timestamp != other._timestamp) {
@@ -548,14 +556,16 @@ public:
     void apply(const schema& schema, mutation_partition&& p);
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
+private:
+    uint32_t do_compact(const schema& s, gc_clock::time_point now,
+        const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit,
+        api::timestamp_type max_purgeable);
 public:
     // Performs the following:
     //   - throws out data which doesn't belong to row_ranges
-    //   - expires cells based on query_time
+    //   - expires cells and tombstones based on query_time
     //   - drops cells covered by higher-level tombstones (compaction)
     //   - leaves at most row_limit live rows
-    //
-    // FIXME: Should also perform tombstone GC.
     //
     // Note: a partition with a static row which has any cell live but no
     // clustered rows still counts as one row, according to the CQL row
