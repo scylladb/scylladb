@@ -1031,23 +1031,13 @@ SEASTAR_TEST_CASE(compact) {
     //        height int,
     //        PRIMARY KEY (name)
     //);
-    schema_ptr s = make_lw_shared(schema({}, "tests", "compaction",
-            // partition key
-            {{"name", utf8_type}},
-            // clustering key
-            {},
-            // regular columns
-            {
-                {"age", int32_type},
-                {"height", int32_type},
-            },
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            "Example table for compaction"
-           ));
+    auto builder = schema_builder("tests", "compaction")
+        .with_column("name", utf8_type, column_kind::partition_key)
+        .with_column("age", int32_type)
+        .with_column("height", int32_type);
+    builder.set_comment("Example table for compaction");
+    builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
+    auto s = builder.build();
 
     return open_sstables("tests/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
         return test_setup::do_with_test_directory([sstables, s, generation] {
