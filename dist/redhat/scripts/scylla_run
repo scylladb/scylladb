@@ -1,6 +1,6 @@
 #!/bin/sh -e
 
-args="--datadir $DATA_DIR --commitlog-directory $COMMITLOG_DIR --options-file $OPTS_FILE $SCYLLA_ARGS"
+args="--options-file $OPTS_FILE $SCYLLA_ARGS"
 
 if [ "$NETWORK_MODE" = "posix" ]; then
     args="$args --network-stack posix"
