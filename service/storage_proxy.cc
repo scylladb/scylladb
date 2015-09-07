@@ -729,43 +729,41 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
  */
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
-    auto have_cl = make_lw_shared<semaphore>(0);
     auto local_addr = utils::fb_utilities::get_broadcast_address();
     auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
     sstring local_dc = snitch_ptr->get_datacenter(local_addr);
     auto type = mutations.size() == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
     utils::latency_counter lc;
     lc.start();
-    shared_ptr<storage_proxy> p = shared_from_this();
 
-    for (auto& m : mutations) {
+    return parallel_for_each(mutations, [this, cl, type, &local_dc] (mutation& m) {
+        storage_proxy::response_id_type response_id = create_write_response_handler(m, cl, type);
+        // it is better to send first and hint afterwards to reduce latency
+        // but request may complete before hint_to_dead_endpoints() is called and
+        // response_id handler will be removed, so we will have to do hint with separate
+        // frozen_mutation copy, or manage handler live time differently.
+        hint_to_dead_endpoints(response_id, cl);
+
+        // call before send_to_live_endpoints() for the same reason as above
+        auto f = response_wait(response_id);
+        send_to_live_endpoints(response_id, local_dc);
+        return f.handle_exception([this, response_id, cl] (std::exception_ptr exp) {
+            remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
+            //std::rethrow_exception(ex);
+            return make_exception_future<>(exp);
+        });
+    }).then_wrapped([this, p = shared_from_this(), lc] (future<>&& f) mutable {
         try {
-            storage_proxy::response_id_type response_id = create_write_response_handler(m, cl, type);
-            // it is better to send first and hint afterwards to reduce latency
-            // but request may complete before hint_to_dead_endpoints() is called and
-            // response_id handler will be removed, so we will have to do hint with separate
-            // frozen_mutation copy, or manage handler live time differently.
-            hint_to_dead_endpoints(response_id, cl);
-
-            // call before send_to_live_endpoints() for the same reason as above
-            auto f = response_wait(response_id);
-            send_to_live_endpoints(response_id, local_dc);
-            f.then_wrapped([p, have_cl, response_id, cl] (future<>&& f) mutable {
-                try {
-                    f.get();
-                    have_cl->signal();
-                    return;
-                } catch(mutation_write_timeout_exception& ex) {
-                    // timeout
-                    logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-                    p->_stats.write_timeouts++;
-                    have_cl->broken(ex);
-                } catch(...) {
-                    have_cl->broken(std::current_exception());
-                }
-                p->remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
-            });
+            f.get();
+            _stats.write.mark(lc.stop().latency_in_nano());
+            return make_ready_future<>();
         } catch (no_such_keyspace& ex) {
+            logger.trace("Write to non existing keyspace: {}", ex.what());
+            return make_exception_future<>(std::current_exception());
+        } catch(mutation_write_timeout_exception& ex) {
+            // timeout
+            logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+            _stats.write_timeouts++;
             return make_exception_future<>(std::current_exception());
         } catch (exceptions::unavailable_exception& ex) {
             _stats.write_unavailables++;
@@ -776,10 +774,6 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             logger.trace("Overloaded");
             return make_exception_future<>(std::current_exception());
         }
-    }
-
-    return have_cl->wait(mutations.size()).finally([p, lc]() mutable {
-        p->_stats.write.mark(lc.stop().latency_in_nano());
     });
 }
 
