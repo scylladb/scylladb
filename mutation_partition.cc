@@ -646,6 +646,15 @@ void mutation_partition::compact_for_compaction(const schema& s,
     do_compact(s, compaction_time, all_rows, query::max_rows, max_purgeable);
 }
 
+// Returns true if there is no live data or tombstones.
+bool mutation_partition::empty() const
+{
+    if (_tombstone.timestamp != api::missing_timestamp) {
+        return false;
+    }
+    return !_static_row.size() && _rows.empty() && _row_tombstones.empty();
+}
+
 bool
 deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
     // _created_at corresponds to the row marker cell, present for rows
