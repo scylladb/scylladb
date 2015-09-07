@@ -381,23 +381,27 @@ void column_family::update_stats_for_new_sstable(uint64_t new_sstable_data_size)
 }
 
 void column_family::add_sstable(sstables::sstable&& sstable) {
+    add_sstable(make_lw_shared(std::move(sstable)));
+}
+
+void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     auto key_shard = [this] (const partition_key& pk) {
         auto token = dht::global_partitioner().get_token(*_schema, pk);
         return dht::shard_of(token);
     };
-    auto s1 = key_shard(sstable.get_first_partition_key(*_schema));
-    auto s2 = key_shard(sstable.get_last_partition_key(*_schema));
+    auto s1 = key_shard(sstable->get_first_partition_key(*_schema));
+    auto s2 = key_shard(sstable->get_last_partition_key(*_schema));
     auto me = engine().cpu_id();
     auto included = (s1 <= me) && (me <= s2);
     if (!included) {
-        dblog.info("sstable {} not relevant for this shard, ignoring", sstable.get_filename());
+        dblog.info("sstable {} not relevant for this shard, ignoring", sstable->get_filename());
         return;
     }
-    auto generation = sstable.generation();
+    auto generation = sstable->generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
-    update_stats_for_new_sstable(sstable.data_size());
-    _sstables->emplace(generation, make_lw_shared(std::move(sstable)));
+    update_stats_for_new_sstable(sstable->data_size());
+    _sstables->emplace(generation, std::move(sstable));
 }
 
 void column_family::add_memtable() {
@@ -450,21 +454,21 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
 
-    sstables::sstable newtab = sstables::sstable(_schema->ks_name(), _schema->cf_name(),
+    auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
         _config.datadir, gen,
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
 
-    dblog.debug("Flushing to {}", newtab.get_filename());
-    return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
-        return newtab.write_components(*old).then([this, &newtab, old] {
-            return newtab.load();
-        }).then([this, old, &newtab] {
+    dblog.debug("Flushing to {}", newtab->get_filename());
+    {
+        return newtab->write_components(*old).then([this, newtab, old] {
+            return newtab->load();
+        }).then([this, old, newtab] {
             dblog.debug("Flushing done");
             // We must add sstable before we call update_cache(), because
             // memtable's data after moving to cache can be evicted at any time.
             auto old_sstables = _sstables;
-            add_sstable(std::move(newtab));
+            add_sstable(newtab);
             return update_cache(*old, std::move(old_sstables));
         }).then_wrapped([this, old] (future<> ret) {
             try {
@@ -495,7 +499,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
         });
-    });
+    };
 }
 
 future<>
