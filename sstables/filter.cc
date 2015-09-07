@@ -23,14 +23,7 @@ future<> sstable::read_filter() {
     return do_with(sstables::filter(), [this] (auto& filter) {
         return this->read_simple<sstable::component_type::Filter>(filter).then([this, &filter] {
             large_bitset bs(filter.buckets.elements.size() * 64);
-            for (size_t i = 0; i != filter.buckets.elements.size(); ++i) {
-                auto w = filter.buckets.elements[i];
-                for (size_t j = 0; j < 64; ++j) {
-                    if (w & (uint64_t(1) << j)) {
-                        bs.set(i * 64 + j);
-                    }
-                }
-            }
+            bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
             _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
         }).then([this] {
             return engine().file_size(this->filename(sstable::component_type::Filter));
@@ -49,12 +42,7 @@ void sstable::write_filter() {
 
     auto&& bs = f->bits();
     std::deque<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
-    for (size_t i = 0; i != bs.size(); ++i) {
-        if (bs.test(i)) {
-            v[i / 64] |= uint64_t(1) << (i % 64);
-        }
-    }
-
+    bs.save(v.begin());
     auto filter = sstables::filter(f->num_hashes(), std::move(v));
     write_simple<sstable::component_type::Filter>(filter);
 }
