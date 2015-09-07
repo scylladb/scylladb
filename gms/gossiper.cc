@@ -39,6 +39,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <chrono>
+#include "dht/i_partitioner.hh"
 
 namespace gms {
 
@@ -51,6 +52,26 @@ constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr int64_t gossiper::MAX_GENERATION_DIFFERENCE;
 
 distributed<gossiper> _the_gossiper;
+
+sstring gossiper::get_cluster_name() {
+    return _cluster_name;
+}
+
+void gossiper::set_cluster_name(sstring name) {
+    _cluster_name = name;
+}
+
+sstring gossiper::get_partitioner_name() {
+    return dht::global_partitioner().name();
+}
+
+std::set<inet_address> gossiper::get_seeds() {
+    return _seeds_from_config;
+}
+
+void gossiper::set_seeds(std::set<inet_address> _seeds) {
+    _seeds_from_config = _seeds;
+}
 
 std::chrono::milliseconds gossiper::quarantine_delay() {
     return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
@@ -126,6 +147,8 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
 }
 
 future<gossip_digest_ack> gossiper::handle_syn_msg(gossip_digest_syn syn_msg) {
+    logger.trace("cluster_name:peer={},local={},partitioner_name:peer={},local={}",
+        syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
     this->set_last_processed_message_at();
     inet_address from;
     if (!this->is_enabled()) {

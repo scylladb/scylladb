@@ -39,6 +39,7 @@ int main(int ac, char ** av) {
             std::cout << "Start gossiper service ...\n";
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(std::move(seeds));
+            gossiper.set_cluster_name("Test Cluster");
 
             std::map<gms::application_state, gms::versioned_value> app_states = {
                 { gms::application_state::LOAD, gms::versioned_value::versioned_value_factory::load(0.5) },

@@ -86,26 +86,17 @@ private:
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<clk> _scheduled_gossip_task;
     bool _enabled = false;
-    sstring get_cluster_name() {
-        // FIXME: DatabaseDescriptor.getClusterName()
-        return "my_cluster_name";
-    }
-    sstring get_partitioner_name() {
-        // FIXME: DatabaseDescriptor.getPartitionerName()
-        return "my_partitioner_name";
-    }
+    sstring get_cluster_name();
+    sstring get_partitioner_name();
     std::set<inet_address> _seeds_from_config;
+    sstring _cluster_name;
 public:
     inet_address get_broadcast_address() {
         return utils::fb_utilities::get_broadcast_address();
     }
-    std::set<inet_address> get_seeds() {
-        // FIXME: DatabaseDescriptor.getSeeds()
-        return _seeds_from_config;
-    }
-    void set_seeds(std::set<inet_address> _seeds) {
-        _seeds_from_config = _seeds;
-    }
+    void set_cluster_name(sstring name);
+    std::set<inet_address> get_seeds();
+    void set_seeds(std::set<inet_address> _seeds);
 public:
     static clk::time_point inline now() { return clk::now(); }
 public:

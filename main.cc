@@ -153,6 +153,7 @@ int main(int ac, char** av) {
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = opts["api-port"].as<uint16_t>();
             ctx.api_dir = opts["api-dir"].as<sstring>();
+            sstring cluster_name = cfg->cluster_name();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             sstring api_address = opts.count("api-address") ? opts["api-address"].as<sstring>() : rpc_address;
@@ -166,8 +167,8 @@ int main(int ac, char** av) {
                 return db.start(std::move(*cfg)).then([&db] {
                     engine().at_exit([&db] { return db.stop(); });
                 });
-            }).then([listen_address, seed_provider] {
-                return init_ms_fd_gossiper(listen_address, seed_provider);
+            }).then([listen_address, seed_provider, cluster_name] {
+                return init_ms_fd_gossiper(listen_address, seed_provider, cluster_name);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {

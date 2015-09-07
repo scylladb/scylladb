@@ -14,7 +14,7 @@ future<> init_storage_service(distributed<database>& db) {
     });
 }
 
-future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider) {
+future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name) {
     const gms::inet_address listen(listen_address);
     // Init messaging_service
     return net::get_messaging_service().start(listen).then([]{
@@ -24,7 +24,7 @@ future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed
         return gms::get_failure_detector().start().then([] {
             engine().at_exit([]{ return gms::get_failure_detector().stop(); });
         });
-    }).then([listen_address, seed_provider] {
+    }).then([listen_address, seed_provider, cluster_name] {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -39,9 +39,10 @@ future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
         }
-        return gms::get_gossiper().start().then([seeds] {
+        return gms::get_gossiper().start().then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
+            gossiper.set_cluster_name(cluster_name);
             engine().at_exit([]{ return gms::get_gossiper().stop(); });
         });
     });
