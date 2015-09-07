@@ -155,8 +155,8 @@ struct ka_stats_metadata : public metadata {
     estimated_histogram estimated_row_size;
     estimated_histogram estimated_column_count;
     db::replay_position position;
-    uint64_t min_timestamp;
-    uint64_t max_timestamp;
+    int64_t min_timestamp;
+    int64_t max_timestamp;
     uint32_t max_local_deletion_time;
     double compression_ratio;
     streaming_histogram estimated_tombstone_drop_time;
