@@ -26,6 +26,9 @@
 #include <utility>
 #include <assert.h>
 
+#include <boost/range/algorithm.hpp>
+#include <boost/range/adaptors.hpp>
+
 #include "core/future-util.hh"
 #include "core/pipe.hh"
 
@@ -58,6 +61,18 @@ public:
     }
 };
 
+static api::timestamp_type get_max_purgeable_timestamp(schema_ptr schema,
+    const std::vector<shared_sstable>& not_compacted_sstables, const dht::decorated_key& dk)
+{
+    auto timestamp = api::max_timestamp;
+    for (auto&& sst : not_compacted_sstables) {
+        if (sst->filter_has_key(*schema, dk.key())) {
+            timestamp = std::min(timestamp, sst->get_stats_metadata().min_timestamp);
+        }
+    }
+    return timestamp;
+}
+
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
@@ -72,6 +87,16 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     assert(sstables.size() > 0);
 
     db::replay_position rp;
+
+    auto all_sstables = cf.get_sstables();
+    std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
+        return x->generation() < y->generation();
+    });
+    std::vector<shared_sstable> not_compacted_sstables;
+    boost::set_difference(*all_sstables | boost::adaptors::map_values, sstables,
+        std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
+            return x->generation() == y->generation();
+        });
 
     auto schema = cf.schema();
     for (auto sst : sstables) {
@@ -100,7 +125,36 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     stats->sstables = sstables.size();
     logger.info("Compacting {}", sstable_logger_msg);
 
-    auto combined_reader = make_combined_reader(std::move(readers));
+    class compacting_reader final : public ::mutation_reader::impl {
+    private:
+        schema_ptr _schema;
+        ::mutation_reader _reader;
+        std::vector<shared_sstable> _not_compacted_sstables;
+        gc_clock::time_point _now;
+    public:
+        compacting_reader(schema_ptr schema, std::vector<::mutation_reader> readers, std::vector<shared_sstable> not_compacted_sstables)
+            : _schema(std::move(schema))
+            , _reader(make_combined_reader(std::move(readers)))
+            , _not_compacted_sstables(std::move(not_compacted_sstables))
+            , _now(gc_clock::now())
+        { }
+
+        virtual future<mutation_opt> operator()() override {
+            return _reader().then([this] (mutation_opt m) {
+                if (!bool(m)) {
+                    return make_ready_future<mutation_opt>(std::move(m));
+                }
+                auto max_purgeable = get_max_purgeable_timestamp(_schema, _not_compacted_sstables, m->decorated_key());
+                m->partition().compact_for_compaction(*_schema, max_purgeable, _now);
+                if (!m->partition().empty()) {
+                    return make_ready_future<mutation_opt>(std::move(m));
+                }
+                return operator()();
+            });
+        }
+    };
+    auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables));
+
     auto start_time = std::chrono::high_resolution_clock::now();
 
     // We use a fixed-sized pipe between the producer fiber (which reads the
@@ -117,8 +171,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto output_writer = make_lw_shared<seastar::pipe_writer<mutation>>(std::move(output.writer));
 
     auto done = make_lw_shared<bool>(false);
-    future<> read_done = do_until([done] { return *done; }, [done, output_writer, combined_reader = std::move(combined_reader), stats] () mutable {
-        return combined_reader().then([done, output_writer, stats] (auto mopt) {
+    future<> read_done = do_until([done] { return *done; }, [done, output_writer, reader = std::move(reader), stats] () mutable {
+        return reader().then([done, output_writer, stats] (auto mopt) {
             if (mopt) {
                 stats->total_keys_written++;
                 return output_writer->write(std::move(*mopt));
