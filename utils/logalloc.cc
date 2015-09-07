@@ -1229,6 +1229,8 @@ allocating_section::guard::~guard() {
     shard_segment_pool.set_emergency_reserve_max(_prev);
 }
 
+#ifndef DEFAULT_ALLOCATOR
+
 void allocating_section::guard::enter(allocating_section& self) {
     shard_segment_pool.set_emergency_reserve_max(std::max(self._lsa_reserve, _prev));
     shard_segment_pool.refill_emergency_reserve();
@@ -1255,5 +1257,16 @@ void allocating_section::on_alloc_failure() {
         logger.debug("Standard allocator failure, increasing head-room in section {} to {} [B]", this, _std_reserve);
     }
 }
+
+#else
+
+void allocating_section::guard::enter(allocating_section& self) {
+}
+
+void allocating_section::on_alloc_failure() {
+    throw std::bad_alloc();
+}
+
+#endif
 
 }
