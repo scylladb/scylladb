@@ -641,8 +641,9 @@ future<> save_system_keyspace_schema() {
         return do_with(std::make_pair(std::move(after), std::move(before)), [&proxy] (auto& pair) {
             auto& after = pair.first;
             auto& before = pair.second;
-            return proxy.get_db().invoke_on_all([&proxy, &before, &after] (database& db) {
-                return seastar::async([&proxy, &db, &before, &after] {
+            return proxy.get_db().invoke_on_all([&before, &after] (database& db) {
+                return seastar::async([&db, &before, &after] {
+                    auto& proxy = service::get_local_storage_proxy();
                     std::vector<schema_ptr> created;
                     std::vector<schema_ptr> altered;
                     std::vector<schema_ptr> dropped;
