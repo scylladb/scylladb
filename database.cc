@@ -546,7 +546,7 @@ column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) 
             new_tables->emplace_back(gen, sst);
             return sst;
     };
-    return sstables::compact_sstables(*sstables_to_compact, _schema,
+    return sstables::compact_sstables(*sstables_to_compact, *this,
             create_sstable).then([this, new_tables, sstables_to_compact] {
         // Build a new list of _sstables: We remove from the existing list the
         // tables we compacted (by now, there might be more sstables flushed

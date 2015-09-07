@@ -1038,14 +1038,16 @@ SEASTAR_TEST_CASE(compact) {
     builder.set_comment("Example table for compaction");
     builder.set_gc_grace_seconds(std::numeric_limits<int32_t>::max());
     auto s = builder.build();
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
 
-    return open_sstables("tests/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
-        return test_setup::do_with_test_directory([sstables, s, generation] {
+    return open_sstables("tests/sstables/compaction", {1,2,3}).then([s = std::move(s), cf, cm, generation] (auto sstables) {
+        return test_setup::do_with_test_directory([sstables, s, generation, cf, cm] {
             auto new_sstable = [generation] {
                 return make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary",
                         generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
             };
-            return sstables::compact_sstables(std::move(sstables), std::move(s), new_sstable).then([s, generation] {
+            return sstables::compact_sstables(std::move(sstables), *cf, new_sstable).then([s, generation, cf, cm] {
                 // Verify that the compacted sstable has the right content. We expect to see:
                 //  name  | age | height
                 // -------+-----+--------
@@ -1122,6 +1124,8 @@ static lw_shared_ptr<sstable_list> create_sstable_list(std::vector<sstables::sha
 static future<> compact_sstables(std::vector<unsigned long> generations_to_compact, unsigned long new_generation, bool create_sstables = true) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+    auto cm = make_lw_shared<compaction_manager>();
+    auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
 
     auto generations = make_lw_shared<std::vector<unsigned long>>(std::move(generations_to_compact));
     auto sstables = make_lw_shared<std::vector<sstables::shared_sstable>>();
@@ -1159,7 +1163,7 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
                 });
             });
         });
-    }).then([s, sstables, new_generation, generations] {
+    }).then([cf, sstables, new_generation, generations] {
         unsigned long generation = new_generation;
         auto new_sstable = [generation] {
             return make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary",
@@ -1174,8 +1178,8 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
         // We do expect that all candidates were selected for compaction (in this case).
         BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
 
-        return sstables::compact_sstables(std::move(sstables_to_compact), s, new_sstable).then([s] {});
-    });
+        return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable);
+    }).then([cf, cm] {});
 }
 
 static future<> check_compacted_sstables(unsigned long generation, std::vector<unsigned long> compacted_generations) {

@@ -62,7 +62,7 @@ public:
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
 future<> compact_sstables(std::vector<shared_sstable> sstables,
-        schema_ptr schema, std::function<shared_sstable()> creator) {
+        column_family& cf, std::function<shared_sstable()> creator) {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
     auto newtab = creator();
@@ -73,6 +73,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     db::replay_position rp;
 
+    auto schema = cf.schema();
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
         readers.emplace_back(make_mutation_reader<sstable_reader>(sst, schema));
