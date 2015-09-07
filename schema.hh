@@ -353,8 +353,9 @@ public:
         return _raw._type == cf_type::super;
     }
 
-    int32_t gc_grace_seconds() const {
-        return _raw._gc_grace_seconds;
+    gc_clock::duration gc_grace_seconds() const {
+        auto seconds = std::chrono::seconds(_raw._gc_grace_seconds);
+        return std::chrono::duration_cast<gc_clock::duration>(seconds);
     }
 
     double dc_local_read_repair_chance() const {
