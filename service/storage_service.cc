@@ -61,9 +61,8 @@ bool is_replacing() {
     return false;
 }
 
-bool is_auto_bootstrap() {
-    // FIXME: DatabaseDescriptor.isAutoBootstrap()
-    return true;
+bool storage_service::is_auto_bootstrap() {
+    return _db.local().get_config().auto_bootstrap();
 }
 
 std::set<inet_address> get_seeds() {

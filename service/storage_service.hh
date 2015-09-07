@@ -81,6 +81,7 @@ public:
     void gossip_snitch_info();
 
 private:
+    bool is_auto_bootstrap();
     inet_address get_broadcast_address() {
         return utils::fb_utilities::get_broadcast_address();
     }
