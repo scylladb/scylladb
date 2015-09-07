@@ -579,6 +579,13 @@ public:
     //
     uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
         const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit);
+
+    // Performs the following:
+    //   - expires cells based on compaction_time
+    //   - drops cells covered by higher-level tombstones
+    //   - drops expired tombstones which timestamp is before max_purgeable
+    void compact_for_compaction(const schema& s, api::timestamp_type max_purgeable,
+        gc_clock::time_point compaction_time);
 public:
     deletable_row& clustered_row(const clustering_key& key);
     deletable_row& clustered_row(clustering_key&& key);

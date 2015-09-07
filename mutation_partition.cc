@@ -636,6 +636,16 @@ mutation_partition::compact_for_query(
     return do_compact(s, query_time, row_ranges, row_limit, api::max_timestamp);
 }
 
+void mutation_partition::compact_for_compaction(const schema& s,
+    api::timestamp_type max_purgeable, gc_clock::time_point compaction_time)
+{
+    static const std::vector<query::clustering_range> all_rows = {
+        query::clustering_range::make_open_ended_both_sides()
+    };
+
+    do_compact(s, compaction_time, all_rows, query::max_rows, max_purgeable);
+}
+
 bool
 deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
     // _created_at corresponds to the row marker cell, present for rows
