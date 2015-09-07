@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
                 tracker.clear();
 
                 // eviction victims
-                for (int i = 0; i < logalloc::segment_size / cell_size; ++i) {
+                for (unsigned i = 0; i < logalloc::segment_size / cell_size; ++i) {
                     cache.populate(make_small_mutation());
                 }
 
