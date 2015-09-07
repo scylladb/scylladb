@@ -16,7 +16,7 @@ if [ ! -f files/scylla-server.rpm ]; then
     cd ../../
     dist/redhat/build_rpm.sh
     cd -
-    RPM=`ls ~/rpmbuild/RPMS/x86_64/scylla-server*.rpm|grep -v debuginfo`
+    RPM=`ls /var/lib/mock/*/result/scylla-server-*.x86_64.rpm|grep -v debuginfo`
     cp $RPM files/scylla-server.rpm
 fi
 
