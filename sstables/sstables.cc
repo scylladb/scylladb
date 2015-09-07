@@ -782,7 +782,7 @@ void sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-    auto out = file_writer(std::move(f), 4096);
+    auto out = file_writer(std::move(f), sstable_buffer_size);
     auto w = file_writer(std::move(out));
     write(w, component);
     w.flush().get();
