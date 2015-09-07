@@ -279,13 +279,16 @@ public:
         ++_segment_manager->totals.segments_created;
     }
     ~segment() {
-        logger.debug("Segment {} is no longer active and will be deleted now", *this);
-        ++_segment_manager->totals.segments_destroyed;
-        _segment_manager->totals.total_size_on_disk -= size_on_disk();
-        _segment_manager->totals.total_size -=
-                (size_on_disk() + _buffer.size());
-        ::unlink(
-                (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
+        if (is_clean()) {
+            logger.debug("Segment {} is no longer active and will be deleted now", *this);
+            ++_segment_manager->totals.segments_destroyed;
+            _segment_manager->totals.total_size_on_disk -= size_on_disk();
+            _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
+            ::unlink(
+                    (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
+        } else {
+            logger.warn("Segment {} is dirty and is left on disk.", *this);
+        }
     }
 
     bool must_sync() {
@@ -840,6 +843,9 @@ future<> db::commitlog::segment_manager::clear() {
     logger.debug("Clearing all segments");
     flush_segments(true);
     return sync_all_segments().then([this] {
+        for (auto& s : _segments) {
+            s->mark_clean();
+        }
        _segments.clear();
     });
 }
