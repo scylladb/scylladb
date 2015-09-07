@@ -91,7 +91,7 @@ public:
         config(const db::config&);
 
         sstring commit_log_location;
-        uint64_t commitlog_total_space_in_mb = 0; // TODO: not respected yet.
+        uint64_t commitlog_total_space_in_mb = 0;
         uint64_t commitlog_segment_size_in_mb = 32;
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
 
@@ -169,6 +169,40 @@ public:
      * @param context the replay position of the flush
      */
     void discard_completed_segments(const cf_id_type&, const replay_position&);
+
+    /**
+     * A 'flush_handler' is invoked when the CL determines that size on disk has
+     * exceeded allowable threshold. It is called once for every currently active
+     * CF id with the highest replay_position which we would prefer to free "until".
+     * I.e. a the highest potentially freeable position in the CL.
+     *
+     * Whatever the callback does to help (or not) this desire is up to him.
+     * The flush calculation+callback will block on the future returned, so IFF
+     * you want the process to "halt" for some reason (test), use this. Otherwise, be async.
+     *
+     */
+    typedef std::function<future<>(cf_id_type, replay_position)> flush_handler;
+    typedef uint64_t flush_handler_id;
+
+    class flush_handler_anchor {
+    public:
+        friend class commitlog;
+        ~flush_handler_anchor();
+        flush_handler_anchor(flush_handler_anchor&&);
+        flush_handler_anchor(const flush_handler_anchor&) = delete;
+
+        flush_handler_id release(); // disengage anchor - danger danger.
+        void unregister();
+
+    private:
+        flush_handler_anchor(commitlog&, flush_handler_id);
+
+        commitlog & _cl;
+        flush_handler_id _id;
+    };
+
+    flush_handler_anchor add_flush_handler(flush_handler);
+    void remove_flush_handler(flush_handler_id);
 
     /**
      * Returns a vector of the segment names

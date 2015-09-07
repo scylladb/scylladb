@@ -849,6 +849,14 @@ future<>
 database::init_commitlog() {
     return db::commitlog::create_commitlog(*_cfg).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
+        _commitlog->add_flush_handler([this](db::cf_id_type id, db::replay_position pos) {
+            if (_column_families.count(id) == 0) {
+                // the CF has been removed.
+                _commitlog->discard_completed_segments(id, pos);
+                return make_ready_future<>();
+            }
+            return _column_families[id]->flush(pos);
+        }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
 
@@ -1450,6 +1458,25 @@ future<> column_family::flush() {
         _stats.memtable_switch_count++;
         return make_ready_future<>();
     });
+}
+
+future<> column_family::flush(const db::replay_position& pos) {
+    // Technically possible if we've already issued the
+    // sstable write, but it is not done yet.
+    if (pos < _highest_flushed_rp) {
+        return make_ready_future<>();
+    }
+
+    // TODO: Origin looks at "secondary" memtables
+    // It also consideres "minReplayPosition", which is simply where
+    // the CL "started" (the first ever RP in this run).
+    // We ignore this for now and just say that if we're asked for
+    // a CF and it exists, we pretty much have to have data that needs
+    // flushing. Let's do it.
+    // Note: NOT doing this sync. We hope we will finish all the
+    // needed flushes "soon enough". Let's not add unwarranted latency.
+    seal_active_memtable();
+    return make_ready_future<>();
 }
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {

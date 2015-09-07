@@ -179,6 +179,7 @@ public:
     void start();
     future<> stop();
     future<> flush();
+    future<> flush(const db::replay_position&);
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
