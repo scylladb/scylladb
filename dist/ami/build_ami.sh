@@ -15,9 +15,9 @@ fi
 if [ ! -f files/scylla-server.rpm ]; then
     cd ../../
     dist/redhat/build_rpm.sh
+    RPM=`ls build/rpms/scylla-server-*.x86_64.rpm|grep -v debuginfo`
+    cp $RPM dist/ami/files/scylla-server.rpm
     cd -
-    RPM=`ls /var/lib/mock/*/result/scylla-server-*.x86_64.rpm|grep -v debuginfo`
-    cp $RPM files/scylla-server.rpm
 fi
 
 if [ ! -d packer ]; then
