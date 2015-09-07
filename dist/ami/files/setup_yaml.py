@@ -71,13 +71,18 @@ def construct_yaml():
     with open('/var/lib/scylla/conf/scylla.yaml', 'r') as f:
         yaml = f.read()
 
+    # Set seeds for DSE/C
+    p = re.compile('seeds:.*')
+    yaml = p.sub('seeds: "{0}"'.format(instance_data['internalip']), yaml)
+
+
     # Set listen_address
     p = re.compile('listen_address:.*')
     yaml = p.sub('listen_address: {0}'.format(instance_data['internalip']), yaml)
 
     # Set rpc_address
     p = re.compile('rpc_address:.*')
-    yaml = p.sub('rpc_address: 0.0.0.0', yaml)
+    yaml = p.sub('rpc_address: {0}'.format(instance_data['internalip']), yaml)
 
     # Set cluster_name to reservationid
     instance_data['clustername'] = instance_data['clustername'].strip("'").strip('"')
@@ -85,9 +90,9 @@ def construct_yaml():
 
     if 'auto_bootstrap' in yaml:
         p = re.compile('auto_bootstrap:.*')
-        yaml = p.sub('auto_bootstrap: false', yaml)
+        yaml = p.sub('auto_bootstrap: true', yaml)
     else:
-        yaml += "\nauto_bootstrap: false\n"
+        yaml += "\nauto_bootstrap: true\n"
 
     with open('/var/lib/scylla/conf/scylla.yaml', 'w') as f:
         f.write(yaml)
