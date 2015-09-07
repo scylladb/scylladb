@@ -1097,9 +1097,8 @@ SEASTAR_TEST_CASE(compact) {
                         BOOST_REQUIRE(m);
                         BOOST_REQUIRE(m->key().representation() == bytes("nadav"));
                         BOOST_REQUIRE(m->partition().partition_tombstone());
-                        // FIXME: enable the following test.
-                        //auto &rows = m->partition().clustered_rows();
-                        //BOOST_REQUIRE(rows.size() == 0);
+                        auto &rows = m->partition().clustered_rows();
+                        BOOST_REQUIRE(rows.size() == 0);
                         return (*reader)();
                     }).then([reader] (mutation_opt m) {
                         BOOST_REQUIRE(!m);
