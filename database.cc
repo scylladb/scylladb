@@ -457,7 +457,6 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
 
     dblog.debug("Flushing to {}", newtab.get_filename());
     return do_with(std::move(newtab), [old, this] (sstables::sstable& newtab) {
-        // FIXME: write all components
         return newtab.write_components(*old).then([this, &newtab, old] {
             return newtab.load();
         }).then([this, old, &newtab] {

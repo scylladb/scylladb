@@ -1311,6 +1311,7 @@ future<> sstable::write_components(const memtable& mt) {
 future<> sstable::write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema) {
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] () mutable {
+        // FIXME: write all components
         touch_directory(_dir).get();
         create_data().get();
         prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
