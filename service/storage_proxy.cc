@@ -816,7 +816,6 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         std::vector<mutation> _mutations;
         db::consistency_level _cl;
 
-        semaphore _have_cl;
         const gms::inet_address _local_addr;
         const sstring _local_dc;
 
@@ -826,7 +825,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
     public:
         context(storage_proxy & p, std::vector<mutation>&& mutations,
                 db::consistency_level cl)
-                : _p(p), _mutations(std::move(mutations)), _cl(cl), _have_cl(0), _local_addr(
+                : _p(p), _mutations(std::move(mutations)), _cl(cl), _local_addr(
                         utils::fb_utilities::get_broadcast_address()), _local_dc(
                         locator::i_endpoint_snitch::get_local_snitch_ptr()->get_datacenter(
                                 _local_addr)), _batch_uuid(
