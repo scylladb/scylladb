@@ -576,7 +576,9 @@ future<> parse(random_access_reader& in, estimated_histogram& eh) {
     return f.then([&in, &eh, len = std::move(len)] {
         uint32_t length = *len;
 
-        assert(length > 0);
+        if (length == 0) {
+            throw malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!");
+        }
         eh.bucket_offsets.resize(length - 1);
         eh.buckets.resize(length);
 
