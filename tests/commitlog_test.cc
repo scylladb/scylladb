@@ -296,7 +296,6 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
             // add a flush handler that simply says we're done with the range.
             auto r = log->second.add_flush_handler([log](cf_id_type id, replay_position pos) {
                 log->second.discard_completed_segments(id, pos);
-                return make_ready_future<>();
             });
             auto set = make_lw_shared<std::set<segment_id_type>>();
             auto uuid = utils::UUID_gen::get_time_UUID();

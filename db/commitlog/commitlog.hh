@@ -177,11 +177,11 @@ public:
      * I.e. a the highest potentially freeable position in the CL.
      *
      * Whatever the callback does to help (or not) this desire is up to him.
-     * The flush calculation+callback will block on the future returned, so IFF
-     * you want the process to "halt" for some reason (test), use this. Otherwise, be async.
+     * This is called synchronously, so callee might want to instigate async ops
+     * in the background.
      *
      */
-    typedef std::function<future<>(cf_id_type, replay_position)> flush_handler;
+    typedef std::function<void(cf_id_type, replay_position)> flush_handler;
     typedef uint64_t flush_handler_id;
 
     class flush_handler_anchor {

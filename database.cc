@@ -853,9 +853,9 @@ database::init_commitlog() {
             if (_column_families.count(id) == 0) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id, pos);
-                return make_ready_future<>();
+                return;
             }
-            return _column_families[id]->flush(pos);
+            _column_families[id]->flush(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
     });
 }
@@ -1473,10 +1473,7 @@ future<> column_family::flush(const db::replay_position& pos) {
     // We ignore this for now and just say that if we're asked for
     // a CF and it exists, we pretty much have to have data that needs
     // flushing. Let's do it.
-    // Note: NOT doing this sync. We hope we will finish all the
-    // needed flushes "soon enough". Let's not add unwarranted latency.
-    seal_active_memtable();
-    return make_ready_future<>();
+    return seal_active_memtable();
 }
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {

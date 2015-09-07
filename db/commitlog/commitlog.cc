@@ -213,7 +213,7 @@ public:
         _flush_handlers.erase(id);
     }
 
-    future<> flush_segments(bool = false);
+    void flush_segments(bool = false);
 
 private:
     segment_id_type _ids = 0;
@@ -717,9 +717,9 @@ scollectd::registrations db::commitlog::segment_manager::create_counters() {
     };
 }
 
-future<> db::commitlog::segment_manager::flush_segments(bool force) {
+void db::commitlog::segment_manager::flush_segments(bool force) {
     if (_segments.empty()) {
-        return make_ready_future<>();
+        return;
     }
     // defensive copy.
     auto callbacks = boost::copy_range<std::vector<flush_handler>>(_flush_handlers | boost::adaptors::map_values);
@@ -745,18 +745,15 @@ future<> db::commitlog::segment_manager::flush_segments(bool force) {
     logger.debug("Flushing ({}) to {}", force, high);
 
     // For each CF id: for each callback c: call c(id, high)
-    return do_with(std::move(callbacks), [ids = std::move(ids), high](auto& callbacks) {
-        return parallel_for_each(callbacks, [ids, high](auto& f) {
-            return parallel_for_each(ids, [&f, high](auto id) {
-                try {
-                    return f(id, high);
-                } catch (...) {
-                    logger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
-                    return make_ready_future<>(); // swallow it and go on.
-                }
-            });
-        });
-    });
+    for (auto& f : callbacks) {
+        for (auto& id : ids) {
+            try {
+                f(id, high);
+            } catch (...) {
+                logger.error("Exception during flush request {}/{}: {}", id, high, std::current_exception());
+            }
+        }
+    }
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
@@ -767,9 +764,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         auto cur = totals.total_size_on_disk;
         if (max != 0 && cur >= max) {
             logger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
-            return flush_segments();
+            flush_segments();
         }
-        return make_ready_future<>();
     }).then([this] {
         return make_ready_future<sseg_ptr>(_segments.back());
     });
@@ -834,12 +830,11 @@ void db::commitlog::segment_manager::discard_unused_segments() {
  */
 future<> db::commitlog::segment_manager::clear() {
     logger.debug("Clearing all segments");
-    return flush_segments(true).then([this] {
-        return do_until([this]() {return _segments.empty();}, [this]() {
-            auto s = _segments.front();
-            _segments.erase(_segments.begin());
-            return s->sync().then([](sseg_ptr) {});
-        });
+    flush_segments(true);
+    return do_until([this]() {return _segments.empty();}, [this]() {
+        auto s = _segments.front();
+        _segments.erase(_segments.begin());
+        return s->sync().then([](sseg_ptr) {});
     });
 }
 /**
