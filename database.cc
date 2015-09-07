@@ -446,7 +446,7 @@ column_family::seal_active_memtable() {
 
 future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
-    // FIXME: better way of ensuring we don't attemt to
+    // FIXME: better way of ensuring we don't attempt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
 
