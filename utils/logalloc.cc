@@ -375,8 +375,12 @@ public:
     size_t segments_in_use() const;
     size_t current_emergency_reserve_goal() const { return 0; }
     void set_current_emergency_reserve_goal(size_t goal) { }
+    void set_emergency_reserve_max(size_t new_size) { }
+    size_t emergency_reserve_max() { return 0; }
+    void clear_allocation_failure_flag() { }
+    bool allocation_failure_flag() { return false; }
     void refill_emergency_reserve() {}
-    size_t trim_emergency_reserve_to_max() {}
+    size_t trim_emergency_reserve_to_max() { return  0; }
 public:
     class reservation_goal;
 };
