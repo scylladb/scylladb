@@ -222,6 +222,14 @@ public:
 
     const config& active_config() const;
 
+    /**
+     * Issues disk sync on all (allocating) segments. I.e. ensures that
+     * all data written up until this call is indeed on disk.
+     * _However_, if you issue new "add" ops while this is executing,
+     * those can/will be missed.
+     */
+    future<> sync_all_segments();
+
     future<std::vector<descriptor>> list_existing_descriptors() const;
     future<std::vector<descriptor>> list_existing_descriptors(const sstring& dir) const;
 
