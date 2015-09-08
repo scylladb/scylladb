@@ -1072,7 +1072,7 @@ future<> save_system_keyspace_schema() {
         m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
         m.set_clustered_cell(ckey, "default_validator", table->default_validator()->name(), timestamp);
-        m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds(), timestamp);
+        m.set_clustered_cell(ckey, "gc_grace_seconds", table->gc_grace_seconds().count(), timestamp);
         m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
         m.set_clustered_cell(ckey, "local_read_repair_chance", table->dc_local_read_repair_chance(), timestamp);
         m.set_clustered_cell(ckey, "min_compaction_threshold", table->min_compaction_threshold(), timestamp);

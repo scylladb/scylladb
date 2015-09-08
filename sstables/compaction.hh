@@ -10,7 +10,7 @@
 
 namespace sstables {
     future<> compact_sstables(std::vector<shared_sstable> sstables,
-            schema_ptr schema, std::function<shared_sstable()> creator);
+            column_family& cf, std::function<shared_sstable()> creator);
 
     // Return the most interesting bucket applying the size-tiered strategy.
     // NOTE: currently used for purposes of testing. May also be used by leveled compaction strategy.

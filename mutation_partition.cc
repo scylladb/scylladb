@@ -553,19 +553,16 @@ row::find_cell(column_id id) const {
     }
 }
 
-uint32_t
-mutation_partition::compact_for_query(
-    const schema& s,
-    gc_clock::time_point query_time,
-    const std::vector<query::clustering_range>& row_ranges,
-    uint32_t row_limit)
+uint32_t mutation_partition::do_compact(const schema& s, gc_clock::time_point query_time,
+    const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit, api::timestamp_type max_purgeable)
 {
     assert(row_limit > 0);
     bool stop = false;
 
-    // FIXME: drop GC'able tombstones
+    auto gc_before = query_time - s.gc_grace_seconds();
 
-    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone, query_time);
+    bool static_row_live = _static_row.compact_and_expire(s, column_kind::static_column, _tombstone,
+        query_time, max_purgeable, gc_before);
 
     uint32_t row_count = 0;
 
@@ -584,8 +581,8 @@ mutation_partition::compact_for_query(
 
             tombstone tomb = tombstone_for_row(s, e);
 
-            bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time);
-            is_live |= row.marker().compact_and_expire(tomb, query_time);
+            bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
+            is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
 
             // when row_limit is reached, do not exit immediately,
             // iterate to the next live_row instead to include trailing
@@ -608,9 +605,54 @@ mutation_partition::compact_for_query(
 
     _rows.erase_and_dispose(last, _rows.end(), current_deleter<rows_entry>());
 
+    auto can_purge_tombstone = [&] (const tombstone& t) {
+        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
+    };
+    auto it = _row_tombstones.begin();
+    while (it != _row_tombstones.end()) {
+        auto& tomb = it->t();
+        if (can_purge_tombstone(tomb) || tomb.timestamp <= _tombstone.timestamp) {
+            it = _row_tombstones.erase_and_dispose(it, current_deleter<row_tombstones_entry>());
+        } else {
+            ++it;
+        }
+    }
+    if (can_purge_tombstone(_tombstone)) {
+        _tombstone = tombstone();
+    }
+
     // FIXME: purge unneeded prefix tombstones based on row_ranges
 
     return row_count;
+}
+
+uint32_t
+mutation_partition::compact_for_query(
+    const schema& s,
+    gc_clock::time_point query_time,
+    const std::vector<query::clustering_range>& row_ranges,
+    uint32_t row_limit)
+{
+    return do_compact(s, query_time, row_ranges, row_limit, api::max_timestamp);
+}
+
+void mutation_partition::compact_for_compaction(const schema& s,
+    api::timestamp_type max_purgeable, gc_clock::time_point compaction_time)
+{
+    static const std::vector<query::clustering_range> all_rows = {
+        query::clustering_range::make_open_ended_both_sides()
+    };
+
+    do_compact(s, compaction_time, all_rows, query::max_rows, max_purgeable);
+}
+
+// Returns true if there is no live data or tombstones.
+bool mutation_partition::empty() const
+{
+    if (_tombstone.timestamp != api::missing_timestamp) {
+        return false;
+    }
+    return !_static_row.size() && _rows.empty() && _row_tombstones.empty();
 }
 
 bool
@@ -815,7 +857,9 @@ void row::merge(const schema& s, column_kind kind, row&& other) {
     });
 }
 
-bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time) {
+bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
+    api::timestamp_type max_purgeable, gc_clock::time_point gc_before)
+{
     bool any_live = false;
     remove_if([&] (column_id id, atomic_cell_or_collection& c) {
         bool erase = false;
@@ -826,15 +870,17 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
                 erase = true;
             } else if (cell.has_expired(query_time)) {
                 c = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+            } else if (!cell.is_live()) {
+                erase = cell.timestamp() < max_purgeable && cell.deletion_time() < gc_before;
             } else {
-                any_live |= cell.is_live();
+                any_live |= true;
             }
         } else {
             auto&& cell = c.as_collection_mutation();
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             auto m_view = ctype->deserialize_mutation_form(cell);
             collection_type_impl::mutation m = m_view.materialize();
-            any_live |= m.compact_and_expire(tomb, query_time);
+            any_live |= m.compact_and_expire(tomb, query_time, max_purgeable, gc_before);
             if (m.cells.empty() && m.tomb <= tomb) {
                 erase = true;
             } else {
