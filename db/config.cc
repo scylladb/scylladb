@@ -274,7 +274,7 @@ bpo::options_description_easy_init& db::config::add_options(bpo::options_descrip
     auto alias_add =
             [&init](const char* name, auto& dst, const char* desc) mutable {
                 init(name,
-                        value_ex(&dst._value)->notifier([dst](auto) mutable {
+                        value_ex(&dst._value)->notifier([&dst](auto& v) mutable {
                                     dst._source = config_source::CommandLine;
                                 })
                         , desc);
