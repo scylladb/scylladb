@@ -13,6 +13,7 @@
 #include <boost/algorithm/string/classification.hpp>
 #include "api/api-doc/utils.json.hh"
 #include "utils/histogram.hh"
+#include "http/exception.hh"
 
 namespace api {
 
@@ -191,4 +192,15 @@ struct ratio_holder : public json::jsonable {
     }
 };
 
+
+class unimplemented_exception : public base_exception {
+public:
+    unimplemented_exception()
+            : base_exception("API call is not supported yet", reply::status_type::internal_server_error) {
+    }
+};
+
+inline void unimplemented() {
+    throw unimplemented_exception();
+}
 }
