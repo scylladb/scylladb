@@ -2446,7 +2446,7 @@ public:
         }
     }
 #endif
-    sstring get_operation_mode();
+    future<sstring> get_operation_mode();
 
     bool is_starting();
 #if 0

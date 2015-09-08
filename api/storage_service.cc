@@ -320,8 +320,9 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_operation_mode.set(r, [](std::unique_ptr<request> req) {
-        auto mode = service::get_local_storage_service().get_operation_mode();
-        return make_ready_future<json::json_return_type>(mode);
+        return service::get_local_storage_service().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode);
+        });
     });
 
     ss::is_starting.set(r, [](const_req req) {

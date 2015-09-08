@@ -1173,8 +1173,11 @@ sstring storage_service::get_schema_version() {
     return _db.local().get_version().to_sstring();
 }
 
-sstring storage_service::get_operation_mode() {
-    return sprint("%s", _operation_mode);
+future<sstring> storage_service::get_operation_mode() {
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        return make_ready_future<sstring>(sprint("%s", mode));
+    });
 }
 
 bool storage_service::is_starting() {
