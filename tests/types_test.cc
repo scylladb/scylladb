@@ -14,6 +14,7 @@
 #include "compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
+#include "utils/big_decimal.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -230,6 +231,58 @@ BOOST_AUTO_TEST_CASE(test_varint) {
     BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ffffffffffffffffffffffffffffffff"))), boost::multiprecision::cpp_int("340282366920938463463374607431768211455"));
 
     test_parsing_fails(varint_type, "1A");
+}
+
+BOOST_AUTO_TEST_CASE(test_decimal) {
+    auto bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1")));
+    BOOST_CHECK_EQUAL(bd.scale(), 0);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), -1);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "-1");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1.00")));
+    BOOST_CHECK_EQUAL(bd.scale(), 2);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), -100);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "-1");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("123")));
+    BOOST_CHECK_EQUAL(bd.scale(), 0);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "123");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e3")));
+    BOOST_CHECK_EQUAL(bd.scale(), -1);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1230");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e+3")));
+    BOOST_CHECK_EQUAL(bd.scale(), -1);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1230");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23")));
+    BOOST_CHECK_EQUAL(bd.scale(), 2);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1.23");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.123")));
+    BOOST_CHECK_EQUAL(bd.scale(), 3);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "0.123");
+
+    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.00123")));
+    BOOST_CHECK_EQUAL(bd.scale(), 5);
+    BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
+    BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "0.00123");
+
+    BOOST_REQUIRE(decimal_type->equal(decimal_type->from_string("-1"), decimal_type->from_string("-1.00")));
+    BOOST_REQUIRE(decimal_type->equal(decimal_type->from_string("1.23e5"), decimal_type->from_string("123000.0")));
+    BOOST_REQUIRE(decimal_type->equal(decimal_type->from_string("1.23e5"), decimal_type->from_string("1230e2")));
+    BOOST_REQUIRE(decimal_type->equal(decimal_type->from_string("1.23e-2"), decimal_type->from_string("0.01230")));
+
+    BOOST_REQUIRE(!decimal_type->equal(decimal_type->from_string("-1"), decimal_type->from_string("-1.01")));
+    BOOST_REQUIRE(!decimal_type->equal(decimal_type->from_string("1.23e5"), decimal_type->from_string("123000.1")));
+    BOOST_REQUIRE(!decimal_type->equal(decimal_type->from_string("1.23e5"), decimal_type->from_string("1231e2")));
+    BOOST_REQUIRE(!decimal_type->equal(decimal_type->from_string("1.23e-2"), decimal_type->from_string("0.01231")));
 }
 
 BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
