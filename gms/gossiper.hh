@@ -77,6 +77,7 @@ private:
     };
     distributed<handler> _handlers;
     void init_messaging_service_handler();
+    void uninit_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
     future<> handle_ack_msg(shard_id id, gossip_digest_ack ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
@@ -413,8 +414,6 @@ public:
     void add_local_application_state(application_state state, versioned_value value);
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
-
-    future<> shutdown();
 
     future<> stop();
 

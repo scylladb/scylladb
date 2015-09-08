@@ -453,18 +453,22 @@ public:
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
+    void unregister_echo();
     future<> send_echo(shard_id id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
+    void unregister_gossip_shutdown();
     future<> send_gossip_shutdown(shard_id id, inet_address from);
 
     // Wrapper for GOSSIP_DIGEST_SYN
     void register_gossip_digest_syn(std::function<future<gms::gossip_digest_ack> (gms::gossip_digest_syn)>&& func);
+    void unregister_gossip_digest_syn();
     future<gms::gossip_digest_ack> send_gossip_digest_syn(shard_id id, gms::gossip_digest_syn msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
+    void unregister_gossip_digest_ack2();
     future<> send_gossip_digest_ack2(shard_id id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for DEFINITIONS_UPDATE

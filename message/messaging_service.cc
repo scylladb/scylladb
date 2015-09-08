@@ -391,12 +391,18 @@ future<> messaging_service::send_complete_message(shard_id id, UUID plan_id, ine
 void messaging_service::register_echo(std::function<future<> ()>&& func) {
     register_handler(this, messaging_verb::ECHO, std::move(func));
 }
+void messaging_service::unregister_echo() {
+    _rpc->unregister_handler(net::messaging_verb::ECHO);
+}
 future<> messaging_service::send_echo(shard_id id) {
     return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 1000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
+}
+void messaging_service::unregister_gossip_shutdown() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_SHUTDOWN);
 }
 future<> messaging_service::send_gossip_shutdown(shard_id id, inet_address from) {
     return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
@@ -405,12 +411,18 @@ future<> messaging_service::send_gossip_shutdown(shard_id id, inet_address from)
 void messaging_service::register_gossip_digest_syn(std::function<future<gossip_digest_ack> (gossip_digest_syn)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
 }
+void messaging_service::unregister_gossip_digest_syn() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_SYN);
+}
 future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(shard_id id, gossip_digest_syn msg) {
     return send_message_timeout<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), 1000ms, std::move(msg));
 }
 
 void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
+}
+void messaging_service::unregister_gossip_digest_ack2() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_ACK2);
 }
 future<> messaging_service::send_gossip_digest_ack2(shard_id id, gossip_digest_ack2 msg) {
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));

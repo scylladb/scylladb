@@ -320,12 +320,15 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_operation_mode.set(r, [](std::unique_ptr<request> req) {
-        auto mode = service::get_local_storage_service().get_operation_mode();
-        return make_ready_future<json::json_return_type>(mode);
+        return service::get_local_storage_service().get_operation_mode().then([] (auto mode) {
+            return make_ready_future<json::json_return_type>(mode);
+        });
     });
 
-    ss::is_starting.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_starting();
+    ss::is_starting.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_starting().then([] (auto starting) {
+            return make_ready_future<json::json_return_type>(starting);
+        });
     });
 
     ss::get_drain_progress.set(r, [](std::unique_ptr<request> req) {
@@ -368,9 +371,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_gossip_running.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_gossip_running();
+    ss::is_gossip_running.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_gossip_running().then([] (bool running){
+            return make_ready_future<json::json_return_type>(running);
+        });
     });
+
 
     ss::stop_daemon.set(r, [](std::unique_ptr<request> req) {
         //TBD

@@ -263,6 +263,14 @@ void gossiper::init_messaging_service_handler() {
     });
 }
 
+void gossiper::uninit_messaging_service_handler() {
+    auto& ms = net::get_local_messaging_service();
+    ms.unregister_echo();
+    ms.unregister_gossip_shutdown();
+    ms.unregister_gossip_digest_syn();
+    ms.unregister_gossip_digest_ack2();
+}
+
 future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
     std::vector<inet_address> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
@@ -1335,7 +1343,13 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
     }
 }
 
-future<> gossiper::shutdown() {
+future<> gossiper::stop() {
+    logger.debug("gossip::stop on cpu {}", engine().cpu_id());
+
+    if (engine().cpu_id() != 0) {
+        return make_ready_future<>();
+    }
+
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         _scheduled_gossip_task.cancel();
@@ -1351,19 +1365,17 @@ future<> gossiper::shutdown() {
                 } catch (...) {
                     logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
                 }
-            });
+                return make_ready_future<>();
+            }).get();
         }
-    });
-}
-
-future<> gossiper::stop() {
-    _enabled = false;
-    _scheduled_gossip_task.cancel();
-    return _handlers.stop().then( [this] () {
-        if (engine().cpu_id() == 0) {
-            get_local_failure_detector().unregister_failure_detection_event_listener(this);
-        }
-        return make_ready_future<>();
+        _handlers.stop().then([this] () {
+            logger.debug("gossip::handler::stop on cpu {}", engine().cpu_id());
+            if (engine().cpu_id() == 0) {
+                get_local_failure_detector().unregister_failure_detection_event_listener(this);
+            }
+            uninit_messaging_service_handler();
+            return make_ready_future<>();
+        }).get();
     });
 }
 
