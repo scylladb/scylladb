@@ -782,7 +782,7 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
 
 
     auto cf_name = make_lw_shared<sstring>(_cf_name);
-    return db::system_keyspace::query(proxy.local(), *cf_name).then([&proxy] (auto rs) {
+    return db::system_keyspace::query(proxy, *cf_name).then([] (auto rs) {
         auto names = std::set<sstring>();
         for (auto& r : rs->rows()) {
             auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
@@ -795,7 +795,7 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
                 return make_ready_future<>();
             }
 
-            return read_schema_partition_for_keyspace(proxy.local(), *cf_name, name).then([func, cf_name] (auto&& v) mutable {
+            return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
                 return do_with(std::move(v), [func = std::forward<Func>(func), cf_name] (auto& v) {
                     return func(v).then_wrapped([cf_name, &v] (future<> f) {
                         try {
@@ -817,7 +817,7 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
         return create_keyspace(ksm);
     }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
-            return create_tables_from_tables_partition(proxy.local(), v.second).then([this] (std::map<sstring, schema_ptr> tables) {
+            return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 for (auto& t: tables) {
                     auto s = t.second;
                     auto& ks = this->find_keyspace(s->ks_name());
@@ -922,7 +922,7 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
 }
 
 future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
-    auto& proxy = service::get_local_storage_proxy();
+    auto& proxy = service::get_storage_proxy();
     auto old_cfm = find_schema(ks_name, cf_name);
     return db::schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
         if (old_cfm->id() != new_cfm->id()) {
@@ -1442,10 +1442,10 @@ const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
 }
 
-future<> update_schema_version_and_announce(service::storage_proxy& proxy)
+future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy)
 {
     return db::schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {
-        return proxy.get_db().invoke_on_all([uuid] (database& db) {
+        return proxy.local().get_db().invoke_on_all([uuid] (database& db) {
             db.update_version(uuid);
             return make_ready_future<>();
         }).then([uuid] {

@@ -32,7 +32,7 @@ namespace service {
 
 class migration_task {
 public:
-    static future<> run_may_throw(service::storage_proxy& proxy, const gms::inet_address& endpoint);
+    static future<> run_may_throw(distributed<service::storage_proxy>& proxy, const gms::inet_address& endpoint);
 };
 
 }

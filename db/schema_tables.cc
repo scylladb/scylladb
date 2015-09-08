@@ -333,11 +333,11 @@ future<> save_system_keyspace_schema() {
      * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
      * will be converted into UUID which would act as content-based version of the schema.
      */
-    future<utils::UUID> calculate_schema_digest(service::storage_proxy& proxy)
+    future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy)
     {
         auto map = [&proxy] (sstring table) {
             return db::system_keyspace::query_mutations(proxy, table).then([&proxy, table] (auto rs) {
-                auto s = proxy.get_db().local().find_schema(system_keyspace::NAME, table);
+                auto s = proxy.local().get_db().local().find_schema(system_keyspace::NAME, table);
                 std::vector<query::result> results;
                 for (auto&& p : rs->partitions()) {
                     auto mut = p.mut().unfreeze(s);
@@ -391,11 +391,11 @@ future<> save_system_keyspace_schema() {
     }
 #endif
 
-    future<std::vector<frozen_mutation>> convert_schema_to_mutations(service::storage_proxy& proxy)
+    future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy)
     {
         auto map = [&proxy] (sstring table) {
             return db::system_keyspace::query_mutations(proxy, table).then([&proxy, table] (auto rs) {
-                auto s = proxy.get_db().local().find_schema(system_keyspace::NAME, table);
+                auto s = proxy.local().get_db().local().find_schema(system_keyspace::NAME, table);
                 std::vector<frozen_mutation> results;
                 for (auto&& p : rs->partitions()) {
                     auto mut = p.mut().unfreeze(s);
@@ -416,9 +416,9 @@ future<> save_system_keyspace_schema() {
     }
 
     future<schema_result>
-    read_schema_for_keyspaces(service::storage_proxy& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
+    read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
         auto insert = [] (schema_result&& result, auto&& schema_entity) {
             if (!schema_entity.second->empty()) {
@@ -437,9 +437,9 @@ future<> save_system_keyspace_schema() {
 #endif
 
     future<schema_result::value_type>
-    read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
+    read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         return db::system_keyspace::query(proxy, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
@@ -448,9 +448,9 @@ future<> save_system_keyspace_schema() {
     }
 
     future<schema_result::value_type>
-    read_schema_partition_for_table(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
+    read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({to_bytes(table_name)})));
@@ -490,7 +490,7 @@ future<> save_system_keyspace_schema() {
      * @throws ConfigurationException If one of metadata attributes has invalid value
      * @throws IOException If data was corrupted during transportation or failed to apply fs operations
      */
-    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
+    future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
     {
         return merge_lock().then([&proxy, mutations = std::move(mutations)] () mutable {
             return do_merge_schema(proxy, std::move(mutations), true).then([&proxy] {
@@ -501,7 +501,7 @@ future<> save_system_keyspace_schema() {
         });
     }
 
-    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
+    future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
     { 
         return merge_lock().then([&proxy, mutations = std::move(mutations), do_flush] () mutable {
             return do_merge_schema(proxy, std::move(mutations), do_flush);
@@ -510,7 +510,7 @@ future<> save_system_keyspace_schema() {
         });
     }
 
-    future<> do_merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
+    future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
     {
        return seastar::async([&proxy, mutations = std::move(mutations), do_flush] () mutable {
            schema_ptr s = keyspaces();
@@ -531,10 +531,10 @@ future<> save_system_keyspace_schema() {
            /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 #endif
 
-           proxy.mutate_locally(std::move(mutations)).get0();
+           proxy.local().mutate_locally(std::move(mutations)).get0();
 
            if (do_flush) {
-               proxy.get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
+               proxy.local().get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
                    return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
                        auto& cf = db.find_column_family(id);
                        return cf.flush();
@@ -558,7 +558,7 @@ future<> save_system_keyspace_schema() {
            mergeFunctions(oldFunctions, newFunctions);
            mergeAggregates(oldAggregates, newAggregates);
 #endif
-           proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
+           proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
                // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
                for (auto&& keyspace_to_drop : keyspaces_to_drop) {
                    db.drop_keyspace(keyspace_to_drop);
@@ -567,7 +567,7 @@ future<> save_system_keyspace_schema() {
        });
     }
 
-    future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
+    future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
     {
         std::vector<schema_result::value_type> created;
         std::vector<sstring> altered;
@@ -608,7 +608,7 @@ future<> save_system_keyspace_schema() {
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-            return proxy.get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
+            return proxy.local().get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
                 return do_for_each(created, [&db] (auto&& val) {
                     auto ksm = create_keyspace_from_schema_partition(val);
                     return db.create_keyspace(std::move(ksm));
@@ -636,14 +636,13 @@ future<> save_system_keyspace_schema() {
     }
 
     // see the comments for merge_keyspaces()
-    future<> merge_tables(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
+    future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
     {
         return do_with(std::make_pair(std::move(after), std::move(before)), [&proxy] (auto& pair) {
             auto& after = pair.first;
             auto& before = pair.second;
-            return proxy.get_db().invoke_on_all([&before, &after] (database& db) {
-                return seastar::async([&db, &before, &after] {
-                    auto& proxy = service::get_local_storage_proxy();
+            return proxy.local().get_db().invoke_on_all([&proxy, &before, &after] (database& db) {
+                return seastar::async([&proxy, &db, &before, &after] {
                     std::vector<schema_ptr> created;
                     std::vector<schema_ptr> altered;
                     std::vector<schema_ptr> dropped;
@@ -1194,7 +1193,7 @@ future<> save_system_keyspace_schema() {
     }
 #endif
 
-    future<schema_ptr> create_table_from_name(service::storage_proxy& proxy, const sstring& keyspace, const sstring& table)
+    future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
     {
         return read_schema_partition_for_table(proxy, COLUMNFAMILIES, keyspace, table).then([&proxy, keyspace, table] (auto partition) {
             if (partition.second->empty()) {
@@ -1209,7 +1208,7 @@ future<> save_system_keyspace_schema() {
      *
      * @return map containing name of the table and its metadata for faster lookup
      */
-    future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(service::storage_proxy& proxy, const schema_result::mapped_type& result)
+    future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
     {
         auto tables = make_lw_shared<std::map<sstring, schema_ptr>>();
         return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, tables] (auto&& row) {
@@ -1234,7 +1233,7 @@ future<> save_system_keyspace_schema() {
         create_table_from_table_row_and_column_rows(builder, table_row, serialized_columns.second);
     }
 
-    future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, lw_shared_ptr<query::result_set>&& partition)
+    future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition)
     {
         return do_with(std::move(partition), [&proxy] (auto& partition) {
             return create_table_from_table_row(proxy, partition->row(0));
@@ -1246,12 +1245,12 @@ future<> save_system_keyspace_schema() {
      *
      * @return Metadata deserialized from schema
      */
-    future<schema_ptr> create_table_from_table_row(service::storage_proxy& proxy, const query::result_set_row& row)
+    future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row)
     {
         auto ks_name = row.get_nonnull<sstring>("keyspace_name");
         auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
         auto id = row.get_nonnull<utils::UUID>("cf_id");
-        return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&proxy, &row, ks_name, cf_name, id] (auto serialized_columns) {
+        return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&row, ks_name, cf_name, id] (auto serialized_columns) {
             schema_builder builder{ks_name, cf_name, id};
             create_table_from_table_row_and_columns_partition(builder, row, serialized_columns);
             return builder.build();

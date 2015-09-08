@@ -33,7 +33,7 @@ namespace service {
 
 static logging::logger logger("Migration Task");
 
-future<> migration_task::run_may_throw(service::storage_proxy& proxy, const gms::inet_address& endpoint)
+future<> migration_task::run_may_throw(distributed<service::storage_proxy>& proxy, const gms::inet_address& endpoint)
 {
     if (!gms::get_failure_detector().local().is_alive(endpoint)) {
         logger.error("Can't send migration request: node {} is down.", endpoint);
@@ -45,7 +45,7 @@ future<> migration_task::run_may_throw(service::storage_proxy& proxy, const gms:
         try {
             std::vector<mutation> schema;
             for (auto& m : mutations) {
-                schema_ptr s = proxy.get_db().local().find_schema(m.column_family_id());
+                schema_ptr s = proxy.local().get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
             return db::schema_tables::merge_schema(proxy, std::move(schema));

@@ -166,7 +166,7 @@ future<> storage_service::prepare_to_join() {
     }).then([this] {
         // gossip snitch infos (local DC and rack)
         gossip_snitch_info();
-        auto& proxy = service::get_local_storage_proxy();
+        auto& proxy = service::get_storage_proxy();
         // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
         return update_schema_version_and_announce(proxy); // Ensure we know our own actual Schema UUID in preparation for updates
 

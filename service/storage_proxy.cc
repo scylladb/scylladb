@@ -2423,14 +2423,13 @@ void storage_proxy::init_messaging_service() {
                 schema_ptr s = p->get_db().local().find_schema(m.column_family_id());
                 schema.emplace_back(m.unfreeze(s));
             }
-            return db::schema_tables::merge_schema(*p, std::move(schema));
+            return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
         }).discard_result();
         return net::messaging_service::no_wait();
     });
     ms.register_migration_request([] (gms::inet_address reply_to, unsigned shard) {
-        auto p = get_local_shared_storage_proxy();
-        return db::schema_tables::convert_schema_to_mutations(*p).finally([p] {
-            // keep proxy alive
+        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
+            // keep local proxy alive
         });
     });
     ms.register_mutation([] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {

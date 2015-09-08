@@ -875,35 +875,35 @@ load_dc_rack_info() {
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-query_mutations(service::storage_proxy& proxy, const sstring& cf_name) {
-    database& db = proxy.get_db().local();
+query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
+    database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
-    return proxy.query_mutations_locally(cmd, query::full_partition_range);
+    return proxy.local().query_mutations_locally(cmd, query::full_partition_range);
 }
 
 future<lw_shared_ptr<query::result_set>>
-query(service::storage_proxy& proxy, const sstring& cf_name) {
-    database& db = proxy.get_db().local();
+query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
+    database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
-    return proxy.query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
+    return proxy.local().query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }
 
 future<lw_shared_ptr<query::result_set>>
-query(service::storage_proxy& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
+query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
 {
-    auto&& db = proxy.get_db().local();
+    auto&& db = proxy.local().get_db().local();
     auto schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema)
         .with_range(std::move(row_range))
         .build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
-    return proxy.query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
+    return proxy.local().query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }

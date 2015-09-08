@@ -53,26 +53,26 @@ std::vector<schema_ptr> all_tables();
 
 future<> save_system_keyspace_schema();
 
-future<utils::UUID> calculate_schema_digest(service::storage_proxy& proxy);
+future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>& proxy);
 
-future<std::vector<frozen_mutation>> convert_schema_to_mutations(service::storage_proxy& proxy);
+future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy);
 
 future<schema_result::value_type>
-read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
+read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 
-future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations);
+future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations);
 
-future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
+future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
 
-future<> do_merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
+future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush);
 
-future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
+future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
 
-future<> merge_tables(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
+future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
 
@@ -80,17 +80,17 @@ mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace
 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
-future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(service::storage_proxy& proxy, const schema_result::mapped_type& result);
+future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
     
-future<schema_ptr> create_table_from_name(service::storage_proxy& proxy, const sstring& keyspace, const sstring& table);
+future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table);
 
-future<schema_ptr> create_table_from_table_row(service::storage_proxy& proxy, const query::result_set_row& row);
+future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
 void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
 
-future<schema_ptr> create_table_from_table_partition(service::storage_proxy& proxy, lw_shared_ptr<query::result_set>&& partition);
+future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition);
 
 std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                const sstring& keyspace,

@@ -114,7 +114,7 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
 {
-    return service::migration_task::run_may_throw(get_local_storage_proxy(), endpoint);
+    return service::migration_task::run_may_throw(get_storage_proxy(), endpoint);
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint)
@@ -436,7 +436,7 @@ future<> migration_manager::announce(mutation schema, bool announce_locally)
 future<> migration_manager::announce(std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
-        return db::schema_tables::merge_schema(get_local_storage_proxy(), std::move(mutations), false);
+        return db::schema_tables::merge_schema(get_storage_proxy(), std::move(mutations), false);
     } else {
         return announce(std::move(mutations));
     }
@@ -471,7 +471,7 @@ future<> migration_manager::announce(std::vector<mutation> schema)
                 }
                 return make_ready_future<>();
             }).then([&schema] {
-                return db::schema_tables::merge_schema(get_local_storage_proxy(), std::move(schema));
+                return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
             });
         });
     });
