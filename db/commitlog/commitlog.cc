@@ -829,8 +829,11 @@ void db::commitlog::segment_manager::discard_unused_segments() {
 }
 
 future<> db::commitlog::segment_manager::sync_all_segments() {
+    logger.debug("Issuing sync for all segments");
     return parallel_for_each(_segments, [this](sseg_ptr s) {
-        return s->sync().then([](sseg_ptr) {});
+        return s->sync().then([](sseg_ptr s) {
+            logger.debug("Synced {}", *s);
+        });
     });
 }
 
