@@ -229,6 +229,11 @@ public:
      * those can/will be missed.
      */
     future<> sync_all_segments();
+    /**
+     * Shuts everything down and causes any
+     * incoming writes to throw exceptions
+     */
+    future<> shutdown();
 
     future<std::vector<descriptor>> list_existing_descriptors() const;
     future<std::vector<descriptor>> list_existing_descriptors(const sstring& dir) const;

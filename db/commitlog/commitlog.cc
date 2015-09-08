@@ -30,14 +30,16 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "core/align.hh"
-#include "core/reactor.hh"
-#include "core/scollectd.hh"
-#include "core/future-util.hh"
-#include "core/file.hh"
-#include "core/rwlock.hh"
-#include "core/fstream.hh"
-#include "net/byteorder.hh"
+#include <core/align.hh>
+#include <core/reactor.hh>
+#include <core/scollectd.hh>
+#include <core/future-util.hh>
+#include <core/file.hh>
+#include <core/rwlock.hh>
+#include <core/gate.hh>
+#include <core/fstream.hh>
+#include <net/byteorder.hh>
+
 #include "commitlog.hh"
 #include "db/config.hh"
 #include "utils/data_input.hh"
@@ -132,6 +134,8 @@ public:
     // we distribute stuff more or less equally across shards.
     const uint64_t max_disk_size; // per-shard
 
+    bool _shutdown = false;
+
     semaphore _new_segment_semaphore;
     scollectd::registrations _regs;
 
@@ -185,6 +189,7 @@ public:
     future<sseg_ptr> active_segment();
     future<> clear();
     future<> sync_all_segments();
+    future<> shutdown();
 
     scollectd::registrations create_counters();
 
@@ -252,6 +257,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     rwlock _dwrite; // used as a barrier between write & flush
     std::unordered_map<cf_id_type, position_type> _cf_dirty;
     time_point _sync_time;
+    seastar::gate _gate;
 
     friend std::ostream& operator<<(std::ostream&, const segment&);
     friend class segment_manager;
@@ -316,6 +322,9 @@ public:
         return cycle().then([](auto seg) {
             return seg->flush();
         });
+    }
+    future<> shutdown() {
+        return _gate.close();
     }
     future<sseg_ptr> flush(uint64_t pos = 0) {
         auto me = shared_from_this();
@@ -502,6 +511,8 @@ public:
             cycle(s);
         }
 
+        _gate.enter(); // this might throw. I guess we accept this?
+
         replay_position rp(_desc.id, position());
         auto pos = _buf_pos;
         _buf_pos += s;
@@ -526,6 +537,9 @@ public:
         out.write(crc.checksum());
 
         ++_segment_manager->totals.allocation_count;
+
+        _gate.leave();
+
         // finally, check if we're required to sync.
         if (must_sync()) {
             return sync().then([rp](auto seg) {
@@ -761,6 +775,9 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
+    if (_shutdown) {
+        throw std::runtime_error("Commitlog has been shut down. Cannot add data");
+    }
     descriptor d(next_id());
     return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d](file f) {
         _segments.emplace_back(make_lw_shared<segment>(this, d, std::move(f)));
@@ -836,6 +853,14 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
         });
     });
 }
+
+future<> db::commitlog::segment_manager::shutdown() {
+    _shutdown = true;
+    return parallel_for_each(_segments, [this](sseg_ptr s) {
+        return s->shutdown();
+    });
+}
+
 
 /*
  * Sync all segments, then clear them out. To ensure all ops are done.
@@ -982,6 +1007,11 @@ void db::commitlog::discard_completed_segments(const cf_id_type& id,
 future<> db::commitlog::sync_all_segments() {
     return _segment_manager->sync_all_segments();
 }
+
+future<> db::commitlog::shutdown() {
+    return _segment_manager->shutdown();
+}
+
 
 size_t db::commitlog::max_record_size() const {
     return _segment_manager->max_mutation_size - segment::entry_overhead_size;
