@@ -53,7 +53,7 @@ SEASTAR_TEST_CASE(test_compaction) {
             }
 
             // Freeing should not invalidate references
-            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), compaction_counter_1);
+            BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), reclaim_counter_1);
 
             // Try to reclaim
 
@@ -61,7 +61,7 @@ SEASTAR_TEST_CASE(test_compaction) {
             BOOST_REQUIRE(shard_tracker().reclaim(target) >= target);
 
             // There must have been some compaction during such reclaim
-            BOOST_REQUIRE(reg.reclaim_counter() != compaction_counter_1);
+            BOOST_REQUIRE(reg.reclaim_counter() != reclaim_counter_1);
         });
     });
 }
