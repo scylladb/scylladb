@@ -30,6 +30,8 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
+
 class random_access_reader {
     input_stream<char> _in;
 protected:
@@ -1477,7 +1479,7 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            remove_by_toc_name(filename(component_type::TOC)).handle_exception(
+            shared_remove_by_toc_name(filename(component_type::TOC), _shared).handle_exception(
                         [] (std::exception_ptr eptr) {
                             sstlog.warn("Exception when deleting sstable file: {}", eptr);
                         });
@@ -1491,6 +1493,24 @@ sstable::~sstable() {
 sstring
 dirname(sstring fname) {
     return boost::filesystem::canonical(std::string(fname)).parent_path().string();
+}
+
+future<>
+sstable::shared_remove_by_toc_name(sstring toc_name, bool shared) {
+    if (!shared) {
+        return remove_by_toc_name(toc_name);
+    } else {
+        auto shard = std::hash<sstring>()(toc_name) % smp::count;
+        return smp::submit_to(shard, [toc_name] {
+            auto& counter = _shards_agreeing_to_remove_sstable[toc_name];
+            if (++counter == smp::count) {
+                _shards_agreeing_to_remove_sstable.erase(toc_name);
+                return remove_by_toc_name(toc_name);
+            } else {
+                return make_ready_future<>();
+            }
+        });
+    }
 }
 
 future<>
