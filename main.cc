@@ -24,6 +24,7 @@
 #include "log.hh"
 #include "debug.hh"
 #include "init.hh"
+#include "release.hh"
 #include <cstdio>
 
 namespace bpo = boost::program_options;

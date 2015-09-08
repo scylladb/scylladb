@@ -1,0 +1,19 @@
+#!/bin/sh
+
+VERSION=0.8
+
+if test -f version
+then
+	SCYLLA_VERSION=$(cat version | awk -F'-' '{print $1}')
+	SCYLLA_RELEASE=$(cat version | awk -F'-' '{print $2}')
+else
+	DATE=$(date +%Y%m%d)
+	GIT_COMMIT=$(git log --pretty=format:'%h' -n 1)
+	SCYLLA_VERSION=$VERSION
+	SCYLLA_RELEASE=$DATE.$GIT_COMMIT
+fi
+
+echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
+mkdir -p build
+echo "$SCYLLA_VERSION" > build/SCYLLA-VERSION-FILE
+echo "$SCYLLA_RELEASE" > build/SCYLLA-RELEASE-FILE
