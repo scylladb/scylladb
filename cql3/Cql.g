@@ -1344,9 +1344,7 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_BLOB      { $t = cql3_type::blob; }
     | K_BOOLEAN   { $t = cql3_type::boolean; }
     | K_COUNTER   { $t = cql3_type::counter; }
-#if 0
-    | K_DECIMAL   { $t = CQL3Type.Native.DECIMAL; }
-#endif
+    | K_DECIMAL   { $t = cql3_type::decimal; }
     | K_DOUBLE    { $t = cql3_type::double_; }
     | K_FLOAT     { $t = cql3_type::float_; }
     | K_INET      { $t = cql3_type::inet; }

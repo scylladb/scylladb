@@ -1267,7 +1267,7 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     (type_id::BLOB      , bytes_type)
     (type_id::BOOLEAN   , boolean_type)
     //(type_id::COUNTER   , CounterColumn_type)
-    //(type_id::DECIMAL   , Decimal_type)
+    (type_id::DECIMAL   , decimal_type)
     (type_id::DOUBLE    , double_type)
     (type_id::FLOAT     , float_type)
     (type_id::INT       , int32_type)

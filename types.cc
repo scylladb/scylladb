@@ -21,6 +21,7 @@
 #include <boost/date_time/c_local_time_adjustor.hpp>
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/multiprecision/cpp_int.hpp>
+#include "utils/big_decimal.hh"
 
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
 static const char* long_type_name      = "org.apache.cassandra.db.marshal.LongType";
@@ -35,6 +36,7 @@ static const char* inet_addr_type_name = "org.apache.cassandra.db.marshal.InetAd
 static const char* double_type_name    = "org.apache.cassandra.db.marshal.DoubleType";
 static const char* float_type_name     = "org.apache.cassandra.db.marshal.FloatType";
 static const char* varint_type_name    = "org.apache.cassandra.db.marshal.IntegerType";
+static const char* decimal_type_name    = "org.apache.cassandra.db.marshal.DecimalType";
 static const char* counter_type_name   = "org.apache.cassandra.db.marshal.CounterColumnType";
 static const char* empty_type_name     = "org.apache.cassandra.db.marshal.EmptyType";
 
@@ -1018,6 +1020,78 @@ public:
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::varint;
+    }
+};
+
+class decimal_type_impl : public abstract_type {
+public:
+    decimal_type_impl() : abstract_type{decimal_type_name} { }
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
+        if (value.empty()) {
+            return;
+        }
+        auto bd = boost::any_cast<big_decimal>(value);
+        auto u = net::hton(bd.scale());
+        out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
+        varint_type->serialize(bd.unscaled_value(), out);
+    }
+    virtual size_t serialized_size(const boost::any& value) const override {
+        if (value.empty()) {
+            return 0;
+        }
+        auto bd = boost::any_cast<big_decimal>(value);
+        return sizeof(int32_t) + varint_type->serialized_size(bd.unscaled_value());
+    }
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        auto a = boost::any_cast<big_decimal>(deserialize(v1));
+        auto b = boost::any_cast<big_decimal>(deserialize(v2));
+
+        return a.compare(b);
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
+        return compare(v1, v2) < 0;
+    }
+    virtual size_t hash(bytes_view v) const override {
+        bytes b(v.begin(), v.end());
+        return std::hash<sstring>()(to_string(b));
+    }
+    virtual boost::any deserialize(bytes_view v) const override {
+        if (v.empty()) {
+            return {};
+        }
+        auto scale = read_simple<int32_t>(v);
+        auto unscaled = varint_type->deserialize(v);
+        return big_decimal(scale, boost::any_cast<boost::multiprecision::cpp_int>(unscaled));
+    }
+    virtual sstring to_string(const bytes& b) const override {
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return boost::any_cast<big_decimal>(v).to_string();
+    }
+    virtual bytes from_string(sstring_view text) const override {
+        if (text.empty()) {
+            return bytes();
+        }
+        try {
+            big_decimal bd(text);
+            bytes b(bytes::initialized_later(), serialized_size(bd));
+            auto out = b.begin();
+            serialize(boost::any(bd), out);
+            return b;
+        } catch (...) {
+            throw marshal_exception(sprint("unable to make BigDecimal from '%s'", text));
+        }
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
+        return cql3::cql3_type::decimal;
     }
 };
 
@@ -2167,6 +2241,7 @@ thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<in
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const shared_ptr<const abstract_type> varint_type(make_shared<varint_type_impl>());
+thread_local const shared_ptr<const abstract_type> decimal_type(make_shared<decimal_type_impl>());
 thread_local const shared_ptr<const abstract_type> counter_type(make_shared<counter_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
 
@@ -2186,6 +2261,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { float_type_name,     float_type     },
         { double_type_name,    double_type    },
         { varint_type_name,    varint_type    },
+        { decimal_type_name,   decimal_type   },
         { counter_type_name,   counter_type   },
         { empty_type_name,     empty_type     },
     };
