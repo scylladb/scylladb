@@ -140,6 +140,7 @@ int main(int ac, char** av) {
             engine().exit(1);
             return make_ready_future<>();
         }
+        print("Scylla version %s starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
         return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
