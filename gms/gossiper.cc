@@ -263,6 +263,14 @@ void gossiper::init_messaging_service_handler() {
     });
 }
 
+void gossiper::uninit_messaging_service_handler() {
+    auto& ms = net::get_local_messaging_service();
+    ms.unregister_echo();
+    ms.unregister_gossip_shutdown();
+    ms.unregister_gossip_digest_syn();
+    ms.unregister_gossip_digest_ack2();
+}
+
 future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
     std::vector<inet_address> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
