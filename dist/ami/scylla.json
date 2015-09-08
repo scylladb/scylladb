@@ -18,23 +18,8 @@
   "provisioners": [
     {
       "type": "file",
-      "source": "files/scylla-server.rpm",
-      "destination": "/home/fedora/scylla-server.rpm"
-    },
-    {
-      "type": "file",
-      "source": "files/scylla-setup.sh",
-      "destination": "/home/fedora/scylla-setup.sh"
-    },
-    {
-      "type": "file",
-      "source": "files/scylla-setup.service",
-      "destination": "/home/fedora/scylla-setup.service"
-    },
-    {
-      "type": "file",
-      "source": "files/setup_yaml.py",
-      "destination": "/home/fedora/setup_yaml.py"
+      "source": "files/",
+      "destination": "/home/fedora"
     },
     {
       "type": "shell",
@@ -45,8 +30,8 @@
         "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",
         "sudo mv /home/fedora/scylla-setup.sh /usr/lib/scylla",
         "sudo chmod a+rx /usr/lib/scylla/scylla-setup.sh",
-	"sudo mv /home/fedora/setup_yaml.py /usr/lib/scylla",
-	"sudo chmod a+rx /usr/lib/scylla/setup_yaml.py",
+	"sudo mv /home/fedora/ComboAMI /usr/lib/scylla/ComboAMI",
+	"sudo chmod a+rx /usr/lib/scylla/ComboAMI/ds2_configure.py",
         "sudo systemctl enable scylla-setup.service",
 	"sudo sed -e 's!/var/lib/scylla/data!/data/data!' -e 's!commitlog_directory: /var/lib/scylla/commitlog!commitlog_directory: /data/commitlog!' /var/lib/scylla/conf/scylla.yaml > /tmp/scylla.yaml",
         "sudo mv /tmp/scylla.yaml /var/lib/scylla/conf"
