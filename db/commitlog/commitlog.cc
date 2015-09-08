@@ -184,6 +184,7 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment();
     future<> clear();
+    future<> sync_all_segments();
 
     scollectd::registrations create_counters();
 
@@ -278,13 +279,16 @@ public:
         ++_segment_manager->totals.segments_created;
     }
     ~segment() {
-        logger.debug("Segment {} is no longer active and will be deleted now", *this);
-        ++_segment_manager->totals.segments_destroyed;
-        _segment_manager->totals.total_size_on_disk -= size_on_disk();
-        _segment_manager->totals.total_size -=
-                (size_on_disk() + _buffer.size());
-        ::unlink(
-                (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
+        if (is_clean()) {
+            logger.debug("Segment {} is no longer active and will be deleted now", *this);
+            ++_segment_manager->totals.segments_destroyed;
+            _segment_manager->totals.total_size_on_disk -= size_on_disk();
+            _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
+            ::unlink(
+                    (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
+        } else {
+            logger.warn("Segment {} is dirty and is left on disk.", *this);
+        }
     }
 
     bool must_sync() {
@@ -824,17 +828,25 @@ void db::commitlog::segment_manager::discard_unused_segments() {
     }
 }
 
+future<> db::commitlog::segment_manager::sync_all_segments() {
+    return parallel_for_each(_segments, [this](sseg_ptr s) {
+        return s->sync().then([](sseg_ptr) {});
+    });
+}
+
 /*
  * Sync all segments, then clear them out. To ensure all ops are done.
  * (Assumes you have barriered adding ops!)
+ * Only use from tests.
  */
 future<> db::commitlog::segment_manager::clear() {
     logger.debug("Clearing all segments");
     flush_segments(true);
-    return do_until([this]() {return _segments.empty();}, [this]() {
-        auto s = _segments.front();
-        _segments.erase(_segments.begin());
-        return s->sync().then([](sseg_ptr) {});
+    return sync_all_segments().then([this] {
+        for (auto& s : _segments) {
+            s->mark_clean();
+        }
+       _segments.clear();
     });
 }
 /**
@@ -962,6 +974,10 @@ void db::commitlog::remove_flush_handler(flush_handler_id id) {
 void db::commitlog::discard_completed_segments(const cf_id_type& id,
         const replay_position& pos) {
     _segment_manager->discard_completed_segments(id, pos);
+}
+
+future<> db::commitlog::sync_all_segments() {
+    return _segment_manager->sync_all_segments();
 }
 
 size_t db::commitlog::max_record_size() const {
