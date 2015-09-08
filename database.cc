@@ -1420,7 +1420,9 @@ database::stop() {
     return _compaction_manager.stop().then([this] {
         // try to ensure that CL has done disk flushing
         if (_commitlog != nullptr) {
-            return _commitlog->sync_all_segments();
+            return _commitlog->shutdown().then([this] {
+                return _commitlog->sync_all_segments();
+            });
         }
         return make_ready_future<>();
     }).then([this] {

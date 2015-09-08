@@ -10,7 +10,8 @@
 
 future<> init_storage_service(distributed<database>& db) {
     return service::init_storage_service(db).then([] {
-        engine().at_exit([] { return service::deinit_storage_service(); });
+        // #293 - do not stop anything
+        //engine().at_exit([] { return service::deinit_storage_service(); });
     });
 }
 
@@ -18,11 +19,13 @@ future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed
     const gms::inet_address listen(listen_address);
     // Init messaging_service
     return net::get_messaging_service().start(listen).then([]{
-        engine().at_exit([] { return net::get_messaging_service().stop(); });
+        // #293 - do not stop anything
+        //engine().at_exit([] { return net::get_messaging_service().stop(); });
     }).then([] {
         // Init failure_detector
         return gms::get_failure_detector().start().then([] {
-            engine().at_exit([]{ return gms::get_failure_detector().stop(); });
+            // #293 - do not stop anything
+            //engine().at_exit([]{ return gms::get_failure_detector().stop(); });
         });
     }).then([listen_address, seed_provider, cluster_name] {
         // Init gossiper
@@ -43,7 +46,8 @@ future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
-            engine().at_exit([]{ return gms::get_gossiper().stop(); });
+            // #293 - do not stop anything
+            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
         });
     });
 }
