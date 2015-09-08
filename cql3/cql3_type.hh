@@ -124,10 +124,6 @@ public:
     static thread_local shared_ptr<cql3_type> decimal;
     static thread_local shared_ptr<cql3_type> counter;
 
-#if 0
-        DECIMAL  (DecimalType.instance),
-        VARINT   (IntegerType.instance),
-#endif
     static const std::vector<shared_ptr<cql3_type>>& values();
 public:
     cql3_type(sstring name, data_type type, kind kind_)
