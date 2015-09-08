@@ -8,6 +8,11 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 
+//
+// NOTE: there functions are (temporarily)
+// duplicated in cql_test_env.cc
+// until proper shutdown is done.
+
 future<> init_storage_service(distributed<database>& db) {
     return service::init_storage_service(db).then([] {
         // #293 - do not stop anything
