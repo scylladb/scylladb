@@ -2448,7 +2448,7 @@ public:
 #endif
     future<sstring> get_operation_mode();
 
-    bool is_starting();
+    future<bool> is_starting();
 #if 0
     public String getDrainProgress()
     {

@@ -325,8 +325,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_starting.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_starting();
+    ss::is_starting.set(r, [](std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_starting().then([] (auto starting) {
+            return make_ready_future<json::json_return_type>(starting);
+        });
     });
 
     ss::get_drain_progress.set(r, [](std::unique_ptr<request> req) {

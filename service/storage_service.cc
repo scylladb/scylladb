@@ -1180,8 +1180,11 @@ future<sstring> storage_service::get_operation_mode() {
     });
 }
 
-bool storage_service::is_starting() {
-    return _operation_mode == storage_service::mode::STARTING;
+future<bool> storage_service::is_starting() {
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        return mode == storage_service::mode::STARTING;
+    });
 }
 
 future<bool> storage_service::is_gossip_running() {
