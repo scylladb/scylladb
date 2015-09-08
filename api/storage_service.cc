@@ -96,6 +96,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
@@ -103,6 +104,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_pending_range_to_endpoint_map.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<ss::maplist_mapper> res;
         return make_ready_future<json::json_return_type>(res);
@@ -110,6 +112,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::describe_ring_jmx.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
@@ -140,6 +143,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_natural_endpoints.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto key = req->get_query_param("key");
@@ -150,12 +154,14 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         std::vector<ss::snapshots> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto tag = req->get_query_param("tag");
         auto keyname = req->get_query_param("kn");
         auto column_family = req->get_query_param("cf");
@@ -164,6 +170,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto tag = req->get_query_param("tag");
         auto keyname = req->get_query_param("kn");
         return make_ready_future<json::json_return_type>(json_void());
@@ -171,6 +178,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -195,6 +203,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::force_keyspace_cleanup.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
@@ -202,6 +211,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::scrub.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto disable_snapshot = req->get_query_param("disable_snapshot");
@@ -211,6 +221,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::upgrade_sstables.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         auto exclude_current_version = req->get_query_param("exclude_current_version");
@@ -273,6 +284,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::force_terminate_all_repair_sessions.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
@@ -284,6 +296,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::move.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto new_token = req->get_query_param("new_token");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -298,16 +311,19 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_removal_status.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>("");
     });
 
     ss::force_remove_completion.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::set_logging_level.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto class_qualifier = req->get_query_param("class_qualifier");
         auto level = req->get_query_param("level");
         return make_ready_future<json::json_return_type>(json_void());
@@ -315,6 +331,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_logging_levels.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         std::vector<ss::mapper> res;
         return make_ready_future<json::json_return_type>(res);
     });
@@ -330,15 +347,18 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_drain_progress.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>("");
     });
 
     ss::drain.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
     ss::truncate.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
@@ -374,6 +394,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::stop_daemon.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
@@ -425,33 +446,39 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::get_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::is_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(false);
     });
 
     ss::set_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto value = req->get_query_param("value");
         return make_ready_future<json::json_return_type>(json_void());
     });
@@ -465,23 +492,27 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::bulk_load.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto path = req->param["path"];
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::bulk_load_async.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto path = req->param["path"];
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::reschedule_failed_deletions.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::load_new_ss_tables.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
@@ -489,28 +520,33 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::sample_key_range.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     ss::reset_local_schema.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::set_trace_probability.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto probability = req->get_query_param("probability");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_trace_probability.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
@@ -518,6 +554,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
         return make_ready_future<json::json_return_type>(json_void());
@@ -525,61 +562,72 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::deliver_hints.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto host = req->get_query_param("host");
         return make_ready_future<json::json_return_type>(json_void());
       });
 
     ss::get_cluster_name.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_partitioner_name.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::set_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto debug_threshold = req->get_query_param("debug_threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_tombstone_failure_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::set_tombstone_failure_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto debug_threshold = req->get_query_param("debug_threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_batch_size_failure_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::set_batch_size_failure_threshold.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto threshold = req->get_query_param("threshold");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::set_hinted_handoff_throttle_in_kb.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         auto debug_threshold = req->get_query_param("throttle");
         return make_ready_future<json::json_return_type>(json_void());
     });
 
     ss::get_metrics_load.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -589,11 +637,13 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_total_hints_in_progress.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     ss::get_total_hints.set(r, [](std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
