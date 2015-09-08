@@ -160,12 +160,23 @@ int main(int ac, char** av) {
             auto seed_provider= cfg->seed_provider();
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
-                engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+                // #293 - do not stop anything
+                // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             }).then([&db] {
                 return init_storage_service(db);
             }).then([&db, cfg] {
                 return db.start(std::move(*cfg)).then([&db] {
-                    engine().at_exit([&db] { return db.stop(); });
+                    engine().at_exit([&db] {
+
+                        // #293 - do not stop anything - not even db (for real)
+                        //return db.stop();
+                        // call stop on each db instance, but leave the shareded<database> pointers alive.
+                        return db.invoke_on_all([](auto& db) {
+                            return db.stop();
+                        }).then([] {
+                            ::_exit(3);
+                        });
+                    });
                 });
             }).then([listen_address, seed_provider, cluster_name] {
                 return init_ms_fd_gossiper(listen_address, seed_provider, cluster_name);
@@ -173,19 +184,23 @@ int main(int ac, char** av) {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
                 return proxy.start(std::ref(db)).then([&proxy] {
-                    engine().at_exit([&proxy] { return proxy.stop(); });
+                    // #293 - do not stop anything
+                    // engine().at_exit([&proxy] { return proxy.stop(); });
                 });
             }).then([&mm] {
                 return mm.start().then([&mm] {
-                    engine().at_exit([&mm] { return mm.stop(); });
+                    // #293 - do not stop anything
+                    // engine().at_exit([&mm] { return mm.stop(); });
                 });
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
-                    engine().at_exit([&qp] { return qp.stop(); });
+                    // #293 - do not stop anything
+                    // engine().at_exit([&qp] { return qp.stop(); });
                 });
             }).then([&qp] {
                 return db::get_batchlog_manager().start(std::ref(qp)).then([] {
-                   engine().at_exit([] { return db::get_batchlog_manager().stop(); });
+                    // #293 - do not stop anything
+                    // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
                 });
             }).then([&db, &dirs] {
                 return dirs.touch_and_lock(db.local().get_config().data_file_directories());
@@ -233,18 +248,20 @@ int main(int ac, char** av) {
                 auto ip = e.addresses[0].in.s_addr;
                 auto cserver = new distributed<transport::cql_server>;
                 cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
-                    engine().at_exit([server] {
-                        return server->stop();
-                    });
+                    // #293 - do not stop anything
+                    //engine().at_exit([server] {
+                    //    return server->stop();
+                    //});
                     server->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, cql_port});
                 }).then([rpc_address, cql_port] {
                     print("Starting listening for CQL clients on %s:%s...\n", rpc_address, cql_port);
                 });
                 auto tserver = new distributed<thrift_server>;
                 tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address, ip] () mutable {
-                    engine().at_exit([server] {
-                        return server->stop();
-                    });
+                    // #293 - do not stop anything
+                    //engine().at_exit([server] {
+                    //    return server->stop();
+                    //});
                     server->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, thrift_port});
                 }).then([rpc_address, thrift_port] {
                     print("Thrift server listening on %s:%s ...\n", rpc_address, thrift_port);
