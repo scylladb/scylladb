@@ -415,8 +415,6 @@ public:
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
 
-    future<> shutdown();
-
     future<> stop();
 
 public:

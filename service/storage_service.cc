@@ -1211,7 +1211,7 @@ future<> storage_service::stop_gossiping() {
         auto ss = get_local_storage_service().shared_from_this();
         if (ss->_initialized) {
             logger.warn("Stopping gossip by operator request");
-            return gms::get_local_gossiper().shutdown().then([ss] {
+            return gms::get_local_gossiper().stop().then([ss] {
                 ss->_initialized = false;
             });
         }
