@@ -1181,28 +1181,36 @@ bool storage_service::is_starting() {
     return _operation_mode == storage_service::mode::STARTING;
 }
 
-bool storage_service::is_gossip_running() {
-    return gms::get_local_gossiper().is_enabled();
+future<bool> storage_service::is_gossip_running() {
+    return smp::submit_to(0, [] {
+        return gms::get_local_gossiper().is_enabled();
+    });
 }
 
 future<> storage_service::start_gossiping() {
-    if (!_initialized) {
-        logger.warn("Starting gossip by operator request");
-        return gms::get_local_gossiper().start(get_generation_number()).then([this] {
-            _initialized = true;
-        });
-    }
-    return make_ready_future<>();
+    return smp::submit_to(0, [] {
+        auto ss = get_local_storage_service().shared_from_this();
+        if (!ss->_initialized) {
+            logger.warn("Starting gossip by operator request");
+            return gms::get_local_gossiper().start(get_generation_number()).then([ss] () mutable {
+                ss->_initialized = true;
+            });
+        }
+        return make_ready_future<>();
+    });
 }
 
 future<> storage_service::stop_gossiping() {
-    if (_initialized) {
-        logger.warn("Stopping gossip by operator request");
-        return gms::get_local_gossiper().shutdown().then([this] {
-            _initialized = false;
-        });
-    }
-    return make_ready_future<>();
+    return smp::submit_to(0, [this] {
+        auto ss = get_local_storage_service().shared_from_this();
+        if (ss->_initialized) {
+            logger.warn("Stopping gossip by operator request");
+            return gms::get_local_gossiper().shutdown().then([ss] {
+                ss->_initialized = false;
+            });
+        }
+        return make_ready_future<>();
+    });
 }
 
 future<> storage_service::start_rpc_server() {

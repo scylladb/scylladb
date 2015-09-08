@@ -46,8 +46,7 @@ namespace service {
  * This class will also maintain histograms of the load information
  * of other nodes in the cluster.
  */
-class storage_service : public gms::i_endpoint_state_change_subscriber
-{
+class storage_service : public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
     using token = dht::token;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
@@ -199,7 +198,7 @@ public:
     future<> start_gossiping();
 
     // should only be called via JMX
-    bool is_gossip_running();
+    future<bool> is_gossip_running();
 
     // should only be called via JMX
     future<> start_rpc_server();
