@@ -142,4 +142,3 @@ large_bitset::save(IntegerIterator out, size_t position, size_t n) {
     }
     return out;
 }
-
