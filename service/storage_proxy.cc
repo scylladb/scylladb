@@ -991,9 +991,21 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
             return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
                 std::move(forward), my_address, engine().cpu_id(), response_id);
         }
-    }).finally([mptr] {
+    }).handle_exception([mptr] (std::exception_ptr eptr) {
         // make mutation alive until it is sent or processed locally, otherwise it
         // may disappear if write timeouts before this future is ready
+        try {
+            std::rethrow_exception(eptr);
+        } catch(rpc::closed_error&) {
+            // ignore, disconnect will be logged by gossiper
+        } catch(seastar::gate_closed_exception&) {
+            // may happen during shutdown, ignore it
+        } catch(std::exception& e) {
+            logger.error("exception during write: {}", e.what());
+        } catch(...) {
+            logger.error("unknown exception during write");
+        }
+
     });
 }
 
@@ -2446,12 +2458,16 @@ void storage_proxy::init_messaging_service() {
                 return when_all(
                     p->mutate_locally(m).then([reply_to, shard, response_id] () mutable {
                         auto& ms = net::get_local_messaging_service();
-                        ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id);
+                        ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
+                            f.ignore_ready_future();
+                        });
                         // return void, no need to wait for send to complete
                     }),
                     parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
                         auto& ms = net::get_local_messaging_service();
-                        return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id);
+                        return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                            f.ignore_ready_future();
+                        });
                     })
                 );
             }).then_wrapped([] (auto&& f) {
