@@ -12,11 +12,12 @@ if [ ! -f variables.json ]; then
     exit 1
 fi
 
-if [ ! -f files/scylla-server.rpm ]; then
+if [ ! -f files/scylla-server.rpm ] || [ ! -f files/scylla-server-debuginfo.rpm ]; then
     cd ../../
     dist/redhat/build_rpm.sh
     RPM=`ls build/rpms/scylla-server-*.x86_64.rpm|grep -v debuginfo`
     cp $RPM dist/ami/files/scylla-server.rpm
+    cp build/rpms/scylla-server-debuginfo-*.x86_64.rpm dist/ami/files/scylla-server-debuginfo.rpm
     cd -
 fi
 
