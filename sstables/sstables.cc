@@ -20,6 +20,7 @@
 #include "compress.hh"
 #include "unimplemented.hh"
 #include "index_reader.hh"
+#include "memtable.hh"
 #include <boost/algorithm/string.hpp>
 #include <regex>
 #include <core/align.hh>

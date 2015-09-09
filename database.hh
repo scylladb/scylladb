@@ -78,7 +78,7 @@ void make(database& db, bool durable, bool volatile_testing_only);
 class replay_position_reordered_exception : public std::exception {};
 
 using memtable_list = std::vector<lw_shared_ptr<memtable>>;
-using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
+using sstable_list = sstables::sstable_list;
 
 class column_family {
 public:

@@ -18,7 +18,6 @@
 #include "core/enum.hh"
 #include "compress.hh"
 #include "row.hh"
-#include "database.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation.hh"
@@ -28,6 +27,7 @@
 #include "metadata_collector.hh"
 #include "filter.hh"
 #include "exceptions.hh"
+#include "mutation_reader.hh"
 
 namespace sstables {
 
@@ -436,6 +436,7 @@ public:
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
+using sstable_list = std::map<unsigned long, shared_sstable>;
 
 struct entry_descriptor {
     sstring ks;
