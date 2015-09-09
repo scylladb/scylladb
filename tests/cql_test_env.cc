@@ -16,6 +16,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
+#include "tmpdir.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
@@ -84,12 +85,13 @@ future<> init_once(shared_ptr<distributed<database>> db) {
     }
 }
 
-class in_memory_cql_env : public cql_test_env {
+class single_node_cql_env : public cql_test_env {
 public:
     static auto constexpr ks_name = "ks";
 private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<distributed<cql3::query_processor>> _qp;
+    lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -109,7 +111,7 @@ private:
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
-    in_memory_cql_env()
+    single_node_cql_env()
     { }
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -235,8 +237,9 @@ public:
             auto db = ::make_shared<distributed<database>>();
             init_once(db).get();
             auto cfg = make_lw_shared<db::config>();
-            cfg->data_file_directories() = {};
-            cfg->volatile_system_keyspace_for_testing() = true;
+            _data_dir = make_lw_shared<tmpdir>();
+            cfg->data_file_directories() = { _data_dir->path };
+            boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
             db->start(std::move(*cfg)).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
@@ -285,7 +288,7 @@ public:
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return seastar::async([] {
-        auto env = ::make_shared<in_memory_cql_env>();
+        auto env = ::make_shared<single_node_cql_env>();
         env->start().get();
         return dynamic_pointer_cast<cql_test_env>(env);
     });
