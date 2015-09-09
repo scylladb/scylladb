@@ -212,13 +212,21 @@ public:
         _marked_for_deletion = true;
     }
 
+    bool marked_for_deletion() const {
+        return _marked_for_deletion;
+    }
+
     void add_ancestor(int generation) {
         _collector.add_ancestor(generation);
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
     bool is_shared() {
-        return true; // FIXME: set to false for sstables created by compaction process
+        return _shared;
+    }
+
+    void set_unshared() {
+        _shared = false;
     }
 
     uint64_t data_size();
@@ -238,6 +246,7 @@ public:
     const sstring get_filename() {
         return filename(component_type::Data);
     }
+    sstring toc_filename() const;
 
     metadata_collector& get_metadata_collector() {
         return _collector;
@@ -260,12 +269,15 @@ private:
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
     void prepare_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema);
+    static future<> shared_remove_by_toc_name(sstring toc_name, bool shared);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
+    static thread_local std::unordered_map<sstring, unsigned> _shards_agreeing_to_remove_sstable;
 
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
+    bool _shared = true;  // across shards; safe default
     compression _compression;
     utils::filter_ptr _filter;
     summary _summary;
@@ -296,7 +308,7 @@ private:
 
     const bool has_component(component_type f);
 
-    const sstring filename(component_type f);
+    const sstring filename(component_type f) const;
     const sstring temporary_filename(component_type f);
 
     template <sstable::component_type Type, typename T>

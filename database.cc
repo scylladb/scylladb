@@ -459,6 +459,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         sstables::sstable::version_types::ka,
         sstables::sstable::format_types::big);
 
+    newtab->set_unshared();
     dblog.debug("Flushing to {}", newtab->get_filename());
     return newtab->write_components(*old).then([this, newtab, old] {
         return newtab->load();
@@ -544,6 +545,7 @@ column_family::compact_sstables(std::vector<sstables::shared_sstable> sstables) 
             auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
                     sstables::sstable::version_types::ka,
                     sstables::sstable::format_types::big);
+            sst->set_unshared();
             new_tables->emplace_back(gen, sst);
             return sst;
     };
