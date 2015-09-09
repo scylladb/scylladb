@@ -675,6 +675,7 @@ future<> column_family::populate(sstring sstdir) {
     enum class status {
         has_some_file,
         has_toc_file,
+        has_temporary_toc_file,
     };
 
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
@@ -685,13 +686,19 @@ future<> column_family::populate(sstring sstdir) {
                 if (verifier->at(entry.generation) == status::has_toc_file) {
                     if (entry.component == sstables::sstable::component_type::TOC) {
                         throw sstables::malformed_sstable_exception("Invalid State encountered. TOC file already processed");
+                    } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
+                        throw sstables::malformed_sstable_exception("Invalid State encountered. Temporary TOC file found after TOC file was processed");
                     }
                 } else if (entry.component == sstables::sstable::component_type::TOC) {
                     verifier->at(entry.generation) = status::has_toc_file;
+                } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
+                    verifier->at(entry.generation) = status::has_temporary_toc_file;
                 }
             } else {
                 if (entry.component == sstables::sstable::component_type::TOC) {
                     verifier->emplace(entry.generation, status::has_toc_file);
+                } else if (entry.component == sstables::sstable::component_type::TemporaryTOC) {
+                    verifier->emplace(entry.generation, status::has_temporary_toc_file);
                 } else {
                     verifier->emplace(entry.generation, status::has_some_file);
                 }
@@ -699,7 +706,10 @@ future<> column_family::populate(sstring sstdir) {
         });
     }).then([verifier, sstdir] {
         return parallel_for_each(*verifier, [sstdir = std::move(sstdir)] (auto v) {
-            if (v.second != status::has_toc_file) {
+            if (v.second == status::has_temporary_toc_file) {
+                // FIXME: should we delete sstable components of this generation with temporary TOC file?
+                throw sstables::malformed_sstable_exception(sprint("At directory: %s: temporary TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
+            } else if (v.second != status::has_toc_file) {
                 throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
             }
             return make_ready_future<>();
