@@ -25,6 +25,7 @@ cache_tracker::cache_tracker() {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
+            --_partitions;
             return memory::reclaiming_result::reclaimed_something;
         });
     });
@@ -57,6 +58,11 @@ cache_tracker::setup_collectd() {
                 , "total_operations", "misses")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _misses)
         ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "objects", "partitions")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _partitions)
+        ),
     }));
 }
 
@@ -64,6 +70,7 @@ void cache_tracker::clear() {
     with_allocator(_region.allocator(), [this] {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
+    _partitions = 0;
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -74,7 +81,12 @@ void cache_tracker::touch(cache_entry& e) {
 
 void cache_tracker::insert(cache_entry& entry) {
     ++_misses;
+    ++_partitions;
     _lru.push_front(entry);
+}
+
+void cache_tracker::on_erase() {
+    --_partitions;
 }
 
 allocation_strategy& cache_tracker::allocator() {
@@ -140,7 +152,10 @@ row_cache::make_reader(const query::partition_range& range) {
 
 row_cache::~row_cache() {
     with_allocator(_tracker.allocator(), [this] {
-        _partitions.clear_and_dispose(current_deleter<cache_entry>());
+        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
+        });
     });
 }
 
@@ -202,6 +217,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 auto cache_i = _partitions.find(i->key(), cmp);
                 if (cache_i != _partitions.end()) {
                     _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
+                    _tracker.on_erase();
                 }
                 throw;
             }

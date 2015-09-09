@@ -88,6 +88,7 @@ public:
 private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
+    uint64_t _partitions = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
@@ -99,6 +100,7 @@ public:
     void clear();
     void touch(cache_entry&);
     void insert(cache_entry&);
+    void on_erase();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
