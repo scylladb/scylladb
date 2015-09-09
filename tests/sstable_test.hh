@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sstables/sstables.hh"
+#include "database.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
 #include "core/thread.hh"
