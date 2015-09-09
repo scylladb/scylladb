@@ -23,23 +23,27 @@ static future<json::json_return_type> get_cm_stats(http_context& ctx,
 void set_compaction_manager(http_context& ctx, routes& r) {
     cm::get_compactions.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         std::vector<cm::jsonmap> map;
         return make_ready_future<json::json_return_type>(map);
     });
 
     cm::get_compaction_summary.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>("");
     });
 
     cm::stop_compaction.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>("");
     });
 
@@ -53,11 +57,13 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
     cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
     cm::get_bytes_compacted.set(r, [] (std::unique_ptr<request> req) {
         //TBD
+        unimplemented();
         return make_ready_future<json::json_return_type>(0);
     });
 
