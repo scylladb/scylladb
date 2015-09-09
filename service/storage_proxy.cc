@@ -1224,7 +1224,18 @@ public:
     future<> done() {
         return _done_promise.get_future();
     }
-    virtual void error(gms::inet_address ep, sstring why) {
+    virtual void error(gms::inet_address ep, std::exception_ptr eptr) {
+        sstring why;
+        try {
+            std::rethrow_exception(eptr);
+        } catch (rpc::closed_error&) {
+            return; // do not report connection closed exception, gossiper does that
+        } catch(std::exception& e) {
+            why = e.what();
+        } catch(...) {
+            why = "Unknown exception";
+        }
+
         // do nothing other than log for now, request will timeout eventually
         logger.error("Exception when communicating with {}: {}", ep, why);
     }
@@ -1430,16 +1441,6 @@ public:
     virtual ~abstract_read_executor() {};
 
 protected:
-    static sstring error_sstring(std::exception_ptr eptr) {
-        try {
-            std::rethrow_exception(eptr);
-        } catch(std::exception& e) {
-            return sstring(e.what());
-        } catch(...) {
-            return sstring("Unknown exception");
-        }
-    }
-
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
         if (is_me(ep)) {
             return _proxy->query_mutations_locally(cmd, _partition_range);
@@ -1474,7 +1475,7 @@ protected:
                 try {
                     resolver->add_mutate_data(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep, error_sstring(std::current_exception()));
+                    resolver->error(ep, std::current_exception());
                 }
             });
         });
@@ -1485,7 +1486,7 @@ protected:
                 try {
                     resolver->add_data(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep, error_sstring(std::current_exception()));
+                    resolver->error(ep, std::current_exception());
                 }
             });
         });
@@ -1496,7 +1497,7 @@ protected:
                 try {
                     resolver->add_digest(ep, f.get0());
                 } catch(...) {
-                    resolver->error(ep, error_sstring(std::current_exception()));
+                    resolver->error(ep, std::current_exception());
                 }
             });
         });
