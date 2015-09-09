@@ -124,6 +124,10 @@ private:
         lw_shared_ptr<query::read_command> cmd,
         std::vector<query::partition_range>&& partition_ranges,
         db::consistency_level cl);
+    future<std::vector<storage_proxy::response_id_type>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
+    future<> mutate_begin(const std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl, const sstring& local_dc);
+    future<> mutate_end(future<> mutate_result, utils::latency_counter);
+
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();
