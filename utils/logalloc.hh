@@ -265,8 +265,8 @@ public:
     //
     template<typename Func>
     auto operator()(logalloc::region& r, Func&& func) {
-        auto _prev_lsa_reserve = _lsa_reserve;
-        auto _prev_std_reserve = _std_reserve;
+        auto prev_lsa_reserve = _lsa_reserve;
+        auto prev_std_reserve = _std_reserve;
         try {
             while (true) {
                 assert(r.reclaiming_enabled());
@@ -282,8 +282,8 @@ public:
         } catch (const std::bad_alloc&) {
             // roll-back limits to protect against pathological requests
             // preventing future requests from succeeding.
-            _lsa_reserve = _prev_lsa_reserve;
-            _std_reserve = _prev_std_reserve;
+            _lsa_reserve = prev_lsa_reserve;
+            _std_reserve = prev_std_reserve;
             throw;
         }
     }
