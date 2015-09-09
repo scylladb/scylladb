@@ -881,8 +881,13 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             std::vector<response_id_type> ids;
 
             ids.reserve(_mutations.size());
-            for (auto& m : _mutations) {
-                ids.emplace_back(_p.create_write_response_handler(m, _cl, db::write_type::BATCH));
+            try {
+                for (auto& m : _mutations) {
+                    ids.emplace_back(_p.create_write_response_handler(m, _cl, db::write_type::BATCH));
+                }
+            } catch(...) {
+                boost::for_each(ids, std::bind(&storage_proxy::remove_response_handler, &_p, std::placeholders::_1));
+                throw;
             }
 
             return sync_write_to_batchlog().then([this, ids = std::move(ids)] {
