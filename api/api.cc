@@ -19,12 +19,25 @@
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 #include "hinted_handoff.hh"
+#include "http/exception.hh"
+
 namespace api {
+
+static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
+    try {
+        std::rethrow_exception(eptr);
+    } catch (const no_such_keyspace& ex) {
+        throw bad_param_exception(ex.what());
+    }
+    // We never going to get here
+    return std::make_unique<reply>();
+}
 
 future<> set_server(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        r.register_exeption_handler(exception_reply);
         httpd::directory_handler* dir = new httpd::directory_handler(ctx.api_dir,
                 new content_replace("html"));
         r.put(GET, "/ui", new httpd::file_handler(ctx.api_dir + "/index.html",
