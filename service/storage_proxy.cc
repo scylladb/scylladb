@@ -753,9 +753,9 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             return make_exception_future<>(exp);
         });
     }).then_wrapped([this, p = shared_from_this(), lc] (future<>&& f) mutable {
+        _stats.write.mark(lc.stop().latency_in_nano());
         try {
             f.get();
-            _stats.write.mark(lc.stop().latency_in_nano());
             return make_ready_future<>();
         } catch (no_such_keyspace& ex) {
             logger.trace("Write to non existing keyspace: {}", ex.what());
