@@ -6,6 +6,7 @@
 
 #include "api.hh"
 #include "api/api-doc/column_family.json.hh"
+#include "database.hh"
 
 namespace api {
 
@@ -52,5 +53,10 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, I init,
         return make_ready_future<json::json_return_type>(res);
     });
 }
+future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
+        int64_t column_family::stats::*f);
+
+future<json::json_return_type>  get_cf_stats(http_context& ctx,
+        int64_t column_family::stats::*f);
 
 }
