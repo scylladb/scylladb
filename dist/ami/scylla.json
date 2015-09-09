@@ -28,6 +28,7 @@
         "sudo dnf install -y /home/fedora/scylla-server.rpm",
         "sudo dnf install -y /home/fedora/scylla-server-debuginfo.rpm",
         "sudo dnf install -y mdadm xfsprogs",
+        "sudo cp /home/fedora/coredump.conf /etc/systemd/coredump.conf",
         "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",
         "sudo mv /home/fedora/scylla-setup.sh /usr/lib/scylla",
         "sudo chmod a+rx /usr/lib/scylla/scylla-setup.sh",
