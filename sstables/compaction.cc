@@ -34,6 +34,7 @@
 
 #include "sstables.hh"
 #include "compaction.hh"
+#include "database.hh"
 #include "compaction_strategy.hh"
 #include "mutation_reader.hh"
 #include "schema.hh"

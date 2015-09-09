@@ -21,6 +21,7 @@
 #include "unimplemented.hh"
 #include "index_reader.hh"
 #include "remove.hh"
+#include "memtable.hh"
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <regex>

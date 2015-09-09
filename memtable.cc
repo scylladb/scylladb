@@ -4,6 +4,7 @@
 
 #include "memtable.hh"
 #include "frozen_mutation.hh"
+#include "sstable_mutation_readers.hh"
 
 namespace stdx = std::experimental;
 
@@ -87,6 +88,8 @@ class scanning_reader final : public mutation_reader::impl {
     memtable::partitions_type::const_iterator _i;
     memtable::partitions_type::const_iterator _end;
     uint64_t _last_reclaim_counter;
+    stdx::optional<query::partition_range> _delegate_range;
+    mutation_reader _delegate;
 private:
     memtable::partitions_type::const_iterator lookup_end() {
         auto cmp = partition_entry::compare(_memtable->_schema);
@@ -123,6 +126,21 @@ public:
     { }
 
     virtual future<mutation_opt> operator()() override {
+        if (_delegate_range) {
+            return _delegate();
+        }
+
+        // We cannot run concurrently with row_cache::update().
+        if (_memtable->is_flushed()) {
+            // FIXME: Use cache. See column_family::make_reader().
+            _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
+            _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
+                _memtable->_sstable, _memtable->_schema, *_delegate_range);
+            _memtable = {};
+            _last = {};
+            return _delegate();
+        }
+
         logalloc::reclaim_lock _(_memtable->_region);
         update_iterators();
         if (_i == _end) {
@@ -204,4 +222,12 @@ partition_entry::partition_entry(partition_entry&& o) noexcept
     using container_type = memtable::partitions_type;
     container_type::node_algorithms::replace_node(o._link.this_ptr(), _link.this_ptr());
     container_type::node_algorithms::init(o._link.this_ptr());
+}
+
+void memtable::mark_flushed(lw_shared_ptr<sstables::sstable> sst) {
+    _sstable = std::move(sst);
+}
+
+bool memtable::is_flushed() const {
+    return bool(_sstable);
 }
