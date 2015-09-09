@@ -1231,7 +1231,6 @@ future<> storage_service::stop_rpc_server() {
 }
 
 bool storage_service::is_rpc_server_running() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if ((daemon == null) || (daemon.thriftServer == null))
     {
@@ -1239,6 +1238,10 @@ bool storage_service::is_rpc_server_running() {
     }
     return daemon.thriftServer.isRunning();
 #endif
+    //FIXME
+    // We assude the rpc server is running.
+    // it will be changed when the API to start and stop
+    // it will be added.
     return true;
 }
 
@@ -1276,7 +1279,6 @@ future<> storage_service::stop_native_transport() {
 }
 
 bool storage_service::is_native_transport_running() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
     if ((daemon == null) || (daemon.nativeServer == null))
     {
@@ -1284,7 +1286,11 @@ bool storage_service::is_native_transport_running() {
     }
     return daemon.nativeServer.isRunning();
 #endif
-    return false;
+    // FIXME
+    // We assume the native transport is running
+    // It will be change when the API to start and stop
+    // will be added.
+    return true;
 }
 
 future<> storage_service::decommission() {
@@ -1545,7 +1551,10 @@ future<> storage_service::rebuild(sstring source_dc) {
 }
 
 int32_t storage_service::get_exception_count() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
+    // FIXME
+    // We return 0 for no exceptions, it should probably be
+    // replaced by some general exception handling that would count
+    // the unhandled exceptions.
     //return (int)StorageMetrics.exceptions.count();
     return 0;
 }
