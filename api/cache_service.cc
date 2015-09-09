@@ -130,37 +130,49 @@ void set_cache_service(http_context& ctx, routes& r) {
 
     cs::get_key_capacity.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for capacity is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_key_hits.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for hits is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_key_requests.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for request is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_key_hit_rate.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for rate is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_key_size.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for size is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_key_entries.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support keys cache,
+        // so currently returning a 0 for key entries is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -205,37 +217,49 @@ void set_cache_service(http_context& ctx, routes& r) {
 
     cs::get_counter_capacity.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for rate is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_counter_hits.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for hits is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_counter_requests.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for hits is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_counter_hit_rate.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for rate is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_counter_size.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for size is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
     cs::get_counter_entries.set(r, [] (std::unique_ptr<request> req) {
         // TBD
-        unimplemented();
+        // FIXME
+        // we don't support counter cache,
+        // so currently returning a 0 for entries is ok
         return make_ready_future<json::json_return_type>(0);
     });
 }
