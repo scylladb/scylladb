@@ -109,11 +109,7 @@ private:
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
-    in_memory_cql_env(
-        ::shared_ptr<distributed<database>> db,
-        ::shared_ptr<distributed<cql3::query_processor>> qp)
-            : _db(db)
-            , _qp(qp)
+    in_memory_cql_env()
     { }
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -147,7 +143,7 @@ public:
         assert(bool(prepared));
         auto stmt = prepared->statement;
         assert(stmt->get_bound_terms() == values.size());
-        
+
         auto options = ::make_shared<cql3::query_options>(std::move(values));
         options->prepare(prepared->bound_names);
 
@@ -234,11 +230,39 @@ public:
     }
 
     future<> start() {
-        return _core_local.start().then([this] () {
+        return seastar::async([this] {
+            locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+            auto db = ::make_shared<distributed<database>>();
+            init_once(db).get();
+            auto cfg = make_lw_shared<db::config>();
+            cfg->data_file_directories() = {};
+            cfg->volatile_system_keyspace_for_testing() = true;
+            db->start(std::move(*cfg)).get();
+
+            distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
+            distributed<service::migration_manager>& mm = service::get_migration_manager();
+            distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
+
+            auto qp = ::make_shared<distributed<cql3::query_processor>>();
+            proxy.start(std::ref(*db)).get();
+            mm.start().get();
+            qp->start(std::ref(proxy), std::ref(*db)).get();
+
+            auto& ss = service::get_local_storage_service();
+            static bool storage_service_started = false;
+            if (!storage_service_started) {
+                storage_service_started = true;
+                ss.init_server().get();
+            }
+
+            bm.start(std::ref(*qp)).get();
+
+            _core_local.start().get();
+            _db = std::move(db);
+            _qp = std::move(qp);
+
             auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
-            return execute_cql(query).discard_result().then([] {
-                return make_ready_future<>();
-            });
+            execute_cql(query).get();
         });
     }
 
@@ -260,39 +284,10 @@ public:
 };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
-    return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
-        auto db = ::make_shared<distributed<database>>();
-        return init_once(db).then([db] {
-            return seastar::async([db] {
-                auto cfg = make_lw_shared<db::config>();
-                cfg->data_file_directories() = {};
-                cfg->volatile_system_keyspace_for_testing() = true;
-                db->start(std::move(*cfg)).get();
-
-                distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
-                distributed<service::migration_manager>& mm = service::get_migration_manager();
-                distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
-
-                auto qp = ::make_shared<distributed<cql3::query_processor>>();
-                proxy.start(std::ref(*db)).get();
-                mm.start().get();
-                qp->start(std::ref(proxy), std::ref(*db)).get();
-
-                auto& ss = service::get_local_storage_service();
-                static bool storage_service_started = false;
-                if (!storage_service_started) {
-                    storage_service_started = true;
-                    ss.init_server().get();
-                }
-
-                bm.start(std::ref(*qp));
-
-                auto env = ::make_shared<in_memory_cql_env>(db, qp);
-                env->start().get();
-
-                return dynamic_pointer_cast<cql_test_env>(env);
-            });
-        });
+    return seastar::async([] {
+        auto env = ::make_shared<in_memory_cql_env>();
+        env->start().get();
+        return dynamic_pointer_cast<cql_test_env>(env);
     });
 }
 
