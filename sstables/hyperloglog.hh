@@ -168,13 +168,13 @@ public:
 
     temporary_buffer<uint8_t> get_bytes() {
         // FIXME: add support to SPARSE format.
-        static constexpr int VERSION = 2;
+        static constexpr int version = 2;
 
         size_t s = get_bytes_size();
         temporary_buffer<uint8_t> bytes(s);
         size_t offset = 0;
         // write version
-        *unaligned_cast<int*>(bytes.get_write() + offset) = htonl(-VERSION);
+        *unaligned_cast<int*>(bytes.get_write() + offset) = htonl(-version);
         offset += sizeof(int);
 
         // write register width
