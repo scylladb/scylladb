@@ -77,7 +77,7 @@ large_bitset::load(IntegerIterator start, IntegerIterator finish, size_t positio
         idx %= bits_per_block();
         auto idx2 = idx / bits_per_int();
         while (start != finish) {
-            auto now = std::min<size_t>(ints_per_block() - idx1, std::distance(start, finish));
+            auto now = std::min<size_t>(ints_per_block() - idx2, std::distance(start, finish));
             std::copy_n(start, now, _storage[idx1].get() + idx2);
             start += now;
             ++idx1;
@@ -114,7 +114,7 @@ large_bitset::save(IntegerIterator out, size_t position, size_t n) {
         auto idx2 = idx / bits_per_int();
         auto n_ints = n / bits_per_int();
         while (n_ints) {
-            auto now = std::min(ints_per_block() - idx1, n_ints);
+            auto now = std::min(ints_per_block() - idx2, n_ints);
             out = std::copy_n(_storage[idx1].get() + idx2, now, out);
             ++idx1;
             idx2 = 0;
