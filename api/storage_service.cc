@@ -12,6 +12,7 @@
 #include "http/exception.hh"
 #include "repair/repair.hh"
 #include "locator/snitch_base.hh"
+#include "column_family.hh"
 
 namespace api {
 
@@ -121,8 +122,8 @@ void set_storage_service(http_context& ctx, routes& r) {
                 get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
     });
 
-    ss::get_load.set(r, [](const_req req) {
-        return service::get_local_storage_service().get_load();
+    ss::get_load.set(r, [&ctx](std::unique_ptr<request> req) {
+        return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
     });
 
     ss::get_load_map.set(r, [](const_req req) {
