@@ -12,6 +12,7 @@
 #include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
 #include "utils/logalloc.hh"
+#include "sstables/sstables.hh"
 
 class frozen_mutation;
 
@@ -77,6 +78,7 @@ private:
     mutable logalloc::region _region;
     partitions_type partitions;
     db::replay_position _replay_position;
+    lw_shared_ptr<sstables::sstable> _sstable;
     void update(const db::replay_position&);
     friend class row_cache;
 private:
@@ -104,6 +106,9 @@ public:
     mutation_source as_data_source();
 
     bool empty() const { return partitions.empty(); }
+    void mark_flushed(lw_shared_ptr<sstables::sstable> sst);
+    bool is_flushed() const;
+
     const db::replay_position& replay_position() const {
         return _replay_position;
     }

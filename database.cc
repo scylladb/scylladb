@@ -227,6 +227,26 @@ column_family::make_reader(const query::partition_range& range) const {
     std::vector<mutation_reader> readers;
     readers.reserve(_memtables->size() + _sstables->size());
 
+    // We're assuming that cache and memtables are both read atomically
+    // for single-key queries, so we don't need to special case memtable
+    // undergoing a move to cache. At any given point in time between
+    // deferring points the sum of data in memtable and cache is coherent. If
+    // single-key queries for each data source were performed across deferring
+    // points, it would be possible that partitions which are ahead of the
+    // memtable cursor would be placed behind the cache cursor, resulting in
+    // those partitions being missing in the combined reader.
+    //
+    // We need to handle this in range queries though, as they are always
+    // deferring. scanning_reader from memtable.cc is falling back to reading
+    // the sstable when memtable is flushed. After memtable is moved to cache,
+    // new readers will no longer use the old memtable, but until then
+    // performance may suffer. We should fix this when we add support for
+    // range queries in cache, so that scans can always be satisfied form
+    // memtable and cache only, as long as data is not evicted.
+    //
+    // https://github.com/cloudius-systems/urchin/issues/309
+    // https://github.com/cloudius-systems/urchin/issues/185
+
     for (auto&& mt : *_memtables) {
         readers.emplace_back(mt->make_reader(range));
     }
@@ -468,6 +488,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         // memtable's data after moving to cache can be evicted at any time.
         auto old_sstables = _sstables;
         add_sstable(newtab);
+        old->mark_flushed(newtab);
         return update_cache(*old, std::move(old_sstables));
     }).then_wrapped([this, old] (future<> ret) {
         try {
