@@ -9,8 +9,9 @@ blockdev --setra 65536 /dev/md0
 mkfs.xfs /dev/md0 -f
 echo "DEVICE /dev/xvdb /dev/xvdc" > /etc/mdadm.conf
 mdadm --detail --scan >> /etc/mdadm.conf 
+UUID=`blkid /dev/md0 | awk '{print $2}'`
 mkdir /data
-echo "/dev/md0 /data xfs noatime 0 0" >> /etc/fstab
+echo "$UUID /data xfs noatime 0 0" >> /etc/fstab
 mount /data
 mkdir -p /data/data
 mkdir -p /data/commitlog
