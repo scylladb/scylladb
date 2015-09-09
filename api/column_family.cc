@@ -45,14 +45,14 @@ future<> foreach_column_family(http_context& ctx, const sstring& name, function<
     });
 }
 
-static future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
+future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
         int64_t column_family::stats::*f) {
     return map_reduce_cf(ctx, name, 0, [f](const column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats(http_context& ctx,
+future<json::json_return_type>  get_cf_stats(http_context& ctx,
         int64_t column_family::stats::*f) {
     return map_reduce_cf(ctx, 0, [f](const column_family& cf) {
         return cf.get_stats().*f;
