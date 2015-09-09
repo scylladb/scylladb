@@ -34,6 +34,7 @@
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
+#include "sstable_mutation_readers.hh"
 
 using namespace std::chrono_literals;
 
@@ -96,20 +97,6 @@ static
 bool belongs_to_current_shard(const mutation& m) {
     return dht::shard_of(m.token()) == engine().cpu_id();
 }
-
-class sstable_range_wrapping_reader final : public mutation_reader::impl {
-    lw_shared_ptr<sstables::sstable> _sst;
-    sstables::mutation_reader _smr;
-public:
-    sstable_range_wrapping_reader(lw_shared_ptr<sstables::sstable> sst,
-            schema_ptr s, const query::partition_range& pr)
-            : _sst(sst)
-            , _smr(sst->read_range_rows(std::move(s), pr)) {
-    }
-    virtual future<mutation_opt> operator()() override {
-        return _smr.read();
-    }
-};
 
 class range_sstable_reader final : public mutation_reader::impl {
     const query::partition_range& _pr;
