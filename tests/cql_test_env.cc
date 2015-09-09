@@ -23,6 +23,67 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 
+// TODO : remove once shutdown is ok.
+// Broke these test when doing horror patch for #293
+// Simpler to copy the code from init.cc than trying to do clever parameterization
+// and whatnot.
+static future<> tst_init_storage_service(distributed<database>& db) {
+    return service::init_storage_service(db).then([] {
+        engine().at_exit([] { return service::deinit_storage_service(); });
+    });
+}
+
+static future<> tst_init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
+    const gms::inet_address listen(listen_address);
+    // Init messaging_service
+    return net::get_messaging_service().start(listen).then([]{
+        engine().at_exit([] { return net::get_messaging_service().stop(); });
+    }).then([] {
+        // Init failure_detector
+        return gms::get_failure_detector().start().then([] {
+            engine().at_exit([]{ return gms::get_failure_detector().stop(); });
+        });
+    }).then([listen_address, seed_provider, cluster_name] {
+        // Init gossiper
+        std::set<gms::inet_address> seeds;
+        if (seed_provider.parameters.count("seeds") > 0) {
+            size_t begin = 0;
+            size_t next = 0;
+            sstring seeds_str = seed_provider.parameters.find("seeds")->second;
+            while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
+                seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+                begin = next+1;
+            }
+        }
+        if (seeds.empty()) {
+            seeds.emplace(gms::inet_address("127.0.0.1"));
+        }
+        return gms::get_gossiper().start().then([seeds, cluster_name] {
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.set_seeds(seeds);
+            gossiper.set_cluster_name(cluster_name);
+            engine().at_exit([]{ return gms::get_gossiper().stop(); });
+        });
+    });
+}
+// END TODO
+
+future<> init_once(shared_ptr<distributed<database>> db) {
+    static bool done = false;
+    if (!done) {
+        done = true;
+        // FIXME: we leak db, since we're initializing the global storage_service with it.
+        new shared_ptr<distributed<database>>(db);
+        return tst_init_storage_service(*db).then([] {
+            return tst_init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
+        }).then([] {
+            return db::system_keyspace::init_local_cache();
+        });
+    } else {
+        return make_ready_future();
+    }
+}
+
 class in_memory_cql_env : public cql_test_env {
 public:
     static auto constexpr ks_name = "ks";
@@ -197,67 +258,6 @@ public:
         });
     }
 };
-
-// TODO : remove once shutdown is ok.
-// Broke these test when doing horror patch for #293
-// Simpler to copy the code from init.cc than trying to do clever parameterization
-// and whatnot.
-static future<> tst_init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db).then([] {
-        engine().at_exit([] { return service::deinit_storage_service(); });
-    });
-}
-
-static future<> tst_init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    const gms::inet_address listen(listen_address);
-    // Init messaging_service
-    return net::get_messaging_service().start(listen).then([]{
-        engine().at_exit([] { return net::get_messaging_service().stop(); });
-    }).then([] {
-        // Init failure_detector
-        return gms::get_failure_detector().start().then([] {
-            engine().at_exit([]{ return gms::get_failure_detector().stop(); });
-        });
-    }).then([listen_address, seed_provider, cluster_name] {
-        // Init gossiper
-        std::set<gms::inet_address> seeds;
-        if (seed_provider.parameters.count("seeds") > 0) {
-            size_t begin = 0;
-            size_t next = 0;
-            sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-            while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-                begin = next+1;
-            }
-        }
-        if (seeds.empty()) {
-            seeds.emplace(gms::inet_address("127.0.0.1"));
-        }
-        return gms::get_gossiper().start().then([seeds, cluster_name] {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_seeds(seeds);
-            gossiper.set_cluster_name(cluster_name);
-            engine().at_exit([]{ return gms::get_gossiper().stop(); });
-        });
-    });
-}
-// END TODO
-
-future<> init_once(shared_ptr<distributed<database>> db) {
-    static bool done = false;
-    if (!done) {
-        done = true;
-        // FIXME: we leak db, since we're initializing the global storage_service with it.
-        new shared_ptr<distributed<database>>(db);
-        return tst_init_storage_service(*db).then([] {
-            return tst_init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
-        }).then([] {
-            return db::system_keyspace::init_local_cache();
-        });
-    } else {
-        return make_ready_future();
-    }
-}
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
