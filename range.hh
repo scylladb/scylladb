@@ -154,6 +154,13 @@ public:
         range right(bound(split_point, false), end());
         return std::make_pair(std::move(left), std::move(right));
     }
+    // Create a sub-range including values greater than the split_point. split_point has to be inside the range
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    range<T> split_after(const T& split_point, Comparator&& cmp) const {
+        assert(contains(split_point, std::forward<Comparator>(cmp)));
+        return range(bound(split_point, false), end());
+    }
     // Transforms this range into a new range of a different value type
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename U, typename Transformer>
