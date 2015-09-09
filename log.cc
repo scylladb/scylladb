@@ -67,6 +67,14 @@ logger::~logger() {
 void
 logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) {
     std::ostringstream out;
+    static array_map<sstring, 20> level_map = {
+            { int(log_level::debug), "DEBUG" },
+            { int(log_level::info),  "INFO "  },
+            { int(log_level::trace), "TRACE" },
+            { int(log_level::warn),  "WARN "  },
+            { int(log_level::error), "ERROR" },
+    };
+    out << level_map[int(level)];
     out << " [shard " << engine().cpu_id() << "] " << _name << " - ";
     const char* p = fmt;
     while (*p != '\0') {
@@ -85,14 +93,7 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
     out << "\n";
     auto msg = out.str();
     if (_stdout.load(std::memory_order_relaxed)) {
-        static array_map<sstring, 20> level_map = {
-                { int(log_level::debug), "DEBUG" },
-                { int(log_level::info),  "INFO "  },
-                { int(log_level::trace), "TRACE" },
-                { int(log_level::warn),  "WARN "  },
-                { int(log_level::error), "ERROR" },
-        };
-        std::cout << level_map[int(level)] << "  " << msg;
+        std::cout << msg;
     }
     if (_syslog.load(std::memory_order_relaxed)) {
         static array_map<int, 20> level_map = {
@@ -108,7 +109,7 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
         //       we'll have to implement some internal buffering (which
         //       still means the problem can happen, just less frequently).
         // syslog() interprets % characters, so send msg as a parameter
-        syslog(level_map[int(level)], "%s", msg.c_str());
+        syslog(level_map[int(level)], "%s", msg.c_str() + 5);
     }
 }
 
