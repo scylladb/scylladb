@@ -140,6 +140,7 @@ private:
     mutation_source _underlying;
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _read_section;
+    mutation_reader make_scanning_reader(const query::partition_range&);
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&);

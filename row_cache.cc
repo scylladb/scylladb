@@ -122,13 +122,18 @@ public:
 };
 
 mutation_reader
+row_cache::make_scanning_reader(const query::partition_range& range) {
+    warn(unimplemented::cause::RANGE_QUERIES);
+    return make_mutation_reader<populating_reader>(*this, _underlying(range));
+}
+
+mutation_reader
 row_cache::make_reader(const query::partition_range& range) {
     if (range.is_singular()) {
         const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
-            warn(unimplemented::cause::RANGE_QUERIES);
-            return make_mutation_reader<populating_reader>(*this, _underlying(range));
+            return make_scanning_reader(range);
         }
 
         return _read_section(_tracker.region(), [&] {
@@ -146,8 +151,7 @@ row_cache::make_reader(const query::partition_range& range) {
         });
     }
 
-    warn(unimplemented::cause::RANGE_QUERIES);
-    return make_mutation_reader<populating_reader>(*this, _underlying(range));
+    return make_scanning_reader(range);
 }
 
 row_cache::~row_cache() {
