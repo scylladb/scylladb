@@ -93,6 +93,15 @@ column_family::sstables_as_mutation_source() {
 column_family::~column_family() {
 }
 
+
+logalloc::occupancy_stats column_family::occupancy() const {
+    logalloc::occupancy_stats res;
+    for (auto m : *_memtables.get()) {
+        res += m->region().occupancy();
+    }
+    return res;
+}
+
 static
 bool belongs_to_current_shard(const mutation& m) {
     return dht::shard_of(m.token()) == engine().cpu_id();

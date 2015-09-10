@@ -91,6 +91,9 @@ public:
     schema_ptr schema() const { return _schema; }
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
+    const logalloc::region& region() const {
+        return _region;
+    }
 public:
     size_t partition_count() const;
     logalloc::occupancy_stats occupancy() const;
