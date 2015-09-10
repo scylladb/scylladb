@@ -336,7 +336,7 @@ public:
                 , _parsed_statements(std::move(parsed_statements)) {
         }
 
-        virtual void prepare_keyspace(service::client_state& state) {
+        virtual void prepare_keyspace(const service::client_state& state) override {
             for (auto&& s : _parsed_statements) {
                 s->prepare_keyspace(state);
             }
