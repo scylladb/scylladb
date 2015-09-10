@@ -12,8 +12,8 @@ namespace cs = httpd::cache_service_json;
 
 void set_cache_service(http_context& ctx, routes& r) {
     cs::get_row_cache_save_period_in_seconds.set(r, [](std::unique_ptr<request> req) {
-        // TBD
-        unimplemented();
+        // We never save the cache
+        // Origin uses 0 for never
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -25,8 +25,8 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 
     cs::get_key_cache_save_period_in_seconds.set(r, [](std::unique_ptr<request> req) {
-        // TBD
-        unimplemented();
+        // We never save the cache
+        // Origin uses 0 for never
         return make_ready_future<json::json_return_type>(0);
     });
 
@@ -38,8 +38,8 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 
     cs::get_counter_cache_save_period_in_seconds.set(r, [](std::unique_ptr<request> req) {
-        // TBD
-        unimplemented();
+        // We never save the cache
+        // Origin uses 0 for never
         return make_ready_future<json::json_return_type>(0);
     });
 

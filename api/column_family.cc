@@ -475,7 +475,10 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_bloom_filter_off_heap_memory_used.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        // We are missing the off heap memory calculation
+        // Return 0 is the wrong value. It's a work around
+        // until the memory calculation will be available
         //auto id = get_uuid(req->param["name"], ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
@@ -488,7 +491,10 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_index_summary_off_heap_memory_used.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        // We are missing the off heap memory calculation
+        // Return 0 is the wrong value. It's a work around
+        // until the memory calculation will be available
         //auto id = get_uuid(req->param["name"], ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
@@ -501,7 +507,10 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_compression_metadata_off_heap_memory_used.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        // We are missing the off heap memory calculation
+        // Return 0 is the wrong value. It's a work around
+        // until the memory calculation will be available
         //auto id = get_uuid(req->param["name"], ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
