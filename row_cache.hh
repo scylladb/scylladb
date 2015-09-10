@@ -88,6 +88,8 @@ public:
 private:
     uint64_t _hits = 0;
     uint64_t _misses = 0;
+    uint64_t _insertions = 0;
+    uint64_t _merges = 0;
     uint64_t _partitions = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
@@ -101,6 +103,9 @@ public:
     void touch(cache_entry&);
     void insert(cache_entry&);
     void on_erase();
+    void on_merge();
+    void on_hit();
+    void on_miss();
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
@@ -141,6 +146,8 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _read_section;
     mutation_reader make_scanning_reader(const query::partition_range&);
+    void on_hit();
+    void on_miss();
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&);

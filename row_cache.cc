@@ -60,6 +60,16 @@ cache_tracker::setup_collectd() {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("cache"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "insertions")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _insertions)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "merges")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _merges)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("cache"
+                , scollectd::per_cpu_plugin_instance
                 , "objects", "partitions")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _partitions)
         ),
@@ -74,19 +84,30 @@ void cache_tracker::clear() {
 }
 
 void cache_tracker::touch(cache_entry& e) {
-    ++_hits;
     _lru.erase(_lru.iterator_to(e));
     _lru.push_front(e);
 }
 
 void cache_tracker::insert(cache_entry& entry) {
-    ++_misses;
+    ++_insertions;
     ++_partitions;
     _lru.push_front(entry);
 }
 
 void cache_tracker::on_erase() {
     --_partitions;
+}
+
+void cache_tracker::on_merge() {
+    ++_merges;
+}
+
+void cache_tracker::on_hit() {
+    ++_hits;
+}
+
+void cache_tracker::on_miss() {
+    ++_misses;
 }
 
 allocation_strategy& cache_tracker::allocator() {
@@ -121,6 +142,16 @@ public:
     }
 };
 
+void row_cache::on_hit() {
+    ++_stats.hits;
+    _tracker.on_hit();
+}
+
+void row_cache::on_miss() {
+    ++_stats.misses;
+    _tracker.on_miss();
+}
+
 mutation_reader
 row_cache::make_scanning_reader(const query::partition_range& range) {
     warn(unimplemented::cause::RANGE_QUERIES);
@@ -142,10 +173,10 @@ row_cache::make_reader(const query::partition_range& range) {
             if (i != _partitions.end()) {
                 cache_entry& e = *i;
                 _tracker.touch(e);
-                ++_stats.hits;
+                on_hit();
                 return make_reader_returning(mutation(_schema, dk, e.partition()));
             } else {
-                ++_stats.misses;
+                on_miss();
                 return make_mutation_reader<populating_reader>(*this, _underlying(range));
             }
         });
@@ -198,8 +229,9 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                         //        search it.
                         if (cache_i != _partitions.end() && cache_i->key().equal(s, mem_e.key())) {
                             cache_entry& entry = *cache_i;
-                            _tracker.touch(entry);
                             entry.partition().apply(s, std::move(mem_e.partition()));
+                            _tracker.touch(entry);
+                            _tracker.on_merge();
                         } else if (presence_checker(mem_e.key().key()) ==
                                    partition_presence_checker_result::definitely_doesnt_exist) {
                             cache_entry* entry = current_allocator().construct<cache_entry>(
