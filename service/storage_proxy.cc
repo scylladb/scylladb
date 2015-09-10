@@ -1250,6 +1250,7 @@ class digest_read_resolver : public abstract_read_resolver {
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<> _cl_promise; // cl is reached
+    bool _cl_reported = false;
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _data_results;
     std::vector<query::result_digest> _digest_results;
 
@@ -1295,11 +1296,12 @@ public:
         return db::is_datacenter_local(_cl) ? is_me(ep) || db::is_local(ep) : true;
     }
     void got_response(gms::inet_address ep) {
-        if (_cl_responses < _block_for) {
+        if (!_cl_reported) {
             if (waiting_for(ep)) {
                 _cl_responses++;
             }
-            if (_cl_responses == _block_for && _data_results.size()) {
+            if (_cl_responses >= _block_for && _data_results.size()) {
+                _cl_reported = true;
                 _cl_promise.set_value();
             }
         }
