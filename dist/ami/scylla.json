@@ -36,7 +36,9 @@
 	"sudo chmod a+rx /usr/lib/scylla/ComboAMI/ds2_configure.py",
         "sudo systemctl enable scylla-setup.service",
 	"sudo sed -e 's!/var/lib/scylla/data!/data/data!' -e 's!commitlog_directory: /var/lib/scylla/commitlog!commitlog_directory: /data/commitlog!' /var/lib/scylla/conf/scylla.yaml > /tmp/scylla.yaml",
-        "sudo mv /tmp/scylla.yaml /var/lib/scylla/conf"
+        "sudo mv /tmp/scylla.yaml /var/lib/scylla/conf",
+	"grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg",
+	"sudo mv /tmp/cloud.cfg /etc/cloud/cloud.cfg"
       ]
     }
   ],
