@@ -28,6 +28,7 @@
 #include "unimplemented.hh"
 #include "timestamp.hh"
 #include "db_clock.hh"
+#include "database.hh"
 
 namespace service {
 
@@ -141,14 +142,15 @@ public:
     }
 
 public:
-    void set_keyspace(sstring keyspace) {
-#if 0
+    void set_keyspace(seastar::sharded<database>& db, sstring keyspace) {
         // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
         // call set_keyspace() before calling login(), and we have to handle that.
+#if 0
         if (user && Schema.instance.getKSMetaData(ks) == null) {
-            throw exceptions::invalid_request_exception(sprint("Keyspace '%s' does not exist", keyspace);
-        }
 #endif
+        if (!db.local().has_keyspace(keyspace)) {
+            throw exceptions::invalid_request_exception(sprint("Keyspace '%s' does not exist", keyspace));
+        }
         _keyspace = keyspace;
     }
 

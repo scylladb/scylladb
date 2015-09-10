@@ -35,7 +35,6 @@ private:
 
         core_local_state()
             : client_state(service::client_state::for_external_calls()) {
-            client_state.set_keyspace(ks_name);
         }
 
         future<> stop() {
@@ -45,6 +44,9 @@ private:
     distributed<core_local_state> _core_local;
 private:
     auto make_query_state() {
+        try {
+            _core_local.local().client_state.set_keyspace(*_db, ks_name);
+        } catch (exceptions::invalid_request_exception&) { }
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:

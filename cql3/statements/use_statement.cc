@@ -32,7 +32,7 @@ namespace statements {
 
 future<::shared_ptr<transport::messages::result_message>>
 use_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    state.get_client_state().set_keyspace(_keyspace);
+    state.get_client_state().set_keyspace(proxy.local().get_db(), _keyspace);
     auto result =::make_shared<transport::messages::result_message::set_keyspace>(_keyspace);
     return make_ready_future<::shared_ptr<transport::messages::result_message>>(result);
 }
