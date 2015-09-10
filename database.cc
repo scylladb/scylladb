@@ -411,6 +411,7 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     auto included = (s1 <= me) && (me <= s2);
     if (!included) {
         dblog.info("sstable {} not relevant for this shard, ignoring", sstable->get_filename());
+        sstable->mark_for_deletion();
         return;
     }
     auto generation = sstable->generation();
