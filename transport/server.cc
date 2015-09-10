@@ -156,6 +156,7 @@ public:
         , _opcode{opcode}
     { }
     scattered_message<char> make_message(uint8_t version);
+    void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
     void write_int(int32_t n);
     void write_long(int64_t n);
@@ -665,12 +666,7 @@ public:
         case event::event_type::SCHEMA_CHANGE: {
             auto sc = static_pointer_cast<event::schema_change>(change);
             _response->write_int(0x0005);
-            _response->write_string(to_string(sc->change));
-            _response->write_string(to_string(sc->target));
-            _response->write_string(sc->keyspace);
-            if (sc->target != event::schema_change::target_type::KEYSPACE) {
-                _response->write_string(sc->table_or_type_or_function.value());
-            }
+            _response->serialize(*sc, _version);
             break;
         }
         default:
@@ -721,12 +717,7 @@ future<> cql_server::connection::write_schema_change_event(const event::schema_c
 {
     auto response = make_shared<cql_server::response>(-1, cql_binary_opcode::EVENT);
     response->write_string("SCHEMA_CHANGE");
-    response->write_string(to_string(event.change));
-    response->write_string(to_string(event.target));
-    response->write_string(event.keyspace);
-    if (event.target != event::schema_change::target_type::KEYSPACE) {
-        response->write_string(*(event.table_or_type_or_function));
-    }
+    response->serialize(event, _version);
     return write_response(response);
 }
 
@@ -1010,6 +1001,34 @@ scattered_message<char> cql_server::response::make_message(uint8_t version) {
     msg.append(std::move(frame));
     msg.append(std::move(body));
     return msg;
+}
+
+void cql_server::response::serialize(const event::schema_change& event, uint8_t version)
+{
+    if (version >= 3) {
+        write_string(to_string(event.change));
+        write_string(to_string(event.target));
+        write_string(event.keyspace);
+        if (event.target != event::schema_change::target_type::KEYSPACE) {
+            write_string(*(event.table_or_type_or_function));
+        }
+    } else {
+        if (event.target == event::schema_change::target_type::TYPE) {
+	    // The v1/v2 protocol is unable to represent type changes. Tell the
+	    // client that the keyspace was updated instead.
+            write_string(to_string(event::schema_change::change_type::UPDATED));
+            write_string(event.keyspace);
+            write_string("");
+        } else {
+            write_string(to_string(event.change));
+            write_string(event.keyspace);
+            if (event.target != event::schema_change::target_type::KEYSPACE) {
+                write_string(*(event.table_or_type_or_function));
+            } else {
+                write_string("");
+            }
+        }
+    }
 }
 
 sstring cql_server::response::make_frame(uint8_t version, size_t length)
