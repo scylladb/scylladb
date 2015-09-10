@@ -623,12 +623,13 @@ future<> save_system_keyspace_schema() {
                 // FIXME: clean this up by reorganizing the code
                 // Send CQL events only once, not once per shard.
                 if (engine().cpu_id() == 0) {
-                    for (auto&& partition : created) {
+                    return do_for_each(created, [] (auto&& partition) {
                         auto ksm = create_keyspace_from_schema_partition(partition);
                         return service::migration_manager::notify_create_keyspace(ksm);
-                    }
+                    });
+                } else {
+                    return make_ready_future<>();
                 }
-                return make_ready_future<>();
             });
         }).then([dropped = std::move(dropped)] () {
             return make_ready_future<std::set<sstring>>(dropped);
