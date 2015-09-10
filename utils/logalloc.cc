@@ -803,7 +803,7 @@ public:
                 free_segment(seg);
             } else {
                 _closed_occupancy += seg_desc.occupancy();
-                _segments.decrease(seg_desc.heap_handle());
+                _segments.increase(seg_desc.heap_handle());
             }
         }
     }
