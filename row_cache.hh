@@ -8,6 +8,7 @@
 #include <boost/intrusive/set.hpp>
 
 #include "core/memory.hh"
+#include <seastar/core/thread.hh>
 
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
@@ -148,6 +149,7 @@ private:
     mutation_reader make_scanning_reader(const query::partition_range&);
     void on_hit();
     void on_miss();
+    static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
     row_cache(schema_ptr, mutation_source underlying, cache_tracker&);

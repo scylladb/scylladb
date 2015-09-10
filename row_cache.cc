@@ -7,9 +7,16 @@
 #include "core/do_with.hh"
 #include "core/future-util.hh"
 #include <seastar/core/scollectd.hh>
+#include <seastar/util/defer.hh>
 #include "memtable.hh"
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 static logging::logger logger("cache");
+
+thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
+
 
 cache_tracker& global_cache_tracker() {
     static thread_local cache_tracker instance;
@@ -212,8 +219,16 @@ void row_cache::populate(const mutation& m) {
 
 future<> row_cache::update(memtable& m, partition_presence_checker presence_checker) {
     _tracker.region().merge(m._region); // Now all data in memtable belongs to cache
-    return repeat([this, &m, presence_checker = std::move(presence_checker)] () mutable {
-        return with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
+    auto attr = seastar::thread_attributes();
+    attr.scheduling_group = &_update_thread_scheduling_group;
+    auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
+      auto cleanup = defer([&] {
+          with_allocator(_tracker.allocator(), [&m, this] () {
+            m.partitions.clear_and_dispose(current_deleter<partition_entry>());
+          });
+      });
+      while (!m.partitions.empty()) {
+        with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
             unsigned quota = 30;
             auto cmp = cache_entry::compare(_schema);
             try {
@@ -244,7 +259,9 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                         --quota;
                     }
                 });
-                return m.partitions.empty() ? stop_iteration::yes : stop_iteration::no;
+                if (quota == 0 && seastar::thread::should_yield()) {
+                    return;
+                }
             } catch (const std::bad_alloc&) {
                 // Cache entry may be in an incomplete state if
                 // _update_section fails due to weak exception guarantees of
@@ -258,10 +275,11 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                 throw;
             }
         });
-    }).finally([&m, this] {
-        with_allocator(_tracker.allocator(), [&m] () {
-            m.partitions.clear_and_dispose(current_deleter<partition_entry>());
-        });
+        seastar::thread::yield();
+      }
+    });
+    return do_with(std::move(t), [] (seastar::thread& t) {
+        return t.join();
     });
 }
 
