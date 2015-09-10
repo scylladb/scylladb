@@ -77,7 +77,7 @@ protected:
         return 0;
     }
 
-    virtual void prepare_keyspace(service::client_state& state) override {
+    virtual void prepare_keyspace(const service::client_state& state) override {
         if (_is_column_family_level) {
             cf_statement::prepare_keyspace(state);
         }

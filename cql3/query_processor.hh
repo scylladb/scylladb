@@ -384,7 +384,7 @@ public:
     prepare(const std::experimental::string_view& query_string, service::query_state& query_state);
 
     future<::shared_ptr<transport::messages::result_message::prepared>>
-    prepare(const std::experimental::string_view& query_string, service::client_state& client_state, bool for_thrift);
+    prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift);
 
     static bytes compute_id(const std::experimental::string_view& query_string, const sstring& keyspace);
 
@@ -439,7 +439,7 @@ private:
 
 public:
     ::shared_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
-            service::client_state& client_state);
+            const service::client_state& client_state);
     static ::shared_ptr<statements::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
 #if 0

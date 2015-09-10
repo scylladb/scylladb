@@ -45,7 +45,7 @@ protected:
     { }
 
 public:
-    virtual void prepare_keyspace(service::client_state& state) {
+    virtual void prepare_keyspace(const service::client_state& state) {
         if (!_cf_name->has_keyspace()) {
             // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
             // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move

@@ -130,7 +130,7 @@ query_processor::prepare(const std::experimental::string_view& query_string, ser
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>
-query_processor::prepare(const std::experimental::string_view& query_string, service::client_state& client_state, bool for_thrift)
+query_processor::prepare(const std::experimental::string_view& query_string, const service::client_state& client_state, bool for_thrift)
 {
     auto existing = get_stored_prepared_statement(query_string, client_state.get_raw_keyspace(), for_thrift);
     if (existing) {
@@ -214,7 +214,7 @@ bytes query_processor::compute_id(const std::experimental::string_view& query_st
 }
 
 ::shared_ptr<parsed_statement::prepared>
-query_processor::get_statement(const sstring_view& query, service::client_state& client_state)
+query_processor::get_statement(const sstring_view& query, const service::client_state& client_state)
 {
 #if 0
         Tracing.trace("Parsing {}", queryStr);
