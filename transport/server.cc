@@ -492,19 +492,19 @@ future<> cql_server::connection::process_prepare(uint16_t stream, temporary_buff
     auto query = read_long_string_view(buf).to_string();
     auto cpu_id = engine().cpu_id();
     auto cpus = boost::irange(0u, smp::count);
-    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, stream] (unsigned int c) mutable {
+    auto client_state = std::make_unique<service::client_state>(_client_state);
+    const auto& cs = *client_state;
+    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
         if (c != cpu_id) {
-            return smp::submit_to(c, [this, query, stream] () mutable {
-                auto& q_state = get_query_state(stream); // FIXME: is this safe?
-                _server._query_processor.local().prepare(query, q_state.query_state);
+            return smp::submit_to(c, [this, query, &cs] () mutable {
+                _server._query_processor.local().prepare(query, cs, false);
                 // FIXME: error handling
             });
         } else {
             return make_ready_future<>();
         }
-    }).then([this, query, stream] {
-        auto& q_state = get_query_state(stream);
-        return _server._query_processor.local().prepare(query, q_state.query_state).then([this, stream] (auto msg) {
+    }).then([this, query, stream, client_state = std::move(client_state)] {
+        return _server._query_processor.local().prepare(query, *client_state, false).then([this, stream] (auto msg) {
              return this->write_result(stream, msg);
         });
     });
