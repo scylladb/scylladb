@@ -125,6 +125,14 @@ public:
 
     shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);
 
+    const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_initiated_streams() const {
+        return _initiated_streams;
+    }
+
+    const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_receiving_streams() const {
+        return _receiving_streams;
+    }
+
     void remove_stream(UUID plan_id);
 
     void show_streams();
