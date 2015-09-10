@@ -9,7 +9,7 @@ ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/lib/scylla/scylla_run
 ExecStopPost=/usr/lib/scylla/scylla_stop
 KillMode=process
-Restart=always
+Restart=no
 
 [Install]
 WantedBy=multi-user.target
