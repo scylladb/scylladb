@@ -1073,7 +1073,7 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     }
 }
 
-bool gossiper::is_dead_state(endpoint_state eps) {
+bool gossiper::is_dead_state(const endpoint_state& eps) const {
     if (!eps.get_application_state(application_state::STATUS)) {
         return false;
     }

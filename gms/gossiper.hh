@@ -356,7 +356,7 @@ private:
 
 public:
     bool is_alive(inet_address ep);
-    bool is_dead_state(endpoint_state eps);
+    bool is_dead_state(const endpoint_state& eps) const;
 
     future<> apply_state_locally(std::map<inet_address, endpoint_state>& map);
 
