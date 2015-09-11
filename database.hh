@@ -49,6 +49,7 @@
 #include "utils/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
+#include "sstables/estimated_histogram.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -104,6 +105,8 @@ public:
         int64_t pending_compactions = 0;
         utils::ihistogram reads{256, 100};
         utils::ihistogram writes{256, 100};
+        sstables::estimated_histogram estimated_read;
+        sstables::estimated_histogram estimated_write;
     };
 
 private:
