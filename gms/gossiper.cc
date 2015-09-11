@@ -1055,19 +1055,21 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     logger.trace("Adding endpoint state for {}", ep);
     endpoint_state_map[ep] = eps;
 
+    auto& local_state = endpoint_state_map.at(ep);
+
     // the node restarted: it is up to the subscriber to take whatever action is necessary
     for (auto& subscriber : _subscribers) {
-        subscriber->on_restart(ep, eps);
+        subscriber->on_restart(ep, local_state);
     }
 
-    if (!is_dead_state(eps)) {
-        mark_alive(ep, eps);
+    if (!is_dead_state(local_state)) {
+        mark_alive(ep, local_state);
     } else {
         logger.debug("Not marking {} alive due to dead state", ep);
-        mark_dead(ep, eps);
+        mark_dead(ep, local_state);
     }
     for (auto& subscriber : _subscribers) {
-        subscriber->on_join(ep, eps);
+        subscriber->on_join(ep, local_state);
     }
 }
 
