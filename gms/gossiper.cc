@@ -987,7 +987,7 @@ void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> re
 }
 
 // Runs inside seastar::async context
-void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
+void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
     //     return;
@@ -997,7 +997,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     shard_id id = get_shard_id(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
-    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state), ok] (auto&& f) mutable {
+    ms().send_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");
@@ -1015,7 +1015,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
 }
 
 // Runs inside seastar::async context
-void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
+void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
@@ -1055,23 +1055,25 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     logger.trace("Adding endpoint state for {}", ep);
     endpoint_state_map[ep] = eps;
 
+    auto& local_state = endpoint_state_map.at(ep);
+
     // the node restarted: it is up to the subscriber to take whatever action is necessary
     for (auto& subscriber : _subscribers) {
-        subscriber->on_restart(ep, eps);
+        subscriber->on_restart(ep, local_state);
     }
 
-    if (!is_dead_state(eps)) {
-        mark_alive(ep, eps);
+    if (!is_dead_state(local_state)) {
+        mark_alive(ep, local_state);
     } else {
         logger.debug("Not marking {} alive due to dead state", ep);
-        mark_dead(ep, eps);
+        mark_dead(ep, local_state);
     }
     for (auto& subscriber : _subscribers) {
-        subscriber->on_join(ep, eps);
+        subscriber->on_join(ep, local_state);
     }
 }
 
-bool gossiper::is_dead_state(endpoint_state eps) {
+bool gossiper::is_dead_state(const endpoint_state& eps) const {
     if (!eps.get_application_state(application_state::STATUS)) {
         return false;
     }
