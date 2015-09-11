@@ -489,7 +489,7 @@ if args.dpdk:
 elif args.dpdk_target:
     seastar_flags += ['--dpdk-target', args.dpdk_target]
 
-seastar_flags += ['--compiler', args.cxx]
+seastar_flags += ['--compiler', args.cxx, '--cflags=-march=nehalem']
 
 status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
 
@@ -518,7 +518,6 @@ for mode in build_modes:
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-args.user_cflags = '-march=nehalem ' + args.user_cflags
 libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
 user_cflags = args.user_cflags
 
