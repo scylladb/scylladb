@@ -56,8 +56,9 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     });
 
     cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
+        // FIXME
+        // We are currently dont have an API for compaction
+        // so returning a 0 as the number of total compaction is ok
         return make_ready_future<json::json_return_type>(0);
     });
 
