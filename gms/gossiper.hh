@@ -340,9 +340,9 @@ public:
     void notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state);
 
 private:
-    void mark_alive(inet_address addr, endpoint_state local_state);
+    void mark_alive(inet_address addr, endpoint_state& local_state);
 
-    void real_mark_alive(inet_address addr, endpoint_state local_state);
+    void real_mark_alive(inet_address addr, endpoint_state& local_state);
 
     void mark_dead(inet_address addr, endpoint_state& local_state);
 

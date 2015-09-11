@@ -987,7 +987,7 @@ void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> re
 }
 
 // Runs inside seastar::async context
-void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
+void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
     //     return;
@@ -997,7 +997,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     shard_id id = get_shard_id(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
-    ms().send_echo(id).then_wrapped([this, id, local_state = std::move(local_state), ok] (auto&& f) mutable {
+    ms().send_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");
@@ -1015,7 +1015,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
 }
 
 // Runs inside seastar::async context
-void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
+void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as alive {}", addr);
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
