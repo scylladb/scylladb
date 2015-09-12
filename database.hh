@@ -203,6 +203,14 @@ public:
     void trigger_compaction();
     future<> run_compaction();
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
+    const sstables::compaction_strategy& get_compaction_strategy() const {
+        return _compaction_strategy;
+    }
+
+    sstables::compaction_strategy& get_compaction_strategy() {
+        return _compaction_strategy;
+    }
+
     bool compaction_manager_queued() const;
     void set_compaction_manager_queued(bool compaction_manager_queued);
     bool pending_compactions() const;
