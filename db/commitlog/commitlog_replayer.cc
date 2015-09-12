@@ -184,7 +184,13 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
             }
 
-            cf.apply(fm, replay_position(shard, rp.base_id(), rp.pos));
+            try {
+                cf.apply(fm, replay_position(shard, rp.base_id(), rp.pos));
+            } catch (replay_position_reordered_exception&) {
+                logger.debug("replay_position reordering detected");
+                auto m = make_lw_shared<frozen_mutation>(std::move(fm));
+                return db.apply(*m).then([m] {});
+            }
             s->applied_mutations++;
             return make_ready_future<>();
         });
