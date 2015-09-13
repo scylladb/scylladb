@@ -1586,7 +1586,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
 static future<bool>
 file_existence(sstring filename) {
     return engine().open_file_dma(filename, open_flags::ro).then([] (file f) {
-        return make_ready_future<>();
+        return f.close().finally([f] {});
     }).then_wrapped([] (future<> f) {
         bool exists = true;
         try {
