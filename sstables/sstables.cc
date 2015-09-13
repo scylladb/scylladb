@@ -93,6 +93,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
     { component_type::CRC, "CRC.db" },
     { component_type::Filter, "Filter.db" },
     { component_type::Statistics, "Statistics.db" },
+    { component_type::TemporaryTOC, "TOC.txt.tmp" },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -679,13 +680,30 @@ future<> sstable::read_toc() {
 
 }
 
+void sstable::generate_toc(compressor c, double filter_fp_chance) {
+    // Creating table of components.
+    _components.insert(component_type::TOC);
+    _components.insert(component_type::Statistics);
+    _components.insert(component_type::Digest);
+    _components.insert(component_type::Index);
+    _components.insert(component_type::Summary);
+    _components.insert(component_type::Data);
+    if (filter_fp_chance != 1.0) {
+        _components.insert(component_type::Filter);
+    }
+    if (c == compressor::none) {
+        _components.insert(component_type::CRC);
+    } else {
+        _components.insert(component_type::CompressionInfo);
+    }
+}
+
 void sstable::write_toc() {
-    // Create TOC file with the string 'tmp-' prepended to it, meaning TOC
-    // is a temporary file.
-    auto file_path = temporary_filename(sstable::component_type::TOC);
+    auto file_path = filename(sstable::component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
+    // Writing TOC content to temporary file.
     file f = engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
     auto out = file_writer(std::move(f), 4096);
     auto w = file_writer(std::move(out));
@@ -699,15 +717,27 @@ void sstable::write_toc() {
     w.flush().get();
     w.close().get();
 
+    // Flushing parent directory to guarantee that temporary TOC file reached
+    // the disk.
+    file dir_f = engine().open_directory(_dir).get0();
+    dir_f.flush().get();
+    dir_f.close().get();
+}
+
+void sstable::seal_sstable() {
+    // SSTable sealing is about renaming temporary TOC file after guaranteeing
+    // that each component reached the disk safely.
+
     file dir_f = engine().open_directory(_dir).get0();
     // Guarantee that every component of this sstable reached the disk.
     dir_f.flush().get();
     // Rename TOC because it's no longer temporary.
-    engine().rename_file(file_path, filename(sstable::component_type::TOC)).get();
+    engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC)).get();
     // Guarantee that the changes above reached the disk.
     dir_f.flush().get();
     dir_f.close().get();
     // If this point was reached, sstable should be safe in disk.
+    sstlog.debug("SSTable with generation {} was sealed successfully.", _generation);
 }
 
 void write_crc(const sstring file_path, checksum& c) {
@@ -1181,9 +1211,6 @@ void sstable::do_write_components(::mutation_reader mr,
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
-    if (filter_fp_chance != 1.0) {
-        _components.insert(component_type::Filter);
-    }
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
     prepare_summary(_summary, estimated_partitions);
@@ -1266,13 +1293,6 @@ void sstable::do_write_components(::mutation_reader mr,
     index->close().get();
     _index_file = file(); // index->close() closed _index_file
 
-    _components.insert(component_type::TOC);
-    _components.insert(component_type::Statistics);
-    _components.insert(component_type::Digest);
-    _components.insert(component_type::Index);
-    _components.insert(component_type::Summary);
-    _components.insert(component_type::Data);
-
     if (has_component(sstable::component_type::CompressionInfo)) {
         _collector.add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
     }
@@ -1284,11 +1304,10 @@ void sstable::do_write_components(::mutation_reader mr,
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
     // CRC component must only be present when compression isn't enabled.
-    bool checksum_file = schema->get_compressor_params().get_compressor() == compressor::none;
+    bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
         auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
-        _components.insert(component_type::CRC);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
@@ -1298,7 +1317,6 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     } else {
         prepare_compression(_compression, *schema);
         auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
-        _components.insert(component_type::CompressionInfo);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
@@ -1318,6 +1336,8 @@ future<> sstable::write_components(::mutation_reader mr,
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] () mutable {
         // FIXME: write all components
         touch_directory(_dir).get();
+        generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
+        write_toc();
         create_data().get();
         prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
         write_summary();
@@ -1325,7 +1345,7 @@ future<> sstable::write_components(::mutation_reader mr,
         write_statistics();
         // NOTE: write_compression means maybe_write_compression.
         write_compression();
-        write_toc();
+        seal_sstable();
     });
 }
 
@@ -1361,12 +1381,8 @@ sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
 }
 
-const sstring sstable::temporary_filename(component_type f) {
-    return filename(_dir, _ks, _cf, _version, _generation, _format, f, true);
-}
-
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
-                                format_types format, component_type component, bool temporary) {
+                                format_types format, component_type component) {
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
@@ -1377,11 +1393,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
         }
     };
 
-    if (temporary) {
-        return dir + "/tmp-" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
-    } else {
-        return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
-    }
+    return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
@@ -1550,6 +1562,63 @@ remove_by_toc_name(sstring sstable_toc_name) {
             }
             return remove_file(prefix + component);
         }).get();
+        fsync_directory(dir).get();
+    });
+}
+
+static future<bool>
+file_existence(sstring filename) {
+    return engine().open_file_dma(filename, open_flags::ro).then([] (file f) {
+        return make_ready_future<>();
+    }).then_wrapped([] (future<> f) {
+        bool exists = true;
+        try {
+            f.get();
+        } catch (std::system_error& e) {
+            if (e.code() == std::error_code(ENOENT, std::system_category())) {
+                exists = false;
+            }
+        }
+        return make_ready_future<bool>(exists);
+    });
+}
+
+future<>
+sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f) {
+    return seastar::async([ks, cf, dir, generation, v, f] {
+        auto toc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+        // assert that toc doesn't exist for sstable with temporary toc.
+        assert(toc == false);
+
+        auto tmptoc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
+        // assert that temporary toc exists for this sstable.
+        assert(tmptoc == true);
+
+        sstlog.warn("Deleting components of sstable from {}/{} of generation {} that has a temporary TOC", ks, cf, generation);
+
+        for (auto& entry : sstable::_component_map) {
+            // Skipping TemporaryTOC because it must be the last component to
+            // be deleted, and unordered map doesn't guarantee ordering.
+            // This is needed because we may end up with a partial delete in
+            // event of a power failure.
+            // If TemporaryTOC is deleted prematurely and scylla crashes,
+            // the subsequent boot would fail because of that generation
+            // missing a TOC.
+            if (entry.first == component_type::TemporaryTOC) {
+                continue;
+            }
+
+            auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
+            // Skip component that doesn't exist.
+            auto exists = file_existence(file_path).get0();
+            if (!exists) {
+                continue;
+            }
+            remove_file(file_path).get();
+        }
+        // Removing temporary
+        remove_file(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
+        // Fsync'ing column family dir to guarantee that deletion completed.
         fsync_directory(dir).get();
     });
 }
