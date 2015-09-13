@@ -628,10 +628,11 @@ void column_family::trigger_compaction() {
 }
 
 future<> column_family::run_compaction() {
-    _stats.pending_compactions--;
     sstables::compaction_strategy strategy = _compaction_strategy;
     return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
-        return cs.compact(*this);
+        return cs.compact(*this).then([this] {
+            _stats.pending_compactions--;
+        });
     });
 }
 
