@@ -160,6 +160,10 @@ public:
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
                                   format_types format, component_type component, bool temporary = false);
+    // WARNING: it should only be called to remove components of a sstable with
+    // a temporary TOC file.
+    static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation,
+                                                 version_types v, format_types f);
 
     future<> load();
 

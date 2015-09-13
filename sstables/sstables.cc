@@ -1574,4 +1574,61 @@ remove_by_toc_name(sstring sstable_toc_name) {
     });
 }
 
+static future<bool>
+file_existence(sstring filename) {
+    return engine().open_file_dma(filename, open_flags::ro).then([] (file f) {
+        return make_ready_future<>();
+    }).then_wrapped([] (future<> f) {
+        bool exists = true;
+        try {
+            f.get();
+        } catch (std::system_error& e) {
+            if (e.code() == std::error_code(ENOENT, std::system_category())) {
+                exists = false;
+            }
+        }
+        return make_ready_future<bool>(exists);
+    });
+}
+
+future<>
+sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f) {
+    return seastar::async([ks, cf, dir, generation, v, f] {
+        auto toc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+        // assert that toc doesn't exist for sstable with temporary toc.
+        assert(toc == false);
+
+        auto tmptoc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
+        // assert that temporary toc exists for this sstable.
+        assert(tmptoc == true);
+
+        sstlog.warn("Deleting components of sstable from {}/{} of generation {} that has a temporary TOC", ks, cf, generation);
+
+        for (auto& entry : sstable::_component_map) {
+            // Skipping TemporaryTOC because it must be the last component to
+            // be deleted, and unordered map doesn't guarantee ordering.
+            // This is needed because we may end up with a partial delete in
+            // event of a power failure.
+            // If TemporaryTOC is deleted prematurely and scylla crashes,
+            // the subsequent boot would fail because of that generation
+            // missing a TOC.
+            if (entry.first == component_type::TemporaryTOC) {
+                continue;
+            }
+
+            auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
+            // Skip component that doesn't exist.
+            auto exists = file_existence(file_path).get0();
+            if (!exists) {
+                continue;
+            }
+            remove_file(file_path).get();
+        }
+        // Removing temporary
+        remove_file(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
+        // Fsync'ing column family dir to guarantee that deletion completed.
+        fsync_directory(dir).get();
+    });
+}
+
 }
