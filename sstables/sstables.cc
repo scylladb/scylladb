@@ -93,6 +93,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
     { component_type::CRC, "CRC.db" },
     { component_type::Filter, "Filter.db" },
     { component_type::Statistics, "Statistics.db" },
+    { component_type::TemporaryTOC, "TOC.txt.tmp" },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -679,13 +680,30 @@ future<> sstable::read_toc() {
 
 }
 
+void sstable::generate_toc(compressor c, double filter_fp_chance) {
+    // Creating table of components.
+    _components.insert(component_type::TOC);
+    _components.insert(component_type::Statistics);
+    _components.insert(component_type::Digest);
+    _components.insert(component_type::Index);
+    _components.insert(component_type::Summary);
+    _components.insert(component_type::Data);
+    if (filter_fp_chance != 1.0) {
+        _components.insert(component_type::Filter);
+    }
+    if (c == compressor::none) {
+        _components.insert(component_type::CRC);
+    } else {
+        _components.insert(component_type::CompressionInfo);
+    }
+}
+
 void sstable::write_toc() {
-    // Create TOC file with the string 'tmp-' prepended to it, meaning TOC
-    // is a temporary file.
-    auto file_path = temporary_filename(sstable::component_type::TOC);
+    auto file_path = filename(sstable::component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
+    // Writing TOC content to temporary file.
     file f = engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
     auto out = file_writer(std::move(f), 4096);
     auto w = file_writer(std::move(out));
@@ -699,15 +717,27 @@ void sstable::write_toc() {
     w.flush().get();
     w.close().get();
 
+    // Flushing parent directory to guarantee that temporary TOC file reached
+    // the disk.
+    file dir_f = engine().open_directory(_dir).get0();
+    dir_f.flush().get();
+    dir_f.close().get();
+}
+
+void sstable::seal_sstable() {
+    // SSTable sealing is about renaming temporary TOC file after guaranteeing
+    // that each component reached the disk safely.
+
     file dir_f = engine().open_directory(_dir).get0();
     // Guarantee that every component of this sstable reached the disk.
     dir_f.flush().get();
     // Rename TOC because it's no longer temporary.
-    engine().rename_file(file_path, filename(sstable::component_type::TOC)).get();
+    engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC)).get();
     // Guarantee that the changes above reached the disk.
     dir_f.flush().get();
     dir_f.close().get();
     // If this point was reached, sstable should be safe in disk.
+    sstlog.debug("SSTable with generation {} was sealed successfully.", _generation);
 }
 
 void write_crc(const sstring file_path, checksum& c) {
@@ -1181,9 +1211,6 @@ void sstable::do_write_components(::mutation_reader mr,
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
-    if (filter_fp_chance != 1.0) {
-        _components.insert(component_type::Filter);
-    }
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
     prepare_summary(_summary, estimated_partitions);
@@ -1266,13 +1293,6 @@ void sstable::do_write_components(::mutation_reader mr,
     index->close().get();
     _index_file = file(); // index->close() closed _index_file
 
-    _components.insert(component_type::TOC);
-    _components.insert(component_type::Statistics);
-    _components.insert(component_type::Digest);
-    _components.insert(component_type::Index);
-    _components.insert(component_type::Summary);
-    _components.insert(component_type::Data);
-
     if (has_component(sstable::component_type::CompressionInfo)) {
         _collector.add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
     }
@@ -1284,11 +1304,10 @@ void sstable::do_write_components(::mutation_reader mr,
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
     // CRC component must only be present when compression isn't enabled.
-    bool checksum_file = schema->get_compressor_params().get_compressor() == compressor::none;
+    bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
         auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
-        _components.insert(component_type::CRC);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
@@ -1298,7 +1317,6 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     } else {
         prepare_compression(_compression, *schema);
         auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
-        _components.insert(component_type::CompressionInfo);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
@@ -1318,6 +1336,8 @@ future<> sstable::write_components(::mutation_reader mr,
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] () mutable {
         // FIXME: write all components
         touch_directory(_dir).get();
+        generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
+        write_toc();
         create_data().get();
         prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
         write_summary();
@@ -1325,7 +1345,7 @@ future<> sstable::write_components(::mutation_reader mr,
         write_statistics();
         // NOTE: write_compression means maybe_write_compression.
         write_compression();
-        write_toc();
+        seal_sstable();
     });
 }
 

@@ -104,6 +104,7 @@ public:
         CRC,
         Filter,
         Statistics,
+        TemporaryTOC,
     };
     enum class version_types { ka, la };
     enum class format_types { big };
@@ -318,7 +319,9 @@ private:
     void write_simple(T& comp);
 
     future<> read_toc();
+    void generate_toc(compressor c, double filter_fp_chance);
     void write_toc();
+    void seal_sstable();
 
     future<> read_compression();
     void write_compression();
