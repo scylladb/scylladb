@@ -1633,6 +1633,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsig
             }
             remove_file(file_path).get();
         }
+        fsync_directory(dir).get();
         // Removing temporary
         remove_file(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
         // Fsync'ing column family dir to guarantee that deletion completed.
