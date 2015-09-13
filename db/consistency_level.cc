@@ -38,6 +38,8 @@
 
 namespace db {
 
+logging::logger cl_logger("consistency");
+
 size_t quorum_for(keyspace& ks) {
     return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
 }

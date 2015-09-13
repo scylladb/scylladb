@@ -37,6 +37,8 @@
 
 namespace db {
 
+extern logging::logger cl_logger;
+
 size_t quorum_for(keyspace& ks);
 
 size_t local_quorum_for(keyspace& ks, const sstring& dc);
@@ -168,11 +170,11 @@ inline void assure_sufficient_live_nodes(
         if (assure_sufficient_live_nodes_each_quorum(cl, ks, live_endpoints)) {
             break;
         }
-// Fallthough on purpose for SimpleStrategy
+    // Fallthough on purpose for SimpleStrategy
     default:
         size_t live = live_endpoints.size();
         if (live < need) {
-            //                    logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", Iterables.toString(liveEndpoints), blockFor);
+            cl_logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", live, need);
             throw exceptions::unavailable_exception(cl, need, live);
         }
         break;
