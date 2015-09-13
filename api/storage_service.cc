@@ -254,9 +254,9 @@ void set_storage_service(http_context& ctx, routes& r) {
             column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
         }
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
-            for (auto cf : column_families) {
-                db.find_column_family(keyspace, cf).flush();
-            }
+            return parallel_for_each(column_families, [&db, keyspace](const sstring& cf) mutable {
+                return db.find_column_family(keyspace, cf).flush();
+            });
         }).then([]{
                 return make_ready_future<json::json_return_type>(json_void());
         });
