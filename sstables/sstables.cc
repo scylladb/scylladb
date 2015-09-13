@@ -1584,7 +1584,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
 }
 
 static future<bool>
-file_existence(sstring filename) {
+file_exists(sstring filename) {
     return engine().open_file_dma(filename, open_flags::ro).then([] (file f) {
         return f.close().finally([f] {});
     }).then_wrapped([] (future<> f) {
@@ -1603,11 +1603,11 @@ file_existence(sstring filename) {
 future<>
 sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
-        auto toc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+        auto toc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
         // assert that toc doesn't exist for sstable with temporary toc.
         assert(toc == false);
 
-        auto tmptoc = file_existence(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
+        auto tmptoc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
 
@@ -1627,7 +1627,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsig
 
             auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
             // Skip component that doesn't exist.
-            auto exists = file_existence(file_path).get0();
+            auto exists = file_exists(file_path).get0();
             if (!exists) {
                 continue;
             }
