@@ -1381,12 +1381,8 @@ sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
 }
 
-const sstring sstable::temporary_filename(component_type f) {
-    return filename(_dir, _ks, _cf, _version, _generation, _format, f, true);
-}
-
 const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
-                                format_types format, component_type component, bool temporary) {
+                                format_types format, component_type component) {
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
         { sstable::version_types::ka, [] (entry_descriptor d) {
@@ -1397,11 +1393,7 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
         }
     };
 
-    if (temporary) {
-        return dir + "/tmp-" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
-    } else {
-        return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
-    }
+    return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {

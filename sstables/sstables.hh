@@ -159,7 +159,7 @@ public:
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
     static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
-                                  format_types format, component_type component, bool temporary = false);
+                                  format_types format, component_type component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
     static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation,
@@ -314,7 +314,6 @@ private:
     const bool has_component(component_type f);
 
     const sstring filename(component_type f) const;
-    const sstring temporary_filename(component_type f);
 
     template <sstable::component_type Type, typename T>
     future<> read_simple(T& comp);
