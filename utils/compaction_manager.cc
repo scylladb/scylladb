@@ -102,6 +102,7 @@ future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task>& 
         // gate_closed_exception exception.
         task->compaction_sem.signal();
         return task->compaction_done.then([task] {
+            task->compaction_gate = seastar::gate();
             task->stopping = false;
             return make_ready_future<>();
         });
