@@ -199,6 +199,8 @@ args = arg_parser.parse_args()
 defines = []
 urchin_libs = '-llz4 -lsnappy -lz -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
 
+extra_cxxflags = {}
+
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
 urchin_core = (['database.cc',
@@ -208,6 +210,7 @@ urchin_core = (['database.cc',
                  'row_cache.cc',
                  'frozen_mutation.cc',
                  'memtable.cc',
+                 'release.cc',
                  'utils/logalloc.cc',
                  'utils/large_bitset.cc',
                  'mutation_partition.cc',
@@ -482,6 +485,18 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
+status = subprocess.call("./SCYLLA-VERSION-GEN")
+if status != 0:
+    print('Version file generation failed')
+    sys.exit(1)
+
+file = open('build/SCYLLA-VERSION-FILE', 'r')
+scylla_version = file.read().strip()
+file = open('build/SCYLLA-RELEASE-FILE', 'r')
+scylla_release = file.read().strip()
+
+extra_cxxflags["release.cc"] = "-DSCYLLA_VERSION=\"\\\"" + scylla_version + "\\\"\" -DSCYLLA_RELEASE=\"\\\"" + scylla_release + "\\\"\""
+
 seastar_flags = ['--disable-xen']
 if args.dpdk:
     # fake dependencies on dpdk, so that it is built before anything else
@@ -523,6 +538,7 @@ user_cflags = args.user_cflags
 
 outdir = 'build'
 buildfile = 'build.ninja'
+
 os.makedirs(outdir, exist_ok = True)
 do_sanitize = True
 if args.static:
@@ -654,6 +670,8 @@ with open(buildfile, 'w') as f:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
+            if src in extra_cxxflags:
+                f.write('    cxxflags = {}\n'.format(extra_cxxflags[src]))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
