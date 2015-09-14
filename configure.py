@@ -671,7 +671,7 @@ with open(buildfile, 'w') as f:
             gen_headers += list(swaggers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
             if src in extra_cxxflags:
-                f.write('    cxxflags = {}\n'.format(extra_cxxflags[src]))
+                f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode = mode, extra_cxxflags = extra_cxxflags[src], **modeval))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
