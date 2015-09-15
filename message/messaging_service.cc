@@ -171,16 +171,16 @@ constexpr int32_t messaging_service::current_version;
 distributed<messaging_service> _the_messaging_service;
 
 bool operator==(const shard_id& x, const shard_id& y) {
-    return x.addr == y.addr && x.cpu_id == y.cpu_id ;
+    // Ignore cpu id for now since we do not really support shard to shard connections
+    return x.addr == y.addr;
 }
 
 bool operator<(const shard_id& x, const shard_id& y) {
+    // Ignore cpu id for now since we do not really support shard to shard connections
     if (x.addr < y.addr) {
         return true;
-    } else if (y.addr < x.addr) {
-        return false;
     } else {
-        return x.cpu_id < y.cpu_id;
+        return false;
     }
 }
 
@@ -189,8 +189,7 @@ std::ostream& operator<<(std::ostream& os, const shard_id& x) {
 }
 
 size_t shard_id::hash::operator()(const shard_id& id) const {
-    // Ignore the cpu id for now since we do not really support
-    // shard to shard connections
+    // Ignore cpu id for now since we do not really support // shard to shard connections
     return std::hash<uint32_t>()(id.addr.raw_addr());
 }
 
