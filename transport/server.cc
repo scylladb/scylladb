@@ -164,6 +164,17 @@ event::event_type parse_event_type(const sstring& value)
     }
 }
 
+cql_load_balance parse_load_balance(sstring value)
+{
+    if (value == "none") {
+        return cql_load_balance::none;
+    } else if (value == "round-robin") {
+        return cql_load_balance::round_robin;
+    } else {
+        throw std::invalid_argument("Unknown load balancing algorithm: " + value);
+    }
+}
+
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
@@ -198,10 +209,11 @@ private:
     sstring make_frame(uint8_t version, size_t length);
 };
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp)
+cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
     : _proxy(proxy)
     , _query_processor(qp)
     , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
+    , _lb(lb)
 {
 }
 
@@ -449,10 +461,15 @@ future<> cql_server::connection::process_request() {
             ++_server._requests_serving;
 
             with_gate(_pending_requests_gate, [this, op, stream, buf = std::move(buf)] () mutable {
-                auto view = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                return this->process_request_one(view, op, stream, _client_state).then([this] (auto&& response) {
+                auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
+                auto cpu = pick_request_cpu();
+                return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state] () mutable {
+                    return this->process_request_one(bv, op, stream, std::move(client_state)).then([] (auto&& response) {
+                        return std::make_pair(make_foreign(response.first), response.second);
+                    });
+                }).then([this] (auto&& response) {
                     _client_state.merge(response.second);
-                    return this->write_response(response.first);
+                    return this->write_response(std::move(response.first));
                 }).then([buf = std::move(buf)] {
                     // Keep buf alive.
                 });
@@ -463,6 +480,14 @@ future<> cql_server::connection::process_request() {
             return make_ready_future<>();
         });
     });
+}
+
+unsigned cql_server::connection::pick_request_cpu()
+{
+    if (_server._lb == cql_load_balance::round_robin) {
+        return _request_cpu++ % smp::count;
+    }
+    return engine().cpu_id();
 }
 
 future<response_type> cql_server::connection::process_startup(uint16_t stream, bytes_view buf, service::client_state client_state)
@@ -815,11 +840,13 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
     return response;
 }
 
-future<> cql_server::connection::write_response(shared_ptr<cql_server::response> response)
+future<> cql_server::connection::write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response)
 {
     _ready_to_respond = _ready_to_respond.then([this, response = std::move(response)] () mutable {
-        return response->output(_write_buf, _version).then([this, response] {
-            return _write_buf.flush();
+        return do_with(std::move(response), [this] (auto& response) {
+            return response->output(_write_buf, _version).then([this] {
+                return _write_buf.flush();
+            });
         });
     });
     return make_ready_future<>();

@@ -65,7 +65,16 @@ struct [[gnu::packed]] cql_binary_frame_v3 {
     }
 };
 
+enum class cql_load_balance {
+    none,
+    round_robin,
+};
+
+cql_load_balance parse_load_balance(sstring value);
+
 class cql_server {
+public:
+private:
     class event_notifier;
 
     static constexpr int current_version = 3;
@@ -81,8 +90,9 @@ private:
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;
     uint64_t _requests_serving = 0;
+    cql_load_balance _lb;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp);
+    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
     future<> stop();
@@ -153,6 +163,7 @@ class cql_server::connection {
     serialization_format _serialization_format = serialization_format::use_16_bit();
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
+    unsigned _request_cpu = 0;
 public:
     connection(cql_server& server, connected_socket&& fd, socket_address addr);
     ~connection();
@@ -161,6 +172,7 @@ public:
 private:
     future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state);
     unsigned frame_size() const;
+    unsigned pick_request_cpu();
     cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
     future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
     future<response_type> process_startup(uint16_t stream, bytes_view buf, service::client_state client_state);
@@ -184,7 +196,7 @@ private:
     shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
     shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
     shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
-    future<> write_response(shared_ptr<cql_server::response> response);
+    future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response);
 
     void check_room(bytes_view& buf, size_t n);
     void validate_utf8(sstring_view s);
