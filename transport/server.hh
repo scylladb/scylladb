@@ -156,34 +156,31 @@ public:
     future<> process();
     future<> process_request();
 private:
-
-    future<> process_request_one(temporary_buffer<char> buf,
-                                 uint8_t op,
-                                 uint16_t stream);
+    future<shared_ptr<cql_server::response>> process_request_one(temporary_buffer<char> buf, uint8_t op, uint16_t stream);
     unsigned frame_size() const;
     cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
     future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
-    future<> process_startup(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_auth_response(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_options(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_query(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_prepare(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_execute(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_register(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_startup(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_auth_response(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_options(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_query(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_prepare(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_execute(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_batch(uint16_t stream, temporary_buffer<char> buf);
+    future<shared_ptr<cql_server::response>> process_register(uint16_t stream, temporary_buffer<char> buf);
 
-    future<> write_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
-    future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
-    future<> write_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type);
-    future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
-    future<> write_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
-    future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
-    future<> write_ready(int16_t stream);
-    future<> write_supported(int16_t stream);
-    future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
-    future<> write_topology_change_event(const transport::event::topology_change& event);
-    future<> write_status_change_event(const transport::event::status_change& event);
-    future<> write_schema_change_event(const transport::event::schema_change& event);
+    shared_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
+    shared_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
+    shared_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type);
+    shared_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
+    shared_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
+    shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg);
+    shared_ptr<cql_server::response> make_ready(int16_t stream);
+    shared_ptr<cql_server::response> make_supported(int16_t stream);
+    shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
+    shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
+    shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
+    shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
     future<> write_response(shared_ptr<cql_server::response> response);
 
     void check_room(temporary_buffer<char>& buf, size_t n);
