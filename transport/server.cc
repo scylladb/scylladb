@@ -11,6 +11,7 @@
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
+#include "cql3/statements/batch_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
 #include "db/consistency_level.hh"
@@ -533,8 +534,71 @@ future<> cql_server::connection::process_execute(uint16_t stream, temporary_buff
 
 future<> cql_server::connection::process_batch(uint16_t stream, temporary_buffer<char> buf)
 {
-    assert(0);
-    return make_ready_future<>();
+    if (_version == 1) {
+        throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
+    }
+
+    const auto type = read_byte(buf);
+    const unsigned n = read_unsigned_short(buf);
+
+    std::vector<shared_ptr<cql3::statements::modification_statement>> modifications;
+    std::vector<std::vector<bytes_view_opt>> values;
+
+    modifications.reserve(n);
+    values.reserve(n);
+
+    for ([[gnu::unused]] auto i : boost::irange(0u, n)) {
+        const auto kind = read_byte(buf);
+
+        ::shared_ptr<cql3::statements::parsed_statement::prepared> ps;
+
+        switch (kind) {
+        case 0: {
+            auto query = read_long_string_view(buf).to_string();
+            ps = _server._query_processor.local().get_statement(query,
+                    _client_state);
+            break;
+        }
+        case 1: {
+            auto id = read_short_bytes(buf);
+            ps = _server._query_processor.local().get_prepared(id);
+            if (!ps) {
+                throw exceptions::prepared_query_not_found_exception(id);
+            }
+            break;
+        }
+        default:
+            throw exceptions::protocol_exception(
+                    "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
+                            + std::to_string(int(kind)));
+        }
+
+        if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
+            throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
+        }
+
+        modifications.emplace_back(static_pointer_cast<cql3::statements::modification_statement>(ps->statement));
+
+        std::vector<bytes_view_opt> tmp;
+        read_value_view_list(buf, tmp);
+
+        auto stmt = ps->statement;
+        if (stmt->get_bound_terms() != tmp.size()) {
+            throw exceptions::invalid_request_exception(sprint("There were %d markers(?) in CQL but %d bound variables",
+                            stmt->get_bound_terms(), tmp.size()));
+        }
+        values.emplace_back(std::move(tmp));
+    }
+
+    auto& q_state = get_query_state(stream);
+    auto& query_state = q_state.query_state;
+    q_state.options = std::make_unique<cql3::query_options>(std::move(*read_options(buf)), std::move(values));
+    auto& options = *q_state.options;
+
+    auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
+    return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
+        return this->write_result(stream, msg);
+    });
 }
 
 future<> cql_server::connection::process_register(uint16_t stream, temporary_buffer<char> buf)
