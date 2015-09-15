@@ -158,6 +158,9 @@ private:
     std::vector<range_type> compute_bounds(const query_options& options) const {
         std::vector<range_type> ranges;
 
+        static constexpr auto invalid_null_msg = std::is_same<ValueType, partition_key>::value
+            ? "Invalid null value for partition key part %s" : "Invalid null value for clustering key part %s";
+
         if (_restrictions->is_all_eq()) {
             ranges.reserve(1);
             if (_restrictions->size() == 1) {
@@ -166,7 +169,7 @@ private:
                 auto&& r = e.second;
                 auto&& val = r->value(options);
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint(invalid_null_msg, def->name_as_text()));
                 }
                 ranges.emplace_back(range_type::make_singular(ValueType::from_single_value(*_schema, std::move(*val))));
                 return ranges;
@@ -179,7 +182,7 @@ private:
                 assert(components.size() == _schema->position(*def));
                 auto&& val = r->value(options);
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint(invalid_null_msg, def->name_as_text()));
                 }
                 components.emplace_back(std::move(*val));
             }
@@ -206,7 +209,7 @@ private:
                         }
                         auto value = r->bounds(b, options)[0];
                         if (!value) {
-                            throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
+                            throw exceptions::invalid_request_exception(sprint(invalid_null_msg, r->to_string()));
                         }
                         return {range_bound(ValueType::from_single_value(*_schema, *value), r->is_inclusive(b))};
                     };
@@ -225,7 +228,7 @@ private:
                         if (r->has_bound(bound)) {
                             auto value = std::move(r->bounds(bound, options)[0]);
                             if (!value) {
-                                throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
+                                throw exceptions::invalid_request_exception(sprint(invalid_null_msg, r->to_string()));
                             }
                             prefix.emplace_back(std::move(value));
                             auto val = ValueType::from_optional_exploded(*_schema, prefix);
@@ -251,7 +254,7 @@ private:
             auto values = r->values(options);
             for (auto&& val : values) {
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint(invalid_null_msg, def->name_as_text()));
                 }
             }
             if (values.empty()) {
