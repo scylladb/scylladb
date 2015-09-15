@@ -61,6 +61,9 @@ private:
     serialization_format _serialization_format;
     std::experimental::optional<std::vector<query_options>> _batch_options;
 public:
+    query_options(query_options&&) = default;
+    query_options(const query_options&) = delete;
+
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<bytes_opt> values,
@@ -76,6 +79,16 @@ public:
                            specific_options options,
                            int32_t protocol_version,
                            serialization_format sf);
+
+    explicit query_options(db::consistency_level consistency,
+                           std::vector<std::vector<bytes_view_opt>> value_views,
+                           bool skip_metadata,
+                           specific_options options,
+                           int32_t protocol_version,
+                           serialization_format sf);
+
+    // Batch query_options constructor
+    explicit query_options(query_options&&, std::vector<std::vector<bytes_view_opt>> value_views);
 
     // It can't be const because of prepare()
     static thread_local query_options DEFAULT;
