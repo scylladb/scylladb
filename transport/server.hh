@@ -206,7 +206,6 @@ private:
     std::unordered_map<sstring, sstring> read_string_map(temporary_buffer<char>& buf);
     std::unique_ptr<cql3::query_options> read_options(temporary_buffer<char>& buf);
 
-    cql_query_state& get_query_state(uint16_t stream);
     void init_serialization_format();
 
     friend event_notifier;
