@@ -449,12 +449,9 @@ future<> cql_server::connection::process_request() {
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(
-                _pending_requests_gate,
-                [this, op, stream, buf = std::move(buf)] () mutable {
-                    return process_request_one(std::move(buf), op, stream);
-                }
-            ).handle_exception([] (std::exception_ptr ex) {
+            with_gate(_pending_requests_gate, [this, op, stream, buf = std::move(buf)] () mutable {
+                return process_request_one(std::move(buf), op, stream);
+            }).handle_exception([] (std::exception_ptr ex) {
                 logger.error("request processing failed: {}", ex);
             });
 
