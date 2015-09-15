@@ -183,18 +183,19 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
                 logger.debug("replaying at {} {}:{} at {}", fm.column_family_id(),
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
             }
-
-            try {
-                cf.apply(fm, replay_position(shard, rp.base_id(), rp.pos));
-            } catch (replay_position_reordered_exception&) {
-                logger.debug("replay_position reordering detected");
-                auto m = make_lw_shared<frozen_mutation>(std::move(fm));
-                return db.apply(*m).then([m] {});
-            }
+            // Removed forwarding "new" RP. Instead give none/empty.
+            // This is what origin does, and it should be fine.
+            // The end result should be that once sstables are flushed out
+            // their "replay_position" attribute will be empty, which is
+            // lower than anything the new session will produce.
+            cf.apply(fm);
             s->applied_mutations++;
             return make_ready_future<>();
+        }).handle_exception([s](auto ep) {
+            s->invalid_mutations++;
+            // TODO: write mutation to file like origin.
+            logger.warn("error replaying: {}", ep);
         });
-
     } catch (no_such_column_family&) {
         // No such CF now? Origin just ignores this.
     } catch (...) {
