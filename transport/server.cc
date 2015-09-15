@@ -346,7 +346,7 @@ cql_server::connection::read_frame() {
 }
 
 future<shared_ptr<cql_server::response>>
-cql_server::connection::process_request_one(temporary_buffer<char> buf, uint8_t op, uint16_t stream) {
+cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream) {
     return make_ready_future<>().then([this, op, stream, buf = std::move(buf)] () mutable {
         switch (static_cast<cql_binary_opcode>(op)) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf));
@@ -449,8 +449,12 @@ future<> cql_server::connection::process_request() {
             ++_server._requests_serving;
 
             with_gate(_pending_requests_gate, [this, op, stream, buf = std::move(buf)] () mutable {
-                return process_request_one(std::move(buf), op, stream).then([this] (auto&& response) {
+                auto view = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
+                return this->process_request_one(view, op, stream).then([this] (auto&& response) {
+                    // FIXME: reconcile client state
                     return this->write_response(response);
+                }).then([buf = std::move(buf)] {
+                    // Keep buf alive.
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 logger.error("request processing failed: {}", ex);
@@ -461,19 +465,19 @@ future<> cql_server::connection::process_request() {
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_startup(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_startup(uint16_t stream, bytes_view buf)
 {
     /*auto string_map =*/ read_string_map(buf);
     return make_ready_future<shared_ptr<cql_server::response>>(make_ready(stream));
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, bytes_view buf)
 {
     assert(0);
     return make_ready_future<shared_ptr<cql_server::response>>();
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_options(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_options(uint16_t stream, bytes_view buf)
 {
     return make_ready_future<shared_ptr<cql_server::response>>(make_supported(stream));
 }
@@ -487,7 +491,7 @@ cql_server::connection::init_serialization_format() {
     }
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_query(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_query(uint16_t stream, bytes_view buf)
 {
     auto query = read_long_string_view(buf);
     auto q_state = std::make_unique<cql_query_state>(_client_state);
@@ -502,7 +506,7 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_query(u
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, bytes_view buf)
 {
     auto query = read_long_string_view(buf).to_string();
     auto cpu_id = engine().cpu_id();
@@ -525,7 +529,7 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_prepare
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, temporary_buffer<char> buf)
+future<shared_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, bytes_view buf)
 {
     auto id = read_short_bytes(buf);
     auto prepared = _server._query_processor.local().get_prepared(id);
@@ -550,7 +554,7 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_execute
 }
 
 future<shared_ptr<cql_server::response>>
-cql_server::connection::process_batch(uint16_t stream, temporary_buffer<char> buf)
+cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
 {
     if (_version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -623,7 +627,7 @@ cql_server::connection::process_batch(uint16_t stream, temporary_buffer<char> bu
 }
 
 future<shared_ptr<cql_server::response>>
-cql_server::connection::process_register(uint16_t stream, temporary_buffer<char> buf)
+cql_server::connection::process_register(uint16_t stream, bytes_view buf)
 {
     std::vector<sstring> event_types;
     read_string_list(buf, event_types);
@@ -828,7 +832,7 @@ future<> cql_server::connection::write_response(shared_ptr<cql_server::response>
     return make_ready_future<>();
 }
 
-void cql_server::connection::check_room(temporary_buffer<char>& buf, size_t n)
+void cql_server::connection::check_room(bytes_view& buf, size_t n)
 {
     if (buf.size() < n) {
         throw exceptions::protocol_exception(sprint("truncated frame: expected %lu bytes, length is %lu", n, buf.size()));
@@ -844,15 +848,15 @@ void cql_server::connection::validate_utf8(sstring_view s)
     }
 }
 
-int8_t cql_server::connection::read_byte(temporary_buffer<char>& buf)
+int8_t cql_server::connection::read_byte(bytes_view& buf)
 {
     check_room(buf, 1);
     int8_t n = buf[0];
-    buf.trim_front(1);
+    buf.remove_prefix(1);
     return n;
 }
 
-int32_t cql_server::connection::read_int(temporary_buffer<char>& buf)
+int32_t cql_server::connection::read_int(bytes_view& buf)
 {
     check_room(buf, sizeof(int32_t));
     auto p = reinterpret_cast<const uint8_t*>(buf.begin());
@@ -860,11 +864,11 @@ int32_t cql_server::connection::read_int(temporary_buffer<char>& buf)
                | (static_cast<uint32_t>(p[1]) << 16)
                | (static_cast<uint32_t>(p[2]) << 8)
                | (static_cast<uint32_t>(p[3]));
-    buf.trim_front(4);
+    buf.remove_prefix(4);
     return n;
 }
 
-int64_t cql_server::connection::read_long(temporary_buffer<char>& buf)
+int64_t cql_server::connection::read_long(bytes_view& buf)
 {
     check_room(buf, sizeof(int64_t));
     auto p = reinterpret_cast<const uint8_t*>(buf.begin());
@@ -876,73 +880,73 @@ int64_t cql_server::connection::read_long(temporary_buffer<char>& buf)
                | (static_cast<uint64_t>(p[5]) << 16)
                | (static_cast<uint64_t>(p[6]) << 8)
                | (static_cast<uint64_t>(p[7]));
-    buf.trim_front(8);
+    buf.remove_prefix(8);
     return n;
 }
 
-int16_t cql_server::connection::read_short(temporary_buffer<char>& buf)
+int16_t cql_server::connection::read_short(bytes_view& buf)
 {
     return static_cast<int16_t>(read_unsigned_short(buf));
 }
 
-uint16_t cql_server::connection::read_unsigned_short(temporary_buffer<char>& buf)
+uint16_t cql_server::connection::read_unsigned_short(bytes_view& buf)
 {
     check_room(buf, sizeof(uint16_t));
     auto p = reinterpret_cast<const uint8_t*>(buf.begin());
     uint16_t n = (static_cast<uint16_t>(p[0]) << 8)
                | (static_cast<uint16_t>(p[1]));
-    buf.trim_front(2);
+    buf.remove_prefix(2);
     return n;
 }
 
-bytes cql_server::connection::read_short_bytes(temporary_buffer<char>& buf)
+bytes cql_server::connection::read_short_bytes(bytes_view& buf)
 {
     auto n = read_short(buf);
     check_room(buf, n);
     bytes s{reinterpret_cast<const int8_t*>(buf.begin()), static_cast<size_t>(n)};
     assert(n >= 0);
-    buf.trim_front(n);
+    buf.remove_prefix(n);
     return s;
 }
 
-sstring cql_server::connection::read_string(temporary_buffer<char>& buf)
+sstring cql_server::connection::read_string(bytes_view& buf)
 {
     auto n = read_short(buf);
     check_room(buf, n);
-    sstring s{buf.begin(), static_cast<size_t>(n)};
+    sstring s{reinterpret_cast<const char*>(buf.begin()), static_cast<size_t>(n)};
     assert(n >= 0);
-    buf.trim_front(n);
+    buf.remove_prefix(n);
     validate_utf8(s);
     return s;
 }
 
-sstring_view cql_server::connection::read_string_view(temporary_buffer<char>& buf)
+sstring_view cql_server::connection::read_string_view(bytes_view& buf)
 {
     auto n = read_short(buf);
     check_room(buf, n);
-    sstring_view s{buf.begin(), static_cast<size_t>(n)};
+    sstring_view s{reinterpret_cast<const char*>(buf.begin()), static_cast<size_t>(n)};
     assert(n >= 0);
-    buf.trim_front(n);
+    buf.remove_prefix(n);
     validate_utf8(s);
     return s;
 }
 
-sstring_view cql_server::connection::read_long_string_view(temporary_buffer<char>& buf)
+sstring_view cql_server::connection::read_long_string_view(bytes_view& buf)
 {
     auto n = read_int(buf);
     check_room(buf, n);
-    sstring_view s{buf.begin(), static_cast<size_t>(n)};
-    buf.trim_front(n);
+    sstring_view s{reinterpret_cast<const char*>(buf.begin()), static_cast<size_t>(n)};
+    buf.remove_prefix(n);
     validate_utf8(s);
     return s;
 }
 
-db::consistency_level cql_server::connection::read_consistency(temporary_buffer<char>& buf)
+db::consistency_level cql_server::connection::read_consistency(bytes_view& buf)
 {
     return wire_to_consistency(read_short(buf));
 }
 
-std::unordered_map<sstring, sstring> cql_server::connection::read_string_map(temporary_buffer<char>& buf)
+std::unordered_map<sstring, sstring> cql_server::connection::read_string_map(bytes_view& buf)
 {
     std::unordered_map<sstring, sstring> string_map;
     auto n = read_short(buf);
@@ -976,7 +980,7 @@ using options_flag_enum = super_enum<options_flag,
     options_flag::NAMES_FOR_VALUES
 >;
 
-std::unique_ptr<cql3::query_options> cql_server::connection::read_options(temporary_buffer<char>& buf)
+std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_view& buf)
 {
     auto consistency = read_consistency(buf);
     if (_version == 1) {
@@ -1042,7 +1046,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
     return std::move(options);
 }
 
-void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
+void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
     uint16_t size = read_unsigned_short(buf);
     names.reserve(size);
     values.reserve(size);
@@ -1052,7 +1056,7 @@ void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& bu
     }
 }
 
-void cql_server::connection::read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings) {
+void cql_server::connection::read_string_list(bytes_view& buf, std::vector<sstring>& strings) {
     uint16_t size = read_unsigned_short(buf);
     strings.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
@@ -1060,7 +1064,7 @@ void cql_server::connection::read_string_list(temporary_buffer<char>& buf, std::
     }
 }
 
-void cql_server::connection::read_value_view_list(temporary_buffer<char>& buf, std::vector<bytes_view_opt>& values) {
+void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<bytes_view_opt>& values) {
     uint16_t size = read_unsigned_short(buf);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
@@ -1068,25 +1072,25 @@ void cql_server::connection::read_value_view_list(temporary_buffer<char>& buf, s
     }
 }
 
-bytes_opt cql_server::connection::read_value(temporary_buffer<char>& buf) {
+bytes_opt cql_server::connection::read_value(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
         return {};
     }
     check_room(buf, len);
     bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
-    buf.trim_front(len);
+    buf.remove_prefix(len);
     return {std::move(b)};
 }
 
-bytes_view_opt cql_server::connection::read_value_view(temporary_buffer<char>& buf) {
+bytes_view_opt cql_server::connection::read_value_view(bytes_view& buf) {
     auto len = read_int(buf);
     if (len < 0) {
         return {};
     }
     check_room(buf, len);
     bytes_view bv(reinterpret_cast<const int8_t*>(buf.begin()), len);
-    buf.trim_front(len);
+    buf.remove_prefix(len);
     return {std::move(bv)};
 }
 
