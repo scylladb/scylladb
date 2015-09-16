@@ -44,6 +44,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/indirected.hpp>
 #include <boost/range/algorithm/count_if.hpp>
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/algorithm/find_if.hpp>
@@ -1275,18 +1276,21 @@ class digest_read_resolver : public abstract_read_resolver {
         _digest_results.clear();
     }
     virtual size_t response_count() const override {
-        return _digest_results.size();
+        return _digest_results.size() + _data_results.size();
     }
     bool digests_match() const {
-        assert(_digest_results.size());
-        auto& first = *_digest_results.begin();
-        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
+        assert(response_count());
+        if (response_count() == 1) {
+            return true;
+        }
+        auto digests = boost::range::join(_digest_results, _data_results | boost::adaptors::indirected | boost::adaptors::transformed(std::mem_fn(&query::result::digest)));
+        const query::result_digest& first = *digests.begin();
+        return std::find_if(digests.begin() + 1, digests.end(), [&first] (const query::result_digest& digest) { return digest != first; }) == digests.end();
     }
 public:
     digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
-            _digest_results.emplace_back(result->digest());
             _data_results.emplace_back(std::move(result));
             got_response(from);
         }
@@ -1317,7 +1321,7 @@ public:
                 _cl_promise.set_value();
             }
         }
-        if (_digest_results.size() == _targets_count) {
+        if (is_completed()) {
             _timeout.cancel();
             _done_promise.set_value();
         }
@@ -1332,7 +1336,7 @@ public:
         _targets_count += targets_count;
     }
     bool is_completed() {
-        return _digest_results.size() == _targets_count;
+        return response_count() == _targets_count;
     }
 };
 

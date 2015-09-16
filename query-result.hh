@@ -16,10 +16,10 @@ class result_digest {
 public:
     result_digest(bytes&& digest) : _digest(std::move(digest)) {}
     const bytes& get() { return _digest; }
-    bool operator==(const result_digest& rh) {
+    bool operator==(const result_digest& rh) const {
         return _digest == rh._digest;
     }
-    bool operator!=(const result_digest& rh) {
+    bool operator!=(const result_digest& rh) const {
         return _digest != rh._digest;
     }
     size_t serialized_size() const { return _digest.size(); }
