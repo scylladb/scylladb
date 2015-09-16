@@ -309,10 +309,9 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
                                     set->insert(rp.id);
                                 });
                     }).then([log]() {
-                        return count_files(log->first.path).then([](size_t n) {
-                                    BOOST_REQUIRE(n > 0);
-                                    BOOST_REQUIRE(n < 2);
-                                });
+                        auto n = log->second.get_active_segment_names().size();
+                        BOOST_REQUIRE(n > 0);
+                        BOOST_REQUIRE(n < 2);
                     }).finally([log, r = std::move(r)]() {
                         return log->second.clear().then([log] {});
                     });
