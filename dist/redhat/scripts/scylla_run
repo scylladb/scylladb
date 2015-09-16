@@ -1,6 +1,6 @@
 #!/bin/sh -e
 
-args="--log-to-syslog 1 --default-log-level info --options-file $OPTS_FILE $SCYLLA_ARGS"
+args="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --options-file $OPTS_FILE $SCYLLA_ARGS"
 
 if [ "$NETWORK_MODE" = "posix" ]; then
     args="$args --network-stack posix"
