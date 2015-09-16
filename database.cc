@@ -730,6 +730,11 @@ future<> column_family::populate(sstring sstdir) {
                 assert(descriptor->format);
                 sstables::sstable::format_types format = descriptor->format.value();
 
+                if (engine().cpu_id() != 0) {
+                    dblog.info("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
+                    return make_ready_future<>();
+                }
+                // shard 0 is the responsible for removing a partial sstable.
                 return sstables::sstable::remove_sstable_with_temp_toc(_schema->ks_name(), _schema->cf_name(), sstdir, gen, version, format);
             } else if (v.second != status::has_toc_file) {
                 throw sstables::malformed_sstable_exception(sprint("At directory: %s: no TOC found for SSTable with generation %d!. Refusing to boot", sstdir, v.first));
