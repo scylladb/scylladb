@@ -147,13 +147,13 @@ public:
     )   \
     /* Default directories */   \
     /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */  \
-    val(commitlog_directory, sstring, "/var/lib/cassandra/commitlog", Used,   \
+    val(commitlog_directory, sstring, "/var/lib/scylla/commitlog", Used,   \
             "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories."   \
     )                                           \
-    val(data_file_directories, string_list, { "/var/lib/cassandra/data" }, Used,   \
+    val(data_file_directories, string_list, { "/var/lib/scylla/data" }, Used,   \
             "The directory location where table data (SSTables) is stored"   \
     )                                           \
-    val(saved_caches_directory, sstring, "/var/lib/cassandra/saved_caches", Unused, \
+    val(saved_caches_directory, sstring, "/var/lib/scylla/saved_caches", Unused, \
             "The directory location where table key and row caches are stored."  \
     )                                                   \
     /* Commonly used properties */  \
@@ -219,6 +219,9 @@ public:
             "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"  \
             "Related information: Configuring compaction"   \
     )                                                   \
+    val(compaction_large_partition_warning_threshold_mb, uint32_t, 100, Unused, \
+            "Log a warning when compacting partitions larger than this value"   \
+    )                                               \
     /* Common memtable settings */  \
     val(memtable_total_space_in_mb, uint32_t, 0, Used,     \
             "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb."  \
