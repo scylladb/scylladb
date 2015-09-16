@@ -368,6 +368,16 @@ void db::config::read_from_yaml(const char* yaml) {
             logger.error("Option {}, exception while converting value.", label);
         }
     }
+
+    for (auto& p : values) {
+        if (p.second->status() > value_status::Used) {
+            continue;
+        }
+        if (p.second->source() > config_source::None) {
+            continue;
+        }
+        logger.debug("Option {} not set", p.first);
+    }
 }
 
 future<> db::config::read_from_file(file f) {
