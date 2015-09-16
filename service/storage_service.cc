@@ -632,12 +632,16 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
     for (auto e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
-    get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).get();
+    get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
+        logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+    });
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("on_alive endpoint={}", endpoint);
-    get_local_migration_manager().schedule_schema_pull(endpoint, state).get();
+    get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
+        logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+    });
     if (_token_metadata.is_member(endpoint)) {
 #if 0
         HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
@@ -684,7 +688,9 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         }
         do_update_system_peers_table(endpoint, state, value);
         if (state == application_state::SCHEMA) {
-            get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).get();
+            get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
+                logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+            });
         }
     }
     replicate_to_all_cores().get();
