@@ -20,3 +20,5 @@ chown scylla:scylla /data/*
 systemctl disable scylla-setup.service
 systemctl enable scylla-server.service
 systemctl start scylla-server.service
+systemctl enable scylla-jmx.service
+systemctl start scylla-jmx.service

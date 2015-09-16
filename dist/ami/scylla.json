@@ -25,8 +25,7 @@
       "type": "shell",
       "inline": [
         "sudo dnf update -y",
-        "sudo dnf install -y /home/fedora/scylla-server.rpm",
-        "sudo dnf install -y /home/fedora/scylla-server-debuginfo.rpm",
+        "sudo dnf install -y /home/fedora/*.rpm",
         "sudo dnf install -y mdadm xfsprogs",
         "sudo cp /home/fedora/coredump.conf /etc/systemd/coredump.conf",
         "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",

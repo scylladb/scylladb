@@ -21,6 +21,11 @@ if [ ! -f files/scylla-server.rpm ] || [ ! -f files/scylla-server-debuginfo.rpm 
     cd -
 fi
 
+if [ ! -f files/scylla-jmx.rpm ]; then
+    echo "copy files/scylla-jmx.rpm before building AMI"
+    exit 1
+fi
+
 if [ ! -d packer ]; then
     wget https://dl.bintray.com/mitchellh/packer/packer_0.8.6_linux_amd64.zip
     mkdir packer
