@@ -143,6 +143,11 @@ int main(int ac, char** av) {
         print("Scylla version %s starting ...\n", scylla_version());
         auto&& opts = app.configuration();
 
+        // Do this first once set log applied from command line so for example config
+        // parse can get right log level.
+        apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
+                cfg->log_to_stdout(), cfg->log_to_syslog());
+
         return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
