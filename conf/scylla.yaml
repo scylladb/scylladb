@@ -10,6 +10,10 @@
 
 ### Supported Parameters
 
+# The name of the cluster. This is mainly used to prevent machines in
+# one logical cluster from joining another.
+cluster_name: 'Test Cluster'
+
 # This defines the number of tokens randomly assigned to this node on the ring
 # The more tokens, relative to other nodes, the larger the proportion of data
 # that this node will store. You probably want all nodes to have the same number
@@ -140,14 +144,34 @@ write_request_timeout_in_ms: 2000
 # of the snitch, which will be assumed to be on your classpath.
 endpoint_snitch: SimpleSnitch
 
+# The address or interface to bind the Thrift RPC service and native transport
+# server to.
+#
+# Set rpc_address OR rpc_interface, not both. Interfaces must correspond
+# to a single address, IP aliasing is not supported.
+#
+# Leaving rpc_address blank has the same effect as on listen_address
+# (i.e. it will be based on the configured hostname of the node).
+#
+# Note that unlike listen_address, you can specify 0.0.0.0, but you must also
+# set broadcast_rpc_address to a value other than 0.0.0.0.
+#
+# For security reasons, you should not expose this port to the internet.  Firewall it if needed.
+#
+# If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address
+# you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4
+# address will be used. If true the first ipv6 address will be used. Defaults to false preferring
+# ipv4. If there is only one address it will be selected regardless of ipv4/ipv6.
+rpc_address: localhost
+# rpc_interface: eth1
+# rpc_interface_prefer_ipv6: false
+
+# port for Thrift to listen for clients on
+rpc_port: 9160
 
 ###################################################
 ## Not currently supported, reserved for future use
 ###################################################
-
-# The name of the cluster. This is mainly used to prevent machines in
-# one logical cluster from joining another.
-cluster_name: 'Test Cluster'
 
 # initial_token allows you to specify tokens manually.  While you can use # it with
 # vnodes (num_tokens > 1, above) -- in which case you should provide a 
@@ -159,25 +183,27 @@ cluster_name: 'Test Cluster'
 # May either be "true" or "false" to enable globally, or contain a list
 # of data centers to enable per-datacenter.
 # hinted_handoff_enabled: DC1,DC2
-hinted_handoff_enabled: true
+# hinted_handoff_enabled: true
+
 # this defines the maximum amount of time a dead host will have hints
 # generated.  After it has been dead this long, new hints for it will not be
 # created until it has been seen alive and gone down again.
-max_hint_window_in_ms: 10800000 # 3 hours
+# max_hint_window_in_ms: 10800000 # 3 hours
+
 # Maximum throttle in KBs per second, per delivery thread.  This will be
 # reduced proportionally to the number of nodes in the cluster.  (If there
 # are two nodes in the cluster, each delivery thread will use the maximum
 # rate; if there are three, each will throttle to half of the maximum,
 # since we expect two nodes to be delivering hints simultaneously.)
-hinted_handoff_throttle_in_kb: 1024
+# hinted_handoff_throttle_in_kb: 1024
 # Number of threads with which to deliver hints;
 # Consider increasing this number when you have multi-dc deployments, since
 # cross-dc handoff tends to be slower
-max_hints_delivery_threads: 2
+# max_hints_delivery_threads: 2
 
 # Maximum throttle in KBs per second, total. This will be
 # reduced proportionally to the number of nodes in the cluster.
-batchlog_replay_throttle_in_kb: 1024
+# batchlog_replay_throttle_in_kb: 1024
 
 # Authentication backend, implementing IAuthenticator; used to identify users
 # Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
@@ -187,7 +213,7 @@ batchlog_replay_throttle_in_kb: 1024
 # - PasswordAuthenticator relies on username/password pairs to authenticate
 #   users. It keeps usernames and hashed passwords in system_auth.credentials table.
 #   Please increase system_auth keyspace replication factor if you use this authenticator.
-authenticator: AllowAllAuthenticator
+# authenticator: AllowAllAuthenticator
 
 # Authorization backend, implementing IAuthorizer; used to limit access/provide permissions
 # Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthorizer,
@@ -196,13 +222,13 @@ authenticator: AllowAllAuthenticator
 # - AllowAllAuthorizer allows any action to any user - set it to disable authorization.
 # - CassandraAuthorizer stores permissions in system_auth.permissions table. Please
 #   increase system_auth keyspace replication factor if you use this authorizer.
-authorizer: AllowAllAuthorizer
+# authorizer: AllowAllAuthorizer
 
 # Validity period for permissions cache (fetching permissions can be an
 # expensive operation depending on the authorizer, CassandraAuthorizer is
 # one example). Defaults to 2000, set to 0 to disable.
 # Will be disabled automatically for AllowAllAuthorizer.
-permissions_validity_in_ms: 2000
+# permissions_validity_in_ms: 2000
 
 # Refresh interval for permissions cache (if enabled).
 # After this interval, cache entries become eligible for refresh. Upon next
@@ -222,7 +248,7 @@ permissions_validity_in_ms: 2000
 # compatibility include RandomPartitioner, ByteOrderedPartitioner, and
 # OrderPreservingPartitioner.
 #
-partitioner: org.apache.cassandra.dht.Murmur3Partitioner
+# partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
 
 # policy for data disk failures:
@@ -235,7 +261,7 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 #              remaining available sstables.  This means you WILL see obsolete
 #              data at CL.ONE!
 # ignore: ignore fatal errors and let requests fail, as in pre-1.2 Scylla
-disk_failure_policy: stop
+# disk_failure_policy: stop
 
 # policy for commit disk failures:
 # die: shut down gossip and Thrift and kill the JVM, so the node can be replaced.
@@ -244,7 +270,7 @@ disk_failure_policy: stop
 # stop_commit: shutdown the commit log, letting writes collect but
 #              continuing to service reads, as in pre-2.0.5 Scylla
 # ignore: ignore fatal errors and let the batches fail
-commit_failure_policy: stop
+# commit_failure_policy: stop
 
 # Maximum size of the key cache in memory.
 #
@@ -258,7 +284,7 @@ commit_failure_policy: stop
 # NOTE: if you reduce the size, you may not get you hottest keys loaded on startup.
 #
 # Default value is empty to make it "auto" (min(5% of Heap (in MB), 100MB)). Set to 0 to disable key cache.
-key_cache_size_in_mb:
+# key_cache_size_in_mb:
 
 # Duration in seconds after which Scylla should
 # save the key cache. Caches are saved to saved_caches_directory as
@@ -269,7 +295,7 @@ key_cache_size_in_mb:
 # has limited use.
 #
 # Default is 14400 or 4 hours.
-key_cache_save_period: 14400
+# key_cache_save_period: 14400
 
 # Number of keys from the key cache to save
 # Disabled by default, meaning all keys are going to be saved
@@ -279,7 +305,7 @@ key_cache_save_period: 14400
 # NOTE: if you reduce the size, you may not get you hottest keys loaded on startup.
 #
 # Default value is 0, to disable row caching.
-row_cache_size_in_mb: 0
+# row_cache_size_in_mb: 0
 
 # Duration in seconds after which Scylla should
 # save the row cache. Caches are saved to saved_caches_directory as specified
@@ -290,7 +316,7 @@ row_cache_size_in_mb: 0
 # has limited use.
 #
 # Default is 0 to disable saving the row cache.
-row_cache_save_period: 0
+# row_cache_save_period: 0
 
 # Number of keys from the row cache to save
 # Disabled by default, meaning all keys are going to be saved
@@ -309,14 +335,14 @@ row_cache_save_period: 0
 #
 # Default value is empty to make it "auto" (min(2.5% of Heap (in MB), 50MB)). Set to 0 to disable counter cache.
 # NOTE: if you perform counter deletes and rely on low gcgs, you should disable the counter cache.
-counter_cache_size_in_mb:
+# counter_cache_size_in_mb:
 
 # Duration in seconds after which Scylla should
 # save the counter cache (keys only). Caches are saved to saved_caches_directory as
 # specified in this configuration file.
 #
 # Default is 7200 or 2 hours.
-counter_cache_save_period: 7200
+# counter_cache_save_period: 7200
 
 # Number of keys from the counter cache to save
 # Disabled by default, meaning all keys are going to be saved
@@ -352,9 +378,9 @@ counter_cache_save_period: 7200
 # On the other hand, since writes are almost never IO bound, the ideal
 # number of "concurrent_writes" is dependent on the number of cores in
 # your system; (8 * number_of_cores) is a good rule of thumb.
-concurrent_reads: 32
-concurrent_writes: 32
-concurrent_counter_writes: 32
+# concurrent_reads: 32
+# concurrent_writes: 32
+# concurrent_counter_writes: 32
 
 # Total memory to use for sstable-reading buffers.  Defaults to
 # the smaller of 1/4 of heap or 512MB.
@@ -381,7 +407,7 @@ concurrent_counter_writes: 32
 #   heap_buffers:    on heap nio buffers
 #   offheap_buffers: off heap (direct) nio buffers
 #   offheap_objects: native memory, eliminating nio buffer heap overhead
-memtable_allocation_type: heap_buffers
+# memtable_allocation_type: heap_buffers
 
 # Total space to use for commitlogs.  Since commitlog segments are
 # mmapped, and hence use up address space, the default size is 32
@@ -391,7 +417,7 @@ memtable_allocation_type: heap_buffers
 # segment multiple), Scylla will flush every dirty CF in the oldest
 # segment and remove it.  So a small total commitlog space will tend
 # to cause more flush activity on less-active columnfamilies.
-# commitlog_total_space_in_mb: 8192
+commitlog_total_space_in_mb: 8192
 
 # This sets the amount of memtable flush writer threads.  These will
 # be blocked by disk io, and each one will hold a memtable in memory
@@ -410,30 +436,30 @@ memtable_allocation_type: heap_buffers
 # shrink their index summaries in order to meet this limit.  However, this
 # is a best-effort process. In extreme conditions Scylla may need to use
 # more than this amount of memory.
-index_summary_capacity_in_mb:
+# index_summary_capacity_in_mb:
 
 # How frequently index summaries should be resampled.  This is done
 # periodically to redistribute memory from the fixed-size pool to sstables
 # proportional their recent read rates.  Setting to -1 will disable this
 # process, leaving existing index summaries at their current sampling level.
-index_summary_resize_interval_in_minutes: 60
+# index_summary_resize_interval_in_minutes: 60
 
 # Whether to, when doing sequential writing, fsync() at intervals in
 # order to force the operating system to flush the dirty
 # buffers. Enable this to avoid sudden dirty buffer flushing from
 # impacting read latencies. Almost always a good idea on SSDs; not
 # necessarily on platters.
-trickle_fsync: false
-trickle_fsync_interval_in_kb: 10240
+# trickle_fsync: false
+# trickle_fsync_interval_in_kb: 10240
 
 # TCP port, for commands and data
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
-storage_port: 7000
+# storage_port: 7000
 
 # SSL port, for encrypted communication.  Unused unless enabled in
 # encryption_options
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.
-ssl_storage_port: 7001
+# ssl_storage_port: 7001
 
 # listen_interface: eth0
 # listen_interface_prefer_ipv6: false
@@ -445,7 +471,7 @@ ssl_storage_port: 7001
 # Whether to start the native transport server.
 # Please note that the address on which the native transport is bound is the
 # same as the rpc_address. The port however is different and specified below.
-start_native_transport: true
+# start_native_transport: true
 
 # The maximum threads for handling requests when the native transport is used.
 # This is similar to rpc_max_threads though the default differs slightly (and
@@ -466,32 +492,8 @@ start_native_transport: true
 # native_transport_max_concurrent_connections_per_ip: -1
 
 # Whether to start the thrift rpc server.
-start_rpc: true
+# start_rpc: true
 
-# The address or interface to bind the Thrift RPC service and native transport
-# server to.
-#
-# Set rpc_address OR rpc_interface, not both. Interfaces must correspond
-# to a single address, IP aliasing is not supported.
-#
-# Leaving rpc_address blank has the same effect as on listen_address
-# (i.e. it will be based on the configured hostname of the node).
-#
-# Note that unlike listen_address, you can specify 0.0.0.0, but you must also
-# set broadcast_rpc_address to a value other than 0.0.0.0.
-#
-# For security reasons, you should not expose this port to the internet.  Firewall it if needed.
-#
-# If you choose to specify the interface by name and the interface has an ipv4 and an ipv6 address
-# you can specify which should be chosen using rpc_interface_prefer_ipv6. If false the first ipv4
-# address will be used. If true the first ipv6 address will be used. Defaults to false preferring
-# ipv4. If there is only one address it will be selected regardless of ipv4/ipv6.
-rpc_address: localhost
-# rpc_interface: eth1
-# rpc_interface_prefer_ipv6: false
-
-# port for Thrift to listen for clients on
-rpc_port: 9160
 
 # RPC address to broadcast to drivers and other Scylla nodes. This cannot
 # be set to 0.0.0.0. If left blank, this will be set to the value of
@@ -500,7 +502,7 @@ rpc_port: 9160
 # broadcast_rpc_address: 1.2.3.4
 
 # enable or disable keepalive on rpc/native connections
-rpc_keepalive: true
+# rpc_keepalive: true
 
 # Scylla provides two out-of-the-box options for the RPC Server:
 #
@@ -520,7 +522,7 @@ rpc_keepalive: true
 #
 # Alternatively,  can provide your own RPC server by providing the fully-qualified class name
 # of an o.a.c.t.TServerFactory that can create an instance of it.
-rpc_server_type: sync
+# rpc_server_type: sync
 
 # Uncomment rpc_min|max_thread to set request pool size limits.
 #
@@ -552,25 +554,25 @@ rpc_server_type: sync
 # internode_recv_buff_size_in_bytes:
 
 # Frame size for thrift (maximum message length).
-thrift_framed_transport_size_in_mb: 15
+# thrift_framed_transport_size_in_mb: 15
 
 # Set to true to have Scylla create a hard link to each sstable
 # flushed or streamed locally in a backups/ subdirectory of the
 # keyspace data.  Removing these links is the operator's
 # responsibility.
-incremental_backups: false
+# incremental_backups: false
 
 # Whether or not to take a snapshot before each compaction.  Be
 # careful using this option, since Scylla won't clean up the
 # snapshots for you.  Mostly useful if you're paranoid when there
 # is a data format change.
-snapshot_before_compaction: false
+# snapshot_before_compaction: false
 
 # Whether or not a snapshot is taken of the data before keyspace truncation
 # or dropping of column families. The STRONGLY advised default of true 
 # should be used to provide data safety. If you set this flag to false, you will
 # lose data on truncation or drop.
-auto_snapshot: true
+# auto_snapshot: true
 
 # When executing a scan, within or across a partition, we need to keep the
 # tombstones seen in memory so we can return them to the coordinator, which
@@ -581,8 +583,8 @@ auto_snapshot: true
 # Adjust the thresholds here if you understand the dangers and want to
 # scan more tombstones anyway.  These thresholds may also be adjusted at runtime
 # using the StorageService mbean.
-tombstone_warn_threshold: 1000
-tombstone_failure_threshold: 100000
+# tombstone_warn_threshold: 1000
+# tombstone_failure_threshold: 100000
 
 # Granularity of the collation index of rows within a partition.
 # Increase if your rows are large, or if you have a very large
@@ -593,12 +595,12 @@ tombstone_failure_threshold: 100000
 #   2) but, Scylla will keep the collation index in memory for hot
 #      rows (as part of the key cache), so a larger granularity means
 #      you can cache more hot rows
-column_index_size_in_kb: 64
+# column_index_size_in_kb: 64
 
 
 # Log WARN on any batch size exceeding this value. 5kb per batch by default.
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
-batch_size_warn_threshold_in_kb: 5
+# batch_size_warn_threshold_in_kb: 5
 
 # Number of simultaneous compactions to allow, NOT including
 # validation "compactions" for anti-entropy repair.  Simultaneous
@@ -622,16 +624,16 @@ batch_size_warn_threshold_in_kb: 5
 # 16 to 32 times the rate you are inserting data is more than sufficient.
 # Setting this to 0 disables throttling. Note that this account for all types
 # of compaction, including validation compaction.
-compaction_throughput_mb_per_sec: 16
+# compaction_throughput_mb_per_sec: 16
 
 # Log a warning when compacting partitions larger than this value
-compaction_large_partition_warning_threshold_mb: 100
+# compaction_large_partition_warning_threshold_mb: 100
 
 # When compacting, the replacement sstable(s) can be opened before they
 # are completely written, and used in place of the prior sstables for
 # any range that has been written. This helps to smoothly transfer reads 
 # between the sstables, reducing page cache churn and keeping hot rows hot
-sstable_preemptive_open_interval_in_mb: 50
+# sstable_preemptive_open_interval_in_mb: 50
 
 # Throttles all streaming file transfer between the datacenters,
 # this setting allows users to throttle inter dc stream throughput in addition
@@ -640,18 +642,18 @@ sstable_preemptive_open_interval_in_mb: 50
 # inter_dc_stream_throughput_outbound_megabits_per_sec:
 
 # How long the coordinator should wait for seq or index scans to complete
-range_request_timeout_in_ms: 10000
+# range_request_timeout_in_ms: 10000
 # How long the coordinator should wait for writes to complete
-counter_write_request_timeout_in_ms: 5000
+# counter_write_request_timeout_in_ms: 5000
 # How long a coordinator should continue to retry a CAS operation
 # that contends with other proposals for the same row
-cas_contention_timeout_in_ms: 1000
+# cas_contention_timeout_in_ms: 1000
 # How long the coordinator should wait for truncates to complete
 # (This can be much longer, because unless auto_snapshot is disabled
 # we need to flush first so we can snapshot before removing the data.)
-truncate_request_timeout_in_ms: 60000
+# truncate_request_timeout_in_ms: 60000
 # The default timeout for other, miscellaneous operations
-request_timeout_in_ms: 10000
+# request_timeout_in_ms: 10000
 
 # Enable operation timeout information exchange between nodes to accurately
 # measure request timeouts.  If disabled, replicas will assume that requests
@@ -661,7 +663,7 @@ request_timeout_in_ms: 10000
 #
 # Warning: before enabling this property make sure to ntp is installed
 # and the times are synchronized between the nodes.
-cross_node_timeout: false
+# cross_node_timeout: false
 
 # Enable socket timeout for streaming operation.
 # When a timeout occurs during streaming, streaming is retried from the start
@@ -724,10 +726,12 @@ cross_node_timeout: false
 
 # controls how often to perform the more expensive part of host score
 # calculation
-dynamic_snitch_update_interval_in_ms: 100 
+# dynamic_snitch_update_interval_in_ms: 100 
+
 # controls how often to reset all host scores, allowing a bad host to
 # possibly recover
-dynamic_snitch_reset_interval_in_ms: 600000
+# dynamic_snitch_reset_interval_in_ms: 600000
+
 # if set greater than zero and read_repair_chance is < 1.0, this will allow
 # 'pinning' of replicas to hosts in order to increase cache capacity.
 # The badness threshold will control how much worse the pinned host has to be
@@ -735,7 +739,7 @@ dynamic_snitch_reset_interval_in_ms: 600000
 # expressed as a double which represents a percentage.  Thus, a value of
 # 0.2 means Scylla would continue to prefer the static snitch values
 # until the pinned host was 20% worse than the fastest.
-dynamic_snitch_badness_threshold: 0.1
+# dynamic_snitch_badness_threshold: 0.1
 
 # request_scheduler -- Set this to a class that implements
 # RequestScheduler, which will schedule incoming client requests
@@ -748,7 +752,7 @@ dynamic_snitch_badness_threshold: 0.1
 # client requests to a node with a separate queue for each
 # request_scheduler_id. The scheduler is further customized by
 # request_scheduler_options as described below.
-request_scheduler: org.apache.cassandra.scheduler.NoScheduler
+# request_scheduler: org.apache.cassandra.scheduler.NoScheduler
 
 # Scheduler Options vary based on the type of scheduler
 # NoScheduler - Has no options
@@ -792,12 +796,13 @@ request_scheduler: org.apache.cassandra.scheduler.NoScheduler
 # the keystore and truststore.  For instructions on generating these files, see:
 # http://download.oracle.com/javase/6/docs/technotes/guides/security/jsse/JSSERefGuide.html#CreateKeystore
 #
-server_encryption_options:
-    internode_encryption: none
-    keystore: conf/.keystore
-    keystore_password: cassandra
-    truststore: conf/.truststore
-    truststore_password: cassandra
+# server_encryption_options:
+#    internode_encryption: none
+#    keystore: conf/.keystore
+#    keystore_password: cassandra
+#    truststore: conf/.truststore
+#    truststore_password: cassandra
+
     # More advanced defaults below:
     # protocol: TLS
     # algorithm: SunX509
@@ -806,10 +811,11 @@ server_encryption_options:
     # require_client_auth: false
 
 # enable or disable client/server encryption.
-client_encryption_options:
-    enabled: false
-    keystore: conf/.keystore
-    keystore_password: cassandra
+# client_encryption_options:
+#    enabled: false
+#    keystore: conf/.keystore
+#    keystore_password: cassandra
+
     # require_client_auth: false
     # Set trustore and truststore_password if require_client_auth is true
     # truststore: conf/.truststore
@@ -825,10 +831,10 @@ client_encryption_options:
 # can be:  all  - all traffic is compressed
 #          dc   - traffic between different datacenters is compressed
 #          none - nothing is compressed.
-internode_compression: all
+# internode_compression: all
 
 # Enable or disable tcp_nodelay for inter-dc communication.
 # Disabling it will result in larger (but fewer) network packets being sent,
 # reducing overhead from the TCP protocol itself, at the cost of increasing
 # latency if you block for cross-datacenter responses.
-inter_dc_tcp_nodelay: false
+# inter_dc_tcp_nodelay: false
