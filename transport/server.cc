@@ -10,6 +10,7 @@
 #include <boost/assign.hpp>
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/range/adaptor/sliced.hpp>
+#include <boost/range/algorithm/remove.hpp>
 
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
@@ -185,6 +186,17 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _query_processor(qp)
     , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
 {
+}
+
+bool
+cql_server::poll_pending_responders() {
+    while (!_pending_responders.empty()) {
+        auto c = _pending_responders.front();
+        _pending_responders.pop_front();
+        c->do_flush();
+        c->_flush_requested = false;
+    }
+    return false;
 }
 
 scollectd::registrations
@@ -401,6 +413,8 @@ future<> cql_server::connection::process()
         }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
+            // Remove ourselves (and everybody else incidentally) from poll list
+            _server.poll_pending_responders();
             return std::move(_ready_to_respond);
         });
     });
@@ -726,10 +740,20 @@ future<> cql_server::connection::write_response(shared_ptr<cql_server::response>
 {
     _ready_to_respond = _ready_to_respond.then([this, response = std::move(response)] () mutable {
         return response->output(_write_buf, _version).then([this, response] {
-            return _write_buf.flush();
+            if (!_flush_requested) {
+                _flush_requested = true;
+                _server._pending_responders.push_back(this);
+            }
         });
     });
     return make_ready_future<>();
+}
+
+void
+cql_server::connection::do_flush() {
+    _ready_to_respond = _ready_to_respond.then([this] {
+        return _write_buf.flush();
+    });
 }
 
 void cql_server::connection::check_room(temporary_buffer<char>& buf, size_t n)
