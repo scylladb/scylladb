@@ -214,24 +214,24 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
                 sslog.debug("================ STREAM_PLAN TEST ==============");
                 auto cs = service::client_state::for_external_calls();
                 service::query_state qs(cs);
-                auto opts = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-                qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, *opts).get();
+                auto& opts = cql3::query_options::DEFAULT;
+                qp.local().process("CREATE KEYSPACE ks WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", qs, opts).get();
                 sslog.debug("CREATE KEYSPACE = KS DONE");
                 sleep(std::chrono::seconds(3)).get();
-                qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, *opts).get();
+                qp.local().process("CREATE TABLE ks.tb ( key text PRIMARY KEY, C0 text, C1 text, C2 text, C3 blob, C4 text);", qs, opts).get();
                 sslog.debug("CREATE TABLE = TB DONE");
                 sleep(std::chrono::seconds(3)).get();
-                qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('1','1');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 1");
-                qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('2','2');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 2");
-                qp.local().process("insert into ks.tb (key,c0) values ('3','3');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('3','3');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 3");
-                qp.local().process("insert into ks.tb (key,c0) values ('4','4');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('4','4');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 4");
-                qp.local().process("insert into ks.tb (key,c0) values ('5','5');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('5','5');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 5");
-                qp.local().process("insert into ks.tb (key,c0) values ('6','6');", qs, *opts).get();
+                qp.local().process("insert into ks.tb (key,c0) values ('6','6');", qs, opts).get();
                 sslog.debug("INSERT VALUE DONE: 6");
             }).then([] {
                 sleep(std::chrono::seconds(10)).then([] {

@@ -39,6 +39,10 @@
 
 namespace cql3 {
 
+namespace statements {
+class batch_statement;
+}
+
 class query_processor {
 private:
     distributed<service::storage_proxy>& _proxy;
@@ -425,19 +429,12 @@ private:
         metrics.preparedStatementsExecuted.inc();
         return processStatement(statement, queryState, options);
     }
-
-    public ResultMessage processBatch(BatchStatement batch, QueryState queryState, BatchQueryOptions options)
-    throws RequestExecutionException, RequestValidationException
-    {
-        ClientState clientState = queryState.getClientState();
-        batch.checkAccess(clientState);
-        batch.validate();
-        batch.validate(clientState);
-        return batch.execute(queryState, options);
-    }
 #endif
 
 public:
+    future<::shared_ptr<transport::messages::result_message>> process_batch(::shared_ptr<statements::batch_statement>,
+            service::query_state& query_state, query_options& options);
+
     ::shared_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
             const service::client_state& client_state);
     static ::shared_ptr<statements::parsed_statement> parse_statement(const std::experimental::string_view& query);

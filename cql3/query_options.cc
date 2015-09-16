@@ -71,6 +71,17 @@ query_options::query_options(db::consistency_level consistency,
 {
 }
 
+query_options::query_options(query_options&& o, std::vector<std::vector<bytes_view_opt>> value_views)
+    : query_options(std::move(o))
+{
+    std::vector<query_options> tmp;
+    tmp.reserve(value_views.size());
+    std::transform(value_views.begin(), value_views.end(), std::back_inserter(tmp), [this](auto& vals) {
+        return query_options(_consistency, {}, vals, _skip_metadata, _options, _protocol_version, _serialization_format);
+    });
+    _batch_options = std::move(tmp);
+}
+
 query_options::query_options(std::vector<bytes_opt> values)
     : query_options(
           db::consistency_level::ONE,

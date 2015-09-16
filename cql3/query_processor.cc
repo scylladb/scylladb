@@ -25,6 +25,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
+#include "cql3/statements/batch_statement.hh"
 
 #include "transport/messages/result_message.hh"
 
@@ -310,5 +311,15 @@ future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
                         });
             });
 }
+
+future<::shared_ptr<transport::messages::result_message>>
+query_processor::process_batch(::shared_ptr<statements::batch_statement> batch, service::query_state& query_state, query_options& options) {
+    auto& client_state = query_state.get_client_state();
+    batch->check_access(client_state);
+    batch->validate();
+    batch->validate(_proxy, client_state);
+    return batch->execute(_proxy, query_state, options);
+}
+
 
 }
