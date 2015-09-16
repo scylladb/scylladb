@@ -175,6 +175,7 @@ public:
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
     void write_value(bytes_opt value);
     void write(const cql3::metadata& m);
+    future<> output(output_stream<char>& out, uint8_t version);
 private:
     sstring make_frame(uint8_t version, size_t length);
 };
@@ -723,9 +724,8 @@ future<> cql_server::connection::write_schema_change_event(const event::schema_c
 
 future<> cql_server::connection::write_response(shared_ptr<cql_server::response> response)
 {
-    auto msg = response->make_message(_version);
-    _ready_to_respond = _ready_to_respond.then([this, msg = std::move(msg)] () mutable {
-        return _write_buf.write(std::move(msg)).then([this] {
+    _ready_to_respond = _ready_to_respond.then([this, response = std::move(response)] () mutable {
+        return response->output(_write_buf, _version).then([this, response] {
             return _write_buf.flush();
         });
     });
@@ -1001,6 +1001,17 @@ scattered_message<char> cql_server::response::make_message(uint8_t version) {
     msg.append(std::move(frame));
     msg.append(std::move(body));
     return msg;
+}
+
+future<>
+cql_server::response::output(output_stream<char>& out, uint8_t version) {
+    auto frame = make_frame(version, _body.size());
+    auto tmp = temporary_buffer<char>(frame.size());
+    std::copy_n(frame.begin(), frame.size(), tmp.get_write());
+    auto f = out.write(tmp.get(), tmp.size());
+    return f.then([this, &out, tmp = std::move(tmp)] {
+        return out.write(_body.data(), _body.size());
+    });
 }
 
 void cql_server::response::serialize(const event::schema_change& event, uint8_t version)
