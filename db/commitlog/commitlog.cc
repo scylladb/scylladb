@@ -280,9 +280,11 @@ public:
     static constexpr size_t default_size = align_up<size_t>(128 * 1024, alignment);
 
     segment(segment_manager* m, const descriptor& d, file && f)
-            : _segment_manager(m), _desc(std::move(d)), _file(std::move(f))
+            : _segment_manager(m), _desc(std::move(d)), _file(std::move(f)), _sync_time(
+                    clock_type::now())
     {
         ++_segment_manager->totals.segments_created;
+        logger.debug("Created new segment {}", *this);
     }
     ~segment() {
         if (is_clean()) {
@@ -304,19 +306,26 @@ public:
         auto now = clock_type::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
-        return _segment_manager->cfg.commitlog_sync_period_in_ms < uint64_t(ms);
+        if ((_segment_manager->cfg.commitlog_sync_period_in_ms * 2) < uint64_t(ms)) {
+            logger.debug("Need sync. {} ms elapsed", ms);
+            return true;
+        }
+        return false;
     }
     /**
      * Finalize this segment and get a new one
      */
     future<sseg_ptr> finish_and_get_new() {
         _closed = true;
-        return sync().then([](auto seg) {
-            return seg->_segment_manager->active_segment();
-        });
+        sync();
+        return _segment_manager->active_segment();
     }
     future<sseg_ptr> sync() {
+        // Note: this is not a marker for when sync was finished.
+        // It is when it was initiated
+        _sync_time = clock_type::now();
         if (position() <= _flush_pos) {
+            logger.trace("Sync not needed : ({} / {})", position(), _flush_pos);
             return make_ready_future<sseg_ptr>(shared_from_this());
         }
         return cycle().then([](auto seg) {
@@ -332,8 +341,10 @@ public:
             pos = _file_pos;
         }
         if (pos != 0 && pos <= _flush_pos) {
+            logger.trace("Already synced! ({} < {})", pos, _flush_pos);
             return make_ready_future<sseg_ptr>(std::move(me));
         }
+        logger.trace("Syncing {} -> {}", _flush_pos, pos);
         // Make sure all disk writes are done.
         // This is not 100% neccesary, we really only need the ones below our flush pos,
         // but since we pretty much assume that task ordering will make this the case anyway...
@@ -342,9 +353,9 @@ public:
                     _dwrite.write_unlock(); // release it already.
                     pos = std::max(pos, _file_pos);
                     if (pos <= _flush_pos) {
+                        logger.trace("Already synced! ({} < {})", pos, _flush_pos);
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
-                    _sync_time = clock_type::now();
                     ++_segment_manager->totals.pending_operations;
                     return _file.flush().handle_exception([](auto ex) {
                                 try {
@@ -361,6 +372,7 @@ public:
                             }).then([this, pos, me = std::move(me)]() {
                                 _flush_pos = std::max(pos, _flush_pos);
                                 ++_segment_manager->totals.flush_count;
+                                logger.trace("Synced to {}", _flush_pos);
                                 return make_ready_future<sseg_ptr>(std::move(me));
                             }).finally([this] {
                                 --_segment_manager->totals.pending_operations;
@@ -882,9 +894,7 @@ future<> db::commitlog::segment_manager::clear() {
  */
 void db::commitlog::segment_manager::sync() {
     for (auto& s : _segments) {
-        if (s->must_sync()) {
-            s->sync(); // we do not care about waiting...
-        }
+        s->sync(); // we do not care about waiting...
     }
     arm();
 }
