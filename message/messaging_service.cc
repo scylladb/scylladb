@@ -394,7 +394,7 @@ void messaging_service::unregister_echo() {
     _rpc->unregister_handler(net::messaging_verb::ECHO);
 }
 future<> messaging_service::send_echo(shard_id id) {
-    return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 1000ms);
+    return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 3000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
@@ -414,7 +414,7 @@ void messaging_service::unregister_gossip_digest_syn() {
     _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_SYN);
 }
 future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(shard_id id, gossip_digest_syn msg) {
-    return send_message_timeout<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), 1000ms, std::move(msg));
+    return send_message_timeout<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), 3000ms, std::move(msg));
 }
 
 void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
