@@ -646,5 +646,86 @@ void set_column_family(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
+    cf::is_auto_compaction_disabled.set(r, [] (const_req req) {
+        // FIXME
+        // currently auto compaction is disable
+        // it should be changed when it would have an API
+        return true;
+    });
+
+    cf::get_built_indexes.set(r, [](const_req) {
+        // FIXME
+        // Currently there are no index support
+        return std::vector<sstring>();
+    });
+
+
+    cf::get_compression_metadata_off_heap_memory_used.set(r, [](const_req) {
+        // FIXME
+        // Currently there are no information on the compression
+        // metadata, so we return 0
+        return 0;
+    });
+
+    cf::get_compression_parameters.set(r, [](const_req) {
+        // FIXME
+        // Currently there are no compression parameters available
+        // so we return an empty map
+        return std::vector<sstring>();
+    });
+
+    cf::get_compression_ratio.set(r, [](const_req) {
+        // FIXME
+        // Currently there are no compression information
+        // so we return 0 as the ratio
+        return 0;
+    });
+
+    cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_read;
+        },
+        sstables::merge, utils_json::estimated_histogram());
+    });
+
+    cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_write;
+        },
+        sstables::merge, utils_json::estimated_histogram());
+    });
+
+    cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<request> req) {
+        sstring strategy = req->get_query_param("class_name");
+        return foreach_column_family(ctx, req->param["name"], [strategy](column_family& cf) {
+            cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+        }).then([] {
+                return make_ready_future<json::json_return_type>(json_void());
+        });
+    });
+
+    cf::get_compaction_strategy_class.set(r, [&ctx](const_req req) {
+        return ctx.db.local().find_column_family(get_uuid(req.param["name"], ctx.db.local())).get_compaction_strategy().name();
+    });
+
+    cf::set_compression_parameters.set(r, [&ctx](std::unique_ptr<request> req) {
+        // TBD
+        unimplemented();
+        return make_ready_future<json::json_return_type>(json_void());
+    });
+
+    cf::set_crc_check_chance.set(r, [&ctx](std::unique_ptr<request> req) {
+        // TBD
+        unimplemented();
+        return make_ready_future<json::json_return_type>(json_void());
+    });
+
+    cf::get_sstable_count_per_level.set(r, [&ctx](std::unique_ptr<request> req) {
+        // TBD
+        // FIXME
+        // This is a workaround, until there will be an API to return the count
+        // per level, we return 0
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 }

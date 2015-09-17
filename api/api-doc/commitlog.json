@@ -114,6 +114,36 @@
           "parameters": []
         }
       ]
+    },
+    {
+      "path": "/commit_log/metrics/waiting_on_segment_allocation",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get waiting on segment allocation",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_waiting_on_segment_allocation",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/commit_log/metrics/waiting_on_commit",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get waiting on commit",
+          "$ref": "#/utils/histogram",
+          "nickname": "get_waiting_on_commit",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
     }
    ]
 }

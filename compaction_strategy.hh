@@ -42,7 +42,7 @@ public:
         }
     }
 
-    static compaction_strategy_type type(sstring& name) {
+    static compaction_strategy_type type(const sstring& name) {
         if (name == "NullCompactionStrategy") {
             return compaction_strategy_type::null;
         } else if (name == "MajorCompactionStrategy") {
@@ -52,6 +52,12 @@ public:
         } else {
             throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class 'org.apache.cassandra.db.compaction.%s", name));
         }
+    }
+
+    compaction_strategy_type type() const;
+
+    sstring name() const {
+        return name(type());
     }
 };
 

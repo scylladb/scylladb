@@ -230,6 +230,7 @@ class compaction_strategy_impl {
 public:
     virtual ~compaction_strategy_impl() {}
     virtual future<> compact(column_family& cfs) = 0;
+    virtual compaction_strategy_type type() const = 0;
 };
 
 //
@@ -240,6 +241,10 @@ class null_compaction_strategy : public compaction_strategy_impl {
 public:
     virtual future<> compact(column_family& cfs) override {
         return make_ready_future<>();
+    }
+
+    virtual compaction_strategy_type type() const {
+        return compaction_strategy_type::null;
     }
 };
 
@@ -257,6 +262,10 @@ public:
         }
 
         return cfs.compact_all_sstables();
+    }
+
+    virtual compaction_strategy_type type() const {
+        return compaction_strategy_type::major;
     }
 };
 
@@ -383,6 +392,10 @@ public:
     virtual future<> compact(column_family& cfs) override;
 
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
+
+    virtual compaction_strategy_type type() const {
+        return compaction_strategy_type::size_tiered;
+    }
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
@@ -535,6 +548,9 @@ compaction_strategy::compaction_strategy(const compaction_strategy&) = default;
 compaction_strategy::compaction_strategy(compaction_strategy&&) = default;
 compaction_strategy& compaction_strategy::operator=(compaction_strategy&&) = default;
 
+compaction_strategy_type compaction_strategy::type() const {
+    return _compaction_strategy_impl->type();
+}
 future<> compaction_strategy::compact(column_family& cfs) {
     return _compaction_strategy_impl->compact(cfs);
 }
