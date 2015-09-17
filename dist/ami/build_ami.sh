@@ -1,7 +1,8 @@
 #!/bin/sh -e
 
-if [ ! -e dist/ami/build_ami.sh ]; then
+if [ ! -e dist/ami/build_ami.sh ] || [ ! -e ../scylla-jmx/dist/redhat/build_rpm.sh ]; then
     echo "run build_ami.sh in top of scylla dir"
+    echo "please make sure scylla-jmx is checked out under the same directory as scylla"
     exit 1
 fi
 
@@ -22,8 +23,11 @@ if [ ! -f files/scylla-server.rpm ] || [ ! -f files/scylla-server-debuginfo.rpm 
 fi
 
 if [ ! -f files/scylla-jmx.rpm ]; then
-    echo "copy files/scylla-jmx.rpm before building AMI"
-    exit 1
+    cd ../../../scylla-jmx
+    dist/redhat/build_rpm.sh
+    RPM=`ls build/rpms/scylla-jmx-*.noarch.rpm`
+    cp $RPM dist/ami/files/scylla-jmx.rpm
+    cd -
 fi
 
 if [ ! -d packer ]; then
