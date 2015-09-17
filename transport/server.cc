@@ -414,9 +414,10 @@ future<> cql_server::connection::process()
         }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
-            // Remove ourselves (and everybody else incidentally) from poll list
-            _server.poll_pending_responders();
-            return std::move(_ready_to_respond);
+            return std::move(_ready_to_respond).finally([this] {
+                // Remove ourselves (and everybody else incidentally) from poll list
+                _server.poll_pending_responders();
+            });
         });
     });
 }
