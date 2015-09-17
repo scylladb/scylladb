@@ -94,6 +94,9 @@ public:
         uint64_t commitlog_total_space_in_mb = 0;
         uint64_t commitlog_segment_size_in_mb = 32;
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
+        // Max number of segments to keep in pre-alloc reserve.
+        // Not (yet) configurable from scylla.conf.
+        uint64_t max_reserve_segments = 12;
 
         sync_mode mode = sync_mode::PERIODIC;
     };
@@ -212,6 +215,8 @@ public:
     uint64_t get_total_size() const;
     uint64_t get_completed_tasks() const;
     uint64_t get_pending_tasks() const;
+    uint64_t get_num_segments_created() const;
+    uint64_t get_num_segments_destroyed() const;
 
     /**
      * Returns the largest amount of data that can be written in a single "mutation".
