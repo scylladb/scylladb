@@ -4,5 +4,5 @@
 	ignore = dirty
 [submodule "swagger-ui"]
 	path = swagger-ui
-	url = ../urchin-swagger-ui
+	url = ../scylla-swagger-ui
 	ignore = dirty
