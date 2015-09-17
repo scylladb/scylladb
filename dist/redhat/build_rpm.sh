@@ -14,7 +14,7 @@ SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 echo $VERSION >version
-./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server-$VERSION $RPMBUILD/SOURCES/scylla-server-$VERSION.tar
+./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server-$SCYLLA_VERSION $RPMBUILD/SOURCES/scylla-server-$VERSION.tar
 rm -f version
 cp dist/redhat/scylla-server.spec.in $RPMBUILD/SPECS/scylla-server.spec
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" $RPMBUILD/SPECS/scylla-server.spec
