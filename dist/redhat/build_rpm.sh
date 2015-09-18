@@ -19,5 +19,5 @@ rm -f version
 cp dist/redhat/scylla-server.spec.in $RPMBUILD/SPECS/scylla-server.spec
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" $RPMBUILD/SPECS/scylla-server.spec
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" $RPMBUILD/SPECS/scylla-server.spec
-rpmbuild -bs --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/scylla-server.spec
+rpmbuild -bs --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
 mock rebuild --resultdir=`pwd`/build/rpms $RPMBUILD/SRPMS/scylla-server-$VERSION*.src.rpm
