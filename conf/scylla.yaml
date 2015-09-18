@@ -248,7 +248,7 @@ rpc_port: 9160
 # compatibility include RandomPartitioner, ByteOrderedPartitioner, and
 # OrderPreservingPartitioner.
 #
-# partitioner: org.apache.cassandra.dht.Murmur3Partitioner
+partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 
 
 # policy for data disk failures:
