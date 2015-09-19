@@ -824,7 +824,7 @@ cql_server::connection::do_flush() {
 void cql_server::connection::check_room(temporary_buffer<char>& buf, size_t n)
 {
     if (buf.size() < n) {
-        throw exceptions::protocol_exception("truncated frame");
+        throw exceptions::protocol_exception(sprint("truncated frame: expected %lu bytes, length is %lu", n, buf.size()));
     }
 }
 
