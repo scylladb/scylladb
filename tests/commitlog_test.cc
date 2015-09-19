@@ -293,15 +293,13 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
     cfg.commitlog_segment_size_in_mb = 2;
     cfg.commitlog_total_space_in_mb = 1;
     return make_commitlog(cfg).then([](tmplog_ptr log) {
-            auto sem = make_lw_shared<semaphore>(0);
             // add a flush handler that simply says we're done with the range.
-            auto r = log->second.add_flush_handler([log, sem](cf_id_type id, replay_position pos) {
+            auto r = log->second.add_flush_handler([log](cf_id_type id, replay_position pos) {
                 log->second.discard_completed_segments(id, pos);
-                sem->signal();
             });
             auto set = make_lw_shared<std::set<segment_id_type>>();
             auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([set, sem]() {return set->size() > 1 && sem->try_wait();},
+            return do_until([set]() {return set->size() > 1;},
                     [log, set, uuid]() {
                         sstring tmp = "hej bubba cow";
                         return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
@@ -312,9 +310,8 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
                                 });
                     }).then([log]() {
                         auto n = log->second.get_active_segment_names().size();
-                        auto d = log->second.get_num_segments_destroyed();
                         BOOST_REQUIRE(n > 0);
-                        BOOST_REQUIRE(d > 0);
+                        BOOST_REQUIRE(n < 2);
                     }).finally([log, r = std::move(r)]() {
                         return log->second.clear().then([log] {});
                     });
