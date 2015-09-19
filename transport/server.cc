@@ -415,8 +415,11 @@ future<> cql_server::connection::process()
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
             return std::move(_ready_to_respond).finally([this] {
-                // Remove ourselves (and everybody else incidentally) from poll list
-                _server.poll_pending_responders();
+                // Remove ourselves from poll list
+                auto i = std::remove(_server._pending_responders.begin(), _server._pending_responders.end(), this);
+                if (i != _server._pending_responders.end()) {
+                    _server._pending_responders.pop_back();
+                }
             });
         });
     });
