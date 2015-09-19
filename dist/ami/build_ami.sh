@@ -23,10 +23,11 @@ if [ ! -f files/scylla-server.rpm ] || [ ! -f files/scylla-server-debuginfo.rpm 
 fi
 
 if [ ! -f files/scylla-jmx.rpm ]; then
+    CWD=`pwd`
     cd ../../../scylla-jmx
     dist/redhat/build_rpm.sh
     RPM=`ls build/rpms/scylla-jmx-*.noarch.rpm`
-    cp $RPM dist/ami/files/scylla-jmx.rpm
+    cp $RPM $CWD/files/scylla-jmx.rpm
     cd -
 fi
 

@@ -8,7 +8,7 @@
       "security_group_id": "{{user `security_group_id`}}",
       "region": "{{user `region`}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "ami-76dfc41e",
+      "source_ami": "ami-d1b1c1b4",
       "instance_type": "{{user `instance_type`}}",
       "ssh_username": "fedora",
       "ssh_timeout": "5m",
