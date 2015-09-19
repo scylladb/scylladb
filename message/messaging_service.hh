@@ -416,7 +416,7 @@ private:
     uint16_t _port;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
-    std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
+    std::unordered_map<shard_id, shard_info, shard_id::hash> _clients[2];
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
@@ -513,8 +513,8 @@ public:
 
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(shard_id id);
-    void remove_rpc_client(shard_id id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
+    void remove_rpc_client(messaging_verb verb, shard_id id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 

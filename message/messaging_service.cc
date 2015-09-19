@@ -202,8 +202,10 @@ rpc::stats messaging_service::shard_info::get_stats() const {
 }
 
 void messaging_service::foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const {
-    for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
-        f(i->first, i->second);
+    for (unsigned idx = 0; idx < 2; idx ++) {
+        for (auto i = _clients[idx].cbegin(); i != _clients[idx].cend(); i++) {
+            f(i->first, i->second);
+        }
     }
 }
 
@@ -248,7 +250,10 @@ gms::inet_address messaging_service::listen_address() {
 
 future<> messaging_service::stop() {
     return when_all(_server->stop(),
-        parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
+        parallel_for_each(_clients[0], [](std::pair<const shard_id, shard_info>& c) {
+            return c.second.rpc_client->stop();
+        }),
+        parallel_for_each(_clients[1], [](std::pair<const shard_id, shard_info>& c) {
             return c.second.rpc_client->stop();
         })
     ).discard_result();
@@ -258,20 +263,34 @@ rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
 
-shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(shard_id id) {
-    auto it = _clients.find(id);
-    if (it == _clients.end()) {
+static unsigned get_rpc_client_idx(messaging_verb verb) {
+    unsigned idx = 0;
+    if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
+        verb == messaging_verb::GOSSIP_DIGEST_ACK ||
+        verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
+        verb == messaging_verb::GOSSIP_SHUTDOWN ||
+        verb == messaging_verb::ECHO) {
+        idx = 1;
+    }
+    return idx;
+}
+
+shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, shard_id id) {
+    auto idx = get_rpc_client_idx(verb);
+    auto it = _clients[idx].find(id);
+    if (it == _clients[idx].end()) {
         auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
         auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
-        it = _clients.emplace(id, shard_info(std::move(client))).first;
+        it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
         return it->second.rpc_client;
     } else {
         return it->second.rpc_client;
     }
 }
 
-void messaging_service::remove_rpc_client(shard_id id) {
-    _clients.erase(id);
+void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
+    auto idx = get_rpc_client_idx(verb);
+    _clients[idx].erase(id);
 }
 
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {
@@ -287,7 +306,7 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
-    auto rpc_client_ptr = ms->get_rpc_client(id);
+    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
@@ -300,7 +319,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
             return std::move(f);
         } catch (rpc::closed_error) {
             // This is a transport error
-            ms->remove_rpc_client(id);
+            ms->remove_rpc_client(verb, id);
             throw;
         } catch (...) {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
@@ -312,7 +331,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id id, std::chrono::milliseconds timeout, MsgOut&&... msg) {
-    auto rpc_client_ptr = ms->get_rpc_client(id);
+    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
@@ -325,7 +344,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id i
             return std::move(f);
         } catch (rpc::closed_error) {
             // This is a transport error
-            ms->remove_rpc_client(id);
+            ms->remove_rpc_client(verb, id);
             throw;
         } catch (...) {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
