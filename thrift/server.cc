@@ -26,6 +26,7 @@
 #include "core/scollectd.hh"
 #include "net/byteorder.hh"
 #include "core/scattered_message.hh"
+#include "log.hh"
 #include <thrift/server/TServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/TProcessor.h>
@@ -40,6 +41,8 @@
 #include <cctype>
 #include <vector>
 #include <boost/make_shared.hpp>
+
+static logging::logger logger("thrift");
 
 using namespace apache::thrift;
 using namespace apache::thrift::transport;
@@ -184,7 +187,7 @@ thrift_server::do_accepts(int which) {
             try {
                 f.get();
             } catch (std::exception& ex) {
-                std::cout << "request error " << ex.what() << "\n";
+                logger.debug("request error {}", ex.what());
             }
         });
         do_accepts(which);
