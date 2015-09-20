@@ -170,7 +170,7 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         throw exceptions::invalid_request_exception(sprint("\"%s\" is not a valid table name (must be alphanumeric character only: [0-9A-Za-z]+)", cf_name.c_str()));
     }
     if (cf_name.size() > size_t(schema::NAME_LENGTH)) {
-        throw exceptions::invalid_request_exception(sprint("Table names shouldn't be more than %" PRId32 " characters long (got \"%s\")", schema::NAME_LENGTH, cf_name.c_str()));
+        throw exceptions::invalid_request_exception(sprint("Table names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, cf_name.c_str()));
     }
 
     for (auto&& entry : _defined_names) {

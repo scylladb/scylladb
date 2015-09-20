@@ -106,7 +106,7 @@ public:
             throw exceptions::invalid_request_exception(sprint("\"%s\" is not a valid keyspace name", _name.c_str()));
         }
         if (name.length() > schema::NAME_LENGTH) {
-            throw exceptions::invalid_request_exception(sprint("Keyspace names shouldn't be more than %" PRId32 " characters long (got \"%s\")", schema::NAME_LENGTH, _name.c_str()));
+            throw exceptions::invalid_request_exception(sprint("Keyspace names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, _name.c_str()));
         }
 
         _attrs->validate();
