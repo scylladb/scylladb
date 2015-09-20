@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include <boost/test/unit_test.hpp>
 #include "cql_assertions.hh"
 #include "transport/messages/result_message.hh"

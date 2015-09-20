@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #pragma once
 
 #include "transport/messages/result_message_base.hh"

@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "log.hh"
 #include "bloom_filter.hh"
 #include "bloom_calculations.hh"

@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #pragma once
 
 #include "cql3/result_set.hh"

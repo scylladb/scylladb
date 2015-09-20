@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include <boost/range/algorithm/transform.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>

@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "perf.hh"
 
 #include "cql3/error_collector.hh"

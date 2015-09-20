@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "locator/rack_inferring_snitch.hh"
 
 namespace locator {

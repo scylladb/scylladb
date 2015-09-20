@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "locator/simple_snitch.hh"
 #include "utils/class_registrator.hh"
 

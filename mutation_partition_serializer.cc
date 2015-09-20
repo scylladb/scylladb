@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "mutation_partition_serializer.hh"
 #include "db/serializer.hh"
 

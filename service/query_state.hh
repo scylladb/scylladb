@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #ifndef SERVICE_QUERY_STATE_HH
 #define SERVICE_QUERY_STATE_HH
 

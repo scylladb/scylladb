@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>

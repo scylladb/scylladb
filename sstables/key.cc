@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include <utils/serialization.hh>
 #include <iterator>
 #include "serialization_format.hh"

@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "database.hh"
 #include "perf.hh"
 #include <seastar/core/app-template.hh>

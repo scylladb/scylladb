@@ -1,3 +1,8 @@
+
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #include "core/reactor.hh"
 #include "core/app-template.hh"
 #include "message/messaging_service.hh"
