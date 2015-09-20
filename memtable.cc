@@ -105,6 +105,7 @@ class scanning_reader final : public mutation_reader::impl {
     memtable::partitions_type::const_iterator _i;
     memtable::partitions_type::const_iterator _end;
     uint64_t _last_reclaim_counter;
+    size_t _last_partition_count = 0;
     stdx::optional<query::partition_range> _delegate_range;
     mutation_reader _delegate;
 private:
@@ -121,9 +122,11 @@ private:
         auto current_reclaim_counter = _memtable->_region.reclaim_counter();
         auto cmp = partition_entry::compare(_memtable->_schema);
         if (_last) {
-            if (current_reclaim_counter != _last_reclaim_counter) {
+            if (current_reclaim_counter != _last_reclaim_counter ||
+                  _last_partition_count != _memtable->partition_count()) {
                 _i = _memtable->partitions.upper_bound(*_last, cmp);
                 _end = lookup_end();
+                _last_partition_count = _memtable->partition_count();
             }
         } else {
             // Initial lookup
@@ -133,6 +136,7 @@ private:
                     : _memtable->partitions.upper_bound(_range.start()->value(), cmp))
                  : _memtable->partitions.cbegin();
             _end = lookup_end();
+            _last_partition_count = _memtable->partition_count();
         }
         _last_reclaim_counter = current_reclaim_counter;
     }
