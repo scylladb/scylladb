@@ -4,6 +4,10 @@ After=network.target libvirtd.service
 
 [Service]
 Type=simple
+LimitMEMLOCK=infinity
+LimitNOFILE=100000
+LimitAS=infinity
+LimitNPROC=8096
 EnvironmentFile=/etc/sysconfig/scylla-server
 ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/lib/scylla/scylla_run
