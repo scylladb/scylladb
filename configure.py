@@ -1,4 +1,8 @@
 #!/usr/bin/python3
+#
+# Copyright 2015 Cloudius Systems
+#
+
 import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 from distutils.spawn import find_executable
 
