@@ -72,7 +72,7 @@ public:
         , plan_id(_plan_id)
         , description(_description)
         , is_for_outgoing(_is_for_outgoing)
-        , keep_ss_table_level(-keep_ss_table_level) {
+        , keep_ss_table_level(_keep_ss_table_level) {
     }
 
 #if 0
