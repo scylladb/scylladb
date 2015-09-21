@@ -220,7 +220,7 @@ row_cache::~row_cache() {
 
 void row_cache::populate(const mutation& m) {
     with_allocator(_tracker.allocator(), [this, &m] {
-        logalloc::reclaim_lock _(_tracker.region());
+        _populate_section(_tracker.region(), [&] {
         auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
         if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
             cache_entry* entry = current_allocator().construct<cache_entry>(m.decorated_key(), m.partition());
@@ -231,6 +231,7 @@ void row_cache::populate(const mutation& m) {
             // We cache whole partitions right now, so if cache already has this partition,
             // it must be complete, so do nothing.
         }
+        });
     });
 }
 

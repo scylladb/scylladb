@@ -162,6 +162,7 @@ private:
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
     logalloc::allocating_section _update_section;
+    logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
     mutation_reader make_scanning_reader(const query::partition_range&);
     void on_hit();
