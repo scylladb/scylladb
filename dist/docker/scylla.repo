@@ -1,0 +1,11 @@
+[scylla]
+name=Scylla for Fedora $releasever - $basearch
+baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/$releasever/$basearch/
+enabled=1
+gpgcheck=0
+
+[scylla-generic]
+name=Scylla for Fedora $releasever
+baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/$releasever/noarch/
+enabled=1
+gpgcheck=0
