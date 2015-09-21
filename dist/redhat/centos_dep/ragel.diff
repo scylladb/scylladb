@@ -1,0 +1,14 @@
+--- rpmbuild/SPECS/ragel.spec	2014-08-18 07:55:49.000000000 -0400
++++ rpmbuild/SPECS/ragel.spec.1	2015-09-17 22:06:27.623000000 -0400
+@@ -49,8 +49,10 @@
+ 
+ %files
+ %defattr(-,root,root,-)
+-%doc COPYING ragel.vim CREDITS ChangeLog
++%doc COPYING ragel.vim 
+ %doc doc/ragel-guide.pdf
++%{_docdir}/%{name}/CREDITS 
++%{_docdir}/%{name}/ChangeLog
+ %{_bindir}/ragel
+ %{_mandir}/*/*
+ 
