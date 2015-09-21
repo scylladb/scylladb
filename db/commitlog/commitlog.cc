@@ -217,8 +217,8 @@ public:
             const replay_position& pos);
     void on_timer();
     void sync();
-    void arm() {
-        _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms));
+    void arm(uint32_t extra = 0) {
+        _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
     }
 
     std::vector<sstring> get_active_names() const;
@@ -704,7 +704,9 @@ future<> db::commitlog::segment_manager::init() {
         _ids = replay_position(engine().cpu_id(), id).id;
         // always run the timer now, since we need to handle segment pre-alloc etc as well.
         _timer.set_callback(std::bind(&segment_manager::on_timer, this));
-        this->arm();
+        auto delay = engine().cpu_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / smp::count);
+        logger.trace("Delaying timer loop {} ms", delay);
+        this->arm(delay);
     });
 }
 
