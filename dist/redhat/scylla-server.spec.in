@@ -8,8 +8,10 @@ License:        Proprietary
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 
-BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel xen-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel libasan libubsan gcc-c++ make python3
-Requires:       libaio boost-program-options boost-system libstdc++ boost-thread cryptopp xen-libs hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs
+BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel make
+%{?fedora:BuildRequires: python3 gcc-c++}
+%{?rhel:BuildRequires: python34 devtoolset-3-gcc-c++}
+Requires:       libaio boost-program-options boost-system libstdc++ boost-thread cryptopp hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs
 
 # TODO: create our own bridge device for virtio
 Requires:       libvirt-daemon
@@ -23,8 +25,13 @@ Provides:       cassandra21
 %setup -q
 
 %build
+%if 0%{?fedora}
 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
-ninja-build -j2 
+%endif
+%if 0%{?rhel}
+./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --compiler=/opt/rh/devtoolset-3/root/usr/bin/g++
+%endif
+ninja-build -j2
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -57,6 +64,11 @@ install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf/
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
 /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sharedstatedir}/scylla scylla 2> /dev/null || :
+%if 0%{?rhel}
+sed -e "s/Defaults    requiretty/#Defaults    requiretty/" /etc/sudoers > /tmp/sudoers
+cp /tmp/sudoers /etc/sudoers
+rm /tmp/sudoers
+%endif
 
 %post
 %systemd_post scylla-server.service

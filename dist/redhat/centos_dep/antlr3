@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# antlr3 script
+# JPackage Project <http://www.jpackage.org/>
+
+# Source functions library
+_prefer_jre="true"
+. /usr/share/java-utils/java-functions
+
+# Source system prefs
+if [ -f /etc/java/antlr3.conf ] ; then
+  . /etc/java/antlr3.conf
+fi
+
+# Source user prefs
+if [ -f $HOME/.antlr3rc ] ; then
+  . $HOME/.antlr3rc
+fi
+
+# Configuration
+MAIN_CLASS=org.antlr.Tool
+BASE_FLAGS=''
+BASE_OPTIONS=''
+BASE_JARS="antlr3.jar"
+
+# Set parameters
+set_jvm
+set_classpath $BASE_JARS
+set_flags $BASE_FLAGS
+set_options $BASE_OPTIONS
+
+# Let's start
+run "$@"
