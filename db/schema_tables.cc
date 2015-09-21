@@ -368,18 +368,24 @@ future<> save_system_keyspace_schema() {
                 return results;
             });
         };
-        auto reduce = [] (auto&& hash, auto&& results) {
+        auto reduce = [] (auto& hash, auto&& results) {
             for (auto&& rs : results) {
                 for (auto&& f : rs.buf().fragments()) {
-                    hash->Update(reinterpret_cast<const unsigned char*>(f.begin()), f.size());
+                    hash.Update(reinterpret_cast<const unsigned char*>(f.begin()), f.size());
                 }
             }
-            return std::move(hash);
+            return make_ready_future<>();
         };
-        return map_reduce(ALL.begin(), ALL.end(), map, std::move(std::make_unique<CryptoPP::Weak::MD5>()), reduce).then([] (auto&& hash) {
-            bytes digest{bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE};
-            hash->Final(reinterpret_cast<unsigned char*>(digest.begin()));
-            return utils::UUID_gen::get_name_UUID(digest);
+        return do_with(CryptoPP::Weak::MD5{}, [map, reduce] (auto& hash) {
+            return do_for_each(ALL.begin(), ALL.end(), [&hash, map, reduce] (auto& table) {
+                return map(table).then([&hash, reduce] (auto&& results) {
+                    return reduce(hash, results);
+                });
+            }).then([&hash] {
+                bytes digest{bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE};
+                hash.Final(reinterpret_cast<unsigned char*>(digest.begin()));
+                return make_ready_future<utils::UUID>(utils::UUID_gen::get_name_UUID(digest));
+            });
         });
     }
 
