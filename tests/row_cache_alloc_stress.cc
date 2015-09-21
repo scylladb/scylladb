@@ -121,20 +121,29 @@ int main(int argc, char** argv) {
             std::deque<dht::decorated_key> cache_stuffing;
             auto fill_cache_to_the_top = [&] {
                 std::cout << "Filling up memory with evictable data\n";
-                try {
-                    logalloc::reclaim_lock _(tracker.region());
-                    while (true) {
-                        auto m = make_small_mutation();
-                        cache_stuffing.push_back(m.decorated_key());
-                        cache.populate(m);
+                while (true) {
+                    // Ensure that entries matching memtable partitions are evicted
+                    // last, we want to hit the merge path in row_cache::update()
+                    for (auto&& key : keys) {
+                        cache.touch(key);
                     }
-                } catch (const std::bad_alloc&) {
-                    // expected
+                    auto occupancy_before = tracker.region().occupancy().used_space();
+                    auto m = make_small_mutation();
+                    cache_stuffing.push_back(m.decorated_key());
+                    cache.populate(m);
+                    if (tracker.region().occupancy().used_space() <= occupancy_before) {
+                        break;
+                    }
                 }
                 std::cout << "Shuffling..\n";
                 // Evict in random order to create fragmentation.
                 std::random_shuffle(cache_stuffing.begin(), cache_stuffing.end());
                 for (auto&& key : cache_stuffing) {
+                    cache.touch(key);
+                }
+                // Ensure that entries matching memtable partitions are evicted
+                // last, we want to hit the merge path in row_cache::update()
+                for (auto&& key : keys) {
                     cache.touch(key);
                 }
                 std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
@@ -161,12 +170,6 @@ int main(int argc, char** argv) {
             };
 
             fill_cache_to_the_top();
-
-            // Ensure that entries matching memtable partitions are evicted
-            // last, we want to hit the merge path in row_cache::update()
-            for (auto&& key : keys) {
-                cache.touch(key);
-            }
 
             fragment_free_space();
 

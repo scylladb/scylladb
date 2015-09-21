@@ -16,9 +16,6 @@ Requires:       libaio boost-program-options boost-system libstdc++ boost-thread
 # TODO: create our own bridge device for virtio
 Requires:       libvirt-daemon
 
-Conflicts:       cassandra21
-Provides:       cassandra21
-
 %description
 
 %prep
