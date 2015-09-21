@@ -6,3 +6,6 @@
 	path = swagger-ui
 	url = ../scylla-swagger-ui
 	ignore = dirty
+[submodule "dist/ami/files/scylla-ami"]
+	path = dist/ami/files/scylla-ami
+	url = ../scylla-ami

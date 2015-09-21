@@ -16,7 +16,7 @@ mount /data
 mkdir -p /data/data
 mkdir -p /data/commitlog
 chown scylla:scylla /data/*
-/usr/lib/scylla/ComboAMI/ds2_configure.py
+/usr/lib/scylla/scylla-ami/ds2_configure.py
 systemctl disable scylla-setup.service
 systemctl enable scylla-server.service
 systemctl start scylla-server.service
