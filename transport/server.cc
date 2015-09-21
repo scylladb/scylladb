@@ -431,12 +431,16 @@ future<> cql_server::connection::process()
         }
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
-            return std::move(_ready_to_respond).finally([this] {
-                // Remove ourselves from poll list
-                auto i = std::remove(_server._pending_responders.begin(), _server._pending_responders.end(), this);
-                if (i != _server._pending_responders.end()) {
-                    _server._pending_responders.pop_back();
-                }
+            // Remove ourselves from poll list
+            auto i = std::remove(_server._pending_responders.begin(), _server._pending_responders.end(), this);
+            if (i != _server._pending_responders.end()) {
+                _server._pending_responders.pop_back();
+            }
+            // prevent the connection from been added to the poller
+            _flush_requested = true;
+            return std::move(_ready_to_respond).then([this] {
+                // do the final flush here since poller was disabled for the connection
+                return  _write_buf.flush();
             });
         });
     });
