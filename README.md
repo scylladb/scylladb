@@ -1,17 +1,17 @@
-#Urchin
+#Scylla
 
-##Building Urchin
+##Building Scylla
 
-In addition to required packages by Seastar, the following packages are required by Urchin.
+In addition to required packages by Seastar, the following packages are required by Scylla.
 
 ### Submodules
-Urchin uses submodules, so make sure you pull the submodules first by doing:
+Scylla uses submodules, so make sure you pull the submodules first by doing:
 ```
 git submodule init
 git submodule update --recursive
 ```
 
-### Building urchin on Fedora
+### Building scylla on Fedora
 Installing required packages:
 
 ```
