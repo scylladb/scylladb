@@ -4,12 +4,12 @@ Release:        @@RELEASE@@%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 Group:          Applications/Databases
 
-License:        Proprietary
+License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 
 BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel make
-%{?fedora:BuildRequires: python3 gcc-c++}
+%{?fedora:BuildRequires: python3 gcc-c++ libasan libubsan}
 %{?rhel:BuildRequires: python34 devtoolset-3-gcc-c++}
 Requires:       libaio boost-program-options boost-system libstdc++ boost-thread cryptopp hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs
 

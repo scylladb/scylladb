@@ -187,6 +187,7 @@ int main(int ac, char** av) {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             dht::set_global_partitioner(cfg->partitioner());
+            auto start_thrift = cfg->start_rpc();
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = cfg->api_port();
@@ -283,7 +284,7 @@ int main(int ac, char** av) {
                 return ss.init_server();
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
-            }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port] (dns::hostent e) {
+            }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port, start_thrift] (dns::hostent e) {
                 auto ip = e.addresses[0].in.s_addr;
                 auto cserver = new distributed<transport::cql_server>;
                 cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
@@ -295,16 +296,18 @@ int main(int ac, char** av) {
                 }).then([rpc_address, cql_port] {
                     print("Starting listening for CQL clients on %s:%s...\n", rpc_address, cql_port);
                 });
-                auto tserver = new distributed<thrift_server>;
-                tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address, ip] () mutable {
-                    // #293 - do not stop anything
-                    //engine().at_exit([server] {
-                    //    return server->stop();
-                    //});
-                    server->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, thrift_port});
-                }).then([rpc_address, thrift_port] {
-                    print("Thrift server listening on %s:%s ...\n", rpc_address, thrift_port);
-                });
+                if (start_thrift) {
+                    auto tserver = new distributed<thrift_server>;
+                    tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address, ip] () mutable {
+                        // #293 - do not stop anything
+                        //engine().at_exit([server] {
+                        //    return server->stop();
+                        //});
+                        server->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, thrift_port});
+                    }).then([rpc_address, thrift_port] {
+                        print("Thrift server listening on %s:%s ...\n", rpc_address, thrift_port);
+                    });
+                }
             }).then([api_address] {
                 return dns::gethostbyname(api_address);
             }).then([&db, api_address, api_port, &ctx] (dns::hostent e){

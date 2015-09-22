@@ -539,7 +539,7 @@ public:
     val(rpc_port, uint16_t, 9160, Used,                \
             "Thrift port for client connections."  \
     )   \
-    val(start_rpc, bool, true, Unused,                \
+    val(start_rpc, bool, false, Used,                \
             "Starts the Thrift RPC server"  \
     )   \
     val(rpc_keepalive, bool, true, Unused,     \
