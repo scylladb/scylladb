@@ -20,11 +20,12 @@ sudo yum install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel 
 
 ## Building Fedora RPM
 
-As a pre-requisite, you need to install [Mock](https://fedoraproject.org/wiki/Mock) on your machine:
+As a pre-requisite, you need to install [Mock](https://fedoraproject.org/wiki/Mock)
+and rpm-build on your machine:
 
 ```
-# Install mock:
-sudo yum install mock
+# Install mock and rpm-build:
+sudo yum install mock rpm-build
 
 # Add user to the "mock" group:
 usermod -a -G mock $USER && newgrp mock
