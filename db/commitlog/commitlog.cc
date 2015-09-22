@@ -1026,6 +1026,7 @@ db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acqu
     if (a == nullptr) {
         throw std::bad_alloc();
     }
+    logger.trace("Allocated {} k buffer", s / 1024);
     return buffer_type(reinterpret_cast<char *>(a), s, make_free_deleter(a));
 }
 
@@ -1038,6 +1039,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
     constexpr const size_t max_temp_buffers = 4;
 
     if (_temp_buffers.size() > max_temp_buffers) {
+        logger.trace("Deleting {} buffers", _temp_buffers.size() - max_temp_buffers);
         _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
     }
     totals.buffer_list_bytes = std::accumulate(_temp_buffers.begin(),
