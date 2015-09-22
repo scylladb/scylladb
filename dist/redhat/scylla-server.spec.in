@@ -4,7 +4,7 @@ Release:        @@RELEASE@@%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 Group:          Applications/Databases
 
-License:        Proprietary
+License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 
