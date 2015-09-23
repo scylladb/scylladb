@@ -56,6 +56,7 @@ class cache_entry {
     mutation_partition _p;
     lru_link_type _lru_link;
     cache_link_type _cache_link;
+    friend class size_calculator;
 public:
     friend class row_cache;
     friend class cache_tracker;

@@ -519,6 +519,7 @@ class mutation_partition final {
         boost::intrusive::compare<row_tombstones_entry::compare>>;
     friend rows_entry;
     friend row_tombstones_entry;
+    friend class size_calculator;
 private:
     tombstone _tombstone;
     row _static_row;
