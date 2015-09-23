@@ -99,10 +99,11 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
-%{_sharedstatedir}/scylla/conf/
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
+%attr(0755,root,root) %dir %{_sharedstatedir}/scylla/conf/
+%{_sharedstatedir}/scylla/conf/scylla.yaml
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
