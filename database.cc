@@ -811,7 +811,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
     if (i == _keyspaces.end()) {
         dblog.warn("Skipping undefined keyspace: {}", ks_name);
     } else {
-        dblog.warn("Populating Keyspace {}", ks_name);
+        dblog.info("Populating Keyspace {}", ks_name);
         return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
             auto comps = parse_fname(de.name);
             if (comps.size() < 2) {
