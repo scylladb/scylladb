@@ -17,9 +17,11 @@ fi
 if [ ! -f files/scylla-server.rpm ] || [ ! -f files/scylla-server-debuginfo.rpm ]; then
     cd ../../
     dist/redhat/build_rpm.sh
-    RPM=`ls build/rpms/scylla-server-*.x86_64.rpm|grep -v debuginfo`
+    SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+    SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
+    RPM=`ls build/rpms/scylla-server-$SCYLLA_VERSION-$SCYLLA_RELEASE*.x86_64.rpm|grep -v debuginfo`
     cp $RPM dist/ami/files/scylla-server.rpm
-    cp build/rpms/scylla-server-debuginfo-*.x86_64.rpm dist/ami/files/scylla-server-debuginfo.rpm
+    cp build/rpms/scylla-server-debuginfo-$SCYLLA_VERSION-$SCYLLA_RELEASE*.x86_64.rpm dist/ami/files/scylla-server-debuginfo.rpm
     cd -
 fi
 
@@ -27,7 +29,9 @@ if [ ! -f files/scylla-jmx.rpm ]; then
     CWD=`pwd`
     cd ../../../scylla-jmx
     dist/redhat/build_rpm.sh
-    RPM=`ls build/rpms/scylla-jmx-*.noarch.rpm`
+    SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+    SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
+    RPM=`ls build/rpms/scylla-jmx-$SCYLLA_VERSION-$SCYLLA_RELEASE*.noarch.rpm`
     cp $RPM $CWD/files/scylla-jmx.rpm
     cd -
 fi
@@ -36,7 +40,9 @@ if [ ! -f files/scylla-tools.rpm ]; then
     CWD=`pwd`
     cd ../../../cassandra
     dist/redhat/build_rpm.sh
-    RPM=`ls build/rpms/scylla-tools-*.noarch.rpm`
+    SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+    SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
+    RPM=`ls build/rpms/scylla-tools-$SCYLLA_VERSION-$SCYLLA_RELEASE*.noarch.rpm`
     cp $RPM $CWD/files/scylla-tools.rpm
     cd -
 fi

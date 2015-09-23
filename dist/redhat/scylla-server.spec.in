@@ -43,6 +43,7 @@ install -m644 dist/redhat/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/
 install -m644 dist/redhat/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -m644 dist/redhat/systemd/scylla-server.service $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/redhat/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
@@ -94,13 +95,15 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_run
 %{_prefix}/lib/scylla/scylla_stop
+%{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
-%attr(0700,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
-%{_sharedstatedir}/scylla/conf/
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
+%attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
+%attr(0755,root,root) %dir %{_sharedstatedir}/scylla/conf/
+%{_sharedstatedir}/scylla/conf/scylla.yaml
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
