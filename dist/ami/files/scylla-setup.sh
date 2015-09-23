@@ -16,6 +16,12 @@ mount /data
 mkdir -p /data/data
 mkdir -p /data/commitlog
 chown scylla:scylla /data/*
+CPU_NR=`cat /proc/cpuinfo |grep processor|wc -l`
+if [ $CPU_NR -ge 8 ]; then
+    NR=$((CPU_NR - 1))
+    echo SCYLLA_ARGS=\"--cpuset 1-$NR  --smp $NR\" >> /etc/sysconfig/scylla-server
+    echo SET_NIC=\"yes\" >> /etc/sysconfig/scylla-server
+fi
 /usr/lib/scylla/scylla-ami/ds2_configure.py
 systemctl disable scylla-setup.service
 systemctl enable scylla-server.service
