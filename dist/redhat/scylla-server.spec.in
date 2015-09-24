@@ -13,9 +13,6 @@ BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel hwloc-de
 %{?rhel:BuildRequires: python34 devtoolset-3-gcc-c++}
 Requires:       libaio boost-program-options boost-system libstdc++ boost-thread cryptopp hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs
 
-# TODO: create our own bridge device for virtio
-Requires:       libvirt-daemon
-
 %description
 
 %prep
