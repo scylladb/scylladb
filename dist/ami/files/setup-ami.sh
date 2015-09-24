@@ -1,6 +1,11 @@
 #!/bin/sh -e
+
+setenforce 0
+sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
+mv /tmp/selinux /etc/sysconfig/
 dnf update -y
-dnf install -y /home/fedora/*.rpm
+mv /home/fedora/scylla.repo /etc/yum.repos.d/
+dnf install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
 dnf install -y mdadm xfsprogs
 cp /home/fedora/coredump.conf /etc/systemd/coredump.conf
 mv /home/fedora/scylla-setup.service /usr/lib/systemd/system
