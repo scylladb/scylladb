@@ -21,6 +21,7 @@
 
 #include "compaction_manager.hh"
 #include "database.hh"
+#include "core/scollectd.hh"
 
 static logging::logger cmlog("compaction_manager");
 
@@ -46,6 +47,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     _stats.pending_tasks--;
                 }
 
+                _stats.active_tasks++;
                 return task->compacting_cf->run_compaction().then([this, task] {
                     // If compaction completed successfully, let's reset
                     // sleep time of compaction_retry.
@@ -64,6 +66,8 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     task->compacting_cf = nullptr;
 
                     _stats.completed_tasks++;
+                }).finally([this] {
+                    _stats.active_tasks--;
                 });
             });
         }).then_wrapped([this, task] (future<> f) {
@@ -139,9 +143,22 @@ compaction_manager::~compaction_manager() {
     assert(_stopped == true);
 }
 
+void compaction_manager::register_collectd_metrics() {
+    auto add = [this] (auto type_name, auto name, auto data_type, auto func) {
+        _registrations.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("compaction_manager",
+                scollectd::per_cpu_plugin_instance,
+                type_name, name),
+                scollectd::make_typed(data_type, func)));
+    };
+
+    add("objects", "compactions", scollectd::data_type::GAUGE, [&] { return _stats.active_tasks; });
+}
+
 void compaction_manager::start(int task_nr) {
     _stopped = false;
     _tasks.reserve(task_nr);
+    register_collectd_metrics();
     for (int i = 0; i < task_nr; i++) {
         auto task = make_lw_shared<compaction_manager::task>();
         task_start(task);
@@ -150,6 +167,7 @@ void compaction_manager::start(int task_nr) {
 }
 
 future<> compaction_manager::stop() {
+    _registrations.clear();
     return do_for_each(_tasks, [this] (auto& task) {
         return this->task_stop(task);
     }).then([this] {

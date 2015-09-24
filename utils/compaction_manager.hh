@@ -42,6 +42,7 @@ public:
     struct stats {
         int64_t pending_tasks = 0;
         int64_t completed_tasks = 0;
+        uint64_t active_tasks = 0; // Number of compaction going on.
     };
 private:
     struct task {
@@ -64,6 +65,7 @@ private:
     bool _stopped = true;
 
     stats _stats;
+    std::vector<scollectd::registration> _registrations;
 private:
     void task_start(lw_shared_ptr<task>& task);
     future<> task_stop(lw_shared_ptr<task>& task);
@@ -72,6 +74,8 @@ private:
 public:
     compaction_manager();
     ~compaction_manager();
+
+    void register_collectd_metrics();
 
     // Creates N fibers that will allow N compaction jobs to run in parallel.
     // Defaults to only one fiber.
