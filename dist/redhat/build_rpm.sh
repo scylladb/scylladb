@@ -37,6 +37,6 @@ if [ "$OS" = "Fedora" ]; then
     rpmbuild -bs --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
     mock rebuild --resultdir=`pwd`/build/rpms $RPMBUILD/SRPMS/scylla-server-$VERSION*.src.rpm
 else
-    sudo yum-builddep $RPMBUILD/SPECS/scylla-server.spec
+    sudo yum-builddep -y  $RPMBUILD/SPECS/scylla-server.spec
     rpmbuild -ba --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
 fi
