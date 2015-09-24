@@ -4,6 +4,8 @@ if [ -f /dev/md0 ]; then
     echo "RAID already constructed."
     exit 1
 fi
+
+dnf update -y
 mdadm --create --verbose --force --run /dev/md0 --level=0 -c256 --raid-devices=2 /dev/xvdb /dev/xvdc
 blockdev --setra 65536 /dev/md0
 mkfs.xfs /dev/md0 -f
