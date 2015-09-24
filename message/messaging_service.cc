@@ -178,6 +178,9 @@ public:
         // FIXME: not really true, a previous stop could be in progress?
         return make_ready_future<>();
     }
+    bool error() {
+        return _p->error();
+    }
     operator rpc_protocol::client&() { return *_p; }
 };
 
@@ -295,14 +298,19 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, shard_id id) {
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
-    if (it == _clients[idx].end()) {
-        auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-        auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
-        it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
-        return it->second.rpc_client;
-    } else {
-        return it->second.rpc_client;
+
+    if (it != _clients[idx].end()) {
+        auto c = it->second.rpc_client;
+        if (!c->error()) {
+            return c;
+        }
+        remove_rpc_client(verb, id);
     }
+
+    auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
+    auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+    it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
+    return it->second.rpc_client;
 }
 
 void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
