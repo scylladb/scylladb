@@ -24,20 +24,7 @@
     {
       "type": "shell",
       "inline": [
-        "sudo dnf update -y",
-        "sudo dnf install -y /home/fedora/*.rpm",
-        "sudo dnf install -y mdadm xfsprogs",
-        "sudo cp /home/fedora/coredump.conf /etc/systemd/coredump.conf",
-        "sudo mv /home/fedora/scylla-setup.service /usr/lib/systemd/system",
-        "sudo mv /home/fedora/scylla-setup.sh /usr/lib/scylla",
-        "sudo chmod a+rx /usr/lib/scylla/scylla-setup.sh",
-	"sudo mv /home/fedora/scylla-ami /usr/lib/scylla/scylla-ami",
-	"sudo chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py",
-        "sudo systemctl enable scylla-setup.service",
-	"sudo sed -e 's!/var/lib/scylla/data!/data/data!' -e 's!commitlog_directory: /var/lib/scylla/commitlog!commitlog_directory: /data/commitlog!' /var/lib/scylla/conf/scylla.yaml > /tmp/scylla.yaml",
-        "sudo mv /tmp/scylla.yaml /var/lib/scylla/conf",
-	"grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg",
-	"sudo mv /tmp/cloud.cfg /etc/cloud/cloud.cfg"
+	"sudo sh -x -e /home/fedora/setup-ami.sh"
       ]
     }
   ],
