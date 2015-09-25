@@ -210,12 +210,7 @@ row_cache::make_reader(const query::partition_range& range) {
 }
 
 row_cache::~row_cache() {
-    with_allocator(_tracker.allocator(), [this] {
-        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
-            deleter(p);
-        });
-    });
+    clear();
 }
 
 void row_cache::populate(const mutation& m) {
@@ -231,6 +226,15 @@ void row_cache::populate(const mutation& m) {
             // We cache whole partitions right now, so if cache already has this partition,
             // it must be complete, so do nothing.
         }
+        });
+    });
+}
+
+void row_cache::clear() {
+    with_allocator(_tracker.allocator(), [this] {
+        _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
         });
     });
 }
