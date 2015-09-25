@@ -381,6 +381,7 @@ urchin_core = (['database.cc',
                  'partition_slice_builder.cc',
                  'init.cc',
                  'repair/repair.cc',
+                 'exceptions/exceptions.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]

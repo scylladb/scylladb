@@ -87,26 +87,11 @@ void truncate_statement::validate(distributed<service::storage_proxy>&, const se
 future<::shared_ptr<transport::messages::result_message>>
 truncate_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options)
 {
-    throw std::runtime_error("not implemented");
-#if 0
-    try
-    {
-        StorageProxy.truncateBlocking(keyspace(), columnFamily());
-    }
-    catch (UnavailableException e)
-    {
-        throw new TruncateException(e);
-    }
-    catch (TimeoutException e)
-    {
-        throw new TruncateException(e);
-    }
-    catch (IOException e)
-    {
-        throw new TruncateException(e);
-    }
-    return null;
-#endif
+    return service::get_local_storage_proxy().truncate_blocking(keyspace(), column_family()).handle_exception([](auto ep) {
+        throw exceptions::truncate_exception(ep);
+    }).then([] {
+        return ::shared_ptr<transport::messages::result_message>{};
+    });
 }
 
 future<::shared_ptr<transport::messages::result_message>>
