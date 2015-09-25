@@ -70,7 +70,7 @@ bool truncate_statement::uses_function(const sstring& ks_name, const sstring& fu
 
 void truncate_statement::check_access(const service::client_state& state)
 {
-    throw std::runtime_error("not implemented");
+    warn(unimplemented::cause::AUTH);
 #if 0
     state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
 #endif
@@ -78,7 +78,7 @@ void truncate_statement::check_access(const service::client_state& state)
 
 void truncate_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
 {
-    throw std::runtime_error("not implemented");
+    warn(unimplemented::cause::VALIDATION);
 #if 0
     ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
 #endif
