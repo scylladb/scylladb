@@ -214,8 +214,8 @@ logging::log_level lexical_cast(const std::string& source) {
 
 }
 
-
-std::ostream& operator<<(std::ostream&out, std::exception_ptr eptr) {
+namespace std {
+std::ostream& operator<<(std::ostream&out, const std::exception_ptr eptr) {
     if (!eptr) {
         out << "<no exception>";
         return out;
@@ -240,4 +240,5 @@ std::ostream& operator<<(std::ostream&out, std::exception_ptr eptr) {
         }
     }
     return out;
+}
 }
