@@ -237,10 +237,29 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     });
 
     // Wait for both read_done and write_done fibers to finish.
-    // FIXME: if write_done throws an exception, we get a broken pipe
-    // exception on read_done, and then we don't handle write_done's
-    // exception, causing a warning message of "ignored exceptional future".
-    return read_done.then([write_done = std::move(write_done)] () mutable { return std::move(write_done); });
+    return when_all(std::move(read_done), std::move(write_done)).then([] (std::tuple<future<>, future<>> t) {
+        sstring ex;
+        try {
+            std::get<0>(t).get();
+        } catch(...) {
+            ex += "read exception: ";
+            ex += sprint("%s", std::current_exception());
+        }
+
+        try {
+            std::get<1>(t).get();
+        } catch(...) {
+            if (ex.size()) {
+                ex += ", ";
+            }
+            ex += "write exception: ";
+            ex += sprint("%s", std::current_exception());
+        }
+
+        if (ex.size()) {
+            throw std::runtime_error(ex);
+        }
+    });
 }
 
 class compaction_strategy_impl {
