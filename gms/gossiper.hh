@@ -305,6 +305,7 @@ public:
     bool is_known_endpoint(inet_address endpoint);
 
     int get_current_generation_number(inet_address endpoint);
+    int get_current_heart_beat_version(inet_address endpoint);
 
     bool is_gossip_only_member(inet_address endpoint);
 private:
@@ -462,6 +463,7 @@ future<std::set<inet_address>> get_unreachable_members();
 future<std::set<inet_address>> get_live_members();
 future<int64_t> get_endpoint_downtime(inet_address ep);
 future<int> get_current_generation_number(inet_address ep);
+future<int> get_current_heart_beat_version(inet_address ep);
 future<> unsafe_assassinate_endpoint(sstring ep);
 future<> assassinate_endpoint(sstring ep);
 
