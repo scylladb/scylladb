@@ -52,6 +52,7 @@
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
+#include <core/fstream.hh>
 
 using namespace std::chrono_literals;
 
@@ -1526,6 +1527,57 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
         }).then([uuid] {
             return db::system_keyspace::update_schema_version(uuid).then([uuid] {
                 return service::get_local_migration_manager().passive_announce(uuid);
+            });
+        });
+    });
+}
+
+future<> column_family::snapshot(sstring name) {
+    return flush().then([this, name = std::move(name)]() {
+        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables | boost::adaptors::map_values);
+        if (tables.size() == 0) {
+            return make_ready_future<>();
+        }
+        return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
+            return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
+                auto dir = sstable->get_dir() + "/snapshots/" + name;
+                return recursive_touch_directory(dir).then([sstable, dir] {
+                    return sstable->create_links(dir);
+                });
+            }).then([this, &tables, name] {
+                std::ostringstream ss;
+                int n = 0;
+                ss << "{" << std::endl << "\t\"files\" : { ";
+                for (auto& sst : tables) {
+                    auto f = sst->get_filename();
+                    auto rf = f.substr(sst->get_dir().size() + 1);
+
+                    if (n++ > 0) {
+                        ss << ", ";
+                    }
+                    ss << "\"" << rf << "\"";
+                }
+                ss << " }" << std::endl << "}" << std::endl;
+
+                auto json = ss.str();
+                auto jsondir = _config.datadir + "/snapshots/" + name;
+                auto jsonfile = jsondir + "/manifest.json";
+
+                dblog.debug("Storing manifest {}", jsonfile);
+
+                return engine().open_file_dma(jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
+                    return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
+                        return out.write(json.c_str(), json.size()).then([&out] {
+                           return out.flush();
+                        });
+                    });
+                }).then([jsondir = std::move(jsondir)] {
+                    // sync dir (is this really needed?)
+                    return engine().open_directory(jsondir).then([](file df) {
+                        auto f = df.flush();
+                        return f.finally([df = std::move(df)] {});
+                    });
+                });
             });
         });
     });

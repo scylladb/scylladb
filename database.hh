@@ -213,6 +213,8 @@ public:
     // Compact all sstables provided in the vector.
     future<> compact_sstables(std::vector<lw_shared_ptr<sstables::sstable>> sstables);
 
+    future<> snapshot(sstring name);
+
     lw_shared_ptr<sstable_list> get_sstables();
     size_t sstables_count();
     int64_t get_unleveled_sstables() const;
