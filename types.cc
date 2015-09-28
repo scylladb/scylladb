@@ -1182,6 +1182,8 @@ struct empty_type_impl : abstract_type {
 logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
 
+thread_local std::unordered_map<data_type, shared_ptr<cql3::cql3_type>> collection_type_impl::_cql3_type_cache;
+
 const collection_type_impl::kind collection_type_impl::kind::map(
         [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
             // FIXME: implement
@@ -1241,14 +1243,16 @@ collection_type_impl::is_compatible_with(const abstract_type& previous) const {
 
 shared_ptr<cql3::cql3_type>
 collection_type_impl::as_cql3_type() const {
-    if (!_cql3_type) {
+    auto ret = _cql3_type_cache[shared_from_this()];
+    if (!ret) {
         auto name = cql3_type_name();
         if (!is_multi_cell()) {
             name = "frozen<" + name + ">";
         }
-        _cql3_type = make_shared<cql3::cql3_type>(name, shared_from_this(), false);
+        ret = make_shared<cql3::cql3_type>(name, shared_from_this(), false);
+        _cql3_type_cache[shared_from_this()] = ret;
     }
-    return _cql3_type;
+    return ret;
 }
 
 bytes
