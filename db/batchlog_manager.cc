@@ -98,7 +98,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
 
 mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-    auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
+    auto key = partition_key::from_singular(*schema, id);
     auto timestamp = db_clock::now_in_usecs();
     auto data = [this, &mutations] {
         std::vector<frozen_mutation> fm(mutations.begin(), mutations.end());
@@ -206,7 +206,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         }).then([this, id] {
             // delete batch
             auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-            auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
+            auto key = partition_key::from_singular(*schema, id);
             mutation m(key, schema);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));

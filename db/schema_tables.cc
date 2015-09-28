@@ -903,7 +903,7 @@ future<> save_system_keyspace_schema() {
     {
         std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
-        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name())});
+        auto pkey = partition_key::from_singular(*s, keyspace->name());
         mutation m(pkey, s);
         exploded_clustering_prefix ckey;
         m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
@@ -1056,7 +1056,7 @@ future<> save_system_keyspace_schema() {
         // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
         auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
         schema_ptr s = keyspaces();
-        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name())});
+        auto pkey = partition_key::from_singular(*s, keyspace->name());
         add_table_to_schema_mutation(table, timestamp, true, pkey, mutations);
         return mutations;
     }

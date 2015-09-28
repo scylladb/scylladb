@@ -160,6 +160,17 @@ public:
         return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
     }
 
+    template <typename T>
+    static
+    TopLevel from_singular(const schema& s, const T& v) {
+        auto ct = get_compound_type(s);
+        if (!ct->is_singular()) {
+            throw std::invalid_argument("compound is not singular");
+        }
+        auto type = ct->types()[0];
+        return from_single_value(s, type->decompose(v));
+    }
+
     TopLevelView view() const {
         return TopLevelView::from_bytes(_bytes);
     }
