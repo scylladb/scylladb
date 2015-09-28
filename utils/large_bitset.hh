@@ -52,6 +52,11 @@ public:
     size_t size() const {
         return _nr_bits;
     }
+
+    size_t memory_size() const {
+        return block_size() * _storage.size() + sizeof(_nr_bits);
+    }
+
     bool test(size_t idx) const {
         auto idx1 = idx / bits_per_block();
         idx %= bits_per_block();

@@ -58,6 +58,8 @@ struct i_filter {
     virtual void clear() = 0;
     virtual void close() = 0;
 
+    virtual size_t memory_size() = 0;
+
     /**
      * @return The smallest bloom_filter that can provide the given false
      *         positive probability rate for the given number of elements.

@@ -96,6 +96,10 @@ public:
     }
 
     virtual void close() override { }
+
+    virtual size_t memory_size() override {
+        return sizeof(_hash_count) + _bitset.memory_size();
+    }
 };
 
 struct murmur3_bloom_filter: public bloom_filter {
@@ -118,6 +122,10 @@ struct always_present_filter: public i_filter {
     virtual void clear() override { }
 
     virtual void close() override { }
+
+    virtual size_t memory_size() override {
+        return 0;
+    }
 };
 
 filter_ptr create_filter(int hash, large_bitset&& bitset);
