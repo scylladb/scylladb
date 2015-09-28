@@ -204,6 +204,8 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
+    void clear(); // discards memtable(s) without flushing them to disk.
+    future<db::replay_position> discard_sstables(db_clock::time_point);
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
@@ -532,6 +534,8 @@ public:
     }
 
     future<> flush_all_memtables();
+    /** Truncates the given column family */
+    future<> truncate(sstring ksname, sstring cfname);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;
