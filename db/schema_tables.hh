@@ -100,7 +100,9 @@ std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadat
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
-    
+
+std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
+
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table);
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
@@ -108,6 +110,8 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
 void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
 
 future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition);
+
+void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
 
 std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                const sstring& keyspace,

@@ -1193,21 +1193,23 @@ future<> save_system_keyspace_schema() {
 
         return mutation;
     }
+#endif
 
-    public static Mutation makeDropTableMutation(KSMetaData keyspace, CFMetaData table, long timestamp)
+    std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
     {
         // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
+        auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+        schema_ptr s = columnfamilies();
+        auto pkey = partition_key::from_singular(*s, table->ks_name());
+        auto ckey = clustering_key::from_singular(*s, table->cf_name());
+        mutation m{pkey, s};
+        m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+        mutations.emplace_back(m);
+        for (auto& column : table->all_columns_in_select_order()) {
+            drop_column_from_schema_mutation(table, column, timestamp, mutations);
+        }
 
-        ColumnFamily cells = mutation.addOrGet(Columnfamilies);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Columnfamilies.comparator.make(table.cfName);
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-
-        for (ColumnDefinition column : table.allColumns())
-            dropColumnFromSchemaMutation(table, column, timestamp, mutation);
-
+#if 0
         for (TriggerDefinition trigger : table.getTriggers().values())
             dropTriggerFromSchemaMutation(table, trigger, timestamp, mutation);
 
@@ -1215,10 +1217,9 @@ future<> save_system_keyspace_schema() {
         ColumnFamily indexCells = mutation.addOrGet(SystemKeyspace.BuiltIndexes);
         for (String indexName : Keyspace.open(keyspace.name).getColumnFamilyStore(table.cfName).getBuiltIndexes())
             indexCells.addTombstone(indexCells.getComparator().makeCellName(indexName), ldt, timestamp);
-
-        return mutation;
-    }
 #endif
+        return mutations;
+    }
 
     future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
     {
@@ -1493,17 +1494,15 @@ future<> save_system_keyspace_schema() {
         }
     }
 
-#if 0
-    private static void dropColumnFromSchemaMutation(CFMetaData table, ColumnDefinition column, long timestamp, Mutation mutation)
+    void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations)
     {
-        ColumnFamily cells = mutation.addOrGet(Columns);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        // Note: we do want to use name.toString(), not name.bytes directly for backward compatibility (For CQL3, this won't make a difference).
-        Composite prefix = Columns.comparator.make(table.cfName, column.name.toString());
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
+        schema_ptr s = columns();
+        auto pkey = partition_key::from_singular(*s, table->ks_name());
+        auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
+        mutation m{pkey, s};
+        m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+        mutations.emplace_back(m);
     }
-#endif
 
     std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                    const sstring& keyspace,
