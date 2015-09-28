@@ -120,7 +120,7 @@ class Antlr3Grammar(object):
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'sanitize_libs': '-lubsan -lasan',
+        'sanitize_libs': '-lasan -lubsan',
         'opt': '-O0 -DDEBUG -DDEBUG_SHARED_PTR -DDEFAULT_ALLOCATOR',
         'libs': '',
     },
@@ -599,11 +599,11 @@ with open(buildfile, 'w') as f:
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
-              command = $cxx  $cxxflags_{mode} -s $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} -s {sanitize_libs} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
             rule ar.{mode}
