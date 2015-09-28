@@ -84,6 +84,9 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
+// Only for testing.
+void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
+
 future<> init_local_cache();
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 future<> update_schema_version(utils::UUID version);
@@ -274,10 +277,10 @@ enum class bootstrap_state {
         return CompactionHistoryTabularData.from(queryResultSet);
     }
 #endif
-    future<> save_truncation_record(cql3::query_processor&, const column_family&, db_clock::time_point truncated_at, const db::replay_position&);
-    future<> remove_truncation_record(cql3::query_processor&, utils::UUID);
-    future<db::replay_position> get_truncated_position(cql3::query_processor&, utils::UUID);
-    future<db_clock::time_point> get_truncated_at(cql3::query_processor&, utils::UUID);
+    future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, const db::replay_position&);
+    future<> remove_truncation_record(utils::UUID);
+    future<db::replay_position> get_truncated_position(utils::UUID);
+    future<db_clock::time_point> get_truncated_at(utils::UUID);
 
 #if 0
 

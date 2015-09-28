@@ -118,7 +118,7 @@ future<> db::commitlog_replayer::impl::init() {
                     }
                 }
                 // TODO: this is not correct. Truncation does not fully take sharding into consideration
-                return db::system_keyspace::get_truncated_position(qp, uuid).then([&map, uuid](auto truncated_rp) {
+                return db::system_keyspace::get_truncated_position(uuid).then([&map, uuid](auto truncated_rp) {
                     if (truncated_rp != replay_position()) {
                         auto& pp = map[engine().cpu_id()][uuid];
                         pp = std::max(pp, truncated_rp);
