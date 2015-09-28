@@ -53,6 +53,13 @@ void set_gossiper(http_context& ctx, routes& r) {
         });
     });
 
+    httpd::gossiper_json::get_current_heart_beat_version.set(r, [](std::unique_ptr<request> req) {
+        gms::inet_address ep(req->param["addr"]);
+        return gms::get_current_heart_beat_version(ep).then([](int res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
+
     httpd::gossiper_json::assassinate_endpoint.set(r, [](std::unique_ptr<request> req) {
         if (req->get_query_param("unsafe") != "True") {
             return gms::assassinate_endpoint(req->param["addr"]).then([] {
