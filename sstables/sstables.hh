@@ -183,6 +183,7 @@ public:
                                                  version_types v, format_types f);
 
     future<> load();
+    future<> open_data();
 
     void set_generation(unsigned long generation) {
         _generation = generation;
@@ -360,7 +361,6 @@ private:
     future<> read_statistics();
     void write_statistics();
 
-    future<> open_data();
     future<> create_data();
 
     future<index_list> read_indexes(uint64_t summary_idx);

@@ -877,7 +877,11 @@ future<> sstable::open_data() {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
         return _data_file.size().then([this] (auto size) {
-          _data_file_size = size;
+            if (this->has_component(sstable::component_type::CompressionInfo)) {
+                _compression.update(size);
+            } else {
+                _data_file_size = size;
+            }
         }).then([this] {
             return _index_file.size().then([this] (auto size) {
               _index_file_size = size;
@@ -911,12 +915,6 @@ future<> sstable::load() {
         return read_summary();
     }).then([this] {
         return open_data();
-    }).then([this] {
-        // After we have _compression and _data_file_size, we can update
-        // _compression with additional information it needs:
-        if (has_component(sstable::component_type::CompressionInfo)) {
-            _compression.update(_data_file_size);
-        }
     });
 }
 

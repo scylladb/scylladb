@@ -215,7 +215,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     future<> write_done = newtab->write_components(
             std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats, start_time] {
-        return newtab->load().then([newtab, stats, start_time] {
+        return newtab->open_data().then([newtab, stats, start_time] {
             uint64_t endsize = newtab->data_size();
             double ratio = (double) endsize / (double) stats->start_size;
             auto end_time = std::chrono::high_resolution_clock::now();

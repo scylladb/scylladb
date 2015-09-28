@@ -496,7 +496,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     newtab->set_unshared();
     dblog.debug("Flushing to {}", newtab->get_filename());
     return newtab->write_components(*old).then([this, newtab, old] {
-        return newtab->load();
+        return newtab->open_data();
     }).then([this, old, newtab] {
         dblog.debug("Flushing done");
         // We must add sstable before we call update_cache(), because
