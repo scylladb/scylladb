@@ -55,6 +55,9 @@ struct query_context {
     api::timestamp_type next_timestamp() {
         return _qp.local().next_timestamp();
     }
+    cql3::query_processor& qp() {
+        return _qp.local();
+    }
 };
 
 // This does not have to be thread local, because all cores will share the same context.
