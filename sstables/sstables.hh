@@ -259,6 +259,10 @@ public:
         return _filter_file_size;
     }
 
+    uint64_t filter_memory_size() {
+        return _filter->memory_size();
+    }
+
     // Returns the total bytes of all components.
     future<uint64_t> bytes_on_disk();
 
