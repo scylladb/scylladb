@@ -255,7 +255,14 @@ maps::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 maps::marker::bind(const query_options& options) {
-    throw std::runtime_error("");
+    auto val = options.get_value_at(_bind_index);
+    return val ?
+            ::make_shared<maps::value>(
+                    maps::value::from_serialized(*val,
+                            static_pointer_cast<const map_type_impl>(
+                                    _receiver->type),
+                            options.get_serialization_format())) :
+            nullptr;
 }
 
 void
