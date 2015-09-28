@@ -143,6 +143,7 @@ private:
     compaction_manager& _compaction_manager;
     // Whether or not a cf is queued by its compaction manager.
     bool _compaction_manager_queued = false;
+    int _compaction_disabled = 0;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -236,6 +237,15 @@ public:
         return _stats;
     }
 
+    template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
+    Result run_with_compaction_disabled(Func && func) {
+        ++_compaction_disabled;
+        return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
+            if (--_compaction_disabled == 0) {
+                trigger_compaction();
+            }
+        });
+    }
 private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually

@@ -641,8 +641,10 @@ void column_family::start_compaction() {
 
 void column_family::trigger_compaction() {
     // Submitting compaction job to compaction manager.
-    _stats.pending_compactions++;
-    _compaction_manager.submit(this);
+    if (!_compaction_disabled) {
+        _stats.pending_compactions++;
+        _compaction_manager.submit(this);
+    }
 }
 
 future<> column_family::run_compaction() {
