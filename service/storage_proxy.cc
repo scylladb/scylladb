@@ -2529,6 +2529,11 @@ void storage_proxy::init_messaging_service() {
             return p->query_singular_local_digest(cmd, pr);
         });
     });
+    ms.register_truncate([](sstring ksname, sstring cfname) {
+        return get_storage_proxy().invoke_on_all([ksname, cfname](storage_proxy& sp) {
+            return sp._db.local().truncate(ksname, cfname);
+        });
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {
@@ -2540,6 +2545,7 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_read_data();
     ms.unregister_read_mutation_data();
     ms.unregister_read_digest();
+    ms.unregister_truncate();
 }
 
 // Merges reconcilable_result:s from different shards into one
