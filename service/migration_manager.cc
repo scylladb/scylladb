@@ -399,14 +399,11 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
 {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
-        /*auto&& cfm = */db.find_schema(ks_name, cf_name);
-        /*auto&& ksm = */db.find_keyspace(ks_name);
-#if 0
-        logger.info(String.format("Drop table '%s/%s'", oldCfm.ksName, oldCfm.cfName));
-        announce(LegacySchemaTables.makeDropTableMutation(ksm, oldCfm, FBUtilities.timestampMicros()), announceLocally);
-#endif
-        // FIXME
-        throw std::runtime_error("not implemented");
+        auto&& old_cfm = db.find_schema(ks_name, cf_name);
+        auto&& keyspace = db.find_keyspace(ks_name);
+        logger.info("Drop table '{}/{}'", old_cfm->ks_name(), old_cfm->cf_name());
+        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, db_clock::now_in_usecs());
+        return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));
     }
