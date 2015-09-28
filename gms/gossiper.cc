@@ -1284,11 +1284,11 @@ future<> gossiper::do_shadow_round() {
                     return make_ready_future<>();
                 }).get();
             }
-            if (clk::now() > t + storage_service_ring_delay()) {
+            if (clk::now() > t + storage_service_ring_delay() * 60) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
-                logger.trace("Sleep 1 second and retry ...");
+                logger.info("Sleep 1 second and connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
                 sleep(std::chrono::seconds(1)).get();
             }
         }
