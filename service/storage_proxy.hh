@@ -160,6 +160,14 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
 
+    /**
+     * Performs the truncate operatoin, which effectively deletes all data from
+     * the column family cfname
+     * @param keyspace
+     * @param cfname
+     */
+    future<> truncate_blocking(sstring keyspace, sstring cfname);
+
     /*
      * Executes data query on the whole cluster.
      *
