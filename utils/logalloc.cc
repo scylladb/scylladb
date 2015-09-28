@@ -378,7 +378,7 @@ public:
         auto i = _segments.find(seg);
         assert(i != _segments.end());
         _segments.erase(i);
-        delete seg;
+        ::free(seg);
     }
     segment* containing_segment(void* obj) const {
         uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
