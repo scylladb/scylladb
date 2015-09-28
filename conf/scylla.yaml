@@ -24,13 +24,13 @@ cluster_name: 'Test Cluster'
 num_tokens: 256
 
 # Directory where Scylla should store data on disk.
-# If not set, the default directory is $CASSANDRA_HOME/data/data.
+# If not set, the default directory is /var/lib/scylla/data.
 data_file_directories:
     - /var/lib/scylla/data
 
 # commit log.  when running on magnetic HDD, this should be a
 # separate spindle than the data directories.
-# If not set, the default directory is $CASSANDRA_HOME/data/commitlog.
+# If not set, the default directory is /var/lib/scylla/commitlog.
 commitlog_directory: /var/lib/scylla/commitlog
 
 # commitlog_sync may be either "periodic" or "batch."
@@ -362,7 +362,7 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 # memory_allocator: NativeAllocator
 
 # saved caches
-# If not set, the default directory is $CASSANDRA_HOME/data/saved_caches.
+# If not set, the default directory is /var/lib/scylla/saved_caches.
 # saved_caches_directory: /var/lib/scylla/saved_caches
 
 
