@@ -24,6 +24,7 @@
 #include <functional>
 #include <vector>
 
+#include <core/distributed.hh>
 #include "core/sstring.hh"
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
@@ -71,6 +72,10 @@ public:
     virtual database& local_db() = 0;
 
     virtual cql3::query_processor& local_qp() = 0;
+
+    virtual distributed<database>& db() = 0;
+
+    virtual distributed<cql3::query_processor> & qp() = 0;
 };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test();
