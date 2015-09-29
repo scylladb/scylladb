@@ -610,6 +610,9 @@ future<> save_system_keyspace_schema() {
             return *x == *y;
         });
 
+        for (auto&& key : diff.entries_only_on_left) {
+            dropped.emplace(key);
+        }
         for (auto&& key : diff.entries_only_on_right) {
             auto&& value = after[key];
             if (!value->empty()) {
