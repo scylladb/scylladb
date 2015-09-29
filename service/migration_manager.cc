@@ -381,13 +381,12 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool 
 {
     try {
         auto& db = get_local_storage_proxy().get_db().local();
-        /*auto&& keyspace = */db.find_keyspace(ks_name);
+        auto& keyspace = db.find_keyspace(ks_name);
 #if 0
         logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
-        announce(LegacySchemaTables.makeDropKeyspaceMutation(oldKsm, FBUtilities.timestampMicros()), announceLocally);
 #endif
-        // FIXME
-        throw std::runtime_error("not implemented");
+        auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), db_clock::now_in_usecs());
+        return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
     }
