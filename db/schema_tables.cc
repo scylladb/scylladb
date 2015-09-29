@@ -673,6 +673,14 @@ future<> save_system_keyspace_schema() {
                     auto diff = difference(before, after, [](const auto& x, const auto& y) -> bool {
                         return *x == *y;
                     });
+                    for (auto&& key : diff.entries_only_on_left) {
+                        auto&& rs = before[key];
+                        for (const query::result_set_row& row : rs->rows()) {
+                            auto ks_name = row.get_nonnull<sstring>("keyspace_name");
+                            auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
+                            dropped.emplace_back(db.find_schema(ks_name, cf_name));
+                        }
+                    }
                     for (auto&& key : diff.entries_only_on_right) {
                         auto&& value = after[key];
                         if (!value->empty()) {
