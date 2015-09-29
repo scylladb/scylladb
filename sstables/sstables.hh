@@ -282,6 +282,8 @@ public:
         return _collector;
     }
 
+    future<> create_links(sstring dir) const;
+
     /**
      * Note. This is using the Origin definition of
      * max_data_age, which is load time. This could maybe

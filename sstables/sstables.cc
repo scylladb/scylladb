@@ -1422,6 +1422,21 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
+future<> sstable::create_links(sstring dir) const {
+    return parallel_for_each(component_filenames(), [this, dir](sstring f) {
+        auto sdir = get_dir();
+        auto name = f.substr(sdir.size());
+        auto dst = dir + name;
+        return ::link_file(f, dst);
+    }).then([dir] {
+        // sync dir
+        return ::open_directory(dir).then([](file df) {
+            auto f = df.flush();
+            return f.finally([df = std::move(df)] {});
+        });
+    });
+}
+
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
     static std::regex la("la-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
