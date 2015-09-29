@@ -97,7 +97,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
         }
     } else {
         // validateNotFullIndex
-        if (target->type != index_target::target_type::full) {
+        if (target->type == index_target::target_type::full) {
             throw exceptions::invalid_request_exception("full() indexes can only be created on frozen collections");
         }
         // validateIsValuesIndexIfTargetColumnNotCollection
