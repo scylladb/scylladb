@@ -988,7 +988,7 @@ void database::update_keyspace(const sstring& name) {
 }
 
 void database::drop_keyspace(const sstring& name) {
-    throw std::runtime_error("not implemented");
+    _keyspaces.erase(name);
 }
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
