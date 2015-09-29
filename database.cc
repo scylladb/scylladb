@@ -1029,7 +1029,17 @@ future<> database::update_column_family(const sstring& ks_name, const sstring& c
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
-    throw std::runtime_error("not implemented");
+    auto& ks = find_keyspace(ks_name);
+    auto& cf = find_column_family(ks_name, cf_name);
+    ks.metadata()->remove_column_family(cf.schema());
+    auto uuid = find_uuid(ks_name, cf_name);
+    _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    return truncate(ks, cf).then([this, &cf] {
+        return cf.stop();
+    }).then([this, uuid] {
+        _column_families.erase(uuid);
+        return make_ready_future<>();
+    });
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
