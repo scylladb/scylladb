@@ -94,6 +94,30 @@
          ]
       },
       {
+         "path":"/gossiper/heart_beat_version/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get heart beat version for a node",
+               "type":"int",
+               "nickname":"get_current_heart_beat_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/gossiper/assassinate/{addr}",
          "operations":[
             {

@@ -840,6 +840,10 @@ int gossiper::get_current_generation_number(inet_address endpoint) {
     return endpoint_state_map.at(endpoint).get_heart_beat_state().get_generation();
 }
 
+int gossiper::get_current_heart_beat_version(inet_address endpoint) {
+    return endpoint_state_map.at(endpoint).get_heart_beat_state().get_heart_beat_version();
+}
+
 future<bool> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
     size_t size = _live_endpoints.size();
     if (size == 0) {
@@ -1280,11 +1284,11 @@ future<> gossiper::do_shadow_round() {
                     return make_ready_future<>();
                 }).get();
             }
-            if (clk::now() > t + storage_service_ring_delay()) {
+            if (clk::now() > t + storage_service_ring_delay() * 60) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {
-                logger.trace("Sleep 1 second and retry ...");
+                logger.info("Sleep 1 second and connect seeds again ... ({} seconds passed)", std::chrono::duration_cast<std::chrono::seconds>(clk::now() - t).count());
                 sleep(std::chrono::seconds(1)).get();
             }
         }
@@ -1474,6 +1478,12 @@ future<int64_t> get_endpoint_downtime(inet_address ep) {
 future<int> get_current_generation_number(inet_address ep) {
     return smp::submit_to(0, [ep] {
         return get_local_gossiper().get_current_generation_number(ep);
+    });
+}
+
+future<int> get_current_heart_beat_version(inet_address ep) {
+    return smp::submit_to(0, [ep] {
+        return get_local_gossiper().get_current_heart_beat_version(ep);
     });
 }
 
