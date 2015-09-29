@@ -87,6 +87,8 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
+std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp);
+
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
 
 future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);

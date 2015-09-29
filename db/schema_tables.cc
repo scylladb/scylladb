@@ -935,16 +935,24 @@ future<> save_system_keyspace_schema() {
         return mutations;
     }
 
-#if 0
-    public static Mutation makeDropKeyspaceMutation(KSMetaData keyspace, long timestamp)
+    std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
     {
-        Mutation mutation = new Mutation(SystemKeyspace.NAME, getSchemaKSKey(keyspace.name));
-        for (String schemaTable : ALL)
-            mutation.delete(schemaTable, timestamp);
-        mutation.delete(SystemKeyspace.BUILT_INDEXES, timestamp);
-        return mutation;
+        std::vector<mutation> mutations;
+        for (auto&& schema_table : all_tables()) {
+            auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
+            mutation m{pkey, schema_table};
+            m.partition().apply(tombstone{timestamp, gc_clock::now()});
+            mutations.emplace_back(std::move(m));
+        }
+        auto&& schema = db::system_keyspace::built_indexes();
+        auto pkey = partition_key::from_exploded(*schema, {utf8_type->decompose(keyspace->name())});
+        mutation m{pkey, schema};
+        m.partition().apply(tombstone{timestamp, gc_clock::now()});
+        mutations.emplace_back(std::move(m));
+        return mutations;
     }
 
+#if 0
     private static KSMetaData createKeyspaceFromSchemaPartitions(Row serializedKeyspace, Row serializedTables, Row serializedTypes)
     {
         Collection<CFMetaData> tables = createTablesFromTablesPartition(serializedTables).values();
