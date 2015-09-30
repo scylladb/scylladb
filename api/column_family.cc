@@ -285,19 +285,26 @@ void set_column_family(http_context& ctx, routes& r) {
         sstables::merge, utils_json::estimated_histogram());
     });
 
-    cf::get_estimated_column_count_histogram.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        std::vector<double> res;
-        return make_ready_future<json::json_return_type>(res);
+    cf::get_estimated_row_count.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, [](column_family& cf) {
+            uint64_t res = 0;
+            for (auto i: *cf.get_sstables() ) {
+                res += i.second->get_stats_metadata().estimated_row_size.count();
+            }
+            return res;
+        },
+        std::plus<uint64_t>());
     });
 
-    cf::get_compression_ratio.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_estimated_column_count_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+            sstables::estimated_histogram res(0);
+            for (auto i: *cf.get_sstables() ) {
+                res.merge(i.second->get_stats_metadata().estimated_column_count);
+            }
+            return res;
+        },
+        sstables::merge, utils_json::estimated_histogram());
     });
 
     cf::get_all_compression_ratio.set(r, [] (std::unique_ptr<request> req) {
@@ -560,7 +567,7 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_true_snapshots_size.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
         //auto id = get_uuid(req->param["name"], ctx.db.local());
         return make_ready_future<json::json_return_type>(0);
     });
@@ -641,17 +648,30 @@ void set_column_family(http_context& ctx, routes& r) {
 
     cf::get_tombstone_scanned_histogram.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
         //auto id = get_uuid(req->param["name"], ctx.db.local());
-        std::vector<double> res;
+        httpd::utils_json::histogram res;
+        res.count = 0;
+        res.mean = 0;
+        res.max = 0;
+        res.min = 0;
+        res.sum = 0;
+        res.variance = 0;
         return make_ready_future<json::json_return_type>(res);
     });
 
     cf::get_live_scanned_histogram.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
         //auto id = get_uuid(req->param["name"], ctx.db.local());
-        std::vector<double> res;
+        //std::vector<double> res;
+        httpd::utils_json::histogram res;
+        res.count = 0;
+        res.mean = 0;
+        res.max = 0;
+        res.min = 0;
+        res.sum = 0;
+        res.variance = 0;
         return make_ready_future<json::json_return_type>(res);
     });
 
@@ -741,8 +761,9 @@ void set_column_family(http_context& ctx, routes& r) {
         // TBD
         // FIXME
         // This is a workaround, until there will be an API to return the count
-        // per level, we return 0
-        return make_ready_future<json::json_return_type>(0);
+        // per level, we return an empty array
+        vector<uint64_t> res;
+        return make_ready_future<json::json_return_type>(res);
     });
 }
 }
