@@ -219,7 +219,29 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_cas_read_timeouts.set(r, [](std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        // cas is not supported yet, so just return 0
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    sp::get_cas_read_unavailables.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        // FIXME
+        // cas is not supported yet, so just return 0
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    sp::get_cas_write_timeouts.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        // FIXME
+        // cas is not supported yet, so just return 0
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    sp::get_cas_write_unavailables.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        // FIXME
+        // cas is not supported yet, so just return 0
         return make_ready_future<json::json_return_type>(0);
     });
 

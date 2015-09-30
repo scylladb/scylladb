@@ -546,7 +546,58 @@
          ]
       },
       {
-      "path": "/storage_service/metrics/cas_write/unfinished_commit",
+         "path":"/storage_proxy/metrics/cas_read/unavailables",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS read unavailables",
+               "type":"long",
+               "nickname":"get_cas_read_unavailables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_write/timeouts",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS write timeout",
+               "type":"long",
+               "nickname":"get_cas_write_timeouts",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/cas_write/unavailables",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS write unavailables",
+               "type":"long",
+               "nickname":"get_cas_write_unavailables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/storage_proxy/metrics/cas_write/unfinished_commit",
       "operations": [
         {
           "method": "GET",
@@ -561,7 +612,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/cas_write/contention",
+      "path": "/storage_proxy/metrics/cas_write/contention",
       "operations": [
         {
           "method": "GET",
@@ -576,7 +627,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/cas_write/condition_not_met",
+      "path": "/storage_proxy/metrics/cas_write/condition_not_met",
       "operations": [
         {
           "method": "GET",
@@ -591,7 +642,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/cas_read/unfinished_commit",
+      "path": "/storage_proxy/metrics/cas_read/unfinished_commit",
       "operations": [
         {
           "method": "GET",
@@ -606,7 +657,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/cas_read/contention",
+      "path": "/storage_proxy/metrics/cas_read/contention",
       "operations": [
         {
           "method": "GET",
@@ -621,7 +672,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/cas_read/condition_not_met",
+      "path": "/storage_proxy/metrics/cas_read/condition_not_met",
       "operations": [
         {
           "method": "GET",
@@ -636,7 +687,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/read/timeouts",
+      "path": "/storage_proxy/metrics/read/timeouts",
       "operations": [
         {
           "method": "GET",
@@ -651,7 +702,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/read/unavailables",
+      "path": "/storage_proxy/metrics/read/unavailables",
       "operations": [
         {
           "method": "GET",
@@ -696,7 +747,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/range/timeouts",
+      "path": "/storage_proxy/metrics/range/timeouts",
       "operations": [
         {
           "method": "GET",
@@ -711,7 +762,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/range/unavailables",
+      "path": "/storage_proxy/metrics/range/unavailables",
       "operations": [
         {
           "method": "GET",
@@ -726,7 +777,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/write/timeouts",
+      "path": "/storage_proxy/metrics/write/timeouts",
       "operations": [
         {
           "method": "GET",
@@ -741,7 +792,7 @@
       ]
     },
     {
-      "path": "/storage_service/metrics/write/unavailables",
+      "path": "/storage_proxy/metrics/write/unavailables",
       "operations": [
         {
           "method": "GET",
