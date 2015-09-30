@@ -91,7 +91,7 @@ static logging::log_level to_loglevel(sstring level) {
 }
 
 static future<> disk_sanity(sstring path) {
-    return check_aio_support(path).then([path] {
+    return check_direct_io_support(path).then([path] {
         return file_system_at(path).then([path] (auto fs) {
             if (fs != fs_type::xfs) {
                 startlog.warn("{} is not on XFS. This is a non-supported setup, and performance is expected to be very bad.\n"
