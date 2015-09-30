@@ -40,6 +40,8 @@
 
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/adaptor/map.hpp>
 
 #include "system_keyspace.hh"
 #include "types.hh"
@@ -50,6 +52,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/query_processor.hh"
 #include "utils/fb_utilities.hh"
+#include "utils/hash.hh"
 #include "dht/i_partitioner.hh"
 #include "version.hh"
 #include "thrift/server.hh"
@@ -506,15 +509,30 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     return make_ready_future<>();
 }
 
-typedef std::pair<db::replay_position, db_clock::time_point> truncation_entry;
-typedef std::unordered_map<utils::UUID, truncation_entry> truncation_map;
+typedef std::pair<replay_positions, db_clock::time_point> truncation_entry;
+typedef utils::UUID truncation_key;
+typedef std::unordered_map<truncation_key, truncation_entry> truncation_map;
+
 static thread_local std::experimental::optional<truncation_map> truncation_records;
 
-future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, const db::replay_position& rp) {
-    db::serializer<replay_position> rps(rp);
-    bytes buf(bytes::initialized_later(), sizeof(db_clock::rep) + rps.size());
+future<> save_truncation_records(const column_family& cf, db_clock::time_point truncated_at, replay_positions positions) {
+    auto size =
+            sizeof(db_clock::rep)
+                    + positions.size()
+                            * db::serializer<replay_position>(
+                                    db::replay_position()).size();
+    bytes buf(bytes::initialized_later(), size);
     data_output out(buf);
-    rps(out);
+
+    // Old version would write a single RP. We write N. Resulting blob size
+    // will determine how many.
+    // An external entity reading this blob would get a "correct" RP
+    // and a garbled time stamp. But an external entity has no business
+    // reading this data anyway, since it is meaningless outside this
+    // machine instance.
+    for (auto& rp : positions) {
+        db::serializer<replay_position>::write(out, rp);
+    }
     out.write<db_clock::rep>(truncated_at.time_since_epoch().count());
 
     map_type_impl::native_type tmp;
@@ -543,14 +561,21 @@ static future<truncation_entry> get_truncation_record(utils::UUID cf_id) {
         sstring req = sprint("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL);
         return qctx->qp().execute_internal(req).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
             truncation_map tmp;
-            if (!rs->empty() && rs->one().has("truncated_set")) {
+            if (!rs->empty() && rs->one().has("truncated_at")) {
                 auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
                 for (auto& p : map) {
+                    auto uuid = p.first;
+                    auto buf = p.second;
+
                     truncation_entry e;
-                    data_input in(p.second);
-                    e.first = db::serializer<replay_position>::read(in);
+
+                    data_input in(buf);
+
+                    while (in.avail() > sizeof(db_clock::rep)) {
+                        e.first.emplace_back(db::serializer<replay_position>::read(in));
+                    }
                     e.second = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
-                    tmp[p.first] = e;
+                    tmp[uuid] = e;
                 }
             }
             truncation_records = std::move(tmp);
@@ -560,9 +585,38 @@ static future<truncation_entry> get_truncation_record(utils::UUID cf_id) {
     return make_ready_future<truncation_entry>((*truncation_records)[cf_id]);
 }
 
-future<db::replay_position> get_truncated_position(utils::UUID cf_id) {
+future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
+    // TODO: this is horribly ineffective, we're doing a full flush of all system tables for all cores
+    // once, for each core (calling us). But right now, redesigning so that calling here (or, rather,
+    // save_truncation_records), is done from "somewhere higher, once per machine, not shard" is tricky.
+    // Mainly because drop_tables also uses truncate. And is run per-core as well. Gah.
+    return get_truncated_position(cf.schema()->id()).then([&cf, truncated_at, rp](replay_positions positions) {
+        auto i = std::find_if(positions.begin(), positions.end(), [rp](auto& p) {
+            return p.shard_id() == rp.shard_id();
+        });
+        if (i == positions.end()) {
+            positions.emplace_back(rp);
+        } else {
+            *i = rp;
+        }
+        return save_truncation_records(cf, truncated_at, positions);
+    });
+}
+
+future<db::replay_position> get_truncated_position(utils::UUID cf_id, uint32_t shard) {
+    return get_truncated_position(std::move(cf_id)).then([shard](replay_positions positions) {
+       for (auto& rp : positions) {
+           if (shard == rp.shard_id()) {
+               return make_ready_future<db::replay_position>(rp);
+           }
+       }
+       return make_ready_future<db::replay_position>();
+    });
+}
+
+ future<replay_positions> get_truncated_position(utils::UUID cf_id) {
     return get_truncation_record(cf_id).then([](truncation_entry e) {
-        return make_ready_future<db::replay_position>(e.first);
+        return make_ready_future<replay_positions>(e.first);
     });
 }
 
