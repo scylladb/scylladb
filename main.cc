@@ -43,6 +43,7 @@
 #include "init.hh"
 #include "release.hh"
 #include <cstdio>
+#include <core/file.hh>
 
 logging::logger startlog("init");
 
@@ -88,6 +89,17 @@ static logging::log_level to_loglevel(sstring level) {
         throw std::runtime_error("Unknown log level '" + level + "'");
     }
 }
+
+static future<> disk_sanity(sstring path) {
+    return check_aio_support(path).then([path] {
+        return file_system_at(path).then([path] (auto fs) {
+            if (fs != fs_type::xfs) {
+                startlog.warn("{} is not on XFS. This is a non-supported setup, and performance is expected to be very bad.\n"
+                    "For better performance, placing your data on XFS-formatted directories is strongly recommended", path);
+            }
+        });
+    });
+};
 
 static void apply_logger_settings(sstring default_level, db::config::string_map levels,
         bool log_to_stdout, bool log_to_syslog) {
@@ -246,6 +258,12 @@ int main(int ac, char** av) {
                 return dirs.touch_and_lock(db.local().get_config().data_file_directories());
             }).then([&db, &dirs] {
                 return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
+            }).then([&db] {
+                return parallel_for_each(db.local().get_config().data_file_directories(), [] (sstring pathname) {
+                    return disk_sanity(pathname);
+                }).then([&db] {
+                    return disk_sanity(db.local().get_config().commitlog_directory());
+                });
             }).then([&db] {
                 return db.invoke_on_all([] (database& db) {
                     return db.init_system_keyspace();
