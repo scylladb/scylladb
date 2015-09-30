@@ -107,6 +107,19 @@ struct unavailable_exception : cassandra_exception {
     {}
 };
 
+class request_execution_exception : public cassandra_exception {
+public:
+    request_execution_exception(exception_code code, sstring msg)
+        : cassandra_exception(code, std::move(msg))
+    { }
+};
+
+class truncate_exception : public request_execution_exception
+{
+public:
+    truncate_exception(std::exception_ptr ep);
+};
+
 class request_timeout_exception : public cassandra_exception {
 public:
     db::consistency_level consistency;

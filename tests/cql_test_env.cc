@@ -250,6 +250,14 @@ public:
         return _qp->local();
     }
 
+    distributed<database>& db() override {
+        return *_db;
+    }
+
+    distributed<cql3::query_processor>& qp() override {
+        return *_qp;
+    }
+
     future<> start() {
         return seastar::async([this] {
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();

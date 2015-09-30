@@ -544,4 +544,18 @@ future<query::result_digest> messaging_service::send_read_digest(shard_id id, qu
     return send_message<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
 }
 
+// Wrapper for TRUNCATE
+void messaging_service::register_truncate(std::function<future<> (sstring, sstring)>&& func) {
+    register_handler(this, net::messaging_verb::TRUNCATE, std::move(func));
+}
+
+void messaging_service::unregister_truncate() {
+    _rpc->unregister_handler(net::messaging_verb::TRUNCATE);
+}
+
+future<> messaging_service::send_truncate(shard_id id, std::chrono::milliseconds timeout, sstring ks, sstring cf) {
+    return send_message_timeout<void>(this, net::messaging_verb::TRUNCATE, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
+}
+
+
 } // namespace net

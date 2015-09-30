@@ -2225,6 +2225,42 @@ bool storage_proxy::should_hint(gms::inet_address ep) {
 #endif
 }
 
+future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
+    logger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
+
+    auto& gossiper = gms::get_local_gossiper();
+
+    if (!gossiper.get_unreachable_token_owners().empty()) {
+        logger.info("Cannot perform truncate, some hosts are down");
+        // Since the truncate operation is so aggressive and is typically only
+        // invoked by an admin, for simplicity we require that all nodes are up
+        // to perform the operation.
+        auto live_members = gossiper.get_live_members().size();
+
+        throw exceptions::unavailable_exception(db::consistency_level::ALL,
+                live_members + gossiper.get_unreachable_members().size(),
+                live_members);
+    }
+
+    auto all_endpoints = gossiper.get_live_token_owners();
+    auto& ms = net::get_local_messaging_service();
+    auto timeout = std::chrono::milliseconds(_db.local().get_config().truncate_request_timeout_in_ms());
+
+    logger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
+
+    return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
+        return ms.send_truncate(net::messaging_service::shard_id{ep, 0}, timeout, keyspace, cfname);
+    }).handle_exception([cfname](auto ep) {
+       try {
+           std::rethrow_exception(ep);
+       } catch (rpc::timeout_error& e) {
+           logger.trace("Truncation of {} timed out: {}", cfname, e.what());
+       } catch (...) {
+           throw;
+       }
+    });
+}
+
 #if 0
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
@@ -2529,6 +2565,11 @@ void storage_proxy::init_messaging_service() {
             return p->query_singular_local_digest(cmd, pr);
         });
     });
+    ms.register_truncate([](sstring ksname, sstring cfname) {
+        return get_storage_proxy().invoke_on_all([ksname, cfname](storage_proxy& sp) {
+            return sp._db.local().truncate(ksname, cfname);
+        });
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {
@@ -2540,6 +2581,7 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_read_data();
     ms.unregister_read_mutation_data();
     ms.unregister_read_digest();
+    ms.unregister_truncate();
 }
 
 // Merges reconcilable_result:s from different shards into one

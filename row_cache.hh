@@ -183,6 +183,9 @@ public:
     // information there is for its partition in the underlying data sources.
     void populate(const mutation& m);
 
+    // Clears the cache.
+    void clear();
+
     // Synchronizes cache with the underlying data source from a memtable which
     // has just been flushed to the underlying data source.
     // The memtable can be queried during the process, but must not be written.

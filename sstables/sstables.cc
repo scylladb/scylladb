@@ -41,6 +41,7 @@
 #include "memtable.hh"
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include <regex>
 #include <core/align.hh>
 
@@ -1384,12 +1385,22 @@ future<uint64_t> sstable::bytes_on_disk() {
     });
 }
 
-const bool sstable::has_component(component_type f) {
+const bool sstable::has_component(component_type f) const {
     return _components.count(f);
 }
 
 const sstring sstable::filename(component_type f) const {
     return filename(_dir, _ks, _cf, _version, _generation, _format, f);
+}
+
+std::vector<sstring> sstable::component_filenames() const {
+    std::vector<sstring> res;
+    for (auto c : _component_map | boost::adaptors::map_keys) {
+        if (has_component(c)) {
+            res.emplace_back(filename(c));
+        }
+    }
+    return res;
 }
 
 sstring sstable::toc_filename() const {
@@ -1409,6 +1420,21 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     };
 
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
+}
+
+future<> sstable::create_links(sstring dir) const {
+    return parallel_for_each(component_filenames(), [this, dir](sstring f) {
+        auto sdir = get_dir();
+        auto name = f.substr(sdir.size());
+        auto dst = dir + name;
+        return ::link_file(f, dst);
+    }).then([dir] {
+        // sync dir
+        return ::open_directory(dir).then([](file df) {
+            auto f = df.flush();
+            return f.finally([df = std::move(df)] {});
+        });
+    });
 }
 
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {

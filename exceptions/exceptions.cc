@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  *
  * Modified by Cloudius Systems
  */
@@ -39,38 +39,11 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include <sstream>
 
-#include "cql3/statements/cf_statement.hh"
-#include "cql3/cql_statement.hh"
+#include "exceptions.hh"
+#include "log.hh"
 
-#include <experimental/optional>
-
-namespace cql3 {
-
-namespace statements {
-
-class truncate_statement : public cf_statement, public cql_statement, public ::enable_shared_from_this<truncate_statement> {
-public:
-    truncate_statement(::shared_ptr<cf_name> name);
-
-    virtual uint32_t get_bound_terms() override;
-
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
-
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
-    virtual void check_access(const service::client_state& state) override;
-
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-};
-
-}
-
-}
+exceptions::truncate_exception::truncate_exception(std::exception_ptr ep)
+    : request_execution_exception(exceptions::exception_code::PROTOCOL_ERROR, sprint("Error during truncate: %s", ep))
+{}

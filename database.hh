@@ -143,6 +143,7 @@ private:
     compaction_manager& _compaction_manager;
     // Whether or not a cf is queued by its compaction manager.
     bool _compaction_manager_queued = false;
+    int _compaction_disabled = 0;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -203,6 +204,8 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
+    void clear(); // discards memtable(s) without flushing them to disk.
+    future<db::replay_position> discard_sstables(db_clock::time_point);
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
@@ -211,6 +214,8 @@ public:
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
     future<> compact_sstables(std::vector<lw_shared_ptr<sstables::sstable>> sstables);
+
+    future<> snapshot(sstring name);
 
     lw_shared_ptr<sstable_list> get_sstables();
     size_t sstables_count();
@@ -236,6 +241,15 @@ public:
         return _stats;
     }
 
+    template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
+    Result run_with_compaction_disabled(Func && func) {
+        ++_compaction_disabled;
+        return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
+            if (--_compaction_disabled == 0) {
+                trigger_compaction();
+            }
+        });
+    }
 private:
     // One does not need to wait on this future if all we are interested in, is
     // initiating the write.  The writes initiated here will eventually
@@ -520,6 +534,8 @@ public:
     }
 
     future<> flush_all_memtables();
+    /** Truncates the given column family */
+    future<> truncate(sstring ksname, sstring cfname);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;

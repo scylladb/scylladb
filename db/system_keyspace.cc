@@ -482,10 +482,14 @@ future<> init_local_cache() {
     });
 }
 
-future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     auto new_ctx = std::make_unique<query_context>(db, qp);
     qctx.swap(new_ctx);
     assert(!new_ctx);
+}
+
+future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+    minimal_setup(db, qp);
     return setup_version().then([&db] {
         return update_schema_version(db.local().get_version());
     }).then([] {
@@ -499,13 +503,14 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
     });
+    return make_ready_future<>();
 }
 
 typedef std::pair<db::replay_position, db_clock::time_point> truncation_entry;
 typedef std::unordered_map<utils::UUID, truncation_entry> truncation_map;
 static thread_local std::experimental::optional<truncation_map> truncation_records;
 
-future<> save_truncation_record(cql3::query_processor& qp, const column_family& cf, db_clock::time_point truncated_at, const db::replay_position& rp) {
+future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, const db::replay_position& rp) {
     db::serializer<replay_position> rps(rp);
     bytes buf(bytes::initialized_later(), sizeof(db_clock::rep) + rps.size());
     data_output out(buf);
@@ -516,7 +521,7 @@ future<> save_truncation_record(cql3::query_processor& qp, const column_family& 
     tmp.emplace_back(boost::any{ cf.schema()->id() }, boost::any{ buf });
 
     sstring req = sprint("UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'", LOCAL, LOCAL);
-    return qp.execute_internal(req, {tmp}).then([&qp](auto rs) {
+    return qctx->qp().execute_internal(req, {tmp}).then([](auto rs) {
         truncation_records = {};
         return force_blocking_flush(LOCAL);
     });
@@ -525,18 +530,18 @@ future<> save_truncation_record(cql3::query_processor& qp, const column_family& 
 /**
  * This method is used to remove information about truncation time for specified column family
  */
-future<> remove_truncation_record(cql3::query_processor& qp, utils::UUID id) {
+future<> remove_truncation_record(utils::UUID id) {
     sstring req = sprint("DELETE truncated_at[?] from system.%s WHERE key = '%s'", LOCAL, LOCAL);
-    return qp.execute_internal(req, {id}).then([&qp](auto rs) {
+    return qctx->qp().execute_internal(req, {id}).then([](auto rs) {
         truncation_records = {};
         return force_blocking_flush(LOCAL);
     });
 }
 
-static future<truncation_entry> get_truncation_record(cql3::query_processor& qp, utils::UUID cf_id) {
+static future<truncation_entry> get_truncation_record(utils::UUID cf_id) {
     if (!truncation_records) {
         sstring req = sprint("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL);
-        return qp.execute_internal(req).then([&qp, cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+        return qctx->qp().execute_internal(req).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
             truncation_map tmp;
             if (!rs->empty() && rs->one().has("truncated_set")) {
                 auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
@@ -549,24 +554,23 @@ static future<truncation_entry> get_truncation_record(cql3::query_processor& qp,
                 }
             }
             truncation_records = std::move(tmp);
-            return get_truncation_record(qp, cf_id);
+            return get_truncation_record(cf_id);
         });
     }
     return make_ready_future<truncation_entry>((*truncation_records)[cf_id]);
 }
 
-future<db::replay_position> get_truncated_position(cql3::query_processor& qp, utils::UUID cf_id) {
-    return get_truncation_record(qp, cf_id).then([](truncation_entry e) {
+future<db::replay_position> get_truncated_position(utils::UUID cf_id) {
+    return get_truncation_record(cf_id).then([](truncation_entry e) {
         return make_ready_future<db::replay_position>(e.first);
     });
 }
 
-future<db_clock::time_point> get_truncated_at(cql3::query_processor& qp, utils::UUID cf_id) {
-    return get_truncation_record(qp, cf_id).then([](truncation_entry e) {
+future<db_clock::time_point> get_truncated_at(utils::UUID cf_id) {
+    return get_truncation_record(cf_id).then([](truncation_entry e) {
         return make_ready_future<db_clock::time_point>(e.second);
     });
 }
-
 
 set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens) {
     set_type_impl::native_type tset;

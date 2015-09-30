@@ -164,7 +164,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             }
             auto& fm = fms->front();
             auto mid = fm.column_family_id();
-            return system_keyspace::get_truncated_at(_qp, mid).then([this, &fm, written_at, mutations](db_clock::time_point t) {
+            return system_keyspace::get_truncated_at(mid).then([this, &fm, written_at, mutations](db_clock::time_point t) {
                 auto schema = _qp.db().local().find_schema(fm.column_family_id());
                 if (written_at > t) {
                     auto schema = _qp.db().local().find_schema(fm.column_family_id());

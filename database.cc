@@ -52,6 +52,7 @@
 #include "service/storage_service.hh"
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
+#include <core/fstream.hh>
 
 using namespace std::chrono_literals;
 
@@ -641,8 +642,10 @@ void column_family::start_compaction() {
 
 void column_family::trigger_compaction() {
     // Submitting compaction job to compaction manager.
-    _stats.pending_compactions++;
-    _compaction_manager.submit(this);
+    if (!_compaction_disabled) {
+        _stats.pending_compactions++;
+        _compaction_manager.submit(this);
+    }
 }
 
 future<> column_family::run_compaction() {
@@ -1511,6 +1514,45 @@ future<> database::flush_all_memtables() {
     });
 }
 
+future<> database::truncate(sstring ksname, sstring cfname) {
+    auto& ks = find_keyspace(ksname);
+    auto& cf = find_column_family(ksname, cfname);
+
+    const auto durable = ks.metadata()->durable_writes();
+    const auto auto_snapshot = get_config().auto_snapshot();
+
+    future<> f = make_ready_future<>();
+    if (durable || auto_snapshot) {
+        // TODO:
+        // this is not really a guarantee at all that we've actually
+        // gotten all things to disk. Again, need queue-ish or something.
+        f = cf.flush();
+    } else {
+        cf.clear();
+    }
+
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = std::move(cfname)]() mutable {
+        return f.then([&cf, auto_snapshot, cfname = std::move(cfname)] {
+            dblog.debug("Discarding sstable data for truncated CF + indexes");
+
+            const auto truncated_at = db_clock::now();
+            // TODO: notify truncation
+
+            future<> f = make_ready_future<>();
+            if (auto_snapshot) {
+                auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cfname);
+                f = cf.snapshot(name);
+            }
+            return f.then([&cf, truncated_at] {
+                return cf.discard_sstables(truncated_at).then([&cf, truncated_at](db::replay_position rp) {
+                    // TODO: indexes.
+                    return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                });
+            });
+        });
+    });
+}
+
 const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
 }
@@ -1524,6 +1566,57 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
         }).then([uuid] {
             return db::system_keyspace::update_schema_version(uuid).then([uuid] {
                 return service::get_local_migration_manager().passive_announce(uuid);
+            });
+        });
+    });
+}
+
+future<> column_family::snapshot(sstring name) {
+    return flush().then([this, name = std::move(name)]() {
+        auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables | boost::adaptors::map_values);
+        if (tables.size() == 0) {
+            return make_ready_future<>();
+        }
+        return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
+            return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
+                auto dir = sstable->get_dir() + "/snapshots/" + name;
+                return recursive_touch_directory(dir).then([sstable, dir] {
+                    return sstable->create_links(dir);
+                });
+            }).then([this, &tables, name] {
+                std::ostringstream ss;
+                int n = 0;
+                ss << "{" << std::endl << "\t\"files\" : { ";
+                for (auto& sst : tables) {
+                    auto f = sst->get_filename();
+                    auto rf = f.substr(sst->get_dir().size() + 1);
+
+                    if (n++ > 0) {
+                        ss << ", ";
+                    }
+                    ss << "\"" << rf << "\"";
+                }
+                ss << " }" << std::endl << "}" << std::endl;
+
+                auto json = ss.str();
+                auto jsondir = _config.datadir + "/snapshots/" + name;
+                auto jsonfile = jsondir + "/manifest.json";
+
+                dblog.debug("Storing manifest {}", jsonfile);
+
+                return engine().open_file_dma(jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
+                    return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
+                        return out.write(json.c_str(), json.size()).then([&out] {
+                           return out.flush();
+                        });
+                    });
+                }).then([jsondir = std::move(jsondir)] {
+                    // sync dir (is this really needed?)
+                    return engine().open_directory(jsondir).then([](file df) {
+                        auto f = df.flush();
+                        return f.finally([df = std::move(df)] {});
+                    });
+                });
             });
         });
     });
@@ -1557,6 +1650,40 @@ future<> column_family::flush(const db::replay_position& pos) {
     // flushing. Let's do it.
     return seal_active_memtable();
 }
+
+void column_family::clear() {
+    _cache.clear();
+    _memtables->clear();
+    add_memtable();
+}
+
+// NOTE: does not need to be futurized, but might eventually, depending on
+// if we implement notifications, whatnot.
+future<db::replay_position> column_family::discard_sstables(db_clock::time_point truncated_at) {
+    assert(_stats.pending_compactions == 0);
+
+    db::replay_position rp;
+    auto gc_trunc = to_gc_clock(truncated_at);
+
+    auto pruned = make_lw_shared<sstable_list>();
+
+    for (auto&p : *_sstables) {
+        if (p.second->max_data_age() <= gc_trunc) {
+            rp = std::max(p.second->get_stats_metadata().position, rp);
+            p.second->mark_for_deletion();
+            continue;
+        }
+        pruned->emplace(p.first, p.second);
+    }
+
+    _sstables = std::move(pruned);
+
+    dblog.debug("cleaning out row cache");
+    _cache.clear();
+
+    return make_ready_future<db::replay_position>(rp);
+}
+
 
 std::ostream& operator<<(std::ostream& os, const user_types_metadata& m) {
     os << "org.apache.cassandra.config.UTMetaData@" << &m;

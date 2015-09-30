@@ -528,6 +528,11 @@ public:
     void unregister_read_digest();
     future<query::result_digest> send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr);
 
+    // Wrapper for TRUNCATE
+    void register_truncate(std::function<future<>(sstring, sstring)>&& func);
+    void unregister_truncate();
+    future<> send_truncate(shard_id, std::chrono::milliseconds, sstring, sstring);
+
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);

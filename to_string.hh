@@ -65,3 +65,9 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
     os << "{" << join(", ", items) << "}";
     return os;
 }
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::set<T>& items) {
+    os << "{" << join(", ", items) << "}";
+    return os;
+}

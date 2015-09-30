@@ -270,14 +270,30 @@ public:
     partition_key get_first_partition_key(const schema& s) const;
     partition_key get_last_partition_key(const schema& s) const;
 
-    const sstring get_filename() {
+    const sstring get_filename() const {
         return filename(component_type::Data);
+    }
+    const sstring& get_dir() const {
+        return _dir;
     }
     sstring toc_filename() const;
 
     metadata_collector& get_metadata_collector() {
         return _collector;
     }
+
+    future<> create_links(sstring dir) const;
+
+    /**
+     * Note. This is using the Origin definition of
+     * max_data_age, which is load time. This could maybe
+     * be improved upon.
+     */
+    gc_clock::time_point max_data_age() const {
+        return _now;
+    }
+    std::vector<sstring> component_filenames() const;
+
 private:
     sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : sstable_buffer_size(wbuffer_size)
@@ -333,7 +349,7 @@ private:
 
     gc_clock::time_point _now;
 
-    const bool has_component(component_type f);
+    const bool has_component(component_type f) const;
 
     const sstring filename(component_type f) const;
 
