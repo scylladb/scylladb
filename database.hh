@@ -359,6 +359,9 @@ public:
     void add_column_family(const schema_ptr& s) {
         _cf_meta_data.emplace(s->cf_name(), s);
     }
+    void remove_column_family(const schema_ptr& s) {
+        _cf_meta_data.erase(s->cf_name());
+    }
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
