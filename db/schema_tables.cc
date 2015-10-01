@@ -726,6 +726,9 @@ future<> save_system_keyspace_schema() {
                         for (auto&& cfm : created) {
                             service::migration_manager::notify_create_column_family(cfm).get0();
                         }
+                        for (auto&& cfm : dropped) {
+                            service::migration_manager::notify_drop_column_family(cfm).get0();
+                        }
                     }
                 });
             });
