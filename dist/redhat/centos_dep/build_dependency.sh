@@ -47,9 +47,7 @@ sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc+
 if [ ! -f $RPMBUILD/RPMS/x86_64/boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --without python3 --rebuild build/srpms/boost-1.57.0-6.fc22.src.rpm
 fi
-for i in `ls $RPMBUILD/RPMS/x86_64/boost*|grep -v debuginfo`;do
-    do_install `basename $i`
-done
+do_install boost*
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/re2c-0.13.5-9.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/re2c-0.13.5-9.fc22.src.rpm
