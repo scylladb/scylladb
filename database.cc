@@ -1054,7 +1054,7 @@ column_family& database::find_column_family(const sstring& ks_name, const sstrin
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
-        std::throw_with_nested(no_such_column_family("Can't find a  column family " + cf_name + " in a keyspace " + ks_name));
+        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
 }
 
@@ -1062,7 +1062,7 @@ const column_family& database::find_column_family(const sstring& ks_name, const 
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
-        std::throw_with_nested(no_such_column_family("Can't find a  column family " + cf_name + " in a keyspace " + ks_name));
+        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
 }
 
@@ -1070,7 +1070,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) throw (no_s
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family("Can't find a column family with UUID: " + uuid.to_sstring()));
+        std::throw_with_nested(no_such_column_family(uuid));
     }
 }
 
@@ -1078,7 +1078,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     try {
         return *_column_families.at(uuid);
     } catch (...) {
-        std::throw_with_nested(no_such_column_family("Can't find a column family with UUID: " + uuid.to_sstring()));
+        std::throw_with_nested(no_such_column_family(uuid));
     }
 }
 
@@ -1135,6 +1135,21 @@ keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid
     return make_directory(column_family_directory(name, uuid));
 }
 
+no_such_keyspace::no_such_keyspace(const sstring& ks_name)
+    : runtime_error{sprint("Can't find a keyspace %s", ks_name)}
+{
+}
+
+no_such_column_family::no_such_column_family(const utils::UUID& uuid)
+    : runtime_error{sprint("Can't find a column family with UUID %s", uuid)}
+{
+}
+
+no_such_column_family::no_such_column_family(const sstring& ks_name, const sstring& cf_name)
+    : runtime_error{sprint("Can't find a column family %s in keyspace %s", cf_name, ks_name)}
+{
+}
+
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
     return find_column_family(schema->id());
 }
@@ -1154,7 +1169,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
     try {
         return find_schema(find_uuid(ks_name, cf_name));
     } catch (std::out_of_range&) {
-        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+        std::throw_with_nested(no_such_column_family(ks_name, cf_name));
     }
 }
 

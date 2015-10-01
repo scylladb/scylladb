@@ -407,12 +407,13 @@ private:
 
 class no_such_keyspace : public std::runtime_error {
 public:
-    using runtime_error::runtime_error;
+    no_such_keyspace(const sstring& ks_name);
 };
 
 class no_such_column_family : public std::runtime_error {
 public:
-    using runtime_error::runtime_error;
+    no_such_column_family(const utils::UUID& uuid);
+    no_such_column_family(const sstring& ks_name, const sstring& cf_name);
 };
 
 // Policy for distributed<database>:
