@@ -537,6 +537,7 @@ public:
     future<> flush_all_memtables();
     /** Truncates the given column family */
     future<> truncate(sstring ksname, sstring cfname);
+    future<> truncate(const keyspace& ks, column_family& cf);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;

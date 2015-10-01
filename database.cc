@@ -1556,7 +1556,11 @@ future<> database::flush_all_memtables() {
 future<> database::truncate(sstring ksname, sstring cfname) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
+    return truncate(ks, cf);
+}
 
+future<> database::truncate(const keyspace& ks, column_family& cf)
+{
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
 
@@ -1570,7 +1574,7 @@ future<> database::truncate(sstring ksname, sstring cfname) {
         cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = std::move(cfname)]() mutable {
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = cf.schema()->cf_name()]() mutable {
         return f.then([&cf, auto_snapshot, cfname = std::move(cfname)] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
 
