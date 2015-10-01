@@ -1028,7 +1028,7 @@ future<> database::update_column_family(const sstring& ks_name, const sstring& c
     });
 }
 
-void database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
     throw std::runtime_error("not implemented");
 }
 

@@ -717,9 +717,9 @@ future<> save_system_keyspace_schema() {
                     parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
                         return db.update_column_family(cfm->ks_name(), cfm->cf_name());
                     }).get();
-                    for (auto&& cfm : dropped) {
-                        db.drop_column_family(cfm->ks_name(), cfm->cf_name());
-                    }
+                    parallel_for_each(dropped.begin(), dropped.end(), [&db] (auto&& cfm) {
+                        return db.drop_column_family(cfm->ks_name(), cfm->cf_name());
+                    }).get();
                     // FIXME: clean this up by reorganizing the code
                     // Send CQL events only once, not once per shard.
                     if (engine().cpu_id() == 0) {

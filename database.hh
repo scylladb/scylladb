@@ -478,7 +478,7 @@ public:
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
     future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
-    void drop_column_family(const sstring& ks_name, const sstring& cf_name);
+    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
