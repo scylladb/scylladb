@@ -513,16 +513,17 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::is_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(false);
+        return make_ready_future<json::json_return_type>(service::get_local_storage_service().incremental_backups_enabled());
     });
 
     ss::set_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto value = req->get_query_param("value");
-        return make_ready_future<json::json_return_type>(json_void());
+        auto val_str = req->get_query_param("value");
+        bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
+        return service::get_storage_service().invoke_on_all([value] (auto& local_service) {
+            local_service.incremental_backups_set_value(value);
+        }).then([] {;
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::rebuild.set(r, [](std::unique_ptr<request> req) {
