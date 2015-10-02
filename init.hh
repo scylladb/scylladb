@@ -26,5 +26,5 @@
 #include "db/config.hh"
 #include "database.hh"
 
-future<> init_storage_service(distributed<database>& db);
+future<> init_storage_service(distributed<database>& db, const db::config& cfg);
 future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster");
