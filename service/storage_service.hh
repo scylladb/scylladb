@@ -85,6 +85,14 @@ public:
     }
     static int RING_DELAY; // delay after which we assume ring has stablized
 
+    bool incremental_backups_enabled() {
+        return _cfg->incremental_backups();
+    }
+
+    void incremental_backups_set_value(bool val) {
+        _cfg->incremental_backups() = val;
+    }
+
     // Needed by distributed<>
     future<> stop();
 
