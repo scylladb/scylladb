@@ -29,7 +29,8 @@ enum class compaction_strategy_type {
     null,
     major,
     size_tiered,
-    // FIXME: Add support to LevelTiered, and DateTiered.
+    leveled,
+    // FIXME: Add support to DateTiered.
 };
 
 class compaction_strategy_impl;
@@ -54,6 +55,8 @@ public:
             return "MajorCompactionStrategy";
         case compaction_strategy_type::size_tiered:
             return "SizeTieredCompactionStrategy";
+        case compaction_strategy_type::leveled:
+            return "LeveledCompactionStrategy";
         default:
             throw std::runtime_error("Invalid Compaction Strategy");
         }
@@ -66,6 +69,8 @@ public:
             return compaction_strategy_type::major;
         } else if (name == "SizeTieredCompactionStrategy") {
             return compaction_strategy_type::size_tiered;
+        } else if (name == "LeveledCompactionStrategy") {
+            return compaction_strategy_type::leveled;
         } else {
             throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class 'org.apache.cassandra.db.compaction.%s", name));
         }

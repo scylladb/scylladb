@@ -56,6 +56,7 @@
 #include "mutation_reader.hh"
 #include "schema.hh"
 #include "cql3/statements/property_definitions.hh"
+#include "leveled_manifest.hh"
 
 namespace sstables {
 
@@ -604,6 +605,35 @@ std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_sha
     return most_interesting;
 }
 
+class leveled_compaction_strategy : public compaction_strategy_impl {
+    // FIXME: User may choose to change this value; add support.
+    static constexpr uint32_t max_sstable_size_in_mb = 160;
+public:
+    virtual future<> compact(column_family& cfs) override;
+
+    virtual compaction_strategy_type type() const {
+        return compaction_strategy_type::leveled;
+    }
+};
+
+future<> leveled_compaction_strategy::compact(column_family& cfs) {
+    // NOTE: leveled_manifest creation may be slightly expensive, so later on,
+    // we may want to store it in the strategy itself. However, the sstable
+    // lists managed by the manifest may become outdated. For example, one
+    // sstable in it may be marked for deletion after compacted.
+    // Currently, we create a new manifest whenever it's time for compaction.
+    leveled_manifest manifest = leveled_manifest::create(cfs, max_sstable_size_in_mb);
+    auto candidate = manifest.get_compaction_candidates();
+
+    if (candidate.sstables.empty()) {
+        return make_ready_future<>();
+    }
+
+    logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
+
+    return cfs.compact_sstables(std::move(candidate));
+}
+
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
     : _compaction_strategy_impl(std::move(impl)) {}
 compaction_strategy::compaction_strategy() = default;
@@ -631,6 +661,9 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         break;
     case compaction_strategy_type::size_tiered:
         impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy(options));
+        break;
+    case compaction_strategy_type::leveled:
+        impl = make_shared<leveled_compaction_strategy>(leveled_compaction_strategy());
         break;
     default:
         throw std::runtime_error("strategy not supported");
