@@ -495,6 +495,10 @@ public:
         return s;
     }
 
+    uint32_t get_sstable_level() const {
+        return get_stats_metadata().sstable_level;
+    }
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
