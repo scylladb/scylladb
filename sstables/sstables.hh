@@ -270,6 +270,9 @@ public:
     partition_key get_first_partition_key(const schema& s) const;
     partition_key get_last_partition_key(const schema& s) const;
 
+    dht::decorated_key get_first_decorated_key(const schema& s) const;
+    dht::decorated_key get_last_decorated_key(const schema& s) const;
+
     const sstring get_filename() const {
         return filename(component_type::Data);
     }
