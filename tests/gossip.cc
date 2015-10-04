@@ -42,7 +42,7 @@ int main(int ac, char ** av) {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        service::init_storage_service(db).then([listen, config] {
+        service::init_storage_service(db, db::config()).then([listen, config] {
             return net::get_messaging_service().start(listen);
         }).then([config] {
             auto& server = net::get_local_messaging_service();

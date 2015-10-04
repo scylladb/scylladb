@@ -30,8 +30,8 @@
 // duplicated in cql_test_env.cc
 // until proper shutdown is done.
 
-future<> init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db).then([] {
+future<> init_storage_service(distributed<database>& db, const db::config& cfg) {
+    return service::init_storage_service(db, cfg).then([] {
         // #293 - do not stop anything
         //engine().at_exit([] { return service::deinit_storage_service(); });
     });
