@@ -76,14 +76,30 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
+static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, const sstring& name,
         utils::ihistogram column_family::stats::*f) {
     return map_reduce_cf(ctx, name, 0, [f](const column_family& cf) {
         return (cf.get_stats().*f).count;
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx,
+static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
+        utils::ihistogram column_family::stats::*f) {
+    auto uuid = get_uuid(name, ctx.db.local());
+    return ctx.db.map_reduce0([uuid, f](database& db) {
+        // Histograms information is sample of the actual load
+        // so to get an estimation of sum, we multiply the mean
+        // with count. The information is gather in nano second,
+        // but reported in micro
+        column_family& cf = db.find_column_family(uuid);
+        return ((cf.get_stats().*f).count/1000.0) * (cf.get_stats().*f).mean;
+    }, 0.0, std::plus<double>()).then([](double res) {
+        return make_ready_future<json::json_return_type>((int64_t)res);
+    });
+}
+
+
+static future<json::json_return_type>  get_cf_stats_count(http_context& ctx,
         utils::ihistogram column_family::stats::*f) {
     return map_reduce_cf(ctx, 0, [f](const column_family& cf) {
         return (cf.get_stats().*f).count;
@@ -322,23 +338,31 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_read.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats_sum(ctx,req->param["name"] ,&column_family::stats::reads);
+        return get_cf_stats_count(ctx,req->param["name"] ,&column_family::stats::reads);
     });
 
     cf::get_all_read.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats_sum(ctx, &column_family::stats::reads);
+        return get_cf_stats_count(ctx, &column_family::stats::reads);
     });
 
     cf::get_write.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats_sum(ctx, req->param["name"] ,&column_family::stats::writes);
+        return get_cf_stats_count(ctx, req->param["name"] ,&column_family::stats::writes);
     });
 
     cf::get_all_write.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_stats_sum(ctx, &column_family::stats::writes);
+        return get_cf_stats_count(ctx, &column_family::stats::writes);
     });
 
     cf::get_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
         return get_cf_histogram(ctx, req->param["name"], &column_family::stats::reads);
+    });
+
+    cf::get_read_latency.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats_sum(ctx,req->param["name"] ,&column_family::stats::reads);
+    });
+
+    cf::get_write_latency.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_stats_sum(ctx, req->param["name"] ,&column_family::stats::writes);
     });
 
     cf::get_all_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
