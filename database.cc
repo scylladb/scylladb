@@ -53,6 +53,7 @@
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
+#include "utils/latency.hh"
 
 using namespace std::chrono_literals;
 
@@ -1279,7 +1280,9 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) const {
+column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
+    utils::latency_counter lc;
+    _stats.reads.set_latency(lc);
     return do_with(query_state(cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
@@ -1302,6 +1305,8 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
         });
+    }).finally([lc, this]() mutable {
+        _stats.reads.mark(lc);
     });
 }
 

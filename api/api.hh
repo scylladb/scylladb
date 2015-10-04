@@ -144,7 +144,9 @@ inline httpd::utils_json::histogram add_histogram(httpd::utils_json::histogram r
         res.max = val.max;
     }
     double ncount = res.count() + val.count;
-    res.sum = res.sum() + val.sum;
+    // To get an estimated sum we take the estimated mean
+    // and multiply it by the true count
+    res.sum = res.sum() + val.mean * val.count;
     double a = res.count()/ncount;
     double b = val.count/ncount;
 

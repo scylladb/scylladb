@@ -58,7 +58,7 @@ public:
             double old_m = mean;
             double old_s = variance;
 
-            mean = old_m + ((value - old_m) / (total + 1));
+            mean = ((double)(sum + value)) / (total + 1);
             variance = old_s + ((value - old_m) * (value - mean));
         }
         sum += value;
@@ -81,7 +81,7 @@ public:
      * Call set_latency, that would start a latency object if needed.
      */
     bool should_sample() const {
-        return total & sample_mask;
+        return total == 0 || (count & sample_mask);
     }
     /**
      * Set the latency according to the sample rate.

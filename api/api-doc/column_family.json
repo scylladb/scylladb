@@ -951,6 +951,33 @@
          ]
       },
       {
+         "path":"/column_family/metrics/estimated_row_count/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get estimated row count",
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "nickname":"get_estimated_row_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The column family name in keysspace:name format",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/column_family/metrics/estimated_column_count_histogram/{name}",
          "operations":[
             {
