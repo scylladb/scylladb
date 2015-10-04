@@ -120,8 +120,8 @@ public:
         int64_t live_sstable_count = 0;
         /** Estimated number of compactions pending for this column family */
         int64_t pending_compactions = 0;
-        utils::ihistogram reads{256, 100};
-        utils::ihistogram writes{256, 100};
+        utils::ihistogram reads{256};
+        utils::ihistogram writes{256};
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
     };
@@ -196,7 +196,7 @@ public:
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
 
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) const;
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
 
     future<> populate(sstring datadir);
 
