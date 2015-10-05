@@ -53,6 +53,8 @@
 #include "locator/local_strategy.hh"
 #include "version.hh"
 #include "unimplemented.hh"
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1239,6 +1241,49 @@ future<> storage_service::stop_gossiping() {
             });
         }
         return make_ready_future<>();
+    });
+}
+
+future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
+    auto& ks = db.find_keyspace(ks_name);
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
+        auto& cf = db.find_column_family(pair.second);
+        return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
+            if (exists) {
+                throw std::runtime_error(sprint("Keyspace %s: snapshot %s already exists.", ks_name, name));
+            }
+        });
+    });
+}
+
+future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+    if (tag.empty()) {
+        throw std::runtime_error("You must supply a snapshot name.");
+    }
+
+    if (keyspace_names.size() == 0) {
+        boost::copy(_db.local().get_keyspaces() | boost::adaptors::map_keys, std::back_inserter(keyspace_names));
+    };
+
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        if (mode == storage_service::mode::JOINING) {
+            throw std::runtime_error("Cannot snapshot until bootstrap completes");
+        }
+    }).then([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
+        return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
+            return check_snapshot_not_exist(_db.local(), ks_name, tag);
+        }).then([this, tag, keyspace_names] {
+            return _db.invoke_on_all([tag = std::move(tag), keyspace_names] (database& db) {
+                return parallel_for_each(keyspace_names, [&db, tag = std::move(tag)] (auto& ks_name) {
+                    auto& ks = db.find_keyspace(ks_name);
+                    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag)] (auto& pair) {
+                        auto& cf = db.find_column_family(pair.second);
+                        return cf.snapshot(tag);
+                    });
+                });
+            });
+        });
     });
 }
 
