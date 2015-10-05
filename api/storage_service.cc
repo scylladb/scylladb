@@ -513,15 +513,36 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::is_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
-        return make_ready_future<json::json_return_type>(service::get_local_storage_service().incremental_backups_enabled());
+        // If this is issued in parallel with an ongoing change, we may see values not agreeing.
+        // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
+        return service::get_local_storage_service().db().map_reduce(adder<bool>(), [] (database& db) {
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                if (ks.incremental_backups_enabled()) {
+                    return true;
+                }
+            }
+            return false;
+        }).then([] (bool val) {
+            return make_ready_future<json::json_return_type>(val);
+        });
     });
 
     ss::set_incremental_backups_enabled.set(r, [](std::unique_ptr<request> req) {
         auto val_str = req->get_query_param("value");
         bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
-        return service::get_storage_service().invoke_on_all([value] (auto& local_service) {
-            local_service.incremental_backups_set_value(value);
-        }).then([] {;
+        return service::get_local_storage_service().db().invoke_on_all([value] (database& db) {
+            // Change both KS and CF, so they are in sync
+            for (auto& pair: db.get_keyspaces()) {
+                auto& ks = pair.second;
+                ks.set_incremental_backups(value);
+            }
+
+            for (auto& pair: db.get_column_families()) {
+                auto cf_ptr = pair.second;
+                cf_ptr->set_incremental_backups(value);
+            }
+        }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
