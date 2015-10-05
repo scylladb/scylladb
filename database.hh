@@ -522,9 +522,19 @@ public:
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
+
+    std::unordered_map<sstring, keyspace>& get_keyspaces() {
+        return _keyspaces;
+    }
+
     const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
+
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() {
+        return _column_families;
+    }
+
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;
