@@ -464,7 +464,7 @@ future<> save_system_keyspace_schema() {
     {
         auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
-            partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
+            partition_key::from_singular(*schema, keyspace_name));
         return db::system_keyspace::query(proxy, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
@@ -475,8 +475,8 @@ future<> save_system_keyspace_schema() {
     {
         auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
-            partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
-        auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({to_bytes(table_name)})));
+            partition_key::from_singular(*schema, keyspace_name));
+        auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
         return db::system_keyspace::query(proxy, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
@@ -1067,7 +1067,7 @@ future<> save_system_keyspace_schema() {
         // we don't keep a property the user has removed
         schema_ptr s = columnfamilies();
         mutation m{pkey, s};
-        auto ckey = clustering_key::from_single_value(*s, to_bytes(table->cf_name()));
+        auto ckey = clustering_key::from_singular(*s, table->cf_name());
         m.set_clustered_cell(ckey, "cf_id", table->id(), timestamp);
         m.set_clustered_cell(ckey, "type", cf_type_to_sstring(table->type()), timestamp);
 
@@ -1448,7 +1448,7 @@ future<> save_system_keyspace_schema() {
     {
         schema_ptr s = columns();
         mutation m{pkey, s};
-        auto ckey = clustering_key::from_exploded(*s, {to_bytes(table->cf_name()), column.name()});
+        auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
         m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
         m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
         if (!column.is_on_all_components()) {
@@ -1559,7 +1559,7 @@ future<> save_system_keyspace_schema() {
         if (row.has("index_name"))
             indexName = row.getString("index_name");
 #endif
-        auto c = column_definition{to_bytes(name), validator, kind, component_index};
+        auto c = column_definition{utf8_type->decompose(name), validator, kind, component_index};
         return c;
     }
 
