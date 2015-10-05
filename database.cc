@@ -498,7 +498,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     newtab->set_unshared();
     dblog.debug("Flushing to {}", newtab->get_filename());
     return newtab->write_components(*old).then([this, newtab, old] {
-        return newtab->open_data().then([this, newtab] {;
+        return newtab->open_data().then([this, newtab] {
             // Note that due to our sharded architecture, it is possible that
             // in the face of a value change some shards will backup sstables
             // while others won't.
@@ -510,7 +510,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
             //
             // The code as is guarantees that we'll never partially backup a
             // single sstable, so that is enough of a guarantee.
-            if (!service::get_local_storage_service().incremental_backups_enabled()) {
+            if (!incremental_backups_enabled()) {
                 return make_ready_future<>();
             }
             auto dir = newtab->get_dir() + "/backups/";
@@ -1139,6 +1139,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
     cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
+    cfg.enable_incremental_backups = _config.enable_incremental_backups;
 
     return cfg;
 }
@@ -1480,6 +1481,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.max_memtable_size = std::numeric_limits<size_t>::max();
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
+    cfg.enable_incremental_backups = _cfg->incremental_backups();
     return cfg;
 }
 

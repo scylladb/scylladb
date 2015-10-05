@@ -106,6 +106,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
         bool enable_commitlog = true;
+        bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
     };
@@ -216,6 +217,14 @@ public:
     future<> compact_sstables(std::vector<lw_shared_ptr<sstables::sstable>> sstables);
 
     future<> snapshot(sstring name);
+
+    const bool incremental_backups_enabled() const {
+        return _config.enable_incremental_backups;
+    }
+
+    void set_incremental_backups(bool val) {
+        _config.enable_incremental_backups = val;
+    }
 
     lw_shared_ptr<sstable_list> get_sstables();
     size_t sstables_count();
@@ -370,6 +379,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
         bool enable_cache = true;
+        bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
     };
@@ -397,6 +407,14 @@ public:
 
     // FIXME to allow simple registration at boostrap
     void set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy);
+
+    const bool incremental_backups_enabled() const {
+        return _config.enable_incremental_backups;
+    }
+
+    void set_incremental_backups(bool val) {
+        _config.enable_incremental_backups = val;
+    }
 
     const sstring& datadir() const {
         return _config.datadir;
@@ -522,9 +540,19 @@ public:
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
+
+    std::unordered_map<sstring, keyspace>& get_keyspaces() {
+        return _keyspaces;
+    }
+
     const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
+
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() {
+        return _column_families;
+    }
+
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;

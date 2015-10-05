@@ -46,7 +46,7 @@
 // Simpler to copy the code from init.cc than trying to do clever parameterization
 // and whatnot.
 static future<> tst_init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db, db::config()).then([] {
+    return service::init_storage_service(db).then([] {
         engine().at_exit([] { return service::deinit_storage_service(); });
     });
 }

@@ -77,21 +77,11 @@ class storage_service : public gms::i_endpoint_state_change_subscriber, public s
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
     distributed<database>& _db;
-    std::unique_ptr<db::config> _cfg;
 public:
-    storage_service(distributed<database>& db, const db::config& cfg)
-        : _db(db)
-        , _cfg(std::make_unique<db::config>(cfg)) {
+    storage_service(distributed<database>& db)
+        : _db(db) {
     }
     static int RING_DELAY; // delay after which we assume ring has stablized
-
-    bool incremental_backups_enabled() {
-        return _cfg->incremental_backups();
-    }
-
-    void incremental_backups_set_value(bool val) {
-        _cfg->incremental_backups() = val;
-    }
 
     // Needed by distributed<>
     future<> stop();
@@ -106,6 +96,9 @@ public:
 
     void gossip_snitch_info();
 
+    distributed<database>& db() {
+        return _db;
+    }
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() {
@@ -2963,8 +2956,8 @@ inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
     });
 }
 
-inline future<> init_storage_service(distributed<database>& db, const db::config& cfg) {
-    return service::get_storage_service().start(std::ref(db), cfg).then([] {
+inline future<> init_storage_service(distributed<database>& db) {
+    return service::get_storage_service().start(std::ref(db)).then([] {
         print("Start Storage service ...\n");
     });
 }

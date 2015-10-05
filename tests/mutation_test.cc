@@ -273,6 +273,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
+    cfg.enable_incremental_backups = false;
     return with_column_family(s, cfg, [s] (column_family& cf) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -319,6 +320,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
     cfg.enable_disk_reads = true;
     cfg.enable_disk_writes = true;
     cfg.enable_cache = true;
+    cfg.enable_incremental_backups = false;
 
     return with_column_family(s, cfg, [s](column_family& cf) {
         return seastar::async([s, &cf] {
@@ -391,6 +393,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
+    cfg.enable_incremental_backups = false;
     auto cm = make_lw_shared<compaction_manager>();
     return do_with(make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm), [s, cm] (auto& cf_ptr) mutable {
         column_family& cf = *cf_ptr;

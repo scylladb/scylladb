@@ -214,10 +214,10 @@ int main(int ac, char** av) {
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            }).then([&db] {
+                return init_storage_service(db);
             }).then([&db, cfg] {
-                return init_storage_service(db, std::ref(*cfg));
-            }).then([&db, cfg] {
-                return db.start(std::ref(*cfg)).then([&db] {
+                return db.start(std::move(*cfg)).then([&db] {
                     engine().at_exit([&db] {
 
                         // #293 - do not stop anything - not even db (for real)

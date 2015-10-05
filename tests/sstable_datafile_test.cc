@@ -980,6 +980,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
     column_family::config cfg;
     cfg.datadir = tmp->path;
     cfg.enable_commitlog = false;
+    cfg.enable_incremental_backups = false;
     auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), *cm);
     cf->start();
     cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
