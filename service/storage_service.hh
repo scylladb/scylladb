@@ -106,6 +106,9 @@ public:
 
     void gossip_snitch_info();
 
+    distributed<database>& db() {
+        return _db;
+    }
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() {
