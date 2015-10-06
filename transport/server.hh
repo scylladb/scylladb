@@ -67,7 +67,6 @@ struct [[gnu::packed]] cql_binary_frame_v3 {
 
 class cql_server {
     class event_notifier;
-    class connection;
 
     static constexpr int current_version = 3;
 
@@ -76,10 +75,7 @@ class cql_server {
     distributed<cql3::query_processor>& _query_processor;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     std::unique_ptr<event_notifier> _notifier;
-    circular_buffer<connection*> _pending_responders;
-    reactor::poller _poller{[this] { return poll_pending_responders(); }}; // FIXME: register before tcp poller
 private:
-    bool poll_pending_responders();
     scollectd::registrations setup_collectd();
     uint64_t _connects = 0;
     uint64_t _connections = 0;
@@ -92,6 +88,7 @@ public:
     future<> stop();
 private:
     class fmt_visitor;
+    class connection;
     class response;
     friend class type_codec;
 };
@@ -153,13 +150,11 @@ class cql_server::connection {
     serialization_format _serialization_format = serialization_format::use_16_bit();
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
-    bool _flush_requested = false;
 public:
     connection(cql_server& server, connected_socket&& fd, socket_address addr);
     ~connection();
     future<> process();
     future<> process_request();
-    void do_flush();
 private:
 
     future<> process_request_one(temporary_buffer<char> buf,
@@ -215,7 +210,6 @@ private:
     void init_serialization_format();
 
     friend event_notifier;
-    friend class cql_server;
 };
 
 }
