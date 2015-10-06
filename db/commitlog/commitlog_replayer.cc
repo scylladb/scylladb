@@ -248,7 +248,10 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
     logger.info("Replaying {}", files);
 
     return parallel_for_each(files, [this](auto f) {
-        return this->recover(std::move(f));
+        return this->recover(f).handle_exception([f](auto ep) {
+            logger.error("Error recovering {}: {}", f, ep);
+            std::rethrow_exception(ep);
+        });
     });
 }
 
