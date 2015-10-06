@@ -127,7 +127,7 @@ if __name__ == "__main__":
            if test[0].startswith(os.path.join('build','debug')):
               mode = 'debug'
            xmlout = args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml"
-           path = path + " --output_format=XML --log_level=all --report_level=no --log_sink=" + xmlout
+           path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
            print(path)
         proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
