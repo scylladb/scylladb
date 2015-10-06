@@ -211,7 +211,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         lw_shared_ptr<seastar::pipe_reader<mutation>> pr;
         queue_reader(lw_shared_ptr<seastar::pipe_reader<mutation>> pr) : pr(std::move(pr)) {}
         virtual future<mutation_opt> operator()() override {
-            return pr->read();
+            return pr->read().then([] (std::experimental::optional<mutation> m) mutable {
+                return make_ready_future<mutation_opt>(std::move(m));
+            });
         }
     };
 
