@@ -988,7 +988,7 @@ void database::update_keyspace(const sstring& name) {
 }
 
 void database::drop_keyspace(const sstring& name) {
-    throw std::runtime_error("not implemented");
+    _keyspaces.erase(name);
 }
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
@@ -1028,8 +1028,18 @@ future<> database::update_column_family(const sstring& ks_name, const sstring& c
     });
 }
 
-void database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
-    throw std::runtime_error("not implemented");
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
+    auto& ks = find_keyspace(ks_name);
+    auto& cf = find_column_family(ks_name, cf_name);
+    ks.metadata()->remove_column_family(cf.schema());
+    auto uuid = find_uuid(ks_name, cf_name);
+    _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
+    return truncate(ks, cf).then([this, &cf] {
+        return cf.stop();
+    }).then([this, uuid] {
+        _column_families.erase(uuid);
+        return make_ready_future<>();
+    });
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
@@ -1558,7 +1568,11 @@ future<> database::flush_all_memtables() {
 future<> database::truncate(sstring ksname, sstring cfname) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
+    return truncate(ks, cf);
+}
 
+future<> database::truncate(const keyspace& ks, column_family& cf)
+{
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
 
@@ -1572,7 +1586,7 @@ future<> database::truncate(sstring ksname, sstring cfname) {
         cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = std::move(cfname)]() mutable {
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = cf.schema()->cf_name()]() mutable {
         return f.then([&cf, auto_snapshot, cfname = std::move(cfname)] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
 

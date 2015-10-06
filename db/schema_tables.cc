@@ -610,6 +610,9 @@ future<> save_system_keyspace_schema() {
             return *x == *y;
         });
 
+        for (auto&& key : diff.entries_only_on_left) {
+            dropped.emplace(key);
+        }
         for (auto&& key : diff.entries_only_on_right) {
             auto&& value = after[key];
             if (!value->empty()) {
@@ -673,6 +676,14 @@ future<> save_system_keyspace_schema() {
                     auto diff = difference(before, after, [](const auto& x, const auto& y) -> bool {
                         return *x == *y;
                     });
+                    for (auto&& key : diff.entries_only_on_left) {
+                        auto&& rs = before[key];
+                        for (const query::result_set_row& row : rs->rows()) {
+                            auto ks_name = row.get_nonnull<sstring>("keyspace_name");
+                            auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
+                            dropped.emplace_back(db.find_schema(ks_name, cf_name));
+                        }
+                    }
                     for (auto&& key : diff.entries_only_on_right) {
                         auto&& value = after[key];
                         if (!value->empty()) {
@@ -717,14 +728,17 @@ future<> save_system_keyspace_schema() {
                     parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
                         return db.update_column_family(cfm->ks_name(), cfm->cf_name());
                     }).get();
-                    for (auto&& cfm : dropped) {
-                        db.drop_column_family(cfm->ks_name(), cfm->cf_name());
-                    }
+                    parallel_for_each(dropped.begin(), dropped.end(), [&db] (auto&& cfm) {
+                        return db.drop_column_family(cfm->ks_name(), cfm->cf_name());
+                    }).get();
                     // FIXME: clean this up by reorganizing the code
                     // Send CQL events only once, not once per shard.
                     if (engine().cpu_id() == 0) {
                         for (auto&& cfm : created) {
                             service::migration_manager::notify_create_column_family(cfm).get0();
+                        }
+                        for (auto&& cfm : dropped) {
+                            service::migration_manager::notify_drop_column_family(cfm).get0();
                         }
                     }
                 });
@@ -924,16 +938,24 @@ future<> save_system_keyspace_schema() {
         return mutations;
     }
 
-#if 0
-    public static Mutation makeDropKeyspaceMutation(KSMetaData keyspace, long timestamp)
+    std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp)
     {
-        Mutation mutation = new Mutation(SystemKeyspace.NAME, getSchemaKSKey(keyspace.name));
-        for (String schemaTable : ALL)
-            mutation.delete(schemaTable, timestamp);
-        mutation.delete(SystemKeyspace.BUILT_INDEXES, timestamp);
-        return mutation;
+        std::vector<mutation> mutations;
+        for (auto&& schema_table : all_tables()) {
+            auto pkey = partition_key::from_exploded(*schema_table, {utf8_type->decompose(keyspace->name())});
+            mutation m{pkey, schema_table};
+            m.partition().apply(tombstone{timestamp, gc_clock::now()});
+            mutations.emplace_back(std::move(m));
+        }
+        auto&& schema = db::system_keyspace::built_indexes();
+        auto pkey = partition_key::from_exploded(*schema, {utf8_type->decompose(keyspace->name())});
+        mutation m{pkey, schema};
+        m.partition().apply(tombstone{timestamp, gc_clock::now()});
+        mutations.emplace_back(std::move(m));
+        return mutations;
     }
 
+#if 0
     private static KSMetaData createKeyspaceFromSchemaPartitions(Row serializedKeyspace, Row serializedTables, Row serializedTypes)
     {
         Collection<CFMetaData> tables = createTablesFromTablesPartition(serializedTables).values();
@@ -1190,21 +1212,23 @@ future<> save_system_keyspace_schema() {
 
         return mutation;
     }
+#endif
 
-    public static Mutation makeDropTableMutation(KSMetaData keyspace, CFMetaData table, long timestamp)
+    std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
     {
         // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
+        auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+        schema_ptr s = columnfamilies();
+        auto pkey = partition_key::from_singular(*s, table->ks_name());
+        auto ckey = clustering_key::from_singular(*s, table->cf_name());
+        mutation m{pkey, s};
+        m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+        mutations.emplace_back(m);
+        for (auto& column : table->all_columns_in_select_order()) {
+            drop_column_from_schema_mutation(table, column, timestamp, mutations);
+        }
 
-        ColumnFamily cells = mutation.addOrGet(Columnfamilies);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Columnfamilies.comparator.make(table.cfName);
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-
-        for (ColumnDefinition column : table.allColumns())
-            dropColumnFromSchemaMutation(table, column, timestamp, mutation);
-
+#if 0
         for (TriggerDefinition trigger : table.getTriggers().values())
             dropTriggerFromSchemaMutation(table, trigger, timestamp, mutation);
 
@@ -1212,10 +1236,9 @@ future<> save_system_keyspace_schema() {
         ColumnFamily indexCells = mutation.addOrGet(SystemKeyspace.BuiltIndexes);
         for (String indexName : Keyspace.open(keyspace.name).getColumnFamilyStore(table.cfName).getBuiltIndexes())
             indexCells.addTombstone(indexCells.getComparator().makeCellName(indexName), ldt, timestamp);
-
-        return mutation;
-    }
 #endif
+        return mutations;
+    }
 
     future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
     {
@@ -1490,17 +1513,15 @@ future<> save_system_keyspace_schema() {
         }
     }
 
-#if 0
-    private static void dropColumnFromSchemaMutation(CFMetaData table, ColumnDefinition column, long timestamp, Mutation mutation)
+    void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations)
     {
-        ColumnFamily cells = mutation.addOrGet(Columns);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        // Note: we do want to use name.toString(), not name.bytes directly for backward compatibility (For CQL3, this won't make a difference).
-        Composite prefix = Columns.comparator.make(table.cfName, column.name.toString());
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
+        schema_ptr s = columns();
+        auto pkey = partition_key::from_singular(*s, table->ks_name());
+        auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
+        mutation m{pkey, s};
+        m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+        mutations.emplace_back(m);
     }
-#endif
 
     std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
                                                                    const sstring& keyspace,
