@@ -1029,15 +1029,15 @@ future<> database::update_column_family(const sstring& ks_name, const sstring& c
 }
 
 future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
-    auto& ks = find_keyspace(ks_name);
-    auto& cf = find_column_family(ks_name, cf_name);
-    ks.metadata()->remove_column_family(cf.schema());
     auto uuid = find_uuid(ks_name, cf_name);
+    auto& ks = find_keyspace(ks_name);
+    auto cf = _column_families.at(uuid);
+    _column_families.erase(uuid);
+    ks.metadata()->remove_column_family(cf->schema());
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
-    return truncate(ks, cf).then([this, &cf] {
-        return cf.stop();
-    }).then([this, uuid] {
-        _column_families.erase(uuid);
+    return truncate(ks, *cf).then([this, cf] {
+        return cf->stop();
+    }).then([this, cf] {
         return make_ready_future<>();
     });
 }
