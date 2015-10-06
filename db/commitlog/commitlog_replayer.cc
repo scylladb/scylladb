@@ -183,8 +183,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         auto uuid = fm.column_family_id();
         auto& map = _rpm[shard];
         auto i = map.find(uuid);
-        if (i != map.end() && rp < i->second) {
-            logger.trace("entry {} at {} is less than recorded replay position {}. skipping", fm.column_family_id(), rp, i->second);
+        if (i != map.end() && rp <= i->second) {
+            logger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, i->second);
             s->skipped_mutations++;
             return make_ready_future<>();
         }
