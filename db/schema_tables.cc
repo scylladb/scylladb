@@ -71,10 +71,6 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(LegacySchemaTables.class);
-#endif
-
 /* static */ schema_ptr keyspaces() {
     static thread_local auto keyspaces = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
@@ -305,34 +301,6 @@ future<> save_system_keyspace_schema() {
 }
 
 #if 0
-
-    public static Collection<KSMetaData> readSchemaFromSystemTables()
-    {
-        List<Row> serializedSchema = getSchemaPartitionsForTable(KEYSPACES);
-
-        List<KSMetaData> keyspaces = new ArrayList<>(serializedSchema.size());
-
-        for (Row partition : serializedSchema)
-        {
-            if (isEmptySchemaPartition(partition) || isSystemKeyspaceSchemaPartition(partition))
-                continue;
-
-            keyspaces.add(createKeyspaceFromSchemaPartitions(partition,
-                                                             readSchemaPartitionForKeyspace(COLUMNFAMILIES, partition.key),
-                                                             readSchemaPartitionForKeyspace(USERTYPES, partition.key)));
-
-            // Will be moved away in #6717
-            for (UDFunction function : createFunctionsFromFunctionsPartition(readSchemaPartitionForKeyspace(FUNCTIONS, partition.key)).values())
-                org.apache.cassandra.cql3.functions.Functions.addFunction(function);
-
-            // Will be moved away in #6717
-            for (UDAggregate aggregate : createAggregatesFromAggregatesPartition(readSchemaPartitionForKeyspace(AGGREGATES, partition.key)).values())
-                org.apache.cassandra.cql3.functions.Functions.addFunction(aggregate);
-        }
-
-        return keyspaces;
-    }
-
     public static void truncateSchemaTables()
     {
         for (String table : ALL)
@@ -389,31 +357,6 @@ future<> save_system_keyspace_schema() {
         });
     }
 
-#if 0
-    /**
-     * @param schemaTableName The name of the table responsible for part of the schema
-     * @return CFS responsible to hold low-level serialized schema
-     */
-    private static ColumnFamilyStore getSchemaCFS(String schemaTableName)
-    {
-        return Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(schemaTableName);
-    }
-
-    /**
-     * @param schemaTableName The name of the table responsible for part of the schema.
-     * @return low-level schema representation
-     */
-    private static List<Row> getSchemaPartitionsForTable(String schemaTableName)
-    {
-        Token minToken = StorageService.getPartitioner().getMinimumToken();
-        return getSchemaCFS(schemaTableName).getRangeSlice(new Range<RowPosition>(minToken.minKeyBound(), minToken.maxKeyBound()),
-                                                           null,
-                                                           new IdentityQueryFilter(),
-                                                           Integer.MAX_VALUE,
-                                                           System.currentTimeMillis());
-    }
-#endif
-
     future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy)
     {
         auto map = [&proxy] (sstring table) {
@@ -452,13 +395,6 @@ future<> save_system_keyspace_schema() {
         return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result{}, insert);
     }
 
-#if 0
-    private static ByteBuffer getSchemaKSKey(String ksName)
-    {
-        return AsciiType.instance.fromString(ksName);
-    }
-#endif
-
     future<schema_result::value_type>
     read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
@@ -481,18 +417,6 @@ future<> save_system_keyspace_schema() {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }
-
-#if 0
-    private static boolean isEmptySchemaPartition(Row partition)
-    {
-        return partition.cf == null || (partition.cf.isMarkedForDelete() && !partition.cf.hasColumns());
-    }
-
-    private static boolean isSystemKeyspaceSchemaPartition(Row partition)
-    {
-        return getSchemaKSKey(SystemKeyspace.NAME).equals(partition.key.getKey());
-    }
-#endif
 
     static semaphore the_merge_lock;
 
@@ -954,25 +878,6 @@ future<> save_system_keyspace_schema() {
         mutations.emplace_back(std::move(m));
         return mutations;
     }
-
-#if 0
-    private static KSMetaData createKeyspaceFromSchemaPartitions(Row serializedKeyspace, Row serializedTables, Row serializedTypes)
-    {
-        Collection<CFMetaData> tables = createTablesFromTablesPartition(serializedTables).values();
-        UTMetaData types = new UTMetaData(createTypesFromPartition(serializedTypes));
-        return createKeyspaceFromSchemaPartition(serializedKeyspace).cloneWith(tables, types);
-    }
-
-    public static KSMetaData createKeyspaceFromName(String keyspace)
-    {
-        Row partition = readSchemaPartitionForKeyspace(KEYSPACES, keyspace);
-
-        if (isEmptySchemaPartition(partition))
-            throw new RuntimeException(String.format("%s not found in the schema definitions keyspaceName (%s).", keyspace, KEYSPACES));
-
-        return createKeyspaceFromSchemaPartition(partition);
-    }
-#endif
 
     /**
      * Deserialize only Keyspace attributes without nested tables or types
