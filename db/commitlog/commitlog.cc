@@ -895,7 +895,11 @@ void db::commitlog::segment_manager::discard_unused_segments() {
             logger.debug("Segment {} is unused", *s);
             return true;
         }
-        logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+        if (s->is_still_allocating()) {
+            logger.debug("Not safe to delete segment {}; still allocating.", s);
+        } else {
+            logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+        }
         return false;
     });
     if (i != _segments.end()) {
