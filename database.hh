@@ -368,6 +368,9 @@ public:
     void add_column_family(const schema_ptr& s) {
         _cf_meta_data.emplace(s->cf_name(), s);
     }
+    void remove_column_family(const schema_ptr& s) {
+        _cf_meta_data.erase(s->cf_name());
+    }
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
@@ -496,7 +499,7 @@ public:
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
     future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
-    void drop_column_family(const sstring& ks_name, const sstring& cf_name);
+    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
@@ -565,6 +568,7 @@ public:
     future<> flush_all_memtables();
     /** Truncates the given column family */
     future<> truncate(sstring ksname, sstring cfname);
+    future<> truncate(const keyspace& ks, column_family& cf);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;
