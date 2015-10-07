@@ -39,8 +39,8 @@
  */
 
 #include <chrono>
-#include <core/future-util.hh>
-#include <core/do_with.hh>
+#include <seastar/core/future-util.hh>
+#include <seastar/core/do_with.hh>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
@@ -79,7 +79,9 @@ future<> db::batchlog_manager::start() {
                     auto dest = (cpu++ % smp::count);
                     return smp::submit_to(dest, [] {
                                 return get_local_batchlog_manager().replay_all_failed_batches();
-                            }).then([this] {
+                            }).handle_exception([](auto ep) {
+                                logger.error("Exception in batch replay: {}", ep);
+                            }).finally([this] {
                                 _timer.arm(lowres_clock::now()
                                         + std::chrono::milliseconds(replay_interval)
                                 );

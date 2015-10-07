@@ -42,10 +42,10 @@
 #pragma once
 
 #include <unordered_map>
-#include <core/future.hh>
-#include <core/distributed.hh>
-#include <core/timer.hh>
-#include <core/gate.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/distributed.hh>
+#include <seastar/core/timer.hh>
+#include <seastar/core/gate.hh>
 
 #include "cql3/query_processor.hh"
 #include "gms/inet_address.hh"
