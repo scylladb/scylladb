@@ -48,6 +48,7 @@
 #include "exceptions/exceptions.hh"
 #include "cql3/query_options.hh"
 #include "cql3/statements/cf_statement.hh"
+#include "service/migration_manager.hh"
 #include "service/query_state.hh"
 #include "log.hh"
 #include "core/distributed.hh"
@@ -463,111 +464,41 @@ public:
     {
         return meter.measureDeep(key);
     }
-
-    private static class MigrationSubscriber implements IMigrationListener
-    {
-        private void removeInvalidPreparedStatements(String ksName, String cfName)
-        {
-            removeInvalidPreparedStatements(preparedStatements.values().iterator(), ksName, cfName);
-            removeInvalidPreparedStatements(thriftPreparedStatements.values().iterator(), ksName, cfName);
-        }
-
-        private void removeInvalidPreparedStatements(Iterator<ParsedStatement.Prepared> iterator, String ksName, String cfName)
-        {
-            while (iterator.hasNext())
-            {
-                if (shouldInvalidate(ksName, cfName, iterator.next().statement))
-                    iterator.remove();
-            }
-        }
-
-        private boolean shouldInvalidate(String ksName, String cfName, CQLStatement statement)
-        {
-            String statementKsName;
-            String statementCfName;
-
-            if (statement instanceof ModificationStatement)
-            {
-                ModificationStatement modificationStatement = ((ModificationStatement) statement);
-                statementKsName = modificationStatement.keyspace();
-                statementCfName = modificationStatement.columnFamily();
-            }
-            else if (statement instanceof SelectStatement)
-            {
-                SelectStatement selectStatement = ((SelectStatement) statement);
-                statementKsName = selectStatement.keyspace();
-                statementCfName = selectStatement.columnFamily();
-            }
-            else
-            {
-                return false;
-            }
-
-            return ksName.equals(statementKsName) && (cfName == null || cfName.equals(statementCfName));
-        }
-
-        public void onCreateKeyspace(String ksName) { }
-        public void onCreateColumnFamily(String ksName, String cfName) { }
-        public void onCreateUserType(String ksName, String typeName) { }
-        public void onCreateFunction(String ksName, String functionName) {
-            if (Functions.getOverloadCount(new FunctionName(ksName, functionName)) > 1)
-            {
-                // in case there are other overloads, we have to remove all overloads since argument type
-                // matching may change (due to type casting)
-                removeInvalidPreparedStatementsForFunction(preparedStatements.values().iterator(), ksName, functionName);
-                removeInvalidPreparedStatementsForFunction(thriftPreparedStatements.values().iterator(), ksName, functionName);
-            }
-        }
-        public void onCreateAggregate(String ksName, String aggregateName) {
-            if (Functions.getOverloadCount(new FunctionName(ksName, aggregateName)) > 1)
-            {
-                // in case there are other overloads, we have to remove all overloads since argument type
-                // matching may change (due to type casting)
-                removeInvalidPreparedStatementsForFunction(preparedStatements.values().iterator(), ksName, aggregateName);
-                removeInvalidPreparedStatementsForFunction(thriftPreparedStatements.values().iterator(), ksName, aggregateName);
-            }
-        }
-
-        public void onUpdateKeyspace(String ksName) { }
-        public void onUpdateColumnFamily(String ksName, String cfName) { }
-        public void onUpdateUserType(String ksName, String typeName) { }
-        public void onUpdateFunction(String ksName, String functionName) { }
-        public void onUpdateAggregate(String ksName, String aggregateName) { }
-
-        public void onDropKeyspace(String ksName)
-        {
-            removeInvalidPreparedStatements(ksName, null);
-        }
-
-        public void onDropColumnFamily(String ksName, String cfName)
-        {
-            removeInvalidPreparedStatements(ksName, cfName);
-        }
-
-        public void onDropUserType(String ksName, String typeName) { }
-        public void onDropFunction(String ksName, String functionName) {
-            removeInvalidPreparedStatementsForFunction(preparedStatements.values().iterator(), ksName, functionName);
-            removeInvalidPreparedStatementsForFunction(thriftPreparedStatements.values().iterator(), ksName, functionName);
-        }
-        public void onDropAggregate(String ksName, String aggregateName)
-        {
-            removeInvalidPreparedStatementsForFunction(preparedStatements.values().iterator(), ksName, aggregateName);
-            removeInvalidPreparedStatementsForFunction(thriftPreparedStatements.values().iterator(), ksName, aggregateName);
-        }
-
-        private void removeInvalidPreparedStatementsForFunction(Iterator<ParsedStatement.Prepared> iterator,
-                                                                String ksName, String functionName)
-        {
-            while (iterator.hasNext())
-                if (iterator.next().statement.usesFunction(ksName, functionName))
-                    iterator.remove();
-        }
-    }
 #endif
 public:
     future<> stop() {
         return make_ready_future<>();
     }
+    class migration_subscriber;
+
+    friend class migration_subscriber;
+};
+
+class query_processor::migration_subscriber : public service::migration_listener {
+    query_processor* _qp;
+public:
+    migration_subscriber(query_processor* qp);
+
+    virtual void on_create_keyspace(const sstring& ks_name) override;
+    virtual void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override;
+    virtual void on_create_user_type(const sstring& ks_name, const sstring& type_name) override;
+    virtual void on_create_function(const sstring& ks_name, const sstring& function_name) override;
+    virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
+
+    virtual void on_update_keyspace(const sstring& ks_name) override;
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name) override;
+    virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) override;
+    virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override;
+    virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override;
+    virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override;
+    virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override;
+    virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override;
+    virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override;
+private:
+    void remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name);
+    bool should_invalidate(sstring ks_name, std::experimental::optional<sstring> cf_name, ::shared_ptr<cql_statement> statement);
 };
 
 extern distributed<query_processor> _the_query_processor;

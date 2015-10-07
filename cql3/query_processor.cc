@@ -345,5 +345,97 @@ query_processor::process_batch(::shared_ptr<statements::batch_statement> batch, 
     return batch->execute(_proxy, query_state, options);
 }
 
+query_processor::migration_subscriber::migration_subscriber(query_processor* qp)
+    : _qp{qp}
+{
+}
+
+void query_processor::migration_subscriber::on_create_keyspace(const sstring& ks_name)
+{
+}
+
+void query_processor::migration_subscriber::on_create_column_family(const sstring& ks_name, const sstring& cf_name)
+{
+}
+
+void query_processor::migration_subscriber::on_create_user_type(const sstring& ks_name, const sstring& type_name)
+{
+}
+
+void query_processor::migration_subscriber::on_create_function(const sstring& ks_name, const sstring& function_name)
+{
+    log.warn("{} event ignored", __func__);
+}
+
+void query_processor::migration_subscriber::on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name)
+{
+    log.warn("{} event ignored", __func__);
+}
+
+void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks_name)
+{
+}
+
+void query_processor::migration_subscriber::on_update_column_family(const sstring& ks_name, const sstring& cf_name)
+{
+}
+
+void query_processor::migration_subscriber::on_update_user_type(const sstring& ks_name, const sstring& type_name)
+{
+}
+
+void query_processor::migration_subscriber::on_update_function(const sstring& ks_name, const sstring& function_name)
+{
+}
+
+void query_processor::migration_subscriber::on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name)
+{
+}
+
+void query_processor::migration_subscriber::on_drop_keyspace(const sstring& ks_name)
+{
+    remove_invalid_prepared_statements(ks_name, std::experimental::nullopt);
+}
+
+void query_processor::migration_subscriber::on_drop_column_family(const sstring& ks_name, const sstring& cf_name)
+{
+    remove_invalid_prepared_statements(ks_name, cf_name);
+}
+
+void query_processor::migration_subscriber::on_drop_user_type(const sstring& ks_name, const sstring& type_name)
+{
+}
+
+void query_processor::migration_subscriber::on_drop_function(const sstring& ks_name, const sstring& function_name)
+{
+    log.warn("{} event ignored", __func__);
+}
+
+void query_processor::migration_subscriber::on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name)
+{
+    log.warn("{} event ignored", __func__);
+}
+
+void query_processor::migration_subscriber::remove_invalid_prepared_statements(sstring ks_name, std::experimental::optional<sstring> cf_name)
+{
+    std::vector<bytes> invalid;
+    for (auto& kv : _qp->_prepared_statements) {
+        auto id   = kv.first;
+        auto stmt = kv.second;
+        if (should_invalidate(ks_name, cf_name, stmt->statement)) {
+            invalid.emplace_back(id);
+        }
+    }
+    for (auto& id : invalid) {
+        get_query_processor().invoke_on_all([id] (auto& qp) {
+            qp.invalidate_prepared_statement(id);
+        });
+    }
+}
+
+bool query_processor::migration_subscriber::should_invalidate(sstring ks_name, std::experimental::optional<sstring> cf_name, ::shared_ptr<cql_statement> statement)
+{
+    return statement->depends_on_keyspace(ks_name) && (!cf_name || statement->depends_on_column_family(*cf_name));
+}
 
 }
