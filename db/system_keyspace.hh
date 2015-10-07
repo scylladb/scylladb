@@ -277,9 +277,13 @@ enum class bootstrap_state {
         return CompactionHistoryTabularData.from(queryResultSet);
     }
 #endif
-    future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, const db::replay_position&);
+    typedef std::vector<db::replay_position> replay_positions;
+
+    future<> save_truncation_record(const column_family&, db_clock::time_point truncated_at, db::replay_position);
+    future<> save_truncation_records(const column_family&, db_clock::time_point truncated_at, replay_positions);
     future<> remove_truncation_record(utils::UUID);
-    future<db::replay_position> get_truncated_position(utils::UUID);
+    future<replay_positions> get_truncated_position(utils::UUID);
+    future<db::replay_position> get_truncated_position(utils::UUID, uint32_t shard);
     future<db_clock::time_point> get_truncated_at(utils::UUID);
 
 #if 0

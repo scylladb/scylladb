@@ -895,7 +895,11 @@ void db::commitlog::segment_manager::discard_unused_segments() {
             logger.debug("Segment {} is unused", *s);
             return true;
         }
-        logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+        if (s->is_still_allocating()) {
+            logger.debug("Not safe to delete segment {}; still allocating.", s);
+        } else {
+            logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+        }
         return false;
     });
     if (i != _segments.end()) {
@@ -1188,7 +1192,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
         future<> read_header() {
             return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
-                advance(buf);
+                if (!advance(buf)) {
+                    // zero length file. accept it just to be nice.
+                    return make_ready_future<>();
+                }
                 // Will throw if we got eof
                 data_input in(buf);
                 auto ver = in.read<uint32_t>();
@@ -1208,9 +1215,6 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 this->id = id;
                 this->next = 0;
 
-                if (start_off > pos) {
-                    return skip(start_off - pos);
-                }
                 return make_ready_future<>();
             });
         }
@@ -1238,6 +1242,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
 
                 this->next = next;
 
+                if (start_off >= next) {
+                    return skip(next - pos);
+                }
+
                 return do_until(std::bind(&work::end_of_chunk, this), std::bind(&work::read_entry, this));
             });
         }
@@ -1263,6 +1271,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
 
                 if (size < 3 * sizeof(uint32_t)) {
                     throw std::runtime_error("Invalid entry size");
+                }
+
+                if (start_off > pos) {
+                    return skip(size - entry_header_size);
                 }
 
                 return fin.read_exactly(size - entry_header_size).then([this, size, checksum, rp](temporary_buffer<char> buf) {
@@ -1297,8 +1309,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
     auto w = make_lw_shared<work>(std::move(f), off);
     auto ret = w->s.listen(std::move(next));
 
-    w->s.started().then(std::bind(&work::read_file, w.get())).finally([w] {
+    w->s.started().then(std::bind(&work::read_file, w.get())).then([w] {
         w->s.close();
+    }).handle_exception([w](auto ep) {
+        w->s.set_exception(ep);
     });
 
     return ret;

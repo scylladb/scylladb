@@ -117,11 +117,16 @@ future<> db::commitlog_replayer::impl::init() {
                         logger.warn("Could not read sstable metadata {}", std::current_exception());
                     }
                 }
-                // TODO: this is not correct. Truncation does not fully take sharding into consideration
-                return db::system_keyspace::get_truncated_position(uuid).then([&map, uuid](auto truncated_rp) {
-                    if (truncated_rp != replay_position()) {
-                        auto& pp = map[engine().cpu_id()][uuid];
-                        pp = std::max(pp, truncated_rp);
+                // We do this on each cpu, for each CF, which technically is a little wasteful, but the values are
+                // cached, this is only startup, and it makes the code easier.
+                // Get all truncation records for the CF and initialize max rps if
+                // present. Cannot do this on demand, as there may be no sstables to
+                // mark the CF as "needed".
+                return db::system_keyspace::get_truncated_position(uuid).then([&map, &uuid](std::vector<db::replay_position> tpps) {
+                    for (auto& p : tpps) {
+                        logger.trace("CF {} truncated at {}", uuid, p);
+                        auto& pp = map[p.shard_id()][uuid];
+                        pp = std::max(pp, p);
                     }
                 });
             }).then([&map] {
@@ -183,8 +188,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         auto uuid = fm.column_family_id();
         auto& map = _rpm[shard];
         auto i = map.find(uuid);
-        if (i != map.end() && rp < i->second) {
-            logger.trace("entry {} at {} is less than recorded replay position {}. skipping", fm.column_family_id(), rp, i->second);
+        if (i != map.end() && rp <= i->second) {
+            logger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, i->second);
             s->skipped_mutations++;
             return make_ready_future<>();
         }
@@ -248,7 +253,10 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
     logger.info("Replaying {}", files);
 
     return parallel_for_each(files, [this](auto f) {
-        return this->recover(std::move(f));
+        return this->recover(f).handle_exception([f](auto ep) {
+            logger.error("Error recovering {}: {}", f, ep);
+            std::rethrow_exception(ep);
+        });
     });
 }
 

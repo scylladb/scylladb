@@ -71,6 +71,9 @@ struct replay_position {
     bool operator<(const replay_position & r) const {
         return id < r.id ? true : (r.id < id ? false : pos < r.pos);
     }
+    bool operator<=(const replay_position & r) const {
+        return id < r.id ? true : (r.id < id ? false : pos <= r.pos);
+    }
     bool operator==(const replay_position & r) const {
         return id == r.id && pos == r.pos;
     }

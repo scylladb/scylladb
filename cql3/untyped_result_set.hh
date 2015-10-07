@@ -70,17 +70,25 @@ public:
         }
         // this could maybe be done as an overload of get_as (or something), but that just
         // muddles things for no real gain. Let user (us) attempt to know what he is doing instead.
-        template<typename K, typename V>
-        std::unordered_map<K, V> get_map(const sstring& name) const {
-            auto vec = boost::any_cast<const map_type_impl::native_type&>(
-                    map_type_impl::get_instance(data_type_for<K>(),
-                            data_type_for<V>(), false)->deserialize(
-                            get_blob(name)));
-            std::unordered_map<K, V> res;
-            std::transform(vec.begin(), vec.end(),
-                    std::inserter(res, res.end()), [](auto& p) {
+        template<typename K, typename V, typename Iter>
+        void get_map_data(const sstring& name, Iter out, data_type keytype =
+                data_type_for<K>(), data_type valtype =
+                data_type_for<V>()) const {
+            auto vec =
+                    boost::any_cast<const map_type_impl::native_type&>(
+                            map_type_impl::get_instance(keytype, valtype, false)->deserialize(
+                                    get_blob(name)));
+            std::transform(vec.begin(), vec.end(), out,
+                    [](auto& p) {
                         return std::pair<K, V>(boost::any_cast<const K&>(p.first), boost::any_cast<const V&>(p.second));
                     });
+        }
+        template<typename K, typename V, typename ... Rest>
+        std::unordered_map<K, V, Rest...> get_map(const sstring& name,
+                data_type keytype = data_type_for<K>(), data_type valtype =
+                        data_type_for<V>()) const {
+            std::unordered_map<K, V, Rest...> res;
+            get_map_data<K, V>(name, std::inserter(res, res.end()), keytype, valtype);
             return res;
         }
         const std::vector<::shared_ptr<column_specification>>& get_columns() const {
