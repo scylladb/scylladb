@@ -225,7 +225,7 @@ struct string_type_impl : public abstract_type {
             }
         } else {
             try {
-                boost::locale::conv::utf_to_utf<char>(v.data(), boost::locale::conv::stop);
+                boost::locale::conv::utf_to_utf<char>(v.data(), v.end(), boost::locale::conv::stop);
             } catch (const boost::locale::conv::conversion_error& ex) {
                 throw marshal_exception(ex.what());
             }
