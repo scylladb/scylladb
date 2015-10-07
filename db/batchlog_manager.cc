@@ -96,7 +96,7 @@ future<> db::batchlog_manager::start() {
 future<> db::batchlog_manager::stop() {
     _stop = true;
     _timer.cancel();
-    return _sem.wait(std::chrono::milliseconds(60));
+    return _gate.close();
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
@@ -228,7 +228,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         });
     };
 
-    return _sem.wait().then([this, batch = std::move(batch)] {
+    return seastar::with_gate(_gate, [this, batch = std::move(batch)] {
         logger.debug("Started replayAllFailedBatches");
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
@@ -271,8 +271,6 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         }).then([this] {
             logger.debug("Finished replayAllFailedBatches");
         });
-    }).finally([this] {
-        _sem.signal();
     });
 }
 
