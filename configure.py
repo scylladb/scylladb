@@ -214,6 +214,8 @@ arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target',
                         help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
                         help = 'Enable(1)/disable(0)compiler debug information generation')
+arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_true',
+			help = 'Link libgcc and libstdc++ statically')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -552,6 +554,8 @@ for mode in build_modes:
     cfg =  dict([line.strip().split(': ', 1)
                  for line in open('seastar/' + pc[mode])
                  if ': ' in line])
+    if args.staticcxx:
+        cfg['Libs'] = cfg['Libs'].replace('-lstdc++ ', '')
     modes[mode]['seastar_cflags'] = cfg['Cflags']
     modes[mode]['seastar_libs'] = cfg['Libs']
 
@@ -560,6 +564,9 @@ seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_re
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
 libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
 user_cflags = args.user_cflags
+user_ldflags = args.user_ldflags
+if args.staticcxx:
+    user_ldflags += " -static-libgcc -static-libstdc++"
 
 outdir = 'build'
 buildfile = 'build.ninja'
