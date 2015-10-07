@@ -48,6 +48,7 @@ sudo ln -sf /usr/bin/python3.4 /usr/bin/python3
 
 sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc++-devel bzip2-devel zlib-devel
 sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc libstdc++-static gmp-devel texinfo texinfo-tex systemtap-sdt-devel mpfr-devel libmpc-devel elfutils-devel elfutils-libelf-devel glibc-devel.x86_64 glibc-devel.i686 gcc-gnat libgnat doxygen graphviz dblatex texlive-collection-latex docbook5-style-xsl python-sphinx cmake
+sudo yum install -y gcc-objc
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
@@ -85,7 +86,6 @@ fi
 do_install ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/ragel-6.8-3.el7.centos.x86_64.rpm ]; then
-    sudo yum install -y gcc-objc
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-3.fc22.src.rpm
     patch $RPMBUILD/SPECS/ragel.spec < dist/redhat/centos_dep/ragel.diff
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ragel.spec
