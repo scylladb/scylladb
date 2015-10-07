@@ -568,4 +568,14 @@ public:
     }
 };
 
+extern distributed<query_processor> _the_query_processor;
+
+inline distributed<query_processor>& get_query_processor() {
+    return _the_query_processor;
+}
+
+inline query_processor& get_local_query_processor() {
+    return _the_query_processor.local();
+}
+
 }

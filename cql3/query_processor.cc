@@ -56,6 +56,8 @@ using namespace transport::messages;
 
 logging::logger log("query_processor");
 
+distributed<query_processor> _the_query_processor;
+
 const sstring query_processor::CQL_VERSION = "3.2.0";
 
 class query_processor::internal_state {
