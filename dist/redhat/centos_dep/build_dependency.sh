@@ -4,10 +4,7 @@ export RPMBUILD=`pwd`/build/rpmbuild
 do_install()
 {
     pkg=$1
-    name=${pkg/%.rpm/}
-    if ! rpm -qs $name  >/dev/null 2>&1; then
-	sudo yum install -y $RPMBUILD/RPMS/x86_64/$pkg || sudo yum install -y $RPMBUILD/RPMS/noarch/$pkg
-    fi
+    sudo yum install -y $RPMBUILD/RPMS/*/$pkg 2> build/err || if [ "`cat build/err`" != "Error: Nothing to do" ]; then cat build/err; exit 1;fi
     echo Install $name done
 }
 
