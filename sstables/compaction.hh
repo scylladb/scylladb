@@ -26,6 +26,26 @@
 #include <functional>
 
 namespace sstables {
+
+    struct compaction_descriptor {
+        // List of sstables to be compacted.
+        std::vector<sstables::shared_sstable> sstables;
+        // Level of sstable(s) created by compaction procedure.
+        int level = 0;
+        // Threshold size for sstable(s) to be created.
+        uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max();
+
+        compaction_descriptor() = default;
+
+        compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level, long max_sstable_bytes)
+            : sstables(std::move(sstables))
+            , level(level)
+            , max_sstable_bytes(max_sstable_bytes) {}
+
+        compaction_descriptor(std::vector<sstables::shared_sstable> sstables)
+            : sstables(std::move(sstables)) {}
+    };
+
     future<> compact_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable()> creator);
 
