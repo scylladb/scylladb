@@ -42,9 +42,11 @@
 #pragma once
 
 #include <unordered_map>
-#include "core/future.hh"
-#include "core/distributed.hh"
-#include "core/timer.hh"
+#include <core/future.hh>
+#include <core/distributed.hh>
+#include <core/timer.hh>
+#include <core/gate.hh>
+
 #include "cql3/query_processor.hh"
 #include "gms/inet_address.hh"
 #include "db_clock.hh"
@@ -61,7 +63,7 @@ private:
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
     timer<clock_type> _timer;
-    semaphore _sem;
+    seastar::gate _gate;
     bool _stop = false;
 
     std::random_device _rd;

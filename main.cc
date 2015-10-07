@@ -300,6 +300,10 @@ int main(int ac, char** av) {
             }).then([] {
                 auto& ss = service::get_local_storage_service();
                 return ss.init_server();
+            }).then([] {
+                return db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
+                    return b.start();
+                });
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
             }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port, start_thrift] (dns::hostent e) {
