@@ -423,6 +423,8 @@ private:
     future<::shared_ptr<transport::messages::result_message::prepared>>
     store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::parsed_statement::prepared> prepared, bool for_thrift);
 
+    void invalidate_prepared_statement(bytes statement_id);
+
 #if 0
     public ResultMessage processPrepared(CQLStatement statement, QueryState queryState, QueryOptions options)
     throws RequestExecutionException, RequestValidationException

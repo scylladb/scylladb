@@ -214,6 +214,11 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
     }
 }
 
+void query_processor::invalidate_prepared_statement(bytes statement_id)
+{
+    _prepared_statements.erase(statement_id);
+}
+
 static bytes md5_calculate(const std::experimental::string_view& s)
 {
     constexpr size_t size = CryptoPP::Weak1::MD5::DIGESTSIZE;
