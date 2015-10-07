@@ -1626,6 +1626,37 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
     });
 }
 
+static future<>
+seal_snapshot(sstring jsondir, std::unordered_set<sstring> tables) {
+    std::ostringstream ss;
+    int n = 0;
+    ss << "{" << std::endl << "\t\"files\" : { ";
+    for (auto&& rf: tables) {
+        if (n++ > 0) {
+            ss << ", ";
+        }
+        ss << "\"" << rf << "\"";
+    }
+    ss << " }" << std::endl << "}" << std::endl;
+
+    auto json = ss.str();
+    auto jsonfile = jsondir + "/manifest.json";
+
+    dblog.debug("Storing manifest {}", jsonfile);
+
+    return engine().open_file_dma(jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
+        return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
+            return out.write(json.c_str(), json.size()).then([&out] {
+               return out.flush();
+            }).then([&out] {
+               return out.close();
+            });
+        });
+    }).then([jsondir = std::move(jsondir)] {
+        return sync_directory(std::move(jsondir));
+    });
+}
+
 future<> column_family::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables | boost::adaptors::map_values);
@@ -1643,36 +1674,13 @@ future<> column_family::snapshot(sstring name) {
             }).then([jsondir] {
                 return sync_directory(std::move(jsondir));
             }).then([this, &tables, name, jsondir] {
-                std::ostringstream ss;
-                int n = 0;
-                ss << "{" << std::endl << "\t\"files\" : { ";
+                std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
                     auto f = sst->get_filename();
                     auto rf = f.substr(sst->get_dir().size() + 1);
-
-                    if (n++ > 0) {
-                        ss << ", ";
-                    }
-                    ss << "\"" << rf << "\"";
+                    table_names.insert(std::move(rf));
                 }
-                ss << " }" << std::endl << "}" << std::endl;
-
-                auto json = ss.str();
-                auto jsonfile = jsondir + "/manifest.json";
-
-                dblog.debug("Storing manifest {}", jsonfile);
-
-                return engine().open_file_dma(jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
-                    return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
-                        return out.write(json.c_str(), json.size()).then([&out] {
-                           return out.flush();
-                        }).then([&out] {
-                           return out.close();
-                        });
-                    });
-                }).then([jsondir = std::move(jsondir)] {
-                    return sync_directory(std::move(jsondir));
-                });
+                return seal_snapshot(jsondir, std::move(table_names));
             });
         });
     });
