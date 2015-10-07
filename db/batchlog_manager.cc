@@ -229,7 +229,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
     };
 
     return seastar::with_gate(_gate, [this, batch = std::move(batch)] {
-        logger.debug("Started replayAllFailedBatches");
+        logger.debug("Started replayAllFailedBatches (cpu {})", engine().cpu_id());
 
         typedef ::shared_ptr<cql3::untyped_result_set> page_ptr;
         sstring query = sprint("SELECT id, data, written_at, version FROM %s.%s LIMIT %d", system_keyspace::NAME, system_keyspace::BATCHLOG, page_size);
