@@ -15,6 +15,18 @@ sudo yum install -y wget yum-utils rpm-build rpmdevtools gcc gcc-c++ make patch
 mkdir -p build/srpms
 cd build/srpms
 
+if [ ! -f binutils-2.25-5.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/releases/22/Everything/source/SRPMS/b/binutils-2.25-5.fc22.src.rpm
+fi
+
+if [ ! -f isl-0.14-3.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/releases/22/Everything/source/SRPMS/i/isl-0.14-3.fc22.src.rpm
+fi
+
+if [ ! -f gcc-5.1.1-4.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/updates/22/SRPMS/g/gcc-5.1.1-4.fc22.src.rpm
+fi
+
 if [ ! -f boost-1.57.0-6.fc22.src.rpm ]; then
     wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/b/boost-1.57.0-6.fc22.src.rpm
 fi
@@ -37,15 +49,29 @@ sudo yum install -y epel-release
 sudo yum install -y cryptopp cryptopp-devel jsoncpp jsoncpp-devel lz4 lz4-devel yaml-cpp yaml-cpp-devel thrift thrift-devel scons gtest gtest-devel python34
 sudo ln -sf /usr/bin/python3.4 /usr/bin/python3
 
-sudo yum install -y scl-utils
-if ! rpm  -qs rhscl-devtoolset-3-epel-7-x86_64-1-2.noarch; then
-    sudo yum install -y https://www.softwarecollections.org/en/scls/rhscl/devtoolset-3/epel-7-x86_64/download/rhscl-devtoolset-3-epel-7-x86_64.noarch.rpm
-fi
-sudo yum install -y devtoolset-3-gcc-c++
-
 sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc++-devel bzip2-devel zlib-devel
+sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc libstdc++-static gmp-devel texinfo texinfo-tex systemtap-sdt-devel mpfr-devel libmpc-devel elfutils-devel elfutils-libelf-devel glibc-devel.x86_64 glibc-devel.i686 gcc-gnat libgnat doxygen graphviz dblatex texlive-collection-latex docbook5-style-xsl python-sphinx cmake
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
+fi
+do_install binutils-2.25-5.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/isl-0.14-3.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/isl-0.14-3.fc22.src.rpm
+fi
+do_install isl-0.14-3.el7.centos.x86_64.rpm
+do_install isl-devel-0.14-3.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/gcc-5.1.1-4.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --define "fedora 21" --rebuild build/srpms/gcc-5.1.1-4.fc22.src.rpm
+fi
+do_install *5.1.1-4*
+
 if [ ! -f $RPMBUILD/RPMS/x86_64/boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --without python3 --rebuild build/srpms/boost-1.57.0-6.fc22.src.rpm
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/boost-1.57.0-6.fc22.src.rpm
+    patch $RPMBUILD/SPECS/boost.spec < dist/redhat/centos_dep/boost.diff
+    rpmbuild --define "_topdir $RPMBUILD" --without python3 -ba $RPMBUILD/SPECS/boost.spec
 fi
 do_install boost*
 
