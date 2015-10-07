@@ -91,11 +91,22 @@ api::timestamp_type query_processor::next_timestamp() {
 
 query_processor::query_processor(distributed<service::storage_proxy>& proxy,
         distributed<database>& db)
-        : _proxy(proxy), _db(db), _internal_state(new internal_state()) {
+    : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
+    , _proxy(proxy)
+    , _db(db)
+    , _internal_state(new internal_state())
+{
+    service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 
 query_processor::~query_processor()
 {}
+
+future<> query_processor::stop()
+{
+    service::get_local_migration_manager().unregister_listener(_migration_subscriber.get());
+    return make_ready_future<>();
+}
 
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)

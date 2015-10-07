@@ -62,7 +62,10 @@ class batch_statement;
 }
 
 class query_processor {
+public:
+    class migration_subscriber;
 private:
+    std::unique_ptr<migration_subscriber> _migration_subscriber;
     distributed<service::storage_proxy>& _proxy;
     distributed<database>& _db;
 
@@ -466,10 +469,7 @@ public:
     }
 #endif
 public:
-    future<> stop() {
-        return make_ready_future<>();
-    }
-    class migration_subscriber;
+    future<> stop();
 
     friend class migration_subscriber;
 };
