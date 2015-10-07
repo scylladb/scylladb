@@ -214,6 +214,8 @@ arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target',
                         help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
                         help = 'Enable(1)/disable(0)compiler debug information generation')
+arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
+                        help = 'Enable(1)/disable(0)compiler debug information generation for tests')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -489,6 +491,7 @@ warnings = [w
 warnings = ' '.join(warnings)
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
+tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 
 if args.so:
     args.pie = '-shared'
@@ -658,7 +661,7 @@ with open(buildfile, 'w') as f:
                     # So we strip the tests by default; The user can very
                     # quickly re-link the test unstripped by adding a "_g"
                     # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: link_stripped.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
+                    f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
                                                                                      'seastar/build/{}/libseastar.a'.format(mode)))
                     if has_thrift:
                         f.write('   libs =  -lthrift -lboost_system $libs\n')
