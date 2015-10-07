@@ -1626,6 +1626,37 @@ future<> update_schema_version_and_announce(distributed<service::storage_proxy>&
     });
 }
 
+// Snapshots: snapshotting the files themselves is easy: if more than one CF
+// happens to link an SSTable twice, all but one will fail, and we will end up
+// with one copy.
+//
+// The problem for us, is that the snapshot procedure is supposed to leave a
+// manifest file inside its directory.  So if we just call snapshot() from
+// multiple shards, only the last one will succeed, writing its own SSTables to
+// the manifest leaving all other shards' SSTables unaccounted for.
+//
+// Moreover, for things like drop table, the operation should only proceed when the
+// snapshot is complete. That includes the manifest file being correctly written,
+// and for this reason we need to wait for all shards to finish their snapshotting
+// before we can move on.
+//
+// To know which files we must account for in the manifest, we will keep an
+// SSTable set.  Theoretically, we could just rescan the snapshot directory and
+// see what's in there. But we would need to wait for all shards to finish
+// before we can do that anyway. That is the hard part, and once that is done
+// keeping the files set is not really a big deal.
+//
+// This code assumes that all shards will be snapshotting at the same time. So
+// far this is a safe assumption, but if we ever want to take snapshots from a
+// group of shards only, this code will have to be updated to account for that.
+struct snapshot_manager {
+    std::unordered_set<sstring> files;
+    semaphore requests;
+    semaphore manifest_write;
+    snapshot_manager() : requests(0), manifest_write(0) {}
+};
+static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
+
 static future<>
 seal_snapshot(sstring jsondir, std::unordered_set<sstring> tables) {
     std::ostringstream ss;
@@ -1674,13 +1705,41 @@ future<> column_family::snapshot(sstring name) {
             }).then([jsondir] {
                 return sync_directory(std::move(jsondir));
             }).then([this, &tables, name, jsondir] {
+                auto shard = std::hash<sstring>()(name) % smp::count;
                 std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
                     auto f = sst->get_filename();
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return seal_snapshot(jsondir, std::move(table_names));
+                return smp::submit_to(shard, [requester = engine().cpu_id(), name = std::move(name),
+                                              tables = std::move(table_names), datadir = _config.datadir] {
+                    if (pending_snapshots.count(name) == 0) {
+                        pending_snapshots.emplace(name, make_lw_shared<snapshot_manager>());
+                    }
+                    auto snapshot = pending_snapshots.at(name);
+                    for (auto&& sst: tables) {
+                        snapshot->files.insert(std::move(sst));
+                    }
+
+                    snapshot->requests.signal(1);
+                    auto my_work = make_ready_future<>();
+                    if (requester == engine().cpu_id()) {
+                        auto jsondir = datadir + "/snapshots/" + name;
+                        my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
+                                                                         snapshot,
+                                                                         name = std::move(name)] () mutable {
+                            return seal_snapshot(jsondir, std::move(snapshot->files)).then([name = std::move(name), snapshot] {
+                                snapshot->manifest_write.signal(smp::count);
+                                pending_snapshots.erase(name);
+                                return make_ready_future<>();
+                            });
+                        });
+                    }
+                    return my_work.then([snapshot] {
+                        return snapshot->manifest_write.wait(1);
+                    }).then([snapshot] {});
+                });
             });
         });
     });
