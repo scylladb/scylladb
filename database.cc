@@ -1663,6 +1663,8 @@ future<> column_family::snapshot(sstring name) {
                     return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
                         return out.write(json.c_str(), json.size()).then([&out] {
                            return out.flush();
+                        }).then([&out] {
+                           return out.close();
                         });
                     });
                 }).then([jsondir = std::move(jsondir)] {
