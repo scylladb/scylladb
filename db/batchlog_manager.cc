@@ -57,7 +57,7 @@
 #include "db/config.hh"
 #include "gms/failure_detector.hh"
 
-static logging::logger logger("BatchLog Manager");
+static logging::logger logger("batchlog_manager");
 
 const uint32_t db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
