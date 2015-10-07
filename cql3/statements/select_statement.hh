@@ -192,17 +192,15 @@ public:
         QueryOptions options = QueryOptions.DEFAULT;
         return process(rows, options, getLimit(options), System.currentTimeMillis());
     }
-
-    public String keyspace()
-    {
-        return _schema.ks_name;
-    }
-
-    public String columnFamily()
-    {
-        return _schema.cfName;
-    }
 #endif
+
+    const sstring& keyspace() const {
+        return _schema->ks_name();
+    }
+
+    const sstring& column_family() const {
+        return _schema->cf_name();
+    }
 
     query::partition_slice make_partition_slice(const query_options& options);
 
