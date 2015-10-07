@@ -68,14 +68,28 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
 {}
 
 future<> db::batchlog_manager::start() {
-    _timer.set_callback(
-            std::bind(&batchlog_manager::replay_all_failed_batches, this));
-    _timer.arm(
-            lowres_clock::now()
-                    + std::chrono::milliseconds(
-                            service::storage_service::RING_DELAY),
-            std::experimental::optional<lowres_clock::duration> {
-                    std::chrono::milliseconds(replay_interval) });
+    // Since replay is a "node global" operation, we should not attempt to
+    // do it in parallel on each shard. It will just overlap/interfere.
+    // Could just run this on cpu 0 or so, but since this _could_ be a
+    // lengty operation, we'll round-robin it between shards just in case...
+    if (smp::main_thread()) {
+        auto cpu = engine().cpu_id();
+        _timer.set_callback(
+                [this, cpu]() mutable {
+                    auto dest = (cpu++ % smp::count);
+                    return smp::submit_to(dest, [] {
+                                return get_local_batchlog_manager().replay_all_failed_batches();
+                            }).then([this] {
+                                _timer.arm(lowres_clock::now()
+                                        + std::chrono::milliseconds(replay_interval)
+                                );
+                            });
+                });
+        _timer.arm(
+                lowres_clock::now()
+                        + std::chrono::milliseconds(
+                                service::storage_service::RING_DELAY));
+    }
     return make_ready_future<>();
 }
 
