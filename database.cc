@@ -1633,12 +1633,16 @@ future<> column_family::snapshot(sstring name) {
             return make_ready_future<>();
         }
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
+            auto jsondir = _config.datadir + "/snapshots/" + name;
+
             return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
                 auto dir = sstable->get_dir() + "/snapshots/" + name;
                 return recursive_touch_directory(dir).then([sstable, dir] {
                     return sstable->create_links(dir);
                 });
-            }).then([this, &tables, name] {
+            }).then([jsondir] {
+                return sync_directory(std::move(jsondir));
+            }).then([this, &tables, name, jsondir] {
                 std::ostringstream ss;
                 int n = 0;
                 ss << "{" << std::endl << "\t\"files\" : { ";
@@ -1654,7 +1658,6 @@ future<> column_family::snapshot(sstring name) {
                 ss << " }" << std::endl << "}" << std::endl;
 
                 auto json = ss.str();
-                auto jsondir = _config.datadir + "/snapshots/" + name;
                 auto jsonfile = jsondir + "/manifest.json";
 
                 dblog.debug("Storing manifest {}", jsonfile);
@@ -1668,11 +1671,7 @@ future<> column_family::snapshot(sstring name) {
                         });
                     });
                 }).then([jsondir = std::move(jsondir)] {
-                    // sync dir (is this really needed?)
-                    return engine().open_directory(jsondir).then([](file df) {
-                        auto f = df.flush();
-                        return f.finally([df = std::move(df)] {});
-                    });
+                    return sync_directory(std::move(jsondir));
                 });
             });
         });
