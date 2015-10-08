@@ -117,9 +117,29 @@ bool combined_reader::key_and_reader::equal(const schema& s, const dht::decorate
     return dk->equal(s, *other);
 }
 
+class key_from_mutation_reader final : public key_reader::impl {
+    mutation_reader _reader;
+public:
+    key_from_mutation_reader(mutation_reader&& reader) : _reader(std::move(reader)) { }
+    virtual future<dht::decorated_key_opt> operator()() override {
+        return _reader().then([] (mutation_opt&& mo) {
+            if (mo) {
+                return dht::decorated_key_opt(std::move(mo->decorated_key()));
+            } else {
+                return dht::decorated_key_opt();
+            }
+        });
+    }
+};
+
 }
 
 key_reader make_combined_reader(schema_ptr s, std::vector<key_reader> readers)
 {
     return make_key_reader<combined_reader>(s, std::move(readers));
+}
+
+key_reader make_key_from_mutation_reader(mutation_reader&& reader)
+{
+    return make_key_reader<key_from_mutation_reader>(std::move(reader));
 }

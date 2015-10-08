@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "mutation_reader.hh"
 #include "schema.hh"
 #include "query-request.hh"
 
@@ -56,5 +57,6 @@ inline key_reader make_key_reader(Args&&... args) {
 }
 
 key_reader make_combined_reader(schema_ptr s, std::vector<key_reader>);
+key_reader make_key_from_mutation_reader(mutation_reader&&);
 
 using key_source = std::function<key_reader(const query::partition_range& range)>;
