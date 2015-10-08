@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "schema.hh"
 #include "query-request.hh"
 
 #include "dht/i_partitioner.hh"
@@ -53,5 +54,7 @@ template<typename Impl, typename... Args>
 inline key_reader make_key_reader(Args&&... args) {
     return key_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
+
+key_reader make_combined_reader(schema_ptr s, std::vector<key_reader>);
 
 using key_source = std::function<key_reader(const query::partition_range& range)>;
