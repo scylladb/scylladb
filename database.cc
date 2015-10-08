@@ -1694,9 +1694,6 @@ seal_snapshot(sstring jsondir) {
 future<> column_family::snapshot(sstring name) {
     return flush().then([this, name = std::move(name)]() {
         auto tables = boost::copy_range<std::vector<sstables::shared_sstable>>(*_sstables | boost::adaptors::map_values);
-        if (tables.size() == 0) {
-            return make_ready_future<>();
-        }
         return do_with(std::move(tables), [this, name](std::vector<sstables::shared_sstable> & tables) {
             auto jsondir = _config.datadir + "/snapshots/" + name;
 
@@ -1705,8 +1702,14 @@ future<> column_family::snapshot(sstring name) {
                 return recursive_touch_directory(dir).then([sstable, dir] {
                     return sstable->create_links(dir);
                 });
-            }).then([jsondir] {
-                return sync_directory(std::move(jsondir));
+            }).then([jsondir, &tables] {
+                // This is not just an optimization. If we have no files, jsondir may not have been created,
+                // and sync_directory would throw.
+                if (tables.size()) {
+                    return sync_directory(std::move(jsondir));
+                } else {
+                    return make_ready_future<>();
+                }
             }).then([this, &tables, jsondir] {
                 auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
