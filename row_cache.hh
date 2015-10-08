@@ -96,6 +96,26 @@ public:
             return _c(k1._key, k2);
         }
     };
+
+    struct ring_position_compare {
+        schema_ptr _s;
+
+        ring_position_compare(schema_ptr s)
+            : _s(std::move(s))
+        { }
+
+        bool operator()(const dht::ring_position& k1, const cache_entry& k2) const {
+            return k1.less_compare(*_s, dht::ring_position(k2.key()));
+        }
+
+        bool operator()(const cache_entry& k1, const cache_entry& k2) const {
+            return dht::ring_position(k1.key()).less_compare(*_s, dht::ring_position(k2.key()));
+        }
+
+        bool operator()(const cache_entry& k1, const dht::ring_position& k2) const {
+            return dht::ring_position(k1.key()).less_compare(*_s, k2);
+        }
+    };
 };
 
 // Tracks accesses and performs eviction of cache entries.
