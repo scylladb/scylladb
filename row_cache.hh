@@ -131,6 +131,7 @@ private:
     uint64_t _insertions = 0;
     uint64_t _merges = 0;
     uint64_t _partitions = 0;
+    uint64_t _modification_count = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
@@ -149,6 +150,7 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
+    uint64_t modification_count() const { return _modification_count; }
 };
 
 // Returns a reference to shard-wide cache_tracker.

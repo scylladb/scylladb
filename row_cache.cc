@@ -50,6 +50,7 @@ cache_tracker::cache_tracker() {
             }
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
+            ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
         });
     });
@@ -105,6 +106,7 @@ void cache_tracker::clear() {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
     _partitions = 0;
+    ++_modification_count;
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -115,11 +117,13 @@ void cache_tracker::touch(cache_entry& e) {
 void cache_tracker::insert(cache_entry& entry) {
     ++_insertions;
     ++_partitions;
+    ++_modification_count;
     _lru.push_front(entry);
 }
 
 void cache_tracker::on_erase() {
     --_partitions;
+    ++_modification_count;
 }
 
 void cache_tracker::on_merge() {
