@@ -1658,11 +1658,11 @@ struct snapshot_manager {
 static thread_local std::unordered_map<sstring, lw_shared_ptr<snapshot_manager>> pending_snapshots;
 
 static future<>
-seal_snapshot(sstring jsondir, std::unordered_set<sstring> tables) {
+seal_snapshot(sstring jsondir) {
     std::ostringstream ss;
     int n = 0;
     ss << "{" << std::endl << "\t\"files\" : { ";
-    for (auto&& rf: tables) {
+    for (auto&& rf: pending_snapshots.at(jsondir)->files) {
         if (n++ > 0) {
             ss << ", ";
         }
@@ -1683,8 +1683,11 @@ seal_snapshot(sstring jsondir, std::unordered_set<sstring> tables) {
                return out.close();
             });
         });
-    }).then([jsondir = std::move(jsondir)] {
+    }).then([jsondir] {
         return sync_directory(std::move(jsondir));
+    }).finally([jsondir] {
+        pending_snapshots.erase(jsondir);
+        return make_ready_future<>();
     });
 }
 
@@ -1704,20 +1707,21 @@ future<> column_family::snapshot(sstring name) {
                 });
             }).then([jsondir] {
                 return sync_directory(std::move(jsondir));
-            }).then([this, &tables, name, jsondir] {
-                auto shard = std::hash<sstring>()(name) % smp::count;
+            }).then([this, &tables, jsondir] {
+                auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
                     auto f = sst->get_filename();
                     auto rf = f.substr(sst->get_dir().size() + 1);
                     table_names.insert(std::move(rf));
                 }
-                return smp::submit_to(shard, [requester = engine().cpu_id(), name = std::move(name),
+                return smp::submit_to(shard, [requester = engine().cpu_id(), jsondir = std::move(jsondir),
                                               tables = std::move(table_names), datadir = _config.datadir] {
-                    if (pending_snapshots.count(name) == 0) {
-                        pending_snapshots.emplace(name, make_lw_shared<snapshot_manager>());
+
+                    if (pending_snapshots.count(jsondir) == 0) {
+                        pending_snapshots.emplace(jsondir, make_lw_shared<snapshot_manager>());
                     }
-                    auto snapshot = pending_snapshots.at(name);
+                    auto snapshot = pending_snapshots.at(jsondir);
                     for (auto&& sst: tables) {
                         snapshot->files.insert(std::move(sst));
                     }
@@ -1725,13 +1729,10 @@ future<> column_family::snapshot(sstring name) {
                     snapshot->requests.signal(1);
                     auto my_work = make_ready_future<>();
                     if (requester == engine().cpu_id()) {
-                        auto jsondir = datadir + "/snapshots/" + name;
                         my_work = snapshot->requests.wait(smp::count).then([jsondir = std::move(jsondir),
-                                                                         snapshot,
-                                                                         name = std::move(name)] () mutable {
-                            return seal_snapshot(jsondir, std::move(snapshot->files)).then([name = std::move(name), snapshot] {
+                                                                            snapshot] () mutable {
+                            return seal_snapshot(jsondir).then([snapshot] {
                                 snapshot->manifest_write.signal(smp::count);
-                                pending_snapshots.erase(name);
                                 return make_ready_future<>();
                             });
                         });
