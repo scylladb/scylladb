@@ -1661,14 +1661,14 @@ static future<>
 seal_snapshot(sstring jsondir) {
     std::ostringstream ss;
     int n = 0;
-    ss << "{" << std::endl << "\t\"files\" : { ";
+    ss << "{" << std::endl << "\t\"files\" : [ ";
     for (auto&& rf: pending_snapshots.at(jsondir)->files) {
         if (n++ > 0) {
             ss << ", ";
         }
         ss << "\"" << rf << "\"";
     }
-    ss << " }" << std::endl << "}" << std::endl;
+    ss << " ]" << std::endl << "}" << std::endl;
 
     auto json = ss.str();
     auto jsonfile = jsondir + "/manifest.json";
