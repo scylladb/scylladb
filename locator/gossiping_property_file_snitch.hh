@@ -76,7 +76,7 @@ public:
 
     gossiping_property_file_snitch(
         const sstring& fname = snitch_properties_filename,
-        unsigned io_cpu_id = 0);
+        unsigned io_cpuid = 0);
 
 private:
     void periodic_reader_callback();

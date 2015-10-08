@@ -62,8 +62,12 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(
-    const sstring& fname, unsigned io_cpu_id)
-: production_snitch_base(fname), _file_reader_cpu_id(io_cpu_id) {}
+    const sstring& fname, unsigned io_cpuid)
+: production_snitch_base(fname), _file_reader_cpu_id(io_cpuid) {
+    if (engine().cpu_id() == _file_reader_cpu_id) {
+        io_cpu_id() = _file_reader_cpu_id;
+    }
+}
 
 future<> gossiping_property_file_snitch::start() {
     using namespace std::chrono_literals;
@@ -81,8 +85,6 @@ future<> gossiping_property_file_snitch::start() {
         _file_reader.set_callback([this] {
             periodic_reader_callback();
         });
-
-        io_cpu_id() = _file_reader_cpu_id;
 
         return read_property_file().then([this] {
             start_io();
