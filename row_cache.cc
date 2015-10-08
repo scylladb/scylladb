@@ -30,6 +30,8 @@
 
 using namespace std::chrono_literals;
 
+namespace stdx = std::experimental;
+
 static logging::logger logger("cache");
 
 thread_local seastar::thread_scheduling_group row_cache::_update_thread_scheduling_group(1ms, 0.2);
@@ -179,6 +181,65 @@ void row_cache::on_miss() {
     ++_stats.misses;
     _tracker.on_miss();
 }
+
+class just_cache_scanning_reader final : public mutation_reader::impl {
+    row_cache& _cache;
+    row_cache::partitions_type::const_iterator _it;
+    row_cache::partitions_type::const_iterator _end;
+    const query::partition_range& _range;
+    stdx::optional<dht::decorated_key> _last;
+    uint64_t _last_reclaim_count;
+    size_t _last_modification_count;
+private:
+    void update_iterators() {
+        auto cmp = cache_entry::ring_position_compare(_cache._schema);
+        auto update_end = [&] {
+            if (_range.end()) {
+                if (_range.end()->is_inclusive()) {
+                    _end = _cache._partitions.upper_bound(_range.end()->value(), cmp);
+                } else {
+                    _end = _cache._partitions.lower_bound(_range.end()->value(), cmp);
+                }
+            } else {
+                _end = _cache._partitions.end();
+            }
+        };
+
+        auto reclaim_count = _cache.get_cache_tracker().region().reclaim_counter();
+        auto modification_count = _cache.get_cache_tracker().modification_count();
+        if (!_last) {
+            if (_range.start()) {
+                if (_range.start()->is_inclusive()) {
+                    _it = _cache._partitions.lower_bound(_range.start()->value(), cmp);
+                } else {
+                    _it = _cache._partitions.upper_bound(_range.start()->value(), cmp);
+                }
+            } else {
+                _it = _cache._partitions.begin();
+            }
+            update_end();
+        } else if (reclaim_count != _last_reclaim_count || modification_count != _last_modification_count) {
+            _it = _cache._partitions.upper_bound(*_last, cmp);
+            update_end();
+        }
+        _last_reclaim_count = reclaim_count;
+        _last_modification_count = modification_count;
+    }
+public:
+    just_cache_scanning_reader(row_cache& cache, const query::partition_range& range) : _cache(cache), _range(range) { }
+    virtual future<mutation_opt> operator()() override {
+        return _cache._read_section(_cache._tracker.region(), [this] {
+            update_iterators();
+            if (_it == _end) {
+                return make_ready_future<mutation_opt>();
+            }
+            auto& ce = *_it;
+            ++_it;
+            _last = ce.key();
+            return make_ready_future<mutation_opt>(mutation(_cache._schema, ce.key(), ce.partition()));
+        });
+    }
+};
 
 mutation_reader
 row_cache::make_scanning_reader(const query::partition_range& range) {

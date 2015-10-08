@@ -225,4 +225,6 @@ public:
     const cache_tracker& get_cache_tracker() const {
         return _tracker;
     }
+
+    friend class just_cache_scanning_reader;
 };
