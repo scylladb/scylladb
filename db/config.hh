@@ -23,6 +23,7 @@
 #pragma once
 
 #include <boost/program_options.hpp>
+#include <boost/filesystem.hpp>
 #include <unordered_map>
 #include "core/sstring.hh"
 #include "core/future.hh"
@@ -111,6 +112,32 @@ public:
     void read_from_yaml(const char *);
     future<> read_from_file(const sstring&);
     future<> read_from_file(file);
+
+    /**
+     * Scans the environment variables for configuration files directory
+     * definition. It's either $SCYLLA_CONF, $SCYLLA_HOME/conf or "conf" if none
+     * of SCYLLA_CONF and SCYLLA_HOME is defined.
+     *
+     * @return path of the directory where configuration files are located
+     *         according the environment variables definitions.
+     */
+    static boost::filesystem::path get_conf_dir() {
+        using namespace boost::filesystem;
+
+        path confdir;
+        auto* cd = std::getenv("SCYLLA_CONF");
+        if (cd != nullptr) {
+            confdir = path(cd);
+        } else {
+            auto* p = std::getenv("SCYLLA_HOME");
+            if (p != nullptr) {
+                confdir = path(p);
+            }
+            confdir /= "conf";
+        }
+
+        return confdir;
+    }
 
     typedef std::unordered_map<sstring, sstring> string_map;
     typedef std::vector<sstring> string_list;
