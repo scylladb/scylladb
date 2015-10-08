@@ -68,6 +68,7 @@
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
 #include "sstables/compaction.hh"
+#include "key_reader.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -164,6 +165,7 @@ private:
     mutation_reader make_sstable_reader(const query::partition_range& range) const;
 
     mutation_source sstables_as_mutation_source();
+    key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
 public:
     // Creates a mutation reader which covers all data sources for this column family.

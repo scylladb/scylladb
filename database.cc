@@ -217,6 +217,24 @@ column_family::make_sstable_reader(const query::partition_range& pr) const {
     }
 }
 
+key_source column_family::sstables_as_key_source() const {
+    return [this] (const query::partition_range& range) {
+        std::vector<key_reader> readers;
+        readers.reserve(_sstables->size());
+        std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& entry) {
+            auto& sst = entry.second;
+            auto rd = sstables::make_key_reader(_schema, sst, range);
+            if (sst->is_shared()) {
+                rd = make_filtering_reader(std::move(rd), [] (const dht::decorated_key& dk) {
+                    return dht::shard_of(dk.token()) == engine().cpu_id();
+                });
+            }
+            return rd;
+        });
+        return make_combined_reader(_schema, std::move(readers));
+    };
+}
+
 // Exposed for testing, not performance critical.
 future<column_family::const_mutation_partition_ptr>
 column_family::find_partition(const dht::decorated_key& key) const {
