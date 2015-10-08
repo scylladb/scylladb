@@ -181,6 +181,7 @@ urchin_tests = [
     'tests/logalloc_test',
     'tests/managed_vector_test',
     'tests/crc_test',
+    'tests/flush_queue_test',
 ]
 
 apps = [
