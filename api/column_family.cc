@@ -370,7 +370,7 @@ void set_column_family(http_context& ctx, routes& r) {
     });
 
     cf::get_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
-        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::reads);
+        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::writes);
     });
 
     cf::get_all_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
@@ -662,12 +662,11 @@ void set_column_family(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cf::get_sstables_per_read_histogram.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        std::vector<double> res;
-        return make_ready_future<json::json_return_type>(res);
+    cf::get_sstables_per_read_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], sstables::estimated_histogram(0), [](column_family& cf) {
+            return cf.get_stats().estimated_sstable_per_read;
+        },
+        sstables::merge, utils_json::estimated_histogram());
     });
 
     cf::get_tombstone_scanned_histogram.set(r, [] (std::unique_ptr<request> req) {
