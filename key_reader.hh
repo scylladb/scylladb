@@ -59,4 +59,27 @@ inline key_reader make_key_reader(Args&&... args) {
 key_reader make_combined_reader(schema_ptr s, std::vector<key_reader>);
 key_reader make_key_from_mutation_reader(mutation_reader&&);
 
+template<typename Filter>
+class filtering_key_reader final : public key_reader::impl {
+    key_reader _reader;
+    Filter _filter;
+public:
+    filtering_key_reader(key_reader&& reader, Filter&& filter)
+        : _reader(std::move(reader)), _filter(std::move(filter))
+    { }
+    virtual future<dht::decorated_key_opt> operator()() override {
+        return _reader().then([this] (dht::decorated_key_opt&& dk) {
+            if (!dk || _filter(*dk)) {
+                return make_ready_future<dht::decorated_key_opt>(std::move(dk));
+            }
+            return operator()();
+        });
+    }
+};
+
+template<typename Filter>
+key_reader make_filtering_reader(key_reader&& reader, Filter&& filter) {
+    return make_key_reader<filtering_key_reader<Filter>>(std::move(reader), std::forward<Filter>(filter));
+}
+
 using key_source = std::function<key_reader(const query::partition_range& range)>;
