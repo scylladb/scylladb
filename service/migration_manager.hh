@@ -79,7 +79,7 @@ public:
 
     static future<> notify_update_column_family(schema_ptr cfm);
 
-    static future<> notify_drop_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    static future<> notify_drop_keyspace(sstring ks_name);
 
     static future<> notify_drop_column_family(schema_ptr cfm);
 

@@ -222,11 +222,11 @@ public void notifyUpdateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::notify_drop_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
+future<> migration_manager::notify_drop_keyspace(sstring ks_name)
 {
-    return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
+    return get_migration_manager().invoke_on_all([ks_name] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_drop_keyspace(name);
+            listener->on_drop_keyspace(ks_name);
         }
     });
 }
