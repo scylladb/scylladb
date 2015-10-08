@@ -1106,7 +1106,6 @@ public:
      * @param keyspaceNames the names of the keyspaces to snapshot; empty means "all."
      */
     future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names);
-#if 0
 
     /**
      * Takes the snapshot of a specific column family. A snapshot name must be specified.
@@ -1115,27 +1114,8 @@ public:
      * @param columnFamilyName the column family to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    public void takeColumnFamilySnapshot(String keyspaceName, String columnFamilyName, String tag) throws IOException
-    {
-        if (keyspaceName == null)
-            throw new IOException("You must supply a keyspace name");
-        if (operationMode == Mode.JOINING)
-            throw new IOException("Cannot snapshot until bootstrap completes");
-
-        if (columnFamilyName == null)
-            throw new IOException("You must supply a table name");
-        if (columnFamilyName.contains("."))
-            throw new IllegalArgumentException("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
-
-        if (tag == null || tag.equals(""))
-            throw new IOException("You must supply a snapshot name.");
-
-        Keyspace keyspace = getValidKeyspace(keyspaceName);
-        if (keyspace.snapshotExists(tag))
-            throw new IOException("Snapshot " + tag + " already exists.");
-
-        keyspace.snapshot(tag, columnFamilyName);
-    }
+    future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag);
+#if 0
 
     private Keyspace getValidKeyspace(String keyspaceName) throws IOException
     {

@@ -1287,6 +1287,36 @@ future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspa
     });
 }
 
+future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
+    if (ks_name.empty()) {
+        throw std::runtime_error("You must supply a keyspace name");
+    }
+    if (cf_name.empty()) {
+        throw std::runtime_error("You must supply a table name");
+    }
+    if (cf_name.find(".") != sstring::npos) {
+        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+    }
+
+    if (tag.empty()) {
+        throw std::runtime_error("You must supply a snapshot name.");
+    }
+
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        if (mode == storage_service::mode::JOINING) {
+            throw std::runtime_error("Cannot snapshot until bootstrap completes");
+        }
+    }).then([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
+        return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
+            return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
+                auto& cf = db.find_column_family(ks_name, cf_name);
+                return cf.snapshot(tag);
+            });
+        });
+    });
+}
+
 future<> storage_service::start_rpc_server() {
     fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
