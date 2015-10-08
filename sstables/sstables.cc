@@ -1223,7 +1223,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 ///  @param out holds an output stream to data file.
 ///
 void sstable::do_write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, file_writer& out) {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out) {
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
@@ -1238,7 +1238,12 @@ void sstable::do_write_components(::mutation_reader mr,
 
     // Iterate through CQL partitions, then CQL rows, then CQL columns.
     // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
-    while (mutation_opt mut = mr().get0()) {
+    while (out.offset() < max_sstable_size) {
+        mutation_opt mut = mr().get0();
+        if (!mut) {
+            break;
+        }
+
         // Set current index of data to later compute row size.
         _c_stats.start_offset = out.offset();
 
@@ -1318,13 +1323,14 @@ void sstable::do_write_components(::mutation_reader mr,
     seal_statistics(_statistics, _collector, dht::global_partitioner().name(), filter_fp_chance);
 }
 
-void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
+void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema,
+        uint64_t max_sstable_size) {
     // CRC component must only be present when compression isn't enabled.
     bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
         auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
@@ -1333,7 +1339,7 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     } else {
         prepare_compression(_compression, *schema);
         auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
@@ -1344,18 +1350,18 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
 future<> sstable::write_components(const memtable& mt) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(),
-            mt.partition_count(), mt.schema());
+            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max());
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] () mutable {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size] () mutable {
         // FIXME: write all components
         touch_directory(_dir).get();
         generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
         write_toc();
         create_data().get();
-        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
+        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size);
         write_summary();
         write_filter();
         write_statistics();

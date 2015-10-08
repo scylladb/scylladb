@@ -1065,7 +1065,7 @@ SEASTAR_TEST_CASE(compact) {
                 return make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary",
                         generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
             };
-            return sstables::compact_sstables(std::move(sstables), *cf, new_sstable).then([s, generation, cf, cm] {
+            return sstables::compact_sstables(std::move(sstables), *cf, new_sstable, std::numeric_limits<uint64_t>::max(), 0).then([s, generation, cf, cm] {
                 // Verify that the compacted sstable has the right content. We expect to see:
                 //  name  | age | height
                 // -------+-----+--------
@@ -1195,7 +1195,7 @@ static future<> compact_sstables(std::vector<unsigned long> generations_to_compa
         // We do expect that all candidates were selected for compaction (in this case).
         BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
 
-        return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable);
+        return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable, std::numeric_limits<uint64_t>::max(), 0);
     }).then([cf, cm] {});
 }
 

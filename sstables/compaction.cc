@@ -64,8 +64,10 @@ logging::logger logger("compaction");
 struct compaction_stats {
     size_t sstables = 0;
     uint64_t start_size = 0;
+    uint64_t end_size = 0;
     uint64_t total_partitions = 0;
     uint64_t total_keys_written = 0;
+    std::vector<shared_sstable> new_sstables;
 };
 
 class sstable_reader final : public ::mutation_reader::impl {
@@ -95,10 +97,10 @@ static api::timestamp_type get_max_purgeable_timestamp(schema_ptr schema,
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
 future<> compact_sstables(std::vector<shared_sstable> sstables,
-        column_family& cf, std::function<shared_sstable()> creator) {
+        column_family& cf, std::function<shared_sstable()> creator, uint64_t max_sstable_size, uint32_t sstable_level) {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
-    auto newtab = creator();
+    auto ancestors = make_lw_shared<std::vector<unsigned long>>();
     auto stats = make_lw_shared<compaction_stats>();
     sstring sstable_logger_msg = "[";
 
@@ -126,9 +128,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         estimated_partitions += sst->get_estimated_key_count();
         stats->total_partitions += sst->get_estimated_key_count();
         // Compacted sstable keeps track of its ancestors.
-        newtab->add_ancestor(sst->generation());
-        // FIXME: get sstable level
-        sstable_logger_msg += sprint("%s:level=%d, ", sst->get_filename(), 0);
+        ancestors->push_back(sst->generation());
+        sstable_logger_msg += sprint("%s:level=%d, ", sst->get_filename(), sst->get_sstable_level());
         stats->start_size += sst->data_size();
         // TODO:
         // Note that this is not fully correct. Since we might be merging sstables that originated on
@@ -139,6 +140,10 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // compacted sstables anyway (CL should be clean by then).
         rp = std::max(rp, sst->get_stats_metadata().position);
     }
+
+    uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(stats->start_size) / max_sstable_size)));
+    uint64_t partitions_per_sstable = ceil(double(estimated_partitions) / estimated_sstables);
+
     sstable_logger_msg += "]";
     stats->sstables = sstables.size();
     logger.info("Compacting {}", sstable_logger_msg);
@@ -209,31 +214,59 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         }
     };
 
-    ::mutation_reader mutation_queue_reader = make_mutation_reader<queue_reader>(output_reader);
+    // If there is a maximum size for a sstable, it's possible that more than
+    // one sstable will be generated for all partitions to be written.
+    future<> write_done = repeat([creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, stats, partitions_per_sstable, schema] {
+        return output_reader->read().then(
+                [creator, ancestors, rp, max_sstable_size, sstable_level, output_reader, stats, partitions_per_sstable, schema] (auto mut) {
+            // Check if mutation is available from the pipe for a new sstable to be written. If not, just stop writing.
+            if (!mut) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            }
+            // If a mutation is available, we must unread it for write_components to read it afterwards.
+            output_reader->unread(std::move(*mut));
 
-    newtab->get_metadata_collector().set_replay_position(rp);
+            auto newtab = creator();
+            newtab->get_metadata_collector().set_replay_position(rp);
+            newtab->get_metadata_collector().sstable_level(sstable_level);
+            for (auto ancestor : *ancestors) {
+                newtab->add_ancestor(ancestor);
+            }
 
-    future<> write_done = newtab->write_components(
-            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab, stats, start_time] {
-        return newtab->open_data().then([newtab, stats, start_time] {
-            uint64_t endsize = newtab->data_size();
-            double ratio = (double) endsize / (double) stats->start_size;
-            auto end_time = std::chrono::high_resolution_clock::now();
-            // time taken by compaction in seconds.
-            auto duration = std::chrono::duration<float>(end_time - start_time);
-            auto throughput = ((double) endsize / (1024*1024)) / duration.count();
+            ::mutation_reader mutation_queue_reader = make_mutation_reader<queue_reader>(output_reader);
 
-            // FIXME: there is some missing information in the log message below.
-            // look at CompactionTask::runMayThrow() in origin for reference.
-            // - add support to merge summary (message: Partition merge counts were {%s}.).
-            // - there is no easy way, currently, to know the exact number of total partitions.
-            // By the time being, using estimated key count.
-            logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
-                "~{} total partitions merged to {}.",
-                stats->sstables, newtab->get_filename(), stats->start_size, endsize, (int) (ratio * 100),
-                std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
-                stats->total_partitions, stats->total_keys_written);
+            return newtab->write_components(std::move(mutation_queue_reader), partitions_per_sstable, schema, max_sstable_size).then([newtab, stats] {
+                return newtab->open_data().then([newtab, stats] {
+                    stats->new_sstables.push_back(newtab);
+                    stats->end_size += newtab->data_size();
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                });
+            });
         });
+    }).then([start_time, stats, output_reader, done] {
+        assert(*done);
+        double ratio = double(stats->end_size) / double(stats->start_size);
+        auto end_time = std::chrono::high_resolution_clock::now();
+        // time taken by compaction in seconds.
+        auto duration = std::chrono::duration<float>(end_time - start_time);
+        auto throughput = (double(stats->end_size) / (1024*1024)) / duration.count();
+        sstring new_sstables_msg;
+
+        for (auto& newtab : stats->new_sstables) {
+            new_sstables_msg += sprint("%s:level=%d, ", newtab->get_filename(), newtab->get_sstable_level());
+        }
+
+        // FIXME: there is some missing information in the log message below.
+        // look at CompactionTask::runMayThrow() in origin for reference.
+        // - add support to merge summary (message: Partition merge counts were {%s}.).
+        // - there is no easy way, currently, to know the exact number of total partitions.
+        // By the time being, using estimated key count.
+        logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
+            "~{} total partitions merged to {}.",
+            stats->sstables, new_sstables_msg, stats->start_size, stats->end_size, (int) (ratio * 100),
+            std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
+            stats->total_partitions, stats->total_keys_written);
+        return make_ready_future<>();
     });
 
     // Wait for both read_done and write_done fibers to finish.
@@ -557,7 +590,7 @@ future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
         return make_ready_future<>();
     }
 
-    return cfs.compact_sstables(std::move(most_interesting));
+    return cfs.compact_sstables(sstables::compaction_descriptor(std::move(most_interesting)));
 }
 
 std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
