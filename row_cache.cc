@@ -27,6 +27,7 @@
 #include <seastar/util/defer.hh>
 #include "memtable.hh"
 #include <chrono>
+#include "utils/move.hh"
 
 using namespace std::chrono_literals;
 
@@ -241,10 +242,89 @@ public:
     }
 };
 
+class scanning_and_populating_reader final : public mutation_reader::impl {
+    row_cache& _cache;
+    schema_ptr _schema;
+    mutation_reader _primary;
+    bool _secondary_only = false;
+    mutation_opt _next_primary;
+    mutation_source& _underlying;
+    mutation_reader _secondary;
+    const query::partition_range& _original_range;
+    query::partition_range _range;
+    key_source& _underlying_keys;
+    key_reader _keys;
+    dht::decorated_key_opt _next_key;
+public:
+    scanning_and_populating_reader(row_cache& cache, const query::partition_range& range)
+        : _cache(cache), _schema(cache._schema),
+          _primary(make_mutation_reader<just_cache_scanning_reader>(cache, range)),
+          _underlying(cache._underlying), _original_range(range), _underlying_keys(cache._underlying_keys),
+          _keys(_underlying_keys(range))
+    { }
+    virtual future<mutation_opt> operator()() override {
+        // FIXME: store in cache information whether the immediate successor
+        // of the current entry is present. As long as it is consulting
+        // index_reader is not necessary.
+        if (_secondary_only) {
+            return next_secondary();
+        }
+        return next_key().then([this] (dht::decorated_key_opt dk) mutable {
+            return _primary().then([this, dk = std::move(dk)] (mutation_opt&& mo) {
+                if (!mo && !dk) {
+                    return make_ready_future<mutation_opt>();
+                }
+                if (mo) {
+                    auto cmp = dk ? dk->tri_compare(*_schema, mo->decorated_key()) : 0;
+                    if (cmp >= 0) {
+                        if (cmp) {
+                            _next_key = std::move(dk);
+                        }
+                        return make_ready_future<mutation_opt>(std::move(mo));
+                    }
+                }
+                _next_primary = std::move(mo);
+
+                stdx::optional<query::partition_range::bound> end;
+                if (_next_primary) {
+                    end = query::partition_range::bound(_next_primary->decorated_key(), false);
+                } else {
+                    end = _original_range.end();
+                }
+                _range = query::partition_range(query::partition_range::bound { std::move(*dk), true }, std::move(end));
+                _secondary = _underlying(_range);
+                _secondary_only = true;
+                return next_secondary();
+            });
+        });
+    }
+private:
+    future<mutation_opt> next_secondary() {
+        return _secondary().then([this] (mutation_opt&& mo) {
+            if (!mo && _next_primary) {
+                auto cmp = dht::ring_position_comparator(*_schema);
+                _range = _original_range.split_after(_next_primary->decorated_key(), cmp);
+                _keys = _underlying_keys(_range);
+                _secondary_only = false;
+                return std::move(_next_primary);
+            }
+            if (mo) {
+                _cache.populate(*mo);
+            }
+            return std::move(mo);
+        });
+    }
+    future<dht::decorated_key_opt> next_key() {
+        if (_next_key) {
+            return make_ready_future<dht::decorated_key_opt>(move_and_disengage(_next_key));
+        }
+        return _keys();
+    }
+};
+
 mutation_reader
 row_cache::make_scanning_reader(const query::partition_range& range) {
-    warn(unimplemented::cause::RANGE_QUERIES);
-    return make_mutation_reader<populating_reader>(*this, _underlying(range));
+    return make_mutation_reader<scanning_and_populating_reader>(*this, range);
 }
 
 mutation_reader

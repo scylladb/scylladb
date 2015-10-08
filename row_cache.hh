@@ -227,4 +227,5 @@ public:
     }
 
     friend class just_cache_scanning_reader;
+    friend class scanning_and_populating_reader;
 };
