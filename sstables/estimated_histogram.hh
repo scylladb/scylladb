@@ -65,6 +65,8 @@ struct estimated_histogram {
     // buckets is one element longer than bucketOffsets -- the last element is values greater than the last offset
     std::vector<int64_t> buckets;
 
+    int64_t _count = 0;
+
     estimated_histogram(int bucket_count = 90) {
 
         new_offsets(bucket_count);
@@ -126,6 +128,27 @@ public:
         }
         auto pos = low - bucket_offsets.begin();
         buckets.at(pos)++;
+        _count++;
+    }
+
+    /**
+     * Increments the count of the bucket closest to n, rounding UP.
+     * when using sampling, the number of items in the bucket will
+     * be increase so that the overall number of items will be equal
+     * to the new count
+     * @param n
+     */
+    void add(int64_t n, int64_t new_count) {
+        if (new_count <= _count) {
+            return;
+        }
+        auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
+        if (low == bucket_offsets.end()) {
+            low--;
+        }
+        auto pos = low - bucket_offsets.begin();
+        buckets.at(pos)+= new_count - _count;
+        _count = new_count;
     }
 
     /**
