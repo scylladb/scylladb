@@ -1887,3 +1887,109 @@ SEASTAR_TEST_CASE(leveled_05) {
         });
     });
 }
+
+static lw_shared_ptr<key_reader> prepare_key_reader(schema_ptr s,
+    const std::vector<shared_sstable>& ssts, const query::partition_range& range)
+{
+    std::vector<key_reader> rds;
+    for (auto&& sst : ssts) {
+        rds.emplace_back(sstables::make_key_reader(s, sst, range));
+    }
+    return make_lw_shared<key_reader>(make_combined_reader(s, std::move(rds)));
+}
+
+template<typename Iterator>
+future<> compare_keys(lw_shared_ptr<key_reader> reader, Iterator start, Iterator stop) {
+    return (*reader)().then([=] (dht::decorated_key_opt dk) mutable {
+        if (!dk) {
+            BOOST_REQUIRE(start == stop);
+            return make_ready_future<>();
+        }
+        BOOST_REQUIRE(start != stop);
+        BOOST_REQUIRE_EQUAL(dk->key().representation(), int32_type->decompose(*start));
+        return compare_keys(std::move(reader), ++start, stop);
+    });
+}
+
+static query::partition_range key_range;
+
+SEASTAR_TEST_CASE(check_sstable_key_reader) {
+    // CREATE TABLE key_reader_test (
+    //        a int PRIMARY KEY
+    //) WITH min_index_interval = 64;
+    auto builder = schema_builder("tests", "key_reader_test")
+        .with_column("a", int32_type, column_kind::partition_key);
+    builder.set_min_index_interval(64);
+    auto s = builder.build();
+
+    auto get_dk = [s] (int value) {
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(value) });
+        return dht::global_partitioner().decorate_key(*s, std::move(pk));
+    };
+
+    return open_sstables("tests/sstables/key_reader", {1,2,3}).then([get_dk, s = std::move(s)] (auto ssts) {
+        int idx = 0;
+        std::vector<int> sst_a(300);
+        std::generate(sst_a.begin(), sst_a.end(), [&] { return idx += 2; });
+
+        idx = 0;
+        std::vector<int> sst_b(200);
+        std::generate(sst_b.begin(), sst_b.end(), [&] { return idx += 3; });
+
+        idx = 0;
+        std::vector<int> sst_c(150);
+        std::generate(sst_c.begin(), sst_c.end(), [&] { return idx += 5; });
+
+        std::vector<int> sst_abc;
+        sst_abc.insert(sst_abc.end(), sst_a.begin(), sst_a.end());
+        sst_abc.insert(sst_abc.end(), sst_b.begin(), sst_b.end());
+        sst_abc.insert(sst_abc.end(), sst_c.begin(), sst_c.end());
+        std::sort(sst_abc.begin(), sst_abc.end());
+        sst_abc.erase(std::unique(sst_abc.begin(), sst_abc.end()), sst_abc.end());
+        std::sort(sst_abc.begin(), sst_abc.end(), [&] (int a, int b) {
+            return get_dk(a).less_compare(*s, get_dk(b));
+        });
+        auto keys = make_lw_shared<std::vector<int>>(std::move(sst_abc));
+
+        auto reader = prepare_key_reader(s, ssts, query::full_partition_range);
+        return compare_keys(std::move(reader), keys->begin(), keys->end()).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 123;
+            key_range = query::partition_range::make_starting_with({ get_dk(*start), true });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), start, keys->end());
+        }).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 123;
+            key_range = query::partition_range::make_starting_with({ get_dk(*start), false });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), ++start, keys->end());
+        }).then([get_dk, s, keys, ssts] {
+            auto end = keys->begin() + 223;
+            key_range = query::partition_range::make_ending_with({ get_dk(*end), false });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), keys->begin(), end);
+        }).then([get_dk, s, keys, ssts] {
+            auto end = keys->begin() + 223;
+            key_range = query::partition_range::make_ending_with({ get_dk(*end), true });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), keys->begin(), ++end);
+        }).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 123;
+            auto end = keys->begin() + 223;
+            key_range = query::partition_range::make({ get_dk(*start), false }, { get_dk(*end), false });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), ++start, end);
+        }).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin();
+            auto end = --keys->end();
+            key_range = query::partition_range::make({ get_dk(*start), true }, { get_dk(*end), true });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), start, ++end);
+        }).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 5;
+            auto end = keys->begin() + 5;
+            key_range = query::partition_range::make({ get_dk(*start), true }, { get_dk(*end), true });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), start, ++end);
+        }).then([get_dk, s, keys, ssts] { });
+    });
+}
