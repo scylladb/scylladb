@@ -125,6 +125,7 @@ public:
         utils::ihistogram writes{256};
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
+        sstables::estimated_histogram estimated_sstable_per_read;
     };
 
 private:
@@ -586,6 +587,9 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
     active_memtable().apply(m, rp);
     seal_on_overflow();
     _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency_in_nano(), _stats.writes.count);
+    }
 }
 
 inline
@@ -617,6 +621,9 @@ column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
     active_memtable().apply(m, rp);
     seal_on_overflow();
     _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency_in_nano(), _stats.writes.count);
+    }
 }
 
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy);
