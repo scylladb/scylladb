@@ -312,11 +312,13 @@ void row_cache::touch(const dht::decorated_key& dk) {
     }
 }
 
-row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_tracker& tracker)
+row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
+    cache_tracker& tracker)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
+    , _underlying_keys(std::move(underlying_keys))
 { }
 
 cache_entry::cache_entry(cache_entry&& o) noexcept

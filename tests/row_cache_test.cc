@@ -73,6 +73,8 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         cache_tracker tracker;
         row_cache cache(s, [m] (const query::partition_range&) {
             return make_reader_returning(m);
+        }, [m] (auto&&) {
+            return make_key_from_mutation_reader(make_reader_returning(m));
         }, tracker);
 
         assert_that(cache.make_reader(query::full_partition_range))
@@ -89,6 +91,8 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
         cache_tracker tracker;
         row_cache cache(s, [m] (const query::partition_range&) {
             return make_reader_returning(m);
+        }, [m] (auto&&) {
+            return make_key_from_mutation_reader(make_reader_returning(m));
         }, tracker);
 
         assert_that(cache.make_reader(query::full_partition_range))
@@ -131,7 +135,7 @@ SEASTAR_TEST_CASE(test_query_of_incomplete_range_goes_to_underlying) {
         }
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
         auto get_partition_range = [] (const mutation& m) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
@@ -184,7 +188,7 @@ SEASTAR_TEST_CASE(test_single_key_queries_after_population_in_reverse_order) {
         }
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
         auto get_partition_range = [] (const mutation& m) {
             return query::partition_range::make_singular(query::ring_position(m.decorated_key()));
@@ -217,7 +221,7 @@ SEASTAR_TEST_CASE(test_row_cache_conforms_to_mutation_source) {
                 mt->apply(m);
             }
 
-            auto cache = make_lw_shared<row_cache>(s, mt->as_data_source(), tracker);
+            auto cache = make_lw_shared<row_cache>(s, mt->as_data_source(), mt->as_key_source(), tracker);
             return [cache] (const query::partition_range& range) {
                 return cache->make_reader(range);
             };
@@ -231,7 +235,7 @@ SEASTAR_TEST_CASE(test_eviction) {
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
         std::vector<dht::decorated_key> keys;
         for (int i = 0; i < 100000; i++) {
@@ -279,7 +283,7 @@ SEASTAR_TEST_CASE(test_update) {
         auto mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), tracker);
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
 
         BOOST_MESSAGE("Check cache miss with populate");
 
