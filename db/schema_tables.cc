@@ -510,6 +510,15 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
            for (auto&& keyspace_to_drop : keyspaces_to_drop) {
                db.drop_keyspace(keyspace_to_drop);
            }
+           // FIXME: clean this up by reorganizing the code
+           // Send CQL events only once, not once per shard.
+           if (engine().cpu_id() == 0) {
+               return do_for_each(keyspaces_to_drop, [] (auto& ks_name) {
+                   return service::migration_manager::notify_drop_keyspace(ks_name);
+               });
+           } else {
+               return make_ready_future<>();
+           }
        }).get0();
    });
 }
