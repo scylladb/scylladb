@@ -13,6 +13,7 @@
 prefer_local=false
  dc=  my_data_center 
  rack=my_rack   
+dc_suffix=_my_dc_suffix
 
 
  

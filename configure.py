@@ -169,6 +169,7 @@ urchin_tests = [
     'tests/compound_test',
     'tests/config_test',
     'tests/gossiping_property_file_snitch_test',
+    'tests/ec2_snitch_test',
     'tests/snitch_reset_test',
     'tests/network_topology_strategy_test',
     'tests/query_processor_test',
