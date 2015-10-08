@@ -40,11 +40,9 @@
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
-    return engine().open_file_dma(_fname, open_flags::ro)
+    return engine().open_file_dma(_prop_file_name, open_flags::ro)
     .then([this](file f) {
-        _sf = make_lw_shared(std::move(f));
-
-        return _sf->stat();
+        return f.stat();
     }).then_wrapped([this] (auto&& f) {
         try {
             auto st = std::get<0>(f.get());
@@ -57,7 +55,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
                 return false;
             }
         } catch (...) {
-            logger().error("Failed to open {} for read or to get stats", _fname);
+            logger().error("Failed to open {} for read or to get stats", _prop_file_name);
             throw;
         }
     });
@@ -65,7 +63,7 @@ future<bool> gossiping_property_file_snitch::property_file_was_modified() {
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(
     const sstring& fname, unsigned io_cpu_id)
-: _fname(fname), _file_reader_cpu_id(io_cpu_id) {}
+: production_snitch_base(fname), _file_reader_cpu_id(io_cpu_id) {}
 
 future<> gossiping_property_file_snitch::start() {
     using namespace std::chrono_literals;
@@ -142,18 +140,7 @@ void gossiping_property_file_snitch::gossiper_starting() {
 future<> gossiping_property_file_snitch::read_property_file() {
     using namespace exceptions;
 
-    return engine().open_file_dma(_fname, open_flags::ro).then([this](file f) {
-        _sf = make_lw_shared(std::move(f));
-
-        return _sf->size();
-    }).then([this](size_t s) {
-        _fsize = s;
-
-        return _sf->dma_read_exactly<char>(0, _fsize);
-    }).then([this](temporary_buffer<char> tb) {
-
-        _srting_buf = std::move(std::string(tb.get(), _fsize));
-
+    return load_property_file().then([this] {
         return reload_configuration();
     }).then_wrapped([this] (auto&& f) {
         try {
@@ -166,11 +153,10 @@ future<> gossiping_property_file_snitch::read_property_file() {
             //    - Print an error when reloading.
             //
             if (_state == snitch_state::initializing) {
-                logger().error("Failed to parse a properties file ({}). Halting...", _fname);
+                logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
                 throw;
             } else {
-                logger().warn("Failed to reload a properties file ({}). "
-                           "Using previous values.", _fname);
+                logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
                 return make_ready_future<>();
             }
         }
@@ -178,89 +164,34 @@ future<> gossiping_property_file_snitch::read_property_file() {
 }
 
 future<> gossiping_property_file_snitch::reload_configuration() {
-    using namespace boost::algorithm;
-
-    std::string line;
-    //
-    // Using two bool variables instead of std::experimental::optional<bool>
-    // since there is a bug in gcc causing it to report "'new_prefer_local' may
-    // be used uninitialized in this function" if we do.
-    //
-    bool new_prefer_local;
-    bool read_prefer_local = false;
-    std::experimental::optional<sstring> new_dc;
-    std::experimental::optional<sstring> new_rack;
-    std::istringstream istrm(_srting_buf);
-    std::vector<std::string> split_line;
-
-    while (std::getline(istrm, line)) {
-        trim(line);
-
-        // Skip comments or empty lines
-        if (!line.size() || line.at(0) == '#') {
-            continue;
-        }
-
-        split_line.clear();
-        split(split_line, line, is_any_of("="));
-
-        if (split_line.size() != 2) {
-            throw_bad_format(line);
-        }
-
-        auto key = split_line[0]; trim(key);
-        auto val = split_line[1]; trim(val);
-
-        if (!val.size()) {
-            throw_bad_format(line);
-        }
-
-        if (!key.compare("dc")) {
-            if (new_dc) {
-                throw_double_declaration("dc");
-            }
-
-            new_dc = sstring(val);
-        } else if (!key.compare("rack")) {
-            if (new_rack) {
-                throw_double_declaration("rack");
-            }
-
-            new_rack = sstring(val);
-        } else if (!key.compare("prefer_local")) {
-            if (read_prefer_local) {
-                throw_double_declaration("prefer_local");
-            }
-
-            if (!val.compare("false")) {
-                new_prefer_local = false;
-            } else if (!val.compare("true")) {
-                new_prefer_local = true;
-            } else {
-                throw_bad_format(line);
-            }
-
-            read_prefer_local = true;
-        } else {
-            throw_bad_format(line);
-        }
-    }
+    // "prefer_local" is FALSE by default
+    bool new_prefer_local = false;
+    sstring new_dc;
+    sstring new_rack;
 
     // Rack and Data Center have to be defined in the properties file!
-    if (!new_dc || !new_rack) {
+    if (!_prop_values.count(dc_property_key) || !_prop_values.count(rack_property_key)) {
         throw_incomplete_file();
     }
 
-    // "prefer_local" is FALSE by default
-    if (!read_prefer_local) {
-        new_prefer_local = false;
+    new_dc   = _prop_values[dc_property_key];
+    new_rack = _prop_values[rack_property_key];
+
+    if (_prop_values.count(prefer_local_property_key)) {
+        if (_prop_values[prefer_local_property_key] == "false") {
+            new_prefer_local = false;
+        } else if (_prop_values[prefer_local_property_key] == "true") {
+            new_prefer_local = true;
+        } else {
+            throw_bad_format("prefer_local configuration is malformed");
+        }
     }
 
-    if (_state == snitch_state::initializing || _my_dc != *new_dc ||
-        _my_rack != *new_rack || _prefer_local != new_prefer_local) {
+    if (_state == snitch_state::initializing || _my_dc != new_dc ||
+        _my_rack != new_rack || _prefer_local != new_prefer_local) {
 
-        _my_dc = *new_dc;
-        _my_rack = *new_rack;
+        _my_dc = new_dc;
+        _my_rack = new_rack;
         _prefer_local = new_prefer_local;
 
         assert(_my_distributed);

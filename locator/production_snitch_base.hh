@@ -41,16 +41,21 @@
 #include <unordered_map>
 #include <utility>
 #include <experimental/optional>
+#include <unordered_set>
+#include <boost/filesystem.hpp>
 
 #include "gms/endpoint_state.hh"
 #include "gms/gossiper.hh"
 #include "utils/fb_utilities.hh"
 #include "locator/token_metadata.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
 #include "core/sstring.hh"
 #include "snitch_base.hh"
 
 namespace locator {
+
+class bad_property_file_error : public std::exception {};
 
 class production_snitch_base : public snitch_base {
 public:
@@ -59,6 +64,31 @@ public:
 
     static constexpr const char* default_dc   = "UNKNOWN_DC";
     static constexpr const char* default_rack = "UNKNOWN_RACK";
+    static constexpr const char* snitch_properties_filename = "cassandra-rackdc.properties";
+
+    // only these property values are supported
+    static constexpr const char* dc_property_key           = "dc";
+    static constexpr const char* rack_property_key         = "rack";
+    static constexpr const char* prefer_local_property_key = "prefer_local";
+    static constexpr const char* dc_suffix_property_key    = "dc_suffix";
+    const std::unordered_set<sstring> allowed_property_keys;
+
+    production_snitch_base(const sstring prop_file_name = "")
+    : allowed_property_keys({ dc_property_key,
+                              rack_property_key,
+                              prefer_local_property_key,
+                              dc_suffix_property_key }){
+        if (!prop_file_name.empty()) {
+            _prop_file_name = prop_file_name;
+        } else {
+            using namespace boost::filesystem;
+
+            path def_prop_file(db::config::get_conf_dir());
+            def_prop_file /= path(snitch_properties_filename);
+
+            _prop_file_name = def_prop_file.string();
+        }
+    }
 
     virtual sstring get_rack(inet_address endpoint) {
         if (endpoint == utils::fb_utilities::get_broadcast_address()) {
@@ -133,9 +163,41 @@ private:
         _my_rack = new_rack;
     }
 
+    void parse_property_file();
+
+protected:
+    /**
+     * Loads the contents of the property file into the map
+     *
+     * @return ready future when the file contents has been loaded.
+     */
+    future<> load_property_file();
+
+    void throw_double_declaration(const sstring& key) const {
+        logger().error("double \"{}\" declaration in {}", key, _prop_file_name);
+        throw bad_property_file_error();
+    }
+
+    void throw_bad_format(const sstring& line) const {
+        logger().error("Bad format in properties file {}: {}", _prop_file_name, line);
+        throw bad_property_file_error();
+    }
+
+    void throw_incomplete_file() const {
+        logger().error("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
+        throw bad_property_file_error();
+    }
+
 protected:
     promise<> _io_is_stopped;
     std::experimental::optional<addr2dc_rack_map> _saved_endpoints;
     distributed<snitch_ptr>* _my_distributed = nullptr;
+    std::string _prop_file_contents;
+    sstring _prop_file_name;
+    std::unordered_map<sstring, sstring> _prop_values;
+
+private:
+    lw_shared_ptr<file> _sf;
+    size_t _prop_file_size;
 };
 } // namespace locator
