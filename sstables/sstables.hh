@@ -273,6 +273,10 @@ public:
     dht::decorated_key get_first_decorated_key(const schema& s) const;
     dht::decorated_key get_last_decorated_key(const schema& s) const;
 
+    // SSTable comparator using the first key (decorated key).
+    // Return values are those of a trichotomic comparison.
+    int compare_by_first_key(const schema& s, const sstable& other) const;
+
     const sstring get_filename() const {
         return filename(component_type::Data);
     }

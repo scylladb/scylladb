@@ -1531,6 +1531,10 @@ dht::decorated_key sstable::get_last_decorated_key(const schema& s) const {
     return dht::global_partitioner().decorate_key(s, std::move(pk));
 }
 
+int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
+    return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
+}
+
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file] (auto ep) {
