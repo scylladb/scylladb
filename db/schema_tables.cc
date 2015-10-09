@@ -601,8 +601,9 @@ future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&
     return do_with(std::make_pair(std::move(after), std::move(before)), [&proxy] (auto& pair) {
         auto& after = pair.first;
         auto& before = pair.second;
-        return proxy.local().get_db().invoke_on_all([&proxy, &before, &after] (database& db) {
-            return seastar::async([&proxy, &db, &before, &after] {
+        auto changed_at = db_clock::now();
+        return proxy.local().get_db().invoke_on_all([changed_at, &proxy, &before, &after] (database& db) {
+            return seastar::async([changed_at, &proxy, &db, &before, &after] {
                 std::vector<schema_ptr> created;
                 std::vector<schema_ptr> altered;
                 std::vector<schema_ptr> dropped;
@@ -661,8 +662,8 @@ future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&
                 parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
                     return db.update_column_family(cfm->ks_name(), cfm->cf_name());
                 }).get();
-                parallel_for_each(dropped.begin(), dropped.end(), [&db] (auto&& cfm) {
-                    return db.drop_column_family(cfm->ks_name(), cfm->cf_name());
+                parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db] (auto&& cfm) {
+                    return db.drop_column_family(changed_at, cfm->ks_name(), cfm->cf_name());
                 }).get();
                 // FIXME: clean this up by reorganizing the code
                 // Send CQL events only once, not once per shard.

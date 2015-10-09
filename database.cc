@@ -1028,14 +1028,14 @@ future<> database::update_column_family(const sstring& ks_name, const sstring& c
     });
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
+future<> database::drop_column_family(db_clock::time_point dropped_at, const sstring& ks_name, const sstring& cf_name) {
     auto uuid = find_uuid(ks_name, cf_name);
     auto& ks = find_keyspace(ks_name);
     auto cf = _column_families.at(uuid);
     _column_families.erase(uuid);
     ks.metadata()->remove_column_family(cf->schema());
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
-    return truncate(ks, *cf).then([this, cf] {
+    return truncate(dropped_at, ks, *cf).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
         return make_ready_future<>();
@@ -1565,13 +1565,13 @@ future<> database::flush_all_memtables() {
     });
 }
 
-future<> database::truncate(sstring ksname, sstring cfname) {
+future<> database::truncate(db_clock::time_point truncated_at, sstring ksname, sstring cfname) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf);
+    return truncate(truncated_at, ks, cf);
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf)
+future<> database::truncate(db_clock::time_point truncated_at, const keyspace& ks, column_family& cf)
 {
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
@@ -1586,11 +1586,9 @@ future<> database::truncate(const keyspace& ks, column_family& cf)
         cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, cfname = cf.schema()->cf_name()]() mutable {
-        return f.then([&cf, auto_snapshot, cfname = std::move(cfname)] {
+    return cf.run_with_compaction_disabled([truncated_at, f = std::move(f), &cf, auto_snapshot, cfname = cf.schema()->cf_name()]() mutable {
+        return f.then([truncated_at, &cf, auto_snapshot, cfname = std::move(cfname)] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
-
-            const auto truncated_at = db_clock::now();
             // TODO: notify truncation
 
             future<> f = make_ready_future<>();
