@@ -499,7 +499,7 @@ public:
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
     future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
-    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name);
+    future<> drop_column_family(db_clock::time_point changed_at, const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
@@ -567,8 +567,8 @@ public:
 
     future<> flush_all_memtables();
     /** Truncates the given column family */
-    future<> truncate(sstring ksname, sstring cfname);
-    future<> truncate(const keyspace& ks, column_family& cf);
+    future<> truncate(db_clock::time_point truncated_at, sstring ksname, sstring cfname);
+    future<> truncate(db_clock::time_point truncated_at, const keyspace& ks, column_family& cf);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;
