@@ -24,17 +24,9 @@
 
 #include "mutation_reader.hh"
 #include "core/future-util.hh"
+#include "utils/move.hh"
 
 namespace stdx = std::experimental;
-
-template<typename T>
-inline
-std::experimental::optional<T>
-move_and_disengage(std::experimental::optional<T>& opt) {
-    auto t = std::move(opt);
-    opt = std::experimental::nullopt;
-    return t;
-}
 
 // Combines multiple mutation_readers into one.
 class combined_reader final : public mutation_reader::impl {
