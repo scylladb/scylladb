@@ -43,11 +43,13 @@ class caching_options {
             throw exceptions::configuration_exception("Invalid key value: " + k); 
         }
 
-        try {
-            boost::lexical_cast<unsigned long>(r);
-        } catch (boost::bad_lexical_cast& e) {
-            if ((r != "ALL") && (r != "NONE")) {
-                throw exceptions::configuration_exception("Invalid key value: " + k); 
+        if ((r == "ALL") || (r == "NONE")) {
+            return;
+        } else {
+            try {
+                boost::lexical_cast<unsigned long>(r);
+            } catch (boost::bad_lexical_cast& e) {
+                throw exceptions::configuration_exception("Invalid key value: " + r);
             }
         }
     }
