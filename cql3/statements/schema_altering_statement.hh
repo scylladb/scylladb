@@ -90,6 +90,10 @@ protected:
         return cf_statement::uses_function(ks_name, function_name);
     }
 
+    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
+
+    virtual bool depends_on_column_family(const sstring& cf_name) const override;
+
     virtual uint32_t get_bound_terms() override {
         return 0;
     }

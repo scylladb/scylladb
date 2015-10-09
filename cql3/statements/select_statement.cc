@@ -106,6 +106,14 @@ void select_statement::validate(distributed<service::storage_proxy>&, const serv
     // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 
+bool select_statement::depends_on_keyspace(const sstring& ks_name) const {
+    return keyspace() == ks_name;
+}
+
+bool select_statement::depends_on_column_family(const sstring& cf_name) const {
+    return column_family() == cf_name;
+}
+
 query::partition_slice
 select_statement::make_partition_slice(const query_options& options) {
     std::vector<column_id> static_columns;

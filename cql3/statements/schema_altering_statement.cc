@@ -47,6 +47,16 @@ namespace cql3 {
 
 namespace statements {
 
+bool schema_altering_statement::depends_on_keyspace(const sstring& ks_name) const
+{
+    return false;
+}
+
+bool schema_altering_statement::depends_on_column_family(const sstring& cf_name) const
+{
+    return false;
+}
+
 future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute0(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options, bool is_local_only) {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing

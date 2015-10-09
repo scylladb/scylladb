@@ -132,6 +132,8 @@ public:
     virtual uint32_t get_bound_terms() override;
     virtual void check_access(const service::client_state& state) override;
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+    virtual bool depends_on_keyspace(const sstring& ks_name) const;
+    virtual bool depends_on_column_family(const sstring& cf_name) const;
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         service::query_state& state, const query_options& options) override;
