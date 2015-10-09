@@ -390,6 +390,11 @@ struct ring_position_comparator {
     int operator()(const ring_position& lh, const ring_position& rh) const;
 };
 
+struct token_comparator {
+    // Return values are those of a trichotomic comparison.
+    int operator()(const token& t1, const token& t2) const;
+};
+
 std::ostream& operator<<(std::ostream& out, const token& t);
 
 std::ostream& operator<<(std::ostream& out, const decorated_key& t);

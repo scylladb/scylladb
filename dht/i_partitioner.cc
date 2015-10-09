@@ -297,6 +297,10 @@ int ring_position_comparator::operator()(const ring_position& lh, const ring_pos
     return lh.tri_compare(s, rh);
 }
 
+int token_comparator::operator()(const token& t1, const token& t2) const {
+    return tri_compare(t1, t2);
+}
+
 void token::serialize(bytes::iterator& out) const {
     uint8_t kind = _kind == dht::token::kind::before_all_keys ? 0 :
                    _kind == dht::token::kind::key ? 1 : 2;
