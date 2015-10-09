@@ -1535,6 +1535,12 @@ int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
     return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
 }
 
+int sstable::compare_by_max_timestamp(const sstable& other) const {
+    auto ts1 = get_stats_metadata().max_timestamp;
+    auto ts2 = other.get_stats_metadata().max_timestamp;
+    return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
+}
+
 sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file] (auto ep) {

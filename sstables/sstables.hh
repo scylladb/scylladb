@@ -277,6 +277,10 @@ public:
     // Return values are those of a trichotomic comparison.
     int compare_by_first_key(const schema& s, const sstable& other) const;
 
+    // SSTable comparator using the max timestamp.
+    // Return values are those of a trichotomic comparison.
+    int compare_by_max_timestamp(const sstable& other) const;
+
     const sstring get_filename() const {
         return filename(component_type::Data);
     }
