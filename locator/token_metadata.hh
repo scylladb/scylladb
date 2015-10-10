@@ -544,25 +544,17 @@ public:
     }
 #if 0
     private final AtomicReference<TokenMetadata> cachedTokenMap = new AtomicReference<TokenMetadata>();
+#endif
+public:
 
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */
-    public TokenMetadata cloneOnlyTokenMap()
-    {
-        lock.readLock().lock();
-        try
-        {
-            return new TokenMetadata(SortedBiMultiValMap.<Token, InetAddress>create(tokenToEndpointMap, null, inetaddressCmp),
-                                     HashBiMap.create(_endpoint_to_host_id_map),
-                                     new Topology(topology));
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
+    token_metadata clone_only_token_map() {
+        return token_metadata(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
     }
+#if 0
 
     /**
      * Return a cached TokenMetadata with only tokenToEndpointMap, i.e., the same as cloneOnlyTokenMap but
