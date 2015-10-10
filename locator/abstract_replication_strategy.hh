@@ -115,6 +115,7 @@ public:
 
     std::unordered_multimap<inet_address, range<token>> get_address_ranges(token_metadata& tm) const;
 
+    std::unordered_multimap<range<token>, inet_address> get_range_addresses(token_metadata& tm) const;
 };
 
 }

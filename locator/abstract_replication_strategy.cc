@@ -154,4 +154,16 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
     return ret;
 }
 
+std::unordered_multimap<range<token>, inet_address>
+abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
+    std::unordered_multimap<range<token>, inet_address> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        range<token> r = tm.get_primary_range_for(t);
+        for (auto ep : calculate_natural_endpoints(t, tm)) {
+            ret.emplace(r, ep);
+        }
+    }
+    return ret;
+}
+
 } // namespace locator
