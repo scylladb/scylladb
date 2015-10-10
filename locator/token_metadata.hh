@@ -653,11 +653,6 @@ public:
     range<token> get_primary_range_for(token right);
 
 #if 0
-    public ArrayList<Token> sortedTokens()
-    {
-        return sortedTokens;
-    }
-
     private Multimap<Range<Token>, InetAddress> getPendingRangesMM(String keyspaceName)
     {
         Multimap<Range<Token>, InetAddress> map = pendingRanges.get(keyspaceName);
