@@ -166,4 +166,22 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
     return ret;
 }
 
+std::vector<range<token>>
+abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address) {
+    return get_pending_address_ranges(tm, std::unordered_set<token>{pending_token}, pending_address);
+}
+
+std::vector<range<token>>
+abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) {
+    std::vector<range<token>> ret;
+    auto temp = tm.clone_only_token_map();
+    temp.update_normal_tokens(pending_tokens, pending_address);
+    for (auto& x : get_address_ranges(temp)) {
+        if (x.first == pending_address) {
+            ret.push_back(x.second);
+        }
+    }
+    return ret;
+}
+
 } // namespace locator
