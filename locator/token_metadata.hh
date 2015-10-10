@@ -810,15 +810,12 @@ public:
             lock.readLock().unlock();
         }
     }
+#endif
+public:
 
-    public Token getPredecessor(Token token)
-    {
-        List tokens = sortedTokens();
-        int index = Collections.binarySearch(tokens, token);
-        assert index >= 0 : token + " not found in " + StringUtils.join(tokenToEndpointMap.keySet(), ", ");
-        return (Token) (index == 0 ? tokens.get(tokens.size() - 1) : tokens.get(index - 1));
-    }
+    token get_predecessor(token t);
 
+#if 0
     public Token getSuccessor(Token token)
     {
         List tokens = sortedTokens();

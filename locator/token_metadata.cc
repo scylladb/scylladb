@@ -302,6 +302,17 @@ void token_metadata::remove_from_moving(inet_address endpoint) {
     invalidate_cached_rings();
 }
 
+token token_metadata::get_predecessor(token t) {
+    auto& tokens = sorted_tokens();
+    auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
+    assert(it != tokens.end() && *it == t);
+    if (it == tokens.begin()) {
+        // If the token is the first element, its preprocessor is the last element
+        return tokens.back();
+    } else {
+        return *(--it);
+    }
+}
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
