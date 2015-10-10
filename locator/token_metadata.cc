@@ -333,6 +333,34 @@ token_metadata::get_pending_ranges_mm(sstring keyspace_name) {
     return _pending_ranges[keyspace_name];
 }
 
+std::unordered_map<range<token>, std::unordered_set<inet_address>>
+token_metadata::get_pending_ranges(sstring keyspace_name) {
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
+    for (auto x : get_pending_ranges_mm(keyspace_name)) {
+        auto& range_token = x.first;
+        auto& ep = x.second;
+        auto it = ret.find(range_token);
+        if (it != ret.end()) {
+            it->second.emplace(ep);
+        } else {
+            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
+        }
+    }
+    return ret;
+}
+
+std::vector<range<token>>
+token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+    std::vector<range<token>> ret;
+    for (auto x : get_pending_ranges_mm(keyspace_name)) {
+        auto& range_token = x.first;
+        auto& ep = x.second;
+        if (ep == endpoint) {
+            ret.push_back(range_token);
+        }
+    }
+    return ret;
+}
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {

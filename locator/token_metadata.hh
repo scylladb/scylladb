@@ -655,26 +655,13 @@ public:
 
 private:
     std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);
-#if 0
+
+public:
     /** a mutable map may be returned but caller should not modify it */
-    public Map<Range<Token>, Collection<InetAddress>> getPendingRanges(String keyspaceName)
-    {
-        return getPendingRangesMM(keyspaceName).asMap();
-    }
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> get_pending_ranges(sstring keyspace_name);
 
-    public List<Range<Token>> getPendingRanges(String keyspaceName, InetAddress endpoint)
-    {
-        List<Range<Token>> ranges = new ArrayList<Range<Token>>();
-        for (Map.Entry<Range<Token>, InetAddress> entry : getPendingRangesMM(keyspaceName).entries())
-        {
-            if (entry.getValue().equals(endpoint))
-            {
-                ranges.add(entry.getKey());
-            }
-        }
-        return ranges;
-    }
-
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+#if 0
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
