@@ -113,6 +113,8 @@ public:
     // StorageService.getPrimaryRangesForEndpoint().
     std::vector<range<token>> get_primary_ranges(inet_address ep);
 
+    std::unordered_multimap<inet_address, range<token>> get_address_ranges(token_metadata& tm) const;
+
 };
 
 }
