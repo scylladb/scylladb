@@ -79,7 +79,7 @@ protected:
 
     void validate_replication_factor(sstring rf) const;
 
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) const = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, token_metadata& tm) const = 0;
 
 public:
     abstract_replication_strategy(

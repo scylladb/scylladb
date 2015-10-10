@@ -75,7 +75,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
     auto res = cached_endpoints.find(key_token);
 
     if (res == cached_endpoints.end()) {
-        auto endpoints = calculate_natural_endpoints(search_token);
+        auto endpoints = calculate_natural_endpoints(search_token, _token_metadata);
         cached_endpoints.emplace(key_token, endpoints);
 
         return std::move(endpoints);
@@ -113,7 +113,7 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
     std::vector<range<token>> ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
-        for (inet_address a : calculate_natural_endpoints(tok)) {
+        for (inet_address a : calculate_natural_endpoints(tok, _token_metadata)) {
             if (a == ep) {
                 ret.emplace_back(
                         range<token>::bound(prev_tok, false),
@@ -131,7 +131,7 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep) {
     std::vector<range<token>> ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok);
+        auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
         if (eps.size() > 0 && eps[0] == ep) {
             ret.emplace_back(
                     range<token>::bound(prev_tok, false),

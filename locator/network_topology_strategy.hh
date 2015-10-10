@@ -72,7 +72,7 @@ protected:
      * progress in each DC, rack etc.
      */
     virtual std::vector<inet_address> calculate_natural_endpoints(
-        const token& search_token) const override;
+        const token& search_token, token_metadata& tm) const override;
 
     virtual void validate_options() const override;
 
