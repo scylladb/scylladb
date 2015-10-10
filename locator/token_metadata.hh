@@ -135,6 +135,8 @@ private:
     std::unordered_set<inet_address> _leaving_endpoints;
     std::unordered_map<token, inet_address> _moving_endpoints;
 
+    std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
+
     std::vector<token> _sorted_tokens;
 
     topology _topology;
@@ -306,7 +308,6 @@ public:
     // (don't need to record Token here since it's still part of tokenToEndpointMap until it's done leaving)
     private final Set<InetAddress> leavingEndpoints = new HashSet<InetAddress>();
     // this is a cache of the calculation from {tokenToEndpointMap, bootstrapTokens, leavingEndpoints}
-    private final ConcurrentMap<String, Multimap<Range<Token>, InetAddress>> pendingRanges = new ConcurrentHashMap<String, Multimap<Range<Token>, InetAddress>>();
 
     // nodes which are migrating to the new tokens in the ring
     private final Set<Pair<Token, InetAddress>> _moving_endpoints = new HashSet<Pair<Token, InetAddress>>();
@@ -655,11 +656,11 @@ public:
 #if 0
     private Multimap<Range<Token>, InetAddress> getPendingRangesMM(String keyspaceName)
     {
-        Multimap<Range<Token>, InetAddress> map = pendingRanges.get(keyspaceName);
+        Multimap<Range<Token>, InetAddress> map = _pending_ranges.get(keyspaceName);
         if (map == null)
         {
             map = HashMultimap.create();
-            Multimap<Range<Token>, InetAddress> priorMap = pendingRanges.putIfAbsent(keyspaceName, map);
+            Multimap<Range<Token>, InetAddress> priorMap = _pending_ranges.putIfAbsent(keyspaceName, map);
             if (priorMap != null)
                 map = priorMap;
         }
@@ -720,7 +721,7 @@ public:
                 if (logger.isDebugEnabled())
                     logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
 
-                pendingRanges.put(keyspaceName, newPendingRanges);
+                _pending_ranges.put(keyspaceName, newPendingRanges);
                 return;
             }
 
@@ -780,10 +781,10 @@ public:
                 allLeftMetadata.removeEndpoint(endpoint);
             }
 
-            pendingRanges.put(keyspaceName, newPendingRanges);
+            _pending_ranges.put(keyspaceName, newPendingRanges);
 
             if (logger.isDebugEnabled())
-                logger.debug("Pending ranges:\n{}", (pendingRanges.isEmpty() ? "<empty>" : printPendingRanges()));
+                logger.debug("Pending ranges:\n{}", (_pending_ranges.isEmpty() ? "<empty>" : printPendingRanges()));
         }
         finally
         {
@@ -946,7 +947,7 @@ public:
             _endpoint_to_host_id_map.clear();
             _bootstrap_tokens.clear();
             _leaving_endpoints.clear();
-            pendingRanges.clear();
+            _pending_ranges.clear();
             _moving_endpoints.clear();
             sortedTokens.clear();
             topology.clear();
@@ -1001,7 +1002,7 @@ public:
                 }
             }
 
-            if (!pendingRanges.isEmpty())
+            if (!_pending_ranges.isEmpty())
             {
                 sb.append("Pending Ranges:");
                 sb.append(System.getProperty("line.separator"));
@@ -1020,7 +1021,7 @@ public:
     {
         StringBuilder sb = new StringBuilder();
 
-        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : pendingRanges.entrySet())
+        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : _pending_ranges.entrySet())
         {
             for (Map.Entry<Range<Token>, InetAddress> rmap : entry.getValue().entries())
             {
