@@ -653,20 +653,9 @@ public:
 
     range<token> get_primary_range_for(token right);
 
+private:
+    std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);
 #if 0
-    private Multimap<Range<Token>, InetAddress> getPendingRangesMM(String keyspaceName)
-    {
-        Multimap<Range<Token>, InetAddress> map = _pending_ranges.get(keyspaceName);
-        if (map == null)
-        {
-            map = HashMultimap.create();
-            Multimap<Range<Token>, InetAddress> priorMap = _pending_ranges.putIfAbsent(keyspaceName, map);
-            if (priorMap != null)
-                map = priorMap;
-        }
-        return map;
-    }
-
     /** a mutable map may be returned but caller should not modify it */
     public Map<Range<Token>, Collection<InetAddress>> getPendingRanges(String keyspaceName)
     {

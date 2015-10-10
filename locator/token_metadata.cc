@@ -328,6 +328,12 @@ range<token> token_metadata::get_primary_range_for(token right) {
     return get_primary_ranges_for({right}).front();
 }
 
+std::unordered_multimap<range<token>, inet_address>&
+token_metadata::get_pending_ranges_mm(sstring keyspace_name) {
+    return _pending_ranges[keyspace_name];
+}
+
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();
