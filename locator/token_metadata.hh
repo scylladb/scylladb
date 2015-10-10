@@ -47,6 +47,7 @@
 #include <experimental/optional>
 #include <boost/range/iterator_range.hpp>
 #include "query-request.hh"
+#include "range.hh"
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -653,21 +654,13 @@ public:
             lock.readLock().unlock();
         }
     }
+#endif
+public:
+    std::vector<range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
 
-    public Collection<Range<Token>> getPrimaryRangesFor(Collection<Token> tokens)
-    {
-        Collection<Range<Token>> ranges = new ArrayList<Range<Token>>(tokens.size());
-        for (Token right : tokens)
-            ranges.add(new Range<Token>(getPredecessor(right), right));
-        return ranges;
-    }
+    range<token> get_primary_range_for(token right);
 
-    @Deprecated
-    public Range<Token> getPrimaryRangeFor(Token right)
-    {
-        return getPrimaryRangesFor(Arrays.asList(right)).iterator().next();
-    }
-
+#if 0
     public ArrayList<Token> sortedTokens()
     {
         return sortedTokens;

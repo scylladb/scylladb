@@ -314,6 +314,20 @@ token token_metadata::get_predecessor(token t) {
     }
 }
 
+std::vector<range<token>> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    std::vector<range<token>> ranges;
+    ranges.reserve(tokens.size());
+    for (auto right : tokens) {
+        ranges.emplace_back(range<token>::bound(get_predecessor(right), false),
+                            range<token>::bound(right, true));
+    }
+    return ranges;
+}
+
+range<token> token_metadata::get_primary_range_for(token right) {
+    return get_primary_ranges_for({right}).front();
+}
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();
