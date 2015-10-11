@@ -51,23 +51,16 @@ namespace bpo = boost::program_options;
 
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
+    using namespace boost::filesystem;
     sstring file;
 
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
     } else {
-        sstring confdir;
-        auto* cd = std::getenv("SCYLLA_CONF");
-        if (cd != nullptr) {
-            confdir = cd;
-        } else {
-            auto* p = std::getenv("SCYLLA_HOME");
-            if (p != nullptr) {
-                confdir = sstring(p) + "/";
-            }
-            confdir += "conf";
-        }
-        file = confdir + "/scylla.yaml";
+        auto file_path = db::config::get_conf_dir();
+        file_path /= path("scylla.yaml");
+
+        file = file_path.string();
     }
     return cfg.read_from_file(file).handle_exception([file](auto ep) {
         startlog.error("Could not read configuration file {}: {}", file, ep);

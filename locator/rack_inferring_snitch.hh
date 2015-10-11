@@ -68,12 +68,6 @@ struct rack_inferring_snitch : public snitch_base {
         return std::to_string((endpoint.raw_addr() >> 16) & 0xFF);
     }
 
-    // noop
-    virtual future<> stop() override {
-        _state = snitch_state::stopped;
-        return make_ready_future<>();
-    }
-
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.RackInferringSnitch";
     }

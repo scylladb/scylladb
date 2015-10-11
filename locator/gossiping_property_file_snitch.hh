@@ -51,8 +51,6 @@
 
 namespace locator {
 
-class bad_property_file_error : public std::exception {};
-
 /**
  * cassandra-rackdc.properties file has the following format:
  *
@@ -62,7 +60,6 @@ class bad_property_file_error : public std::exception {};
  */
 class gossiping_property_file_snitch : public production_snitch_base {
 public:
-    static constexpr const char* snitch_properties_filename = "cassandra-rackdc.properties";
     // Check the property file for changes every 60s.
     static constexpr timer<>::duration reload_property_file_period() {
         return std::chrono::seconds(60);
@@ -73,46 +70,15 @@ public:
     virtual future<> start() override;
     virtual future<> pause_io() override;
     virtual void resume_io() override;
-
-    gossiping_property_file_snitch(
-        const sstring& fname = snitch_properties_filename,
-        unsigned io_cpu_id = 0);
-
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
     }
 
+    gossiping_property_file_snitch(
+        const sstring& fname = snitch_properties_filename,
+        unsigned io_cpuid = 0);
+
 private:
-    static logging::logger& logger() {
-        return i_endpoint_snitch::snitch_logger;
-    }
-
-    template <typename... Args>
-    void err(const char* fmt, Args&&... args) const {
-        logger().error(fmt, std::forward<Args>(args)...);
-    }
-
-    template <typename... Args>
-    void warn(const char* fmt, Args&&... args) const {
-        logger().warn(fmt, std::forward<Args>(args)...);
-    }
-
-    void throw_double_declaration(const sstring& key) const {
-        err("double \"{}\" declaration in {}", key, _fname);
-        throw bad_property_file_error();
-    }
-
-    void throw_bad_format(const sstring& line) const {
-        err("Bad format in properties file {}: {}", _fname, line);
-        throw bad_property_file_error();
-    }
-
-    void throw_incomplete_file() const {
-        err("Property file {} is incomplete. Both \"dc\" and \"rack\" "
-            "labels have to be defined.", _fname);
-        throw bad_property_file_error();
-    }
-
     void periodic_reader_callback();
 
     /**
@@ -154,12 +120,8 @@ private:
     void start_io();
 
 private:
-    sstring _fname;
     timer<> _file_reader;
-    lw_shared_ptr<file> _sf;
     std::experimental::optional<timespec> _last_file_mod;
-    size_t _fsize;
-    std::string _srting_buf;
     std::istringstream _istrm;
     bool _gossip_started = false;
     bool _prefer_local = false;

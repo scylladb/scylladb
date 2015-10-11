@@ -116,7 +116,11 @@ public:
 
     virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
 
-    virtual future<> stop() = 0;
+    // noop by default
+    virtual future<> stop() {
+        _state = snitch_state::stopped;
+        return make_ready_future<>();
+    }
 
     // noop by default
     virtual future<> pause_io() {
@@ -161,14 +165,17 @@ public:
     }
 
 protected:
+    static logging::logger& logger() {
+        static logging::logger snitch_logger("snitch_logger");
+        return snitch_logger;
+    }
+
     static unsigned& io_cpu_id() {
         static unsigned id = 0;
         return id;
     }
 
 protected:
-    static logging::logger snitch_logger;
-
     enum class snitch_state {
         initializing,
         running,
@@ -250,7 +257,7 @@ future<> i_endpoint_snitch::init_snitch_obj(
                 s->set_my_distributed(&snitch_obj);
                 local_inst = std::move(s);
             } catch (no_such_class& e) {
-                snitch_logger.error("Can't create snitch {}: not supported", snitch_name);
+                logger().error("Can't create snitch {}: not supported", snitch_name);
                 throw;
             } catch (...) {
                 throw;

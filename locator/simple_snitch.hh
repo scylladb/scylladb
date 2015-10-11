@@ -88,12 +88,6 @@ struct simple_snitch : public snitch_base {
         return 0;
     }
 
-    // noop
-    virtual future<> stop() override {
-        _state = snitch_state::stopped;
-        return make_ready_future<>();
-    }
-
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.SimpleSnitch";
     }
