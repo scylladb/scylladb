@@ -719,6 +719,23 @@ future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_i
     });
 }
 
+future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips() {
+    sstring req = "SELECT peer, preferred_ip FROM system.%s";
+
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
+        std::unordered_map<gms::inet_address, gms::inet_address> res;
+
+        for (auto& r : *cql_res_set) {
+            if (r.has("preferred_ip")) {
+                res.emplace(gms::inet_address(r.get_as<net::ipv4_address>("peer")),
+                            gms::inet_address(r.get_as<net::ipv4_address>("preferred_ip")));
+            }
+        }
+
+        return res;
+    });
+}
+
 template <typename Value>
 static future<> update_cached_values(gms::inet_address ep, sstring column_name, Value value) {
     return make_ready_future<>();
