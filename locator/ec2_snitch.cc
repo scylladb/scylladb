@@ -14,7 +14,7 @@ future<> ec2_snitch::start() {
     _state = snitch_state::initializing;
 
     if (engine().cpu_id() == io_cpu_id()) {
-        return aws_api_call(ZONE_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
+        return aws_api_call(AWS_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
             assert(az.size());
 
             std::vector<std::string> splits;
