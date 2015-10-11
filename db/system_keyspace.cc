@@ -714,7 +714,7 @@ future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
+    return execute_cql(req, PEERS, ep.addr(), preferred_ip.addr()).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
