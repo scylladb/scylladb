@@ -609,7 +609,7 @@
          "path":"/storage_service/keyspace_cleanup/{keyspace}",
          "operations":[
             {
-               "method":"GET",
+               "method":"POST",
                "summary":"Trigger a cleanup of keys on a single keyspace",
                "type":"int",
                "nickname":"force_keyspace_cleanup",
