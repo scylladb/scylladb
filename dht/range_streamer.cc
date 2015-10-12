@@ -38,6 +38,8 @@
 
 #include "dht/range_streamer.hh"
 #include "utils/fb_utilities.hh"
+#include "locator/snitch_base.hh"
+#include "database.hh"
 
 namespace dht {
 
@@ -98,6 +100,41 @@ range_streamer::get_range_fetch_map(const std::unordered_multimap<range<token>, 
     }
 
     return range_fetch_map_map;
+}
+
+std::unordered_multimap<range<token>, inet_address>
+range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<range<token>> desired_ranges) {
+    logger.debug("{} ks={}", __func__, keyspace_name);
+
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto& strat = ks.get_replication_strategy();
+
+    // std::unordered_multimap<range<token>, inet_address>
+    auto tm = _metadata.clone_only_token_map();
+    auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(tm));
+
+    std::unordered_multimap<range<token>, inet_address> range_sources;
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    for (auto& desired_range : desired_ranges) {
+        auto found = false;
+        for (auto& x : range_addresses) {
+            const range<token>& src_range = x.first;
+            if (src_range.contains(desired_range, dht::tri_compare)) {
+                std::unordered_set<inet_address>& addresses = x.second;
+                auto preferred = snitch->get_sorted_list_by_proximity(_address, addresses);
+                for (inet_address& p : preferred) {
+                    range_sources.emplace(desired_range, p);
+                }
+                found = true;
+            }
+        }
+
+        if (!found) {
+            throw std::runtime_error(sprint("No sources found for %s", desired_range));
+        }
+    }
+
+    return range_sources;
 }
 
 } // dht

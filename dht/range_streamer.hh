@@ -43,8 +43,11 @@
 #include "gms/inet_address.hh"
 #include "gms/i_failure_detector.hh"
 #include "range.hh"
+#include <seastar/core/distributed.hh>
 #include <unordered_map>
 #include <memory>
+
+class database;
 
 namespace dht {
 /**
@@ -103,16 +106,17 @@ public:
     }
 #endif
 
-    range_streamer(token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description)
-        : _metadata(tm)
+    range_streamer(distributed<database>& db, token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description)
+        : _db(db)
+        , _metadata(tm)
         , _tokens(std::move(tokens))
         , _address(address)
         , _description(std::move(description))
         , _stream_plan(_description, true) {
     }
 
-    range_streamer(token_metadata& tm, inet_address address, sstring description)
-        : range_streamer(tm, std::unordered_set<token>(), address, description) {
+    range_streamer(distributed<database>& db, token_metadata& tm, inet_address address, sstring description)
+        : range_streamer(db, tm, std::unordered_set<token>(), address, description) {
     }
 
 #if 0
@@ -151,36 +155,15 @@ public:
                 && tokens != null
                 && metadata.getAllEndpoints().size() != strat.getReplicationFactor();
     }
-
+#endif
+private:
     /**
      * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
      * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.
      */
-    private Multimap<Range<Token>, InetAddress> getAllRangesWithSourcesFor(String keyspaceName, Collection<Range<Token>> desiredRanges)
-    {
-        AbstractReplicationStrategy strat = Keyspace.open(keyspaceName).getReplicationStrategy();
-        Multimap<Range<Token>, InetAddress> rangeAddresses = strat.getRangeAddresses(metadata.cloneOnlyTokenMap());
-
-        Multimap<Range<Token>, InetAddress> rangeSources = ArrayListMultimap.create();
-        for (Range<Token> desiredRange : desiredRanges)
-        {
-            for (Range<Token> range : rangeAddresses.keySet())
-            {
-                if (range.contains(desiredRange))
-                {
-                    List<InetAddress> preferred = DatabaseDescriptor.getEndpointSnitch().getSortedListByProximity(address, rangeAddresses.get(range));
-                    rangeSources.putAll(desiredRange, preferred);
-                    break;
-                }
-            }
-
-            if (!rangeSources.keySet().contains(desiredRange))
-                throw new IllegalStateException("No sources found for " + desiredRange);
-        }
-
-        return rangeSources;
-    }
-
+    std::unordered_multimap<range<token>, inet_address>
+    get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<range<token>> desired_ranges);
+#if 0
     /**
      * Get a map of all ranges and the source that will be cleaned up once this bootstrapped node is added for the given ranges.
      * For each range, the list should only contain a single source. This allows us to consistently migrate data without violating
@@ -283,6 +266,7 @@ private:
     }
 #endif
 private:
+    distributed<database>& _db;
     token_metadata& _metadata;
     std::unordered_set<token> _tokens;
     inet_address _address;
