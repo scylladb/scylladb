@@ -809,7 +809,7 @@ future<> cql_server::connection::write_response(shared_ptr<cql_server::response>
 {
     _ready_to_respond = _ready_to_respond.then([this, response = std::move(response)] () mutable {
         return response->output(_write_buf, _version).then([this, response] {
-            return _write_buf.batch_flush();
+            return _write_buf.flush();
         });
     });
     return make_ready_future<>();
