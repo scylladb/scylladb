@@ -49,14 +49,16 @@ class boot_strapper {
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
     using token = dht::token;
+    distributed<database>& _db;
     /* endpoint that needs to be bootstrapped */
     inet_address _address;
     /* token of the node being bootstrapped. */
     std::unordered_set<token> _tokens;
     token_metadata _token_metadata;
 public:
-    boot_strapper(inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
-        : _address(addr)
+    boot_strapper(distributed<database>& db, inet_address addr, std::unordered_set<token> tokens, token_metadata tmd)
+        : _db(db)
+        , _address(addr)
         , _tokens(tokens)
         , _token_metadata(tmd) {
     }
