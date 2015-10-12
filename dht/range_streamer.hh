@@ -101,21 +101,21 @@ public:
             return snitch.getDatacenter(endpoint).equals(sourceDc);
         }
     }
+#endif
 
-    public RangeStreamer(TokenMetadata metadata, Collection<Token> tokens, InetAddress address, String description)
-    {
-        this.metadata = metadata;
-        this.tokens = tokens;
-        this.address = address;
-        this.description = description;
-        this.streamPlan = new StreamPlan(description, true);
+    range_streamer(token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description)
+        : _metadata(tm)
+        , _tokens(std::move(tokens))
+        , _address(address)
+        , _description(std::move(description))
+        , _stream_plan(_description, true) {
     }
 
-    public RangeStreamer(TokenMetadata metadata, InetAddress address, String description)
-    {
-        this(metadata, null, address, description);
+    range_streamer(token_metadata& tm, inet_address address, sstring description)
+        : range_streamer(tm, std::unordered_set<token>(), address, description) {
     }
 
+#if 0
     public void addSourceFilter(ISourceFilter filter)
     {
         sourceFilters.add(filter);
@@ -312,8 +312,8 @@ public:
     }
 #endif
 private:
+    token_metadata& _metadata;
     std::unordered_set<token> _tokens;
-    token_metadata _metadata;
     inet_address _address;
     sstring _description;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> _to_fetch;
