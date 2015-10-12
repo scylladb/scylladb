@@ -161,6 +161,39 @@ public:
             return !before(point, cmp) && !after(point, cmp);
         }
     }
+    // Returns true iff all values contained by other are also contained by this.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool contains(const range& other, Comparator&& cmp) const {
+        bool this_wraps = is_wrap_around(cmp);
+        bool other_wraps = other.is_wrap_around(cmp);
+
+        if (this_wraps && other_wraps) {
+            return cmp(start()->value(), other.start()->value())
+                   <= -(!start()->is_inclusive() && other.start()->is_inclusive())
+                && cmp(end()->value(), other.end()->value())
+                   >= (!end()->is_inclusive() && other.end()->is_inclusive());
+        }
+
+        if (!this_wraps && !other_wraps) {
+            return (!start() || (other.start()
+                                 && cmp(start()->value(), other.start()->value())
+                                    <= -(!start()->is_inclusive() && other.start()->is_inclusive())))
+                && (!end() || (other.end()
+                               && cmp(end()->value(), other.end()->value())
+                                  >= (!end()->is_inclusive() && other.end()->is_inclusive())));
+        }
+
+        if (other_wraps) { // && !this_wraps
+            return false;
+        }
+
+        // !other_wraps && this_wraps
+        return (other.start() && cmp(start()->value(), other.start()->value())
+                                 <= -(!start()->is_inclusive() && other.start()->is_inclusive()))
+                || (other.end() && cmp(end()->value(), other.end()->value())
+                                   >= (!end()->is_inclusive() && other.end()->is_inclusive()));
+    }
     // split range in two around a split_point. split_point has to be inside the range
     // split_point will belong to first range
     // Comparator must define a total ordering on T.
