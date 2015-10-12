@@ -14,49 +14,58 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  */
-package org.apache.cassandra.dht;
 
-import java.net.InetAddress;
-import java.util.*;
+/*
+ * This file is part of Scylla.
+ *
+ * Scylla is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Scylla is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
+ */
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.Sets;
-import org.apache.cassandra.gms.EndpointState;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#pragma once
 
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.SystemKeyspace;
-import org.apache.cassandra.gms.FailureDetector;
-import org.apache.cassandra.gms.Gossiper;
-import org.apache.cassandra.gms.IFailureDetector;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.locator.IEndpointSnitch;
-import org.apache.cassandra.locator.TokenMetadata;
-import org.apache.cassandra.streaming.StreamPlan;
-import org.apache.cassandra.streaming.StreamResultFuture;
-import org.apache.cassandra.utils.FBUtilities;
+#include "locator/token_metadata.hh"
+#include "streaming/stream_plan.hh"
+#include "gms/inet_address.hh"
+#include "range.hh"
+#include <unordered_map>
 
+namespace dht {
 /**
  * Assists in streaming ranges to a node.
  */
-public class RangeStreamer
-{
-    private static final Logger logger = LoggerFactory.getLogger(RangeStreamer.class);
-    public static final boolean useStrictConsistency = Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement","true"));
-    private final Collection<Token> tokens;
-    private final TokenMetadata metadata;
-    private final InetAddress address;
-    private final String description;
-    private final Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> toFetch = HashMultimap.create();
-    private final Set<ISourceFilter> sourceFilters = new HashSet<ISourceFilter>();
-    private final StreamPlan streamPlan;
-
+class range_streamer {
+public:
+    using inet_address = gms::inet_address;
+    using token_metadata = locator::token_metadata;
+    using stream_plan = streaming::stream_plan;
+    static bool use_strict_consistency() {
+        //FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement","true"));
+        return true;
+    }
+private:
+    std::unordered_set<token> _tokens;
+    token_metadata _metadata;
+    inet_address _address;
+    sstring _description;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> _to_fetch;
+    //Set<ISourceFilter> sourceFilters = new HashSet<ISourceFilter>();
+    stream_plan _stream_plan;
+#if 0
     /**
      * A filter applied to sources to stream from when constructing a fetch map.
      */
@@ -312,4 +321,7 @@ public class RangeStreamer
 
         return streamPlan.execute();
     }
-}
+#endif
+};
+
+} // dht
