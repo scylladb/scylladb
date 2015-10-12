@@ -119,12 +119,11 @@ public:
         : range_streamer(db, tm, std::unordered_set<token>(), address, description) {
     }
 
-#if 0
-    public void addSourceFilter(ISourceFilter filter)
-    {
-        sourceFilters.add(filter);
+    void add_source_filter(std::unique_ptr<i_source_filter> filter) {
+        _source_filters.emplace(std::move(filter));
     }
 
+#if 0
     public void addRanges(String keyspaceName, Collection<Range<Token>> ranges)
     {
         Multimap<Range<Token>, InetAddress> rangesForKeyspace = useStrictSourcesForRanges(keyspaceName)
