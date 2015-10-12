@@ -145,17 +145,10 @@ public:
             toFetch.put(keyspaceName, entry);
         }
     }
-
-    private boolean useStrictSourcesForRanges(String keyspaceName)
-    {
-        AbstractReplicationStrategy strat = Keyspace.open(keyspaceName).getReplicationStrategy();
-        return !DatabaseDescriptor.isReplacing()
-                && useStrictConsistency
-                && tokens != null
-                && metadata.getAllEndpoints().size() != strat.getReplicationFactor();
-    }
 #endif
+
 private:
+    bool use_strict_sources_for_ranges(const sstring& keyspace_name);
     /**
      * Get a map of all ranges and their respective sources that are candidates for streaming the given ranges
      * to us. For each range, the list of sources is sorted by proximity relative to the given destAddress.

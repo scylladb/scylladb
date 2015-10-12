@@ -202,4 +202,15 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
     return range_sources;
 }
 
+bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name) {
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto& strat = ks.get_replication_strategy();
+    // FIXME: DatabaseDescriptor.isReplacing()
+    auto is_replacing = false;
+    return !is_replacing
+           && use_strict_consistency()
+           && !_tokens.empty()
+           && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
+}
+
 } // dht
