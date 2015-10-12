@@ -240,49 +240,20 @@ public:
 
         return rangeSources;
     }
-
+#endif
+private:
     /**
      * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)
      * @param sourceFilters A (possibly empty) collection of source filters to apply. In addition to any filters given
      *                      here, we always exclude ourselves.
      * @return
      */
-    private static Multimap<InetAddress, Range<Token>> getRangeFetchMap(Multimap<Range<Token>, InetAddress> rangesWithSources,
-                                                                        Collection<ISourceFilter> sourceFilters, String keyspace)
-    {
-        Multimap<InetAddress, Range<Token>> rangeFetchMapMap = HashMultimap.create();
-        for (Range<Token> range : rangesWithSources.keySet())
-        {
-            boolean foundSource = false;
+    static std::unordered_multimap<inet_address, range<token>>
+    get_range_fetch_map(const std::unordered_multimap<range<token>, inet_address>& ranges_with_sources,
+                        const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
+                        const sstring& keyspace);
 
-            outer:
-            for (InetAddress address : rangesWithSources.get(range))
-            {
-                if (address.equals(FBUtilities.getBroadcastAddress()))
-                {
-                    // If localhost is a source, we have found one, but we don't add it to the map to avoid streaming locally
-                    foundSource = true;
-                    continue;
-                }
-
-                for (ISourceFilter filter : sourceFilters)
-                {
-                    if (!filter.shouldInclude(address))
-                        continue outer;
-                }
-
-                rangeFetchMapMap.put(address, range);
-                foundSource = true;
-                break; // ensure we only stream from one other node for each range
-            }
-
-            if (!foundSource)
-                throw new IllegalStateException("unable to find sufficient sources for streaming range " + range + " in keyspace " + keyspace);
-        }
-
-        return rangeFetchMapMap;
-    }
-
+#if 0
     public static Multimap<InetAddress, Range<Token>> getWorkMap(Multimap<Range<Token>, InetAddress> rangesWithSourceTarget, String keyspace)
     {
         return getRangeFetchMap(rangesWithSourceTarget, Collections.<ISourceFilter>singleton(new FailureDetectorSourceFilter(FailureDetector.instance)), keyspace);

@@ -37,7 +37,67 @@
  */
 
 #include "dht/range_streamer.hh"
+#include "utils/fb_utilities.hh"
 
 namespace dht {
+
+using inet_address = gms::inet_address;
+
+static std::unordered_map<range<token>, std::unordered_set<inet_address>>
+unordered_multimap_to_unordered_map(const std::unordered_multimap<range<token>, inet_address>& multimap) {
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
+    for (auto x : multimap) {
+        auto& range_token = x.first;
+        auto& ep = x.second;
+        auto it = ret.find(range_token);
+        if (it != ret.end()) {
+            it->second.emplace(ep);
+        } else {
+            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
+        }
+    }
+    return ret;
+}
+
+std::unordered_multimap<inet_address, range<token>>
+range_streamer::get_range_fetch_map(const std::unordered_multimap<range<token>, inet_address>& ranges_with_sources,
+                                    const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
+                                    const sstring& keyspace) {
+    std::unordered_multimap<inet_address, range<token>> range_fetch_map_map;
+    for (auto x : unordered_multimap_to_unordered_map(ranges_with_sources)) {
+        const range<token>& range_ = x.first;
+        const std::unordered_set<inet_address>& addresses = x.second;
+        bool found_source = false;
+        for (auto address : addresses) {
+            if (address == utils::fb_utilities::get_broadcast_address()) {
+                // If localhost is a source, we have found one, but we don't add it to the map to avoid streaming locally
+                found_source = true;
+                continue;
+            }
+
+            auto filtered = false;
+            for (const auto& filter : source_filters) {
+                if (!filter->should_include(address)) {
+                    filtered = true;
+                    break;
+                }
+            }
+
+            if (filtered) {
+                continue;
+            }
+
+            range_fetch_map_map.emplace(address, range_);
+            found_source = true;
+            break; // ensure we only stream from one other node for each range
+        }
+
+        if (!found_source) {
+            throw std::runtime_error(sprint("unable to find sufficient sources for streaming range %s in keyspace %s", range_, keyspace));
+        }
+    }
+
+    return range_fetch_map_map;
+}
 
 } // dht
