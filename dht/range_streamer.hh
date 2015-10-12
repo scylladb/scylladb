@@ -41,8 +41,10 @@
 #include "locator/token_metadata.hh"
 #include "streaming/stream_plan.hh"
 #include "gms/inet_address.hh"
+#include "gms/i_failure_detector.hh"
 #include "range.hh"
 #include <unordered_map>
+#include <memory>
 
 namespace dht {
 /**
@@ -53,46 +55,33 @@ public:
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
     using stream_plan = streaming::stream_plan;
+    using i_failure_detector = gms::i_failure_detector;
     static bool use_strict_consistency() {
         //FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement","true"));
         return true;
     }
-private:
-    std::unordered_set<token> _tokens;
-    token_metadata _metadata;
-    inet_address _address;
-    sstring _description;
-    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> _to_fetch;
-    //Set<ISourceFilter> sourceFilters = new HashSet<ISourceFilter>();
-    stream_plan _stream_plan;
-#if 0
+public:
     /**
      * A filter applied to sources to stream from when constructing a fetch map.
      */
-    public static interface ISourceFilter
-    {
-        public boolean shouldInclude(InetAddress endpoint);
-    }
+    class i_source_filter {
+    public:
+        virtual bool should_include(inet_address endpoint) = 0;
+    };
 
     /**
      * Source filter which excludes any endpoints that are not alive according to a
      * failure detector.
      */
-    public static class FailureDetectorSourceFilter implements ISourceFilter
-    {
-        private final IFailureDetector fd;
+    class failure_detector_source_filter : public i_source_filter {
+    private:
+        gms::i_failure_detector& _fd;
+    public:
+        failure_detector_source_filter(i_failure_detector& fd) : _fd(fd) { }
+        virtual bool should_include(inet_address endpoint) override { return _fd.is_alive(endpoint); }
+    };
 
-        public FailureDetectorSourceFilter(IFailureDetector fd)
-        {
-            this.fd = fd;
-        }
-
-        public boolean shouldInclude(InetAddress endpoint)
-        {
-            return fd.isAlive(endpoint);
-        }
-    }
-
+#if 0
     /**
      * Source filter which excludes any endpoints that are not in a specific data center.
      */
@@ -322,6 +311,14 @@ private:
         return streamPlan.execute();
     }
 #endif
+private:
+    std::unordered_set<token> _tokens;
+    token_metadata _metadata;
+    inet_address _address;
+    sstring _description;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> _to_fetch;
+    std::unordered_set<std::unique_ptr<i_source_filter>> _source_filters;
+    stream_plan _stream_plan;
 };
 
 } // dht
