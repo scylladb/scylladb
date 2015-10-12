@@ -1125,34 +1125,14 @@ public:
         }
         return Keyspace.open(keyspaceName);
     }
+#endif
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
      * If no tag is specified we will remove all snapshots.
      */
-    public void clearSnapshot(String tag, String... keyspaceNames) throws IOException
-    {
-        if(tag == null)
-            tag = "";
-
-        Set<String> keyspaces = new HashSet<>();
-        for (String dataDir : DatabaseDescriptor.getAllDataFileLocations())
-        {
-            for(String keyspaceDir : new File(dataDir).list())
-            {
-                // Only add a ks if it has been specified as a param, assuming params were actually provided.
-                if (keyspaceNames.length > 0 && !Arrays.asList(keyspaceNames).contains(keyspaceDir))
-                    continue;
-                keyspaces.add(keyspaceDir);
-            }
-        }
-
-        for (String keyspace : keyspaces)
-            Keyspace.clearSnapshot(tag, keyspace);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Cleared out snapshot directories");
-    }
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
+#if 0
 
     public Map<String, TabularData> getSnapshotDetails()
     {

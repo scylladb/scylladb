@@ -1317,6 +1317,29 @@ future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring c
     });
 }
 
+// For the filesystem operations, this code will assume that all keyspaces are visible in all shards
+// (as we have been doing for a lot of the other operations, like the snapshot itself).
+future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+    std::vector<std::reference_wrapper<keyspace>> keyspaces;
+    for (auto& ksname: keyspace_names) {
+        try {
+            keyspaces.push_back(std::reference_wrapper<keyspace>(_db.local().find_keyspace(ksname)));
+        } catch (no_such_keyspace& e) {
+            return make_exception_future(std::current_exception());
+        }
+    }
+
+    auto deleted_keyspaces = make_lw_shared<std::vector<sstring>>();
+    return parallel_for_each(keyspaces, [this, tag, deleted_keyspaces] (auto& ks) {
+        return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
+            auto& cf = _db.local().find_column_family(pair.second);
+            return cf.clear_snapshot(tag);
+         });
+    });
+    logger.debug("Cleared out snapshot directories");
+}
+
+
 future<> storage_service::start_rpc_server() {
     fail(unimplemented::cause::STORAGE_SERVICE);
 #if 0
