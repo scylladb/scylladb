@@ -41,8 +41,11 @@
 #include "locator/snitch_base.hh"
 #include "database.hh"
 #include "gms/gossiper.hh"
+#include "log.hh"
 
 namespace dht {
+
+logging::logger logger("range_streamer");
 
 using inet_address = gms::inet_address;
 
@@ -211,6 +214,38 @@ bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name)
            && use_strict_consistency()
            && !_tokens.empty()
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
+}
+
+void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<range<token>> ranges) {
+    auto ranges_for_keyspace = use_strict_sources_for_ranges(keyspace_name)
+        ? get_all_ranges_with_strict_sources_for(keyspace_name, ranges)
+        : get_all_ranges_with_sources_for(keyspace_name, ranges);
+
+    if (logger.is_enabled(logging::log_level::debug)) {
+        for (auto& x : ranges_for_keyspace) {
+            logger.debug("{} : range {} exists on {}", _description, x.first, x.second);
+        }
+    }
+
+    // TODO: share code with unordered_multimap_to_unordered_map
+    std::unordered_map<inet_address, std::vector<range<token>>> tmp;
+    for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
+        auto& addr = x.first;
+        auto& range_ = x.second;
+        auto it = tmp.find(addr);
+        if (it != tmp.end()) {
+            it->second.push_back(range_);
+        } else {
+            tmp.emplace(addr, std::vector<range<token>>{range_});
+        }
+    }
+
+    if (logger.is_enabled(logging::log_level::debug)) {
+        for (auto& x : tmp) {
+            logger.debug("{} : range {} from source {} for keyspace {}", _description, x.second, x.first, keyspace_name);
+        }
+    }
+    _to_fetch.emplace(keyspace_name, std::move(tmp));
 }
 
 } // dht

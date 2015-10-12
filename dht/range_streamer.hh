@@ -123,30 +123,7 @@ public:
         _source_filters.emplace(std::move(filter));
     }
 
-#if 0
-    public void addRanges(String keyspaceName, Collection<Range<Token>> ranges)
-    {
-        Multimap<Range<Token>, InetAddress> rangesForKeyspace = useStrictSourcesForRanges(keyspaceName)
-                ? getAllRangesWithStrictSourcesFor(keyspaceName, ranges) : getAllRangesWithSourcesFor(keyspaceName, ranges);
-
-        if (logger.isDebugEnabled())
-        {
-            for (Map.Entry<Range<Token>, InetAddress> entry : rangesForKeyspace.entries())
-                logger.debug(String.format("%s: range %s exists on %s", description, entry.getKey(), entry.getValue()));
-        }
-
-        for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : getRangeFetchMap(rangesForKeyspace, sourceFilters, keyspaceName).asMap().entrySet())
-        {
-            if (logger.isDebugEnabled())
-            {
-                for (Range<Token> r : entry.getValue())
-                    logger.debug(String.format("%s: range %s from source %s for keyspace %s", description, r, entry.getKey(), keyspaceName));
-            }
-            toFetch.put(keyspaceName, entry);
-        }
-    }
-#endif
-
+    void add_ranges(const sstring& keyspace_name, std::vector<range<token>> ranges);
 private:
     bool use_strict_sources_for_ranges(const sstring& keyspace_name);
     /**
