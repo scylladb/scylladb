@@ -163,67 +163,13 @@ private:
      */
     std::unordered_multimap<range<token>, inet_address>
     get_all_ranges_with_sources_for(const sstring& keyspace_name, std::vector<range<token>> desired_ranges);
-#if 0
     /**
      * Get a map of all ranges and the source that will be cleaned up once this bootstrapped node is added for the given ranges.
      * For each range, the list should only contain a single source. This allows us to consistently migrate data without violating
      * consistency.
      */
-    private Multimap<Range<Token>, InetAddress> getAllRangesWithStrictSourcesFor(String table, Collection<Range<Token>> desiredRanges)
-    {
-
-        assert tokens != null;
-        AbstractReplicationStrategy strat = Keyspace.open(table).getReplicationStrategy();
-
-        //Active ranges
-        TokenMetadata metadataClone = metadata.cloneOnlyTokenMap();
-        Multimap<Range<Token>,InetAddress> addressRanges = strat.getRangeAddresses(metadataClone);
-
-        //Pending ranges
-        metadataClone.updateNormalTokens(tokens, address);
-        Multimap<Range<Token>,InetAddress> pendingRangeAddresses = strat.getRangeAddresses(metadataClone);
-
-        //Collects the source that will have its range moved to the new node
-        Multimap<Range<Token>, InetAddress> rangeSources = ArrayListMultimap.create();
-
-        for (Range<Token> desiredRange : desiredRanges)
-        {
-            for (Map.Entry<Range<Token>, Collection<InetAddress>> preEntry : addressRanges.asMap().entrySet())
-            {
-                if (preEntry.getKey().contains(desiredRange))
-                {
-                    Set<InetAddress> oldEndpoints = Sets.newHashSet(preEntry.getValue());
-                    Set<InetAddress> newEndpoints = Sets.newHashSet(pendingRangeAddresses.get(desiredRange));
-
-                    //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
-                    //So we need to be careful to only be strict when endpoints == RF
-                    if (oldEndpoints.size() == strat.getReplicationFactor())
-                    {
-                        oldEndpoints.removeAll(newEndpoints);
-                        assert oldEndpoints.size() == 1 : "Expected 1 endpoint but found " + oldEndpoints.size();
-                    }
-
-                    rangeSources.put(desiredRange, oldEndpoints.iterator().next());
-                }
-            }
-
-            //Validate
-            Collection<InetAddress> addressList = rangeSources.get(desiredRange);
-            if (addressList == null || addressList.isEmpty())
-                throw new IllegalStateException("No sources found for " + desiredRange);
-
-            if (addressList.size() > 1)
-                throw new IllegalStateException("Multiple endpoints found for " + desiredRange);
-
-            InetAddress sourceIp = addressList.iterator().next();
-            EndpointState sourceState = Gossiper.instance.getEndpointStateForEndpoint(sourceIp);
-            if (Gossiper.instance.isEnabled() && (sourceState == null || !sourceState.isAlive()))
-                throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
-        }
-
-        return rangeSources;
-    }
-#endif
+    std::unordered_multimap<range<token>, inet_address>
+    get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, std::vector<range<token>> desired_ranges);
 private:
     /**
      * @param rangesWithSources The ranges we want to fetch (key) and their potential sources (value)

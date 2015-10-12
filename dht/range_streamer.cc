@@ -40,6 +40,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/snitch_base.hh"
 #include "database.hh"
+#include "gms/gossiper.hh"
 
 namespace dht {
 
@@ -131,6 +132,70 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
 
         if (!found) {
             throw std::runtime_error(sprint("No sources found for %s", desired_range));
+        }
+    }
+
+    return range_sources;
+}
+
+std::unordered_multimap<range<token>, inet_address>
+range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_name, std::vector<range<token>> desired_ranges) {
+    logger.debug("{} ks={}", __func__, keyspace_name);
+    assert (_tokens.empty() == false);
+
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto& strat = ks.get_replication_strategy();
+
+    //Active ranges
+    auto metadata_clone = _metadata.clone_only_token_map();
+    auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(metadata_clone));
+
+    //Pending ranges
+    metadata_clone.update_normal_tokens(_tokens, _address);
+    auto pending_range_addresses  = unordered_multimap_to_unordered_map(strat.get_range_addresses(metadata_clone));
+
+    //Collects the source that will have its range moved to the new node
+    std::unordered_multimap<range<token>, inet_address> range_sources;
+
+    for (auto& desired_range : desired_ranges) {
+        for (auto& x : range_addresses) {
+            const range<token>& src_range = x.first;
+            if (src_range.contains(desired_range, dht::tri_compare)) {
+                auto old_endpoints = x.second;
+                auto it = pending_range_addresses.find(desired_range);
+                assert (it != pending_range_addresses.end());
+                auto new_endpoints = it->second;
+
+                //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                //So we need to be careful to only be strict when endpoints == RF
+                if (old_endpoints.size() == strat.get_replication_factor()) {
+                    std::unordered_set<inet_address> diff;
+                    std::set_difference(old_endpoints.begin(), old_endpoints.end(),
+                            new_endpoints.begin(), new_endpoints.end(), std::inserter(diff, diff.begin()));
+                    old_endpoints = std::move(diff);
+                    if (old_endpoints.size() != 1) {
+                        throw std::runtime_error(sprint("Expected 1 endpoint but found ", old_endpoints.size()));
+                    }
+                }
+                range_sources.emplace(desired_range, *(old_endpoints.begin()));
+            }
+        }
+
+        //Validate
+        auto nr = range_sources.count(desired_range);
+        if (nr < 1) {
+            throw std::runtime_error(sprint("No sources found for %s", desired_range));
+        }
+
+        if (nr > 1) {
+            throw std::runtime_error(sprint("Multiple endpoints found for %s", desired_range));
+        }
+
+        inet_address source_ip = range_sources.find(desired_range)->second;
+        auto& gossiper = gms::get_local_gossiper();
+        auto source_state = gossiper.get_endpoint_state_for_endpoint(source_ip);
+        if (gossiper.is_enabled() && source_state && !source_state->is_alive()) {
+            throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false", source_ip));
         }
     }
 
