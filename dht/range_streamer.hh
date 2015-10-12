@@ -40,6 +40,7 @@
 
 #include "locator/token_metadata.hh"
 #include "streaming/stream_plan.hh"
+#include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
 #include "gms/i_failure_detector.hh"
 #include "range.hh"
@@ -58,6 +59,7 @@ public:
     using inet_address = gms::inet_address;
     using token_metadata = locator::token_metadata;
     using stream_plan = streaming::stream_plan;
+    using stream_state = streaming::stream_state;
     using i_failure_detector = gms::i_failure_detector;
     static bool use_strict_consistency() {
         //FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement","true"));
@@ -162,24 +164,9 @@ private:
     {
         return toFetch;
     }
-
-    public StreamResultFuture fetchAsync()
-    {
-        for (Map.Entry<String, Map.Entry<InetAddress, Collection<Range<Token>>>> entry : toFetch.entries())
-        {
-            String keyspace = entry.getKey();
-            InetAddress source = entry.getValue().getKey();
-            InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-            Collection<Range<Token>> ranges = entry.getValue().getValue();
-            /* Send messages to respective folks to stream data over to me */
-            if (logger.isDebugEnabled())
-                logger.debug("{}ing from {} ranges {}", description, source, StringUtils.join(ranges, ", "));
-            streamPlan.requestRanges(source, preferred, keyspace, ranges);
-        }
-
-        return streamPlan.execute();
-    }
 #endif
+public:
+    future<streaming::stream_state> fetch_async();
 private:
     distributed<database>& _db;
     token_metadata& _metadata;

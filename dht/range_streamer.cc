@@ -42,6 +42,8 @@
 #include "database.hh"
 #include "gms/gossiper.hh"
 #include "log.hh"
+#include "streaming/stream_plan.hh"
+#include "streaming/stream_state.hh"
 
 namespace dht {
 
@@ -246,6 +248,25 @@ void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<range<
         }
     }
     _to_fetch.emplace(keyspace_name, std::move(tmp));
+}
+
+future<streaming::stream_state> range_streamer::fetch_async() {
+    for (auto& fetch : _to_fetch) {
+        const auto& keyspace = fetch.first;
+        for (auto& x : fetch.second) {
+            auto& source = x.first;
+            auto& ranges = x.second;
+            // FIXME InetAddress preferred = SystemKeyspace.getPreferredIP(source);
+            auto preferred = source;
+            /* Send messages to respective folks to stream data over to me */
+            if (logger.is_enabled(logging::log_level::debug)) {
+                logger.debug("{}ing from {} ranges {}", _description, source, ranges);
+            }
+            _stream_plan.request_ranges(source, preferred, keyspace, ranges);
+        }
+    }
+
+    return _stream_plan.execute();
 }
 
 } // dht
