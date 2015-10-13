@@ -276,6 +276,12 @@ BOOST_AUTO_TEST_CASE(test_range_contains) {
         BOOST_REQUIRE(!enclosed.contains(enclosing, cmp));
     };
 
+    BOOST_REQUIRE(range<int>({}, {}).contains(range<int>({}, {}), cmp));
+    check_contains(range<int>({}, {}), range<int>({1}, {2}));
+    check_contains(range<int>({}, {}), range<int>({}, {2}));
+    check_contains(range<int>({}, {}), range<int>({1}, {}));
+    check_contains(range<int>({}, {}), range<int>({2}, {1}));
+
     BOOST_REQUIRE(range<int>({}, {3}).contains(range<int>({}, {3}), cmp));
     BOOST_REQUIRE(range<int>({3}, {}).contains(range<int>({3}, {}), cmp));
     BOOST_REQUIRE(range<int>({}, {{3, false}}).contains(range<int>({}, {{3, false}}), cmp));

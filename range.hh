@@ -185,7 +185,7 @@ public:
         }
 
         if (other_wraps) { // && !this_wraps
-            return false;
+            return !start() && !end();
         }
 
         // !other_wraps && this_wraps
