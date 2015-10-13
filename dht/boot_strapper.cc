@@ -100,7 +100,9 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
     // if (numTokens == 1)
     //     logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
 
-    return get_random_tokens(metadata, num_tokens);
+    auto tokens = get_random_tokens(metadata, num_tokens);
+    logger.debug("Get bootstrap_tokens={}", tokens);
+    return tokens;
 }
 
 std::unordered_set<token> boot_strapper::get_random_tokens(token_metadata metadata, size_t num_tokens) {
