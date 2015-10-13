@@ -42,7 +42,7 @@
 #include "gms/failure_detector.hh"
 #include "log.hh"
 
-logging::logger logger("boot_strapper");
+static logging::logger logger("boot_strapper");
 
 namespace dht {
 
