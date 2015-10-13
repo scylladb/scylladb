@@ -1494,3 +1494,36 @@ SEASTAR_TEST_CASE(check_compaction_ancestor_metadata) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_47) {
+    // Tests the problem in which the sstable row parser would hang.
+    return test_setup::do_with_test_directory([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        const column_definition& r1_col = *s->get_column_definition("r1");
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+        mutation m(key, s);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(bytes(512*1024, 'a')));
+        mt->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("ks", "cf", "tests/sstables/tests-temporary", 47, la, big);
+        return sst->write_components(*mt).then([s] {
+            return reusable_sst("tests/sstables/tests-temporary", 47).then([s] (auto sstp) mutable {
+                auto reader = make_lw_shared(sstable_reader(sstp, s));
+                return repeat([reader] {
+                    return (*reader)().then([] (mutation_opt m) {
+                        if (!m) {
+                            return make_ready_future<stop_iteration>(stop_iteration::yes);
+                        }
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    });
+                }).then([sstp, reader, s] {});
+            });
+        }).then([sst, mt] {});
+    });
+}

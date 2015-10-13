@@ -144,7 +144,7 @@ protected:
     }
 
     inline void process_buffer(temporary_buffer<char>& data) {
-        while (__builtin_expect((_prestate != prestate::NONE), 0)) {
+        if (__builtin_expect((_prestate != prestate::NONE), 0)) {
             do_process_buffer(data);
         }
     }
@@ -236,6 +236,16 @@ public:
     inline proceed process(temporary_buffer<char>& data) {
         while (data || non_consuming()) {
             process_buffer(data);
+            // If _prestate is set to something other than prestate::NONE
+            // after process_buffer was called, it means that data wasn't
+            // enough to complete the prestate. That can happen specially
+            // when reading a large buf. Thefore, we need to ask caller
+            // to read more data until prestate is completed.
+            if (__builtin_expect((_prestate != prestate::NONE), 0)) {
+                // assert that data was all consumed by process_buffer.
+                assert(data.size() == 0);
+                return proceed::yes;
+            }
             auto ret = state_processor().process_state(data);
             if (__builtin_expect(ret == proceed::no, 0)) {
                 return ret;
