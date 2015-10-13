@@ -316,6 +316,12 @@ void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
     remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id);
 }
 
+void messaging_service::remove_rpc_client(shard_id id) {
+    for (auto& c : _clients) {
+        remove_rpc_client_one(c, id);
+    }
+}
+
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {
     return _rpc;
 }

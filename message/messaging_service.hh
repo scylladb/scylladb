@@ -545,6 +545,7 @@ public:
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
     void remove_rpc_client_one(clients_map& clients, shard_id id);
     void remove_rpc_client(messaging_verb verb, shard_id id);
+    void remove_rpc_client(shard_id id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 
