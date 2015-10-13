@@ -562,8 +562,15 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     std::vector<column_family*> stores;
     auto& db = get_local_db();
     if (column_families.empty()) {
-        abort();
-        // FIXME: stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
+        for (auto& x : db.get_column_families()) {
+            column_family& cf = *(x.second);
+            auto cf_name = cf.schema()->cf_name();
+            auto ks_name = cf.schema()->ks_name();
+            if (ks_name == keyspace) {
+                sslog.info("Find ks={} cf={}", ks_name, cf_name);
+                stores.push_back(&cf);
+            }
+        }
     } else {
         // TODO: We can move this to database class and use shared_ptr<column_family> instead
         for (auto& cf_name : column_families) {
