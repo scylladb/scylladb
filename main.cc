@@ -252,10 +252,14 @@ int main(int ac, char** av) {
             }).then([&db, &dirs] {
                 return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
             }).then([&db] {
-                return parallel_for_each(db.local().get_config().data_file_directories(), [] (sstring pathname) {
-                    return disk_sanity(pathname);
-                }).then([&db] {
-                    return disk_sanity(db.local().get_config().commitlog_directory());
+                std::unordered_set<sstring> directories;
+                directories.insert(db.local().get_config().data_file_directories().cbegin(),
+                        db.local().get_config().data_file_directories().cend());
+                directories.insert(db.local().get_config().commitlog_directory());
+                return do_with(std::move(directories), [] (auto& directories) {
+                    return parallel_for_each(directories, [] (sstring pathname) {
+                        return disk_sanity(pathname);
+                    });
                 });
             }).then([&db] {
                 return db.invoke_on_all([] (database& db) {
