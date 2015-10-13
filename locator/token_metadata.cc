@@ -302,6 +302,65 @@ void token_metadata::remove_from_moving(inet_address endpoint) {
     invalidate_cached_rings();
 }
 
+token token_metadata::get_predecessor(token t) {
+    auto& tokens = sorted_tokens();
+    auto it = std::lower_bound(tokens.begin(), tokens.end(), t);
+    assert(it != tokens.end() && *it == t);
+    if (it == tokens.begin()) {
+        // If the token is the first element, its preprocessor is the last element
+        return tokens.back();
+    } else {
+        return *(--it);
+    }
+}
+
+std::vector<range<token>> token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
+    std::vector<range<token>> ranges;
+    ranges.reserve(tokens.size());
+    for (auto right : tokens) {
+        ranges.emplace_back(range<token>::bound(get_predecessor(right), false),
+                            range<token>::bound(right, true));
+    }
+    return ranges;
+}
+
+range<token> token_metadata::get_primary_range_for(token right) {
+    return get_primary_ranges_for({right}).front();
+}
+
+std::unordered_multimap<range<token>, inet_address>&
+token_metadata::get_pending_ranges_mm(sstring keyspace_name) {
+    return _pending_ranges[keyspace_name];
+}
+
+std::unordered_map<range<token>, std::unordered_set<inet_address>>
+token_metadata::get_pending_ranges(sstring keyspace_name) {
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
+    for (auto x : get_pending_ranges_mm(keyspace_name)) {
+        auto& range_token = x.first;
+        auto& ep = x.second;
+        auto it = ret.find(range_token);
+        if (it != ret.end()) {
+            it->second.emplace(ep);
+        } else {
+            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
+        }
+    }
+    return ret;
+}
+
+std::vector<range<token>>
+token_metadata::get_pending_ranges(sstring keyspace_name, inet_address endpoint) {
+    std::vector<range<token>> ret;
+    for (auto x : get_pending_ranges_mm(keyspace_name)) {
+        auto& range_token = x.first;
+        auto& ep = x.second;
+        if (ep == endpoint) {
+            ret.push_back(range_token);
+        }
+    }
+    return ret;
+}
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {

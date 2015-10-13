@@ -389,7 +389,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
          throw std::runtime_error("Unable to contact any seeds!");
     }
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
-    dht::boot_strapper bs(get_broadcast_address(), tokens, _token_metadata);
+    dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
     bs.bootstrap().get(); // handles token update
     logger.info("Bootstrap completed! for the tokens {}", tokens);
 }

@@ -267,3 +267,56 @@ BOOST_AUTO_TEST_CASE(test_range_with_equal_value_but_opposite_inclusiveness_is_a
         BOOST_REQUIRE(!r.contains(key2, dht::ring_position_comparator(*s)));
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_range_contains) {
+    auto cmp = [] (int i1, int i2) -> int { return i1 - i2; };
+
+    auto check_contains = [&] (range<int> enclosing, range<int> enclosed) {
+        BOOST_REQUIRE(enclosing.contains(enclosed, cmp));
+        BOOST_REQUIRE(!enclosed.contains(enclosing, cmp));
+    };
+
+    BOOST_REQUIRE(range<int>({}, {3}).contains(range<int>({}, {3}), cmp));
+    BOOST_REQUIRE(range<int>({3}, {}).contains(range<int>({3}, {}), cmp));
+    BOOST_REQUIRE(range<int>({}, {{3, false}}).contains(range<int>({}, {{3, false}}), cmp));
+    BOOST_REQUIRE(range<int>({{3, false}}, {}).contains(range<int>({{3, false}}, {}), cmp));
+    BOOST_REQUIRE(range<int>({1}, {3}).contains(range<int>({1}, {3}), cmp));
+    BOOST_REQUIRE(range<int>({3}, {1}).contains(range<int>({3}, {1}), cmp));
+
+    check_contains(range<int>({}, {3}), range<int>({}, {2}));
+    check_contains(range<int>({}, {3}), range<int>({2}, {{3, false}}));
+    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({}, {4}), cmp));
+    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({2}, {{4, false}}), cmp));
+    BOOST_REQUIRE(!range<int>({}, {3}).contains(range<int>({}, {}), cmp));
+
+    check_contains(range<int>({3}, {}), range<int>({4}, {}));
+    check_contains(range<int>({3}, {}), range<int>({{3, false}}, {}));
+    check_contains(range<int>({3}, {}), range<int>({3}, {4}));
+    check_contains(range<int>({3}, {}), range<int>({4}, {5}));
+    BOOST_REQUIRE(!range<int>({3}, {}).contains(range<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!range<int>({3}, {}).contains(range<int>({}, {}), cmp));
+
+    check_contains(range<int>({}, {{3, false}}), range<int>({}, {2}));
+    BOOST_REQUIRE(!range<int>({}, {{3, false}}).contains(range<int>({}, {3}), cmp));
+    BOOST_REQUIRE(!range<int>({}, {{3, false}}).contains(range<int>({}, {4}), cmp));
+
+    check_contains(range<int>({1}, {3}), range<int>({1}, {2}));
+    check_contains(range<int>({1}, {3}), range<int>({1}, {1}));
+    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({2}, {4}), cmp));
+    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({0}, {1}), cmp));
+    BOOST_REQUIRE(!range<int>({1}, {3}).contains(range<int>({0}, {4}), cmp));
+
+    check_contains(range<int>({3}, {1}), range<int>({0}, {1}));
+    check_contains(range<int>({3}, {1}), range<int>({3}, {4}));
+    check_contains(range<int>({3}, {1}), range<int>({}, {1}));
+    check_contains(range<int>({3}, {1}), range<int>({}, {{1, false}}));
+    check_contains(range<int>({3}, {1}), range<int>({3}, {}));
+    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {}));
+    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {{1, false}}));
+    check_contains(range<int>({3}, {1}), range<int>({{3, false}}, {1}));
+    check_contains(range<int>({3}, {1}), range<int>({3}, {{1, false}}));
+    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({2}, {2}), cmp));
+    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({2}, {{3, false}}), cmp));
+    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({{1, false}}, {{3, false}}), cmp));
+    BOOST_REQUIRE(!range<int>({3}, {1}).contains(range<int>({{1, false}}, {3}), cmp));
+}

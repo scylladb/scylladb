@@ -38,40 +38,36 @@
 
 #include "dht/boot_strapper.hh"
 #include "service/storage_service.hh"
+#include "dht/range_streamer.hh"
+#include "gms/failure_detector.hh"
+#include "log.hh"
+
+logging::logger logger("boot_strapper");
 
 namespace dht {
 
 future<> boot_strapper::bootstrap() {
-    // FIXME: Stream data from other nodes
-    service::get_local_storage_service().finish_bootstrapping();
-    return make_ready_future<>();
-#if 0
-    if (logger.isDebugEnabled())
-        logger.debug("Beginning bootstrap process");
+    logger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
 
-    RangeStreamer streamer = new RangeStreamer(tokenMetadata, tokens, address, "Bootstrap");
-    streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
-
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        AbstractReplicationStrategy strategy = Keyspace.open(keyspaceName).getReplicationStrategy();
-        streamer.addRanges(keyspaceName, strategy.getPendingAddressRanges(tokenMetadata, tokens, address));
+    range_streamer streamer(_db, _token_metadata, _tokens, _address, "Bootstrap");
+    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto& strategy = ks.get_replication_strategy();
+        std::vector<range<token>> ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
+        logger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
+        streamer.add_ranges(keyspace_name, ranges);
     }
 
-    try
-    {
-        streamer.fetchAsync().get();
-        StorageService.instance.finishBootstrapping();
-    }
-    catch (InterruptedException e)
-    {
-        throw new RuntimeException("Interrupted while waiting on boostrap to complete. Bootstrap will have to be restarted.");
-    }
-    catch (ExecutionException e)
-    {
-        throw new RuntimeException("Error during boostrap: " + e.getCause().getMessage(), e.getCause());
-    }
-#endif
+    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+        try {
+            auto state = f.get0();
+        } catch (...) {
+            throw std::runtime_error(sprint("Error during boostrap: %s", std::current_exception()));
+        }
+        service::get_local_storage_service().finish_bootstrapping();
+        return make_ready_future<>();
+    });
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata metadata, database& db) {
@@ -100,7 +96,9 @@ std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata met
     // if (numTokens == 1)
     //     logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
 
-    return get_random_tokens(metadata, num_tokens);
+    auto tokens = get_random_tokens(metadata, num_tokens);
+    logger.debug("Get bootstrap_tokens={}", tokens);
+    return tokens;
 }
 
 std::unordered_set<token> boot_strapper::get_random_tokens(token_metadata metadata, size_t num_tokens) {

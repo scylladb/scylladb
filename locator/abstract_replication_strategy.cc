@@ -75,7 +75,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
     auto res = cached_endpoints.find(key_token);
 
     if (res == cached_endpoints.end()) {
-        auto endpoints = calculate_natural_endpoints(search_token);
+        auto endpoints = calculate_natural_endpoints(search_token, _token_metadata);
         cached_endpoints.emplace(key_token, endpoints);
 
         return std::move(endpoints);
@@ -113,7 +113,7 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
     std::vector<range<token>> ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
-        for (inet_address a : calculate_natural_endpoints(tok)) {
+        for (inet_address a : calculate_natural_endpoints(tok, _token_metadata)) {
             if (a == ep) {
                 ret.emplace_back(
                         range<token>::bound(prev_tok, false),
@@ -131,13 +131,57 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep) {
     std::vector<range<token>> ret;
     auto prev_tok = _token_metadata.sorted_tokens().back();
     for (auto tok : _token_metadata.sorted_tokens()) {
-        auto&& eps = calculate_natural_endpoints(tok);
+        auto&& eps = calculate_natural_endpoints(tok, _token_metadata);
         if (eps.size() > 0 && eps[0] == ep) {
             ret.emplace_back(
                     range<token>::bound(prev_tok, false),
                     range<token>::bound(tok, true));
         }
         prev_tok = tok;
+    }
+    return ret;
+}
+
+std::unordered_multimap<inet_address, range<token>>
+abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
+    std::unordered_multimap<inet_address, range<token>> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        range<token> r = tm.get_primary_range_for(t);
+        auto eps = calculate_natural_endpoints(t, tm);
+        logger.debug("token={}, primary_range={}, address={}", t, r, eps);
+        for (auto ep : eps) {
+            ret.emplace(ep, r);
+        }
+    }
+    return ret;
+}
+
+std::unordered_multimap<range<token>, inet_address>
+abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
+    std::unordered_multimap<range<token>, inet_address> ret;
+    for (auto& t : tm.sorted_tokens()) {
+        range<token> r = tm.get_primary_range_for(t);
+        for (auto ep : calculate_natural_endpoints(t, tm)) {
+            ret.emplace(r, ep);
+        }
+    }
+    return ret;
+}
+
+std::vector<range<token>>
+abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address) {
+    return get_pending_address_ranges(tm, std::unordered_set<token>{pending_token}, pending_address);
+}
+
+std::vector<range<token>>
+abstract_replication_strategy::get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address) {
+    std::vector<range<token>> ret;
+    auto temp = tm.clone_only_token_map();
+    temp.update_normal_tokens(pending_tokens, pending_address);
+    for (auto& x : get_address_ranges(temp)) {
+        if (x.first == pending_address) {
+            ret.push_back(x.second);
+        }
     }
     return ret;
 }

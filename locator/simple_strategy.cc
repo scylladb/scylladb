@@ -41,8 +41,8 @@ simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& t
     }
 }
 
-std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t) const {
-    const std::vector<token>& tokens = _token_metadata.sorted_tokens();
+std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t, token_metadata& tm) const {
+    const std::vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
         return std::vector<inet_address>();
@@ -52,8 +52,8 @@ std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const tok
     utils::sequenced_set<inet_address> endpoints;
     endpoints.reserve(replicas);
 
-    for (auto& token : _token_metadata.ring_range(t)) {
-        auto ep = _token_metadata.get_endpoint(token);
+    for (auto& token : tm.ring_range(t)) {
+        auto ep = tm.get_endpoint(token);
         assert(ep);
 
         endpoints.push_back(*ep);

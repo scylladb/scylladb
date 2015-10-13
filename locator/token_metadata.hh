@@ -47,6 +47,7 @@
 #include <experimental/optional>
 #include <boost/range/iterator_range.hpp>
 #include "query-request.hh"
+#include "range.hh"
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -133,6 +134,8 @@ private:
     std::unordered_map<token, inet_address> _bootstrap_tokens;
     std::unordered_set<inet_address> _leaving_endpoints;
     std::unordered_map<token, inet_address> _moving_endpoints;
+
+    std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
 
     std::vector<token> _sorted_tokens;
 
@@ -305,7 +308,6 @@ public:
     // (don't need to record Token here since it's still part of tokenToEndpointMap until it's done leaving)
     private final Set<InetAddress> leavingEndpoints = new HashSet<InetAddress>();
     // this is a cache of the calculation from {tokenToEndpointMap, bootstrapTokens, leavingEndpoints}
-    private final ConcurrentMap<String, Multimap<Range<Token>, InetAddress>> pendingRanges = new ConcurrentHashMap<String, Multimap<Range<Token>, InetAddress>>();
 
     // nodes which are migrating to the new tokens in the ring
     private final Set<Pair<Token, InetAddress>> _moving_endpoints = new HashSet<Pair<Token, InetAddress>>();
@@ -543,25 +545,17 @@ public:
     }
 #if 0
     private final AtomicReference<TokenMetadata> cachedTokenMap = new AtomicReference<TokenMetadata>();
+#endif
+public:
 
     /**
      * Create a copy of TokenMetadata with only tokenToEndpointMap. That is, pending ranges,
      * bootstrap tokens and leaving endpoints are not included in the copy.
      */
-    public TokenMetadata cloneOnlyTokenMap()
-    {
-        lock.readLock().lock();
-        try
-        {
-            return new TokenMetadata(SortedBiMultiValMap.<Token, InetAddress>create(tokenToEndpointMap, null, inetaddressCmp),
-                                     HashBiMap.create(_endpoint_to_host_id_map),
-                                     new Topology(topology));
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
+    token_metadata clone_only_token_map() {
+        return token_metadata(this->_token_to_endpoint_map, this->_endpoint_to_host_id_map, this->_topology);
     }
+#if 0
 
     /**
      * Return a cached TokenMetadata with only tokenToEndpointMap, i.e., the same as cloneOnlyTokenMap but
@@ -653,58 +647,21 @@ public:
             lock.readLock().unlock();
         }
     }
+#endif
+public:
+    std::vector<range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
 
-    public Collection<Range<Token>> getPrimaryRangesFor(Collection<Token> tokens)
-    {
-        Collection<Range<Token>> ranges = new ArrayList<Range<Token>>(tokens.size());
-        for (Token right : tokens)
-            ranges.add(new Range<Token>(getPredecessor(right), right));
-        return ranges;
-    }
+    range<token> get_primary_range_for(token right);
 
-    @Deprecated
-    public Range<Token> getPrimaryRangeFor(Token right)
-    {
-        return getPrimaryRangesFor(Arrays.asList(right)).iterator().next();
-    }
+private:
+    std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);
 
-    public ArrayList<Token> sortedTokens()
-    {
-        return sortedTokens;
-    }
-
-    private Multimap<Range<Token>, InetAddress> getPendingRangesMM(String keyspaceName)
-    {
-        Multimap<Range<Token>, InetAddress> map = pendingRanges.get(keyspaceName);
-        if (map == null)
-        {
-            map = HashMultimap.create();
-            Multimap<Range<Token>, InetAddress> priorMap = pendingRanges.putIfAbsent(keyspaceName, map);
-            if (priorMap != null)
-                map = priorMap;
-        }
-        return map;
-    }
-
+public:
     /** a mutable map may be returned but caller should not modify it */
-    public Map<Range<Token>, Collection<InetAddress>> getPendingRanges(String keyspaceName)
-    {
-        return getPendingRangesMM(keyspaceName).asMap();
-    }
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> get_pending_ranges(sstring keyspace_name);
 
-    public List<Range<Token>> getPendingRanges(String keyspaceName, InetAddress endpoint)
-    {
-        List<Range<Token>> ranges = new ArrayList<Range<Token>>();
-        for (Map.Entry<Range<Token>, InetAddress> entry : getPendingRangesMM(keyspaceName).entries())
-        {
-            if (entry.getValue().equals(endpoint))
-            {
-                ranges.add(entry.getKey());
-            }
-        }
-        return ranges;
-    }
-
+    std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
+#if 0
      /**
      * Calculate pending ranges according to bootsrapping and leaving nodes. Reasoning is:
      *
@@ -740,7 +697,7 @@ public:
                 if (logger.isDebugEnabled())
                     logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
 
-                pendingRanges.put(keyspaceName, newPendingRanges);
+                _pending_ranges.put(keyspaceName, newPendingRanges);
                 return;
             }
 
@@ -800,25 +757,22 @@ public:
                 allLeftMetadata.removeEndpoint(endpoint);
             }
 
-            pendingRanges.put(keyspaceName, newPendingRanges);
+            _pending_ranges.put(keyspaceName, newPendingRanges);
 
             if (logger.isDebugEnabled())
-                logger.debug("Pending ranges:\n{}", (pendingRanges.isEmpty() ? "<empty>" : printPendingRanges()));
+                logger.debug("Pending ranges:\n{}", (_pending_ranges.isEmpty() ? "<empty>" : printPendingRanges()));
         }
         finally
         {
             lock.readLock().unlock();
         }
     }
+#endif
+public:
 
-    public Token getPredecessor(Token token)
-    {
-        List tokens = sortedTokens();
-        int index = Collections.binarySearch(tokens, token);
-        assert index >= 0 : token + " not found in " + StringUtils.join(tokenToEndpointMap.keySet(), ", ");
-        return (Token) (index == 0 ? tokens.get(tokens.size() - 1) : tokens.get(index - 1));
-    }
+    token get_predecessor(token t);
 
+#if 0
     public Token getSuccessor(Token token)
     {
         List tokens = sortedTokens();
@@ -969,7 +923,7 @@ public:
             _endpoint_to_host_id_map.clear();
             _bootstrap_tokens.clear();
             _leaving_endpoints.clear();
-            pendingRanges.clear();
+            _pending_ranges.clear();
             _moving_endpoints.clear();
             sortedTokens.clear();
             topology.clear();
@@ -1024,7 +978,7 @@ public:
                 }
             }
 
-            if (!pendingRanges.isEmpty())
+            if (!_pending_ranges.isEmpty())
             {
                 sb.append("Pending Ranges:");
                 sb.append(System.getProperty("line.separator"));
@@ -1043,7 +997,7 @@ public:
     {
         StringBuilder sb = new StringBuilder();
 
-        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : pendingRanges.entrySet())
+        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : _pending_ranges.entrySet())
         {
             for (Map.Entry<Range<Token>, InetAddress> rmap : entry.getValue().entries())
             {

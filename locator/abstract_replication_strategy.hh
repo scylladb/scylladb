@@ -79,7 +79,7 @@ protected:
 
     void validate_replication_factor(sstring rf) const;
 
-    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) const = 0;
+    virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token, token_metadata& tm) const = 0;
 
 public:
     abstract_replication_strategy(
@@ -113,6 +113,13 @@ public:
     // StorageService.getPrimaryRangesForEndpoint().
     std::vector<range<token>> get_primary_ranges(inet_address ep);
 
+    std::unordered_multimap<inet_address, range<token>> get_address_ranges(token_metadata& tm) const;
+
+    std::unordered_multimap<range<token>, inet_address> get_range_addresses(token_metadata& tm) const;
+
+    std::vector<range<token>> get_pending_address_ranges(token_metadata& tm, token pending_token, inet_address pending_address);
+
+    std::vector<range<token>> get_pending_address_ranges(token_metadata& tm, std::unordered_set<token> pending_tokens, inet_address pending_address);
 };
 
 }

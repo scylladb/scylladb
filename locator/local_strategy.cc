@@ -31,10 +31,10 @@ local_strategy::local_strategy(const sstring& keyspace_name, token_metadata& tok
         abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::local) {}
 
 std::vector<inet_address> local_strategy::get_natural_endpoints(const token& t) {
-    return calculate_natural_endpoints(t);
+    return calculate_natural_endpoints(t, _token_metadata);
 }
 
-std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t) const {
+std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t, token_metadata& tm) const {
     return std::vector<inet_address>({utils::fb_utilities::get_broadcast_address()});
 }
 

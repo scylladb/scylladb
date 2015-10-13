@@ -89,7 +89,7 @@ network_topology_strategy::network_topology_strategy(
 
 std::vector<inet_address>
 network_topology_strategy::calculate_natural_endpoints(
-    const token& search_token) const {
+    const token& search_token, token_metadata& tm) const {
     //
     // We want to preserve insertion order so that the first added endpoint
     // becomes primary.
@@ -120,7 +120,7 @@ network_topology_strategy::calculate_natural_endpoints(
         skipped_dc_endpoints[dc_name] = {};
     }
 
-    topology& tp = _token_metadata.get_topology();
+    topology& tp = tm.get_topology();
 
     //
     // all endpoints in each DC, so we can check when we have exhausted all
@@ -141,13 +141,13 @@ network_topology_strategy::calculate_natural_endpoints(
     // not aware of any cluster members
     assert(!all_endpoints.empty() && !racks.empty());
 
-    for (auto& next : _token_metadata.ring_range(search_token)) {
+    for (auto& next : tm.ring_range(search_token)) {
 
         if (has_sufficient_replicas(dc_replicas, all_endpoints)) {
             break;
         }
 
-        inet_address ep = *_token_metadata.get_endpoint(next);
+        inet_address ep = *tm.get_endpoint(next);
         sstring dc = _snitch->get_datacenter(ep);
 
         auto& seen_racks_dc_set = seen_racks[dc];
