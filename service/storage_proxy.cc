@@ -250,7 +250,8 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
         return *_response_handlers.find(id)->second.handler;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation,
+                             std::unordered_set<gms::inet_address> targets, const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
@@ -734,19 +735,26 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
     }
 }
 
-future<std::vector<storage_proxy::response_id_type>> storage_proxy::mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type) {
+template<typename Range, typename CreateWriteHandler>
+future<std::vector<storage_proxy::response_id_type>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
     std::vector<response_id_type> ids;
 
     try {
         ids.reserve(mutations.size());
         for (auto& m : mutations) {
-            ids.emplace_back(create_write_response_handler(m, cl, type));
+            ids.emplace_back(create_handler(m, cl, type));
         }
         return make_ready_future<std::vector<response_id_type>>(std::move(ids));
     } catch(...) {
         boost::for_each(ids, std::bind(&storage_proxy::remove_response_handler, this, std::placeholders::_1));
         return make_exception_future<std::vector<response_id_type>>(std::current_exception());
     }
+}
+
+future<std::vector<storage_proxy::response_id_type>> storage_proxy::mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type) {
+    return mutate_prepare<>(mutations, cl, type, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+        return create_write_response_handler(m, cl, type);
+    });
 }
 
 future<> storage_proxy::mutate_begin(std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl, const sstring& local_dc) {
@@ -887,18 +895,18 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                             return chosen_endpoints;
                         }()) {
         }
+
+        future<> send_batchlog_mutation(mutation m) {
+            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, _cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+                auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
+                return _p.create_write_response_handler(ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
+            }).then([this] (std::vector<response_id_type> ids) {
+                return _p.mutate_begin(std::move(ids), _cl, _local_dc);
+            });
+        }
         future<> sync_write_to_batchlog() {
             auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
-            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, db::write_type::BATCH_LOG, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
-            response_id_type response_id = _p.register_response_handler(std::move(h));
-
-            auto f = _p.response_wait(response_id);
-            _p.send_to_live_endpoints(response_id, _local_dc);
-            return f.handle_exception([this, response_id](auto ex) {
-                _p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
-                //return make_exception_future(ex);
-                std::rethrow_exception(ex);
-            });
+            return send_batchlog_mutation(std::move(m));
         };
         void async_remove_from_batchlog() {
             // delete batch
@@ -908,15 +916,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             mutation m(key, schema);
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
 
-            auto h = std::make_unique<write_response_handler>(_p._db.local().find_keyspace(db::system_keyspace::NAME), db::consistency_level::ONE, db::write_type::BATCH_LOG, make_lw_shared<frozen_mutation>(freeze(m)), _batchlog_endpoints);
-            auto response_id = _p.register_response_handler(std::move(h));
-
-            auto f = _p.response_wait(response_id);
-            _p.send_to_live_endpoints(response_id, _local_dc);
-            f.handle_exception([&p = _p, response_id](std::exception_ptr ex) {
-                p.remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
-                std::rethrow_exception(ex);
-            });
+            send_batchlog_mutation(std::move(m));
         };
 
         future<> run() {
