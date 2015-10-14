@@ -78,6 +78,13 @@ class storage_service : public gms::i_endpoint_state_change_subscriber, public s
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
     distributed<database>& _db;
+    // Note that this is obviously only valid for the current shard. Users of
+    // this facility should elect a shard to be the coordinator based on any
+    // given objective criteria
+    //
+    // It shouldn't be impossible to actively serialize two callers if the need
+    // ever arise.
+    bool _loading_new_sstables = false;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -2477,15 +2484,21 @@ public:
     {
         SSTableDeletingTask.rescheduleFailedTasks();
     }
-
+#endif
     /**
-     * #{@inheritDoc}
+     * Load new SSTables not currently tracked by the system
+     *
+     * This can be called, for instance, after copying a batch of SSTables to a CF directory.
+     *
+     * This should not be called in parallel for the same keyspace / column family, and doing
+     * so will throw an std::runtime_exception.
+     *
+     * @param ks_name the keyspace in which to search for new SSTables.
+     * @param cf_name the column family in which to search for new SSTables.
+     * @return a future<> when the operation finishes.
      */
-    public void loadNewSSTables(String ksName, String cfName)
-    {
-        ColumnFamilyStore.loadNewSSTables(ksName, cfName);
-    }
-
+    future<> load_new_sstables(sstring ks_name, sstring cf_name);
+#if 0
     /**
      * #{@inheritDoc}
      */

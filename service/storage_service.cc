@@ -2019,4 +2019,77 @@ future<streaming::stream_state> storage_service::stream_hints() {
     }
 }
 
+// For more details, see the commends on column_family::load_new_sstables
+// All the global operations are going to happen here, and just the reloading happens
+// in there.
+future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
+    class max_element {
+        int64_t _result = 1;
+    public:
+        future<> operator()(int64_t value) {
+            _result = std::max(value, _result);
+            return make_ready_future<>();
+        }
+        int64_t get() && {
+            return _result;
+        }
+    };
+
+    if (_loading_new_sstables) {
+        throw std::runtime_error("Already loading SSTables. Try again later");
+    } else {
+        _loading_new_sstables = true;
+    }
+
+    // First, we need to stop SSTable creation for that CF in all shards. This is a really horrible
+    // thing to do, because under normal circumnstances this can make dirty memory go up to the point
+    // of explosion.
+    //
+    // Remember, however, that we are assuming this is going to be ran on an empty CF. In that scenario,
+    // stopping the SSTables should have no effect, while guaranteeing we will see no data corruption
+    // * in case * this is ran on a live CF.
+    //
+    // The statement above is valid at least from the Scylla side of things: it is still totally possible
+    // that someones just copies the table over existing ones. There isn't much we can do about it.
+    return _db.map_reduce(max_element(), [ks_name, cf_name] (database& db) {
+        auto& cf = db.find_column_family(ks_name, cf_name);
+        return cf.disable_sstable_write();
+    }).then([this, cf_name, ks_name] (int64_t max_seen_sstable) {
+        logger.debug("Loading new sstables with generation numbers larger or equal than {}", max_seen_sstable);
+        // Then, we will reshuffle the tables to make sure that the generation numbers don't go too high.
+        // We will do all of it the same CPU, to make sure that we won't have two parallel shufflers stepping
+        // onto each other.
+        //
+        // Note that this will reshuffle all tables, including existing ones. Figuring out which of the tables
+        // are new would require coordination between all shards, so it is simpler this way. Renaming an existing
+        // SSTable shouldn't be that bad, and we are assuming empty directory for normal operation anyway.
+        auto shard = std::hash<sstring>()(cf_name) % smp::count;
+        return _db.invoke_on(shard, [ks_name, cf_name, max_seen_sstable] (database& db) {
+            auto& cf = db.find_column_family(ks_name, cf_name);
+            return cf.reshuffle_sstables(max_seen_sstable);
+        });
+    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
+        int64_t new_gen = 1;
+        if (new_tables.size() > 0) {
+            new_gen = new_tables.back().generation;
+        }
+
+        logger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
+        return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
+            auto& cf = db.find_column_family(ks_name, cf_name);
+            auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
+            logger.info("CF {} at shard {} had SSTables writes disabled for {} usec", cf_name, engine().cpu_id(), disabled);
+            return make_ready_future<>();
+        }).then([new_tables = std::move(new_tables)] {
+            return std::move(new_tables);
+        });
+    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
+        return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
+            auto& cf = db.find_column_family(ks_name, cf_name);
+            return cf.load_new_sstables(new_tables);
+        });
+    }).finally([this] {
+        _loading_new_sstables = false;
+    });
+}
 } // namespace service
