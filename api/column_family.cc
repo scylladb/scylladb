@@ -615,30 +615,29 @@ void set_column_family(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cf::get_row_cache_hit.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_row_cache_hit.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().hits;
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_row_cache_hit.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_row_cache_hit.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().hits;
+        }, std::plus<int64_t>());
     });
 
-    cf::get_row_cache_miss.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_row_cache_miss.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, req->param["name"], 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().misses;
+        }, std::plus<int64_t>());
     });
 
-    cf::get_all_row_cache_miss.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    cf::get_all_row_cache_miss.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return map_reduce_cf(ctx, 0, [](const column_family& cf) {
+            return cf.get_row_cache().stats().misses;
+        }, std::plus<int64_t>());
+
     });
 
     cf::get_cas_prepare.set(r, [] (std::unique_ptr<request> req) {
