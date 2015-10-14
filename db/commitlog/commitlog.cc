@@ -1194,6 +1194,10 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 });
             });
         }
+        future<> stop() {
+            eof = true;
+            return make_ready_future<>();
+        }
         future<> read_header() {
             return fin.read_exactly(segment::descriptor_header_size).then([this](temporary_buffer<char> buf) {
                 if (!advance(buf)) {
@@ -1205,6 +1209,12 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 auto ver = in.read<uint32_t>();
                 auto id = in.read<uint64_t>();
                 auto checksum = in.read<uint32_t>();
+
+                if (ver == 0 && id == 0 && checksum == 0) {
+                    // let's assume this was an empty (pre-allocated)
+                    // file. just skip it.
+                    return stop();
+                }
 
                 crc32_nbo crc;
                 crc.process(ver);
@@ -1233,6 +1243,11 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 data_input in(buf);
                 auto next = in.read<uint32_t>();
                 auto checksum = in.read<uint32_t>();
+
+                if (next == 0 && checksum == 0) {
+                    // in a pre-allocating world, this means eof
+                    return stop();
+                }
 
                 crc32_nbo crc;
                 crc.process<int32_t>(id & 0xffffffff);
