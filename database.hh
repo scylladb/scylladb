@@ -32,6 +32,7 @@
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
+#include <chrono>
 #include "core/distributed.hh"
 #include <functional>
 #include <cstdint>
@@ -68,6 +69,7 @@
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
 #include "sstables/compaction.hh"
+#include <seastar/core/rwlock.hh>
 
 class frozen_mutation;
 class reconcilable_result;
@@ -136,6 +138,9 @@ private:
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    // There are situations in which we need to stop writing sstables. Flushers will take
+    // the read lock, and the ones that wish to stop that process will take the write lock.
+    rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
     int64_t _sstable_generation = 1;
     unsigned _mutation_count = 0;
@@ -170,6 +175,8 @@ private:
 
     mutation_source sstables_as_mutation_source();
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
+    // We will use highres because hopefully it won't take more than a few usecs
+    std::chrono::high_resolution_clock::time_point _sstable_writes_disabled_at;
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -216,6 +223,24 @@ public:
     void clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
+    // Important warning: disabling writes will only have an effect in the current shard.
+    // The other shards will keep writing tables at will. Therefore, you very likely need
+    // to call this separately in all shards first, to guarantee that none of them are writing
+    // new data before you can safely assume that the whole node is disabled.
+    future<int64_t> disable_sstable_write() {
+        _sstable_writes_disabled_at = std::chrono::high_resolution_clock::now();
+        return _sstables_lock.write_lock().then([this] {
+            return make_ready_future<int64_t>((*_sstables->end()).first);
+        });
+    }
+
+    // SSTable writes are now allowed again, and generation is updated to new_generation
+    // returns the amount of microseconds elapsed since we disabled writes.
+    std::chrono::high_resolution_clock::duration enable_sstable_write(int64_t new_generation) {
+        update_sstables_known_generation(new_generation);
+        _sstables_lock.write_unlock();
+        return std::chrono::high_resolution_clock::now() - _sstable_writes_disabled_at;
+    }
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
