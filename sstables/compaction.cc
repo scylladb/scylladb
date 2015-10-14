@@ -242,18 +242,13 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         try {
             std::get<0>(t).get();
         } catch(...) {
-            ex += "read exception: ";
-            ex += sprint("%s", std::current_exception());
+            ex += sprint("read exception: %s", std::current_exception());
         }
 
         try {
             std::get<1>(t).get();
         } catch(...) {
-            if (ex.size()) {
-                ex += ", ";
-            }
-            ex += "write exception: ";
-            ex += sprint("%s", std::current_exception());
+            ex += sprint("%swrite_exception: %s", (ex.size() ? ", " : ""), std::current_exception());
         }
 
         if (ex.size()) {
