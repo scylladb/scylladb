@@ -4,10 +4,7 @@ export RPMBUILD=`pwd`/build/rpmbuild
 do_install()
 {
     pkg=$1
-    name=${pkg/%.rpm/}
-    if ! rpm -qs $name  >/dev/null 2>&1; then
-	sudo yum install -y $RPMBUILD/RPMS/x86_64/$pkg || sudo yum install -y $RPMBUILD/RPMS/noarch/$pkg
-    fi
+    sudo yum install -y $RPMBUILD/RPMS/*/$pkg 2> build/err || if [ "`cat build/err`" != "Error: Nothing to do" ]; then cat build/err; exit 1;fi
     echo Install $name done
 }
 
@@ -37,13 +34,26 @@ sudo yum install -y epel-release
 sudo yum install -y cryptopp cryptopp-devel jsoncpp jsoncpp-devel lz4 lz4-devel yaml-cpp yaml-cpp-devel thrift thrift-devel scons gtest gtest-devel python34
 sudo ln -sf /usr/bin/python3.4 /usr/bin/python3
 
-sudo yum install -y scl-utils
-if ! rpm  -qs rhscl-devtoolset-3-epel-7-x86_64-1-2.noarch; then
-    sudo yum install -y https://www.softwarecollections.org/en/scls/rhscl/devtoolset-3/epel-7-x86_64/download/rhscl-devtoolset-3-epel-7-x86_64.noarch.rpm
-fi
-sudo yum install -y devtoolset-3-gcc-c++
-
 sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc++-devel bzip2-devel zlib-devel
+sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc libstdc++-static gmp-devel texinfo texinfo-tex systemtap-sdt-devel mpfr-devel libmpc-devel elfutils-devel elfutils-libelf-devel glibc-devel.x86_64 glibc-devel.i686 gcc-gnat libgnat doxygen graphviz dblatex texlive-collection-latex docbook5-style-xsl python-sphinx cmake
+sudo yum install -y gcc-objc
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
+fi
+do_install binutils-2.25-5.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/isl-0.14-3.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/isl-0.14-3.fc22.src.rpm
+fi
+do_install isl-0.14-3.el7.centos.x86_64.rpm
+do_install isl-devel-0.14-3.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/gcc-5.1.1-4.el7.centos.x86_64.rpm ]; then
+    rpmbuild --define "_topdir $RPMBUILD" --define "fedora 21" --rebuild build/srpms/gcc-5.1.1-4.fc22.src.rpm
+fi
+do_install *5.1.1-4*
+
 if [ ! -f $RPMBUILD/RPMS/x86_64/boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --without python3 --rebuild build/srpms/boost-1.57.0-6.fc22.src.rpm
 fi
@@ -62,7 +72,6 @@ fi
 do_install ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/ragel-6.8-3.el7.centos.x86_64.rpm ]; then
-    sudo yum install -y gcc-objc
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-3.fc22.src.rpm
     patch $RPMBUILD/SPECS/ragel.spec < dist/redhat/centos_dep/ragel.diff
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ragel.spec

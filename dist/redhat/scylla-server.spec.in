@@ -10,8 +10,8 @@ Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 
 BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel ninja-build ragel antlr3-tool antlr3-C++-devel xfsprogs-devel make
 %{?fedora:BuildRequires: python3 gcc-c++ libasan libubsan}
-%{?rhel:BuildRequires: python34 devtoolset-3-gcc-c++}
-Requires:       libaio boost-program-options boost-system libstdc++ boost-thread cryptopp hwloc-libs numactl-libs libpciaccess libxml2 zlib thrift yaml-cpp lz4 snappy jsoncpp boost-filesystem systemd-libs xz-libs openssl-libs libcap libselinux libgcrypt libgpg-error elfutils-libs krb5-libs libcom_err libattr pcre elfutils-libelf bzip2-libs keyutils-libs xfsprogs
+%{?rhel:BuildRequires: python34 gcc-c++ >= 5.1.1}
+Requires:       systemd-libs xfsprogs
 
 %description
 
@@ -23,7 +23,7 @@ Requires:       libaio boost-program-options boost-system libstdc++ boost-thread
 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
 %endif
 %if 0%{?rhel}
-./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --compiler=/opt/rh/devtoolset-3/root/usr/bin/g++
+./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --static-stdc++
 %endif
 ninja-build -j2
 
