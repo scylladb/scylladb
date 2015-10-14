@@ -113,6 +113,19 @@ public:
         auto sst = sstable(buffer_size, ks, cf, dir, generation, v, f, now);
         return make_lw_shared<sstable>(std::move(sst));
     }
+
+    // Used to create synthetic sstables for testing leveled compaction strategy.
+    void set_values_for_leveled_strategy(uint64_t fake_data_size, uint32_t sstable_level, int64_t max_timestamp, sstring first_key, sstring last_key) {
+        _sst->_data_file_size = fake_data_size;
+        // Create a synthetic stats metadata
+        stats_metadata stats = {};
+        // leveled strategy sorts sstables by age using max_timestamp, let's set it to 0.
+        stats.max_timestamp = max_timestamp;
+        stats.sstable_level = sstable_level;
+        _sst->_statistics.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
+        _sst->_summary.first_key.value = bytes(reinterpret_cast<const signed char*>(first_key.c_str()), first_key.size());
+        _sst->_summary.last_key.value = bytes(reinterpret_cast<const signed char*>(last_key.c_str()), last_key.size());
+    }
 };
 
 inline future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
