@@ -540,18 +540,22 @@ public:
                                     + std::to_string(_segment_manager->max_mutation_size)));
         }
         // would we make the file too big?
-        if (position() + s > _segment_manager->max_size) {
-            // do this in next segment instead.
-            return finish_and_get_new().then(
-                    [id, size, func = std::move(func)](auto new_seg) {
-                        return new_seg->allocate(id, size, func);
-                    });
-        }
-        // enough data?
-        if (s > (_buffer.size() - _buf_pos)) {
-            // TODO: iff we have to many writes running, maybe we should
-            // wait for this?
-            cycle(s);
+        for (;;) {
+            if (position() + s > _segment_manager->max_size) {
+                // do this in next segment instead.
+                return finish_and_get_new().then(
+                        [id, size, func = std::move(func)](auto new_seg) {
+                            return new_seg->allocate(id, size, func);
+                        });
+            }
+            // enough data?
+            if (s > (_buffer.size() - _buf_pos)) {
+                // TODO: iff we have to many writes running, maybe we should
+                // wait for this?
+                cycle(s);
+                continue; // re-check file size overflow
+            }
+            break;
         }
 
         _gate.enter(); // this might throw. I guess we accept this?
