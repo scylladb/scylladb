@@ -1754,6 +1754,65 @@ future<> column_family::snapshot(sstring name) {
     });
 }
 
+enum class missing { no, yes };
+static missing
+file_missing(future<> f) {
+    try {
+        f.get();
+        return missing::no;
+    } catch (std::system_error& e) {
+        if (e.code() != std::error_code(ENOENT, std::system_category())) {
+            throw;
+        }
+        return missing::yes;
+    }
+}
+
+future<> column_family::clear_snapshot(sstring tag) {
+    sstring jsondir = _config.datadir + "/snapshots/";
+    sstring parent = _config.datadir;
+    if (!tag.empty()) {
+        jsondir += tag;
+        parent += "/snapshots/";
+    }
+
+    lister::dir_entry_types dir_and_files = { directory_entry_type::regular, directory_entry_type::directory };
+    return lister::scan_dir(jsondir, dir_and_files, [this, curr_dir = jsondir, dir_and_files, tag] (directory_entry de) {
+        // FIXME: We really need a better directory walker. This should eventually be part of the seastar infrastructure.
+        // It's hard to write this in a fully recursive manner because we need to keep information about the parent directory,
+        // so we can remove the file. For now, we'll take advantage of the fact that we will at most visit 2 levels and keep
+        // it ugly but simple.
+        auto recurse = make_ready_future<>();
+        if (de.type == directory_entry_type::directory) {
+            // Should only recurse when tag is empty, meaning delete all snapshots
+            if (!tag.empty()) {
+                throw std::runtime_error(sprint("Unexpected directory %s found at %s! Aborting", de.name, curr_dir));
+            }
+            auto newdir = curr_dir + "/" + de.name;
+            recurse = lister::scan_dir(newdir, dir_and_files, [this, curr_dir = newdir] (directory_entry de) {
+                return remove_file(curr_dir + "/" + de.name);
+            });
+        }
+        return recurse.then([fname = curr_dir + "/" + de.name] {
+            return remove_file(fname);
+        });
+    }).then_wrapped([jsondir] (future<> f) {
+        // Fine if directory does not exist. If it did, we delete it
+        if (file_missing(std::move(f)) == missing::no) {
+            return remove_file(jsondir);
+        }
+        return make_ready_future<>();
+    }).then([parent] {
+        return sync_directory(parent).then_wrapped([] (future<> f) {
+            // Should always exist for empty tags, but may not exist for a single tag if we never took
+            // snapshots. We will check this here just to mask out the exception, without silencing
+            // unexpected ones.
+            file_missing(std::move(f));
+            return make_ready_future<>();
+        });
+    });
+}
+
 future<> column_family::flush() {
     // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
     // anything about previous writes.
