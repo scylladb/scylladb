@@ -270,9 +270,7 @@ public:
     }
 #endif
 public:
-    bool is_initialized() {
-        return _initialized;
-    }
+    future<bool> is_initialized();
 #if 0
 
     public void stopDaemon()

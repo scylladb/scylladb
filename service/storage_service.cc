@@ -1596,4 +1596,10 @@ int32_t storage_service::get_exception_count() {
     return 0;
 }
 
+future<bool> storage_service::is_initialized() {
+    return smp::submit_to(0, [] {
+        return get_local_storage_service()._initialized;
+    });
+}
+
 } // namespace service
