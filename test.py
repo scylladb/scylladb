@@ -55,6 +55,7 @@ boost_tests = [
     'batchlog_manager_test',
     'logalloc_test',
     'crc_test',
+    'flush_queue_test',
 ]
 
 other_tests = [

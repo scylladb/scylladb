@@ -54,10 +54,14 @@
 #include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
 #include "utils/latency.hh"
+#include "utils/flush_queue.hh"
 
 using namespace std::chrono_literals;
 
 logging::logger dblog("database");
+
+// Do this to avoid having to include or forward-declare template in our header.
+class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {};
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
@@ -67,6 +71,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
     , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
     , _commitlog(&cl)
     , _compaction_manager(compaction_manager)
+    , _flush_queue(std::make_unique<memtable_flush_queue>())
 {
     add_memtable();
     if (!_config.enable_disk_writes) {
@@ -82,6 +87,7 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
     , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
     , _commitlog(nullptr)
     , _compaction_manager(compaction_manager)
+    , _flush_queue(std::make_unique<memtable_flush_queue>())
 {
     add_memtable();
     if (!_config.enable_disk_writes) {
@@ -477,8 +483,15 @@ column_family::seal_active_memtable() {
     );
     _highest_flushed_rp = old->replay_position();
 
-    return seastar::with_gate(_in_flight_seals, [old, this] {
-        return flush_memtable_to_sstable(old);
+    return _flush_queue->run_with_ordered_post_op(old->replay_position(), [old, this] {
+        return repeat([this, old] {
+            _flush_queue->check_open_gate();
+            return try_flush_memtable_to_sstable(old);
+        });
+    }, [old, this] {
+        if (_commitlog) {
+            _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
+        }
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
@@ -530,38 +543,16 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
         try {
             ret.get();
 
-            // FIXME: until the surrounding function returns a future and
-            // caller ensures ordering (i.e. finish flushing one or more sequential tables before
-            // doing the discard), this below is _not_ correct, since the use of replay_position
-            // depends on us reporting the factual highest position we've actually flushed,
-            // _and_ all positions (for a given UUID) below having been dealt with.
-            //
-            // Note that the whole scheme is also dependent on memtables being "allocated" in order,
-            // i.e. we may not flush a younger memtable before and older, and we need to use the
-            // highest rp.
-            if (_commitlog) {
-                _commitlog->discard_completed_segments(_schema->id(), old->replay_position());
-            }
             _memtables->erase(boost::range::find(*_memtables, old));
             dblog.debug("Memtable replaced");
             trigger_compaction();
+
             return make_ready_future<stop_iteration>(stop_iteration::yes);
-        } catch (std::exception& e) {
-            dblog.error("failed to write sstable: {}", e.what());
         } catch (...) {
-            dblog.error("failed to write sstable: unknown error");
+            dblog.error("failed to write sstable: {}", std::current_exception());
         }
         return sleep(10s).then([] {
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        });
-    });
-}
-
-future<>
-column_family::flush_memtable_to_sstable(lw_shared_ptr<memtable> memt) {
-    return repeat([this, memt] {
-        return seastar::with_gate(_in_flight_seals, [memt, this] {
-            return try_flush_memtable_to_sstable(memt);
         });
     });
 }
@@ -575,11 +566,8 @@ column_family::start() {
 future<>
 column_family::stop() {
     seal_active_memtable();
-
     return _compaction_manager.remove(this).then([this] {
-        return _in_flight_seals.close().then([this] {
-            return make_ready_future<>();
-        });
+        return _flush_queue->close();
     });
 }
 

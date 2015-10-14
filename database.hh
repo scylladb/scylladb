@@ -145,12 +145,13 @@ private:
     // Whether or not a cf is queued by its compaction manager.
     bool _compaction_manager_queued = false;
     int _compaction_disabled = 0;
+    class memtable_flush_queue;
+    std::unique_ptr<memtable_flush_queue> _flush_queue;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     void add_memtable();
-    future<> flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
