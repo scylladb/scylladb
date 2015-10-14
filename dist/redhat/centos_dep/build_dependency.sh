@@ -67,9 +67,7 @@ fi
 do_install *5.1.1-4*
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
-    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/boost-1.57.0-6.fc22.src.rpm
-    patch $RPMBUILD/SPECS/boost.spec < dist/redhat/centos_dep/boost.diff
-    rpmbuild --define "_topdir $RPMBUILD" --without python3 -ba $RPMBUILD/SPECS/boost.spec
+    rpmbuild --define "_topdir $RPMBUILD" --without python3 --rebuild build/srpms/boost-1.57.0-6.fc22.src.rpm
 fi
 do_install boost*
 
