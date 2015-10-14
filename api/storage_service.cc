@@ -216,11 +216,12 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         auto tag = req->get_query_param("tag");
-        auto keyname = req->get_query_param("kn");
-        return make_ready_future<json::json_return_type>(json_void());
+
+        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
+        return service::get_local_storage_service().clear_snapshot(tag, keynames).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
