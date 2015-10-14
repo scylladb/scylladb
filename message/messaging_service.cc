@@ -279,6 +279,53 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
     return idx;
 }
 
+/**
+ * Get an IP for a given endpoint to connect to
+ *
+ * @param ep endpoint to check
+ *
+ * @return preferred IP (local) for the given endpoint if exists and if the
+ *         given endpoint resides in the same data center with the current Node.
+ *         Otherwise 'ep' itself is returned.
+ */
+gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
+    auto it = _preferred_ip_cache.find(ep);
+
+    if (it != _preferred_ip_cache.end()) {
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        auto my_addr = utils::fb_utilities::get_broadcast_address();
+
+        if (snitch_ptr->get_datacenter(ep) == snitch_ptr->get_datacenter(my_addr)) {
+            return it->second;
+        }
+    }
+
+    // If cache doesn't have an entry for this endpoint - return endpoint itself
+    return ep;
+}
+
+future<> messaging_service::init_local_preferred_ip_cache() {
+    return db::system_keyspace::get_preferred_ips().then([this] (auto ips_cache) {
+        _preferred_ip_cache = ips_cache;
+        //
+        // Reset the connections to the endpoints that have entries in
+        // _preferred_ip_cache so that they reopen with the preferred IPs we've
+        // just read.
+        //
+        for (auto& p : _preferred_ip_cache) {
+            shard_id id = {
+                .addr = p.first
+            };
+
+            this->remove_rpc_client(id);
+        }
+    });
+}
+
+void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
+    _preferred_ip_cache[ep] = ip;
+}
+
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, shard_id id) {
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
@@ -291,7 +338,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_rpc_client(verb, id);
     }
 
-    auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
+    auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), _port);
     auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
     return it->second.rpc_client;

@@ -505,6 +505,10 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
         return check_health();
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
+    }).then([] {
+        return net::get_messaging_service().invoke_on_all([] (auto& ms){
+            return ms.init_local_preferred_ip_cache();
+        });
     });
     return make_ready_future<>();
 }

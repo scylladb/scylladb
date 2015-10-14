@@ -433,6 +433,8 @@ private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
+    // map: Node broadcast address -> Node internal IP for communication within the same data center
+    std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
     std::array<clients_map, 2> _clients;
@@ -446,6 +448,10 @@ public:
     future<> stop();
     static rpc::no_wait_type no_wait();
 public:
+    gms::inet_address get_preferred_ip(gms::inet_address ep);
+    future<> init_local_preferred_ip_cache();
+    void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
+
     // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
     future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
