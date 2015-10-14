@@ -1843,6 +1843,50 @@ future<> column_family::clear_snapshot(sstring tag) {
     });
 }
 
+future<std::unordered_map<sstring, column_family::snapshot_details>> column_family::get_snapshot_details() {
+    std::unordered_map<sstring, snapshot_details> all_snapshots;
+    return do_with(std::move(all_snapshots), [this] (auto& all_snapshots) {
+        return lister::scan_dir(_config.datadir + "/snapshots",  { directory_entry_type::directory }, [this, &all_snapshots] (directory_entry de) {
+            auto snapshot_name = de.name;
+            auto snapshot = _config.datadir + "/snapshots/" + snapshot_name;
+            all_snapshots.emplace(snapshot_name, snapshot_details());
+            return lister::scan_dir(snapshot,  { directory_entry_type::regular }, [this, &all_snapshots, snapshot, snapshot_name] (directory_entry de) {
+                return file_size(snapshot + "/" + de.name).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
+                    // The manifest is the only file expected to be in this directory not belonging to the SSTable.
+                    // For it, we account the total size, but zero it for the true size calculation.
+                    //
+                    // All the others should just generate an exception: there is something wrong, so don't blindly
+                    // add it to the size.
+                    if (name != "manifest.json") {
+                        sstables::entry_descriptor::make_descriptor(name);
+                        all_snapshots.at(snapshot_name).total += size;
+                    } else {
+                        size = 0;
+                    }
+                    return make_ready_future<uint64_t>(size);
+                }).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
+                    // FIXME: When we support multiple data directories, the file may not necessarily
+                    // live in this same location. May have to test others as well.
+                    return file_size(_config.datadir + "/" + name).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                        try {
+                            // File exists in the main SSTable directory. Snapshots are not contributing to size
+                            fut.get0();
+                        } catch (std::system_error& e) {
+                            if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                                throw;
+                            }
+                            all_snapshots.at(snapshot_name).live += size;
+                        }
+                        return make_ready_future<>();
+                    });
+                });
+            });
+        }).then([&all_snapshots] {
+            return std::move(all_snapshots);
+        });
+    });
+}
+
 future<> column_family::flush() {
     // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
     // anything about previous writes.
