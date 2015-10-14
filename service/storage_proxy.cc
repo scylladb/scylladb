@@ -258,7 +258,6 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 
     auto m = make_lw_shared<const frozen_mutation>(std::move(mutation));
 
-    // for now make is simple
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
         h = std::make_unique<datacenter_write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
