@@ -1251,9 +1251,8 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
         }
 
         //notify snitches that Gossiper is about to start
-#if 0
-        DatabaseDescriptor.getEndpointSnitch().gossiperStarting();
-#endif
+        locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting();
+
         logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
         _enabled = true;
         _scheduled_gossip_task.arm(INTERVAL);
