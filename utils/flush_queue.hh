@@ -37,31 +37,7 @@ namespace utils {
 template<typename T, typename Comp = std::less<T>>
 class flush_queue {
 private:
-    enum class state {
-        running,
-        waiting,
-    };
-
-    struct notifier {
-        state s;
-        // to signal when "post" action may run
-        promise<> pr;
-        // to carry any "func" exception
-        std::exception_ptr ex;
-        // to wait for before issuing next post
-        std::experimental::optional<future<>> done;
-
-        future<> signal() {
-            if (ex) {
-                pr.set_exception(ex);
-            } else {
-                pr.set_value();
-            }
-            return std::move(*done);
-        }
-    };
-
-    typedef std::map<T, notifier, Comp> map_type;
+    typedef std::map<T, promise<>, Comp> map_type;
     typedef typename map_type::reverse_iterator reverse_iterator;
 
     map_type _map;
@@ -69,76 +45,68 @@ private:
     // so we can effectively block incoming ops
     seastar::gate _gate;
 
-    // Adds/updates an entry to be called once "rp" maps the lowest, finished
-    // operation
-    template<typename Post>
-    future<> add_callback(T rp, Post&& post, state s = state::running) {
-        promise<> pr;
-        auto fut = pr.get_future();
-
-        notifier n;
-        n.s = s;
-        n.done = n.pr.get_future().then(std::forward<Post>(post)).then_wrapped([this, pr = std::move(pr)](future<> f) mutable {
-            f.forward_to(std::move(pr));
-        });
-
-        // Do not use emplace, since we might want to overwrite
-        _map[rp] = std::move(n);
-
-        // We also go through gate the whole func + post chain
-        _gate.enter();
-        return fut.finally([this] {
-            _gate.leave();
-        });
+    template<typename Func, typename... Args>
+    static auto call_helper(Func&& func, future<Args...> f) {
+        using futurator = futurize<std::result_of_t<Func(Args&&...)>>;
+        try {
+            return futurator::apply(std::forward<Func>(func), f.get());
+        } catch (...) {
+            return futurator::make_exception_future(std::current_exception());
+        }
     }
-
 public:
+    flush_queue() = default;
+    // we are repeatedly using lambdas with "this" captured.
+    // allowing moving would not be wise.
+    flush_queue(flush_queue&&) = delete;
+    flush_queue(const flush_queue&) = delete;
+
     /*
      * Runs func() followed by post(), but guaranteeing that
      * all operations with lower <T> keys have completed before
      * post() is executed.
      *
+     * Post is invoked on the return value of Func
      * Returns a future containing the result of post()
      *
-     * Func & Post are both restricted to return future<>
      * Any exception from Func is forwarded to end result, but
      * in case of exception post is _not_ run.
      */
     template<typename Func, typename Post>
-    future<> run_with_ordered_post_op(T rp, Func&& func, Post&& post) {
+    auto run_with_ordered_post_op(T rp, Func&& func, Post&& post) {
         assert(!_map.count(rp));
         assert(_map.empty() || _map.rbegin()->first < rp);
 
-        auto fut = add_callback(rp, std::forward<Post>(post));
+        _gate.enter();
+        _map.emplace(std::make_pair(rp, promise<>()));
 
         using futurator = futurize<std::result_of_t<Func()>>;
 
-        futurator::apply(std::forward<Func>(func)).then_wrapped([this, rp](future<> f) {
+        return futurator::apply(std::forward<Func>(func)).then_wrapped([this, rp, post = std::forward<Post>(post)](typename futurator::type f) mutable {
             auto i = _map.find(rp);
-            // mark us as done (waiting for notofication)
-            i->second.s = state::waiting;
+            assert(i != _map.end());
 
-            try {
-                f.get();
-            } catch (...) {
-                i->second.ex = std::current_exception();
-            }
+            auto run_post = [this, post = std::forward<Post>(post), f = std::move(f), i]() mutable {
+                assert(i == _map.begin());
+                return call_helper(std::forward<Post>(post), std::move(f)).finally([this, i]() {
+                    auto pr = std::move(i->second);
+                    assert(i == _map.begin());
+                    _map.erase(i);
+                    _gate.leave();
+                    pr.set_value();
+                });
+            };
 
-            // if we are the first item, dequeue and signal all
-            // that are currently waiting, starting with ourself
             if (i == _map.begin()) {
-                return do_until([this] {return _map.empty() || _map.begin()->second.s != state::waiting;},
-                        [this] {
-                            auto i = _map.begin();
-                            auto n = std::move(i->second);
-                            _map.erase(i);
-                            return n.signal();
-                        }
-                );
+                return run_post();
             }
-            return make_ready_future<>();
+
+            --i;
+            auto pr = std::exchange(i->second, promise<>());
+            return i->second.get_future().then(std::move(run_post)).finally([pr = std::move(pr)]() mutable {
+                pr.set_value();
+            });
         });
-        return fut;
     }
 private:
     // waits for the entry at "i" to complete (and thus all before it)
@@ -146,12 +114,10 @@ private:
         if (i == _map.rend()) {
             return make_ready_future<>();
         }
-        auto n = std::move(i->second);
-        auto s = n.s;
-        return add_callback(i->first, [n = std::move(n)]() {
-            // wait for original callback
-            return n.signal();
-        }, s);
+        auto pr = std::exchange(i->second, promise<>());
+        return i->second.get_future().then([pr = std::move(pr)]() mutable {
+            pr.set_value();
+        });
     }
 public:
     // Waits for all operations currently active to finish
