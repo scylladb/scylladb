@@ -706,6 +706,19 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
     });
 }
 
+future<>
+column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
+    return parallel_for_each(new_tables, [this] (auto comps) {
+        auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, comps.generation, comps.version, comps.format);
+        return sst->load().then([this, sst] {
+            return sst->mutate_sstable_level(0);
+        }).then([this, sst] {
+            this->add_sstable(sst);
+            return make_ready_future<>();
+        });
+    });
+}
+
 // FIXME: this is just an example, should be changed to something more general
 // Note: We assume that the column_family does not get destroyed during compaction.
 future<>

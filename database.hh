@@ -265,6 +265,7 @@ public:
 
     future<bool> snapshot_exists(sstring name);
 
+    future<> load_new_sstables(std::vector<sstables::entry_descriptor> new_tables);
     future<> snapshot(sstring name);
     future<> clear_snapshot(sstring name);
 
