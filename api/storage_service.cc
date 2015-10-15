@@ -589,11 +589,16 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::load_new_ss_tables.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>(json_void());
+        auto ks = validate_keyspace(ctx, req->param);
+        auto cf = req->get_query_param("cf");
+        // No need to add the keyspace, since all we want is to avoid always sending this to the same
+        // CPU. Even then I am being overzealous here. This is not something that happens all the time.
+        auto coordinator = std::hash<sstring>()(cf) % smp::count;
+        return service::get_storage_service().invoke_on(coordinator, [ks = std::move(ks), cf = std::move(cf)] (service::storage_service& s) {
+            return s.load_new_sstables(ks, cf);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::sample_key_range.set(r, [](std::unique_ptr<request> req) {
