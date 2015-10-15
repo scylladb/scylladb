@@ -85,7 +85,12 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-
+    cm::get_compaction_history.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        unimplemented();
+        std::vector<cm::history> res;
+        return make_ready_future<json::json_return_type>(res);
+    });
 
 }
 

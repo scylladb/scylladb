@@ -27,6 +27,25 @@
          ]
       },
       {
+         "path":"/compaction_manager/compaction_history",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get List of the compaction history",
+               "type":"array",
+               "items":{
+                  "type":"history"
+               },
+               "nickname":"get_compaction_history",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/compaction_manager/compaction_summary",
          "operations":[
             {
@@ -181,6 +200,43 @@
                "description":"A list of key, value mapping"
             }
          }
+      },
+      "history": {
+      "id":"history",
+      "description":"Compaction history information",
+      "properties":{
+            "id":{
+               "type":"string",
+               "description":"The UUID"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family name"
+            },
+            "ks":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "compacted_at":{
+               "type":"long",
+               "description":"The time of compaction"
+            },
+            "bytes_in":{
+               "type":"long",
+               "description":"Bytes in"
+            },
+            "bytes_out":{
+               "type":"long",
+               "description":"Bytes out"
+            },
+            "rows_merged":{
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "description":"The merged rows"
+            }
+        }
       }
    }
 }
