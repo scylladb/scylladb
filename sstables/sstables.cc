@@ -1428,15 +1428,27 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 }
 
 future<> sstable::create_links(sstring dir, int64_t generation) const {
-    return parallel_for_each(_components, [this, dir, generation] (auto comp) {
-        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
-        return ::link_file(this->filename(comp), dst);
-    }).then([dir] {
-        // sync dir
-        return ::open_directory(dir).then([](file df) {
-            auto f = df.flush();
-            return f.finally([df = std::move(df)] {});
+    // TemporaryTOC is always first, TOC is always last
+    auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+    return ::link_file(filename(component_type::TOC), dst).then([dir] {
+        return sync_directory(dir);
+    }).then([this, dir, generation] {
+        // FIXME: Should clean already-created links if we failed midway.
+        return parallel_for_each(_components, [this, dir, generation] (auto comp) {
+            if (comp == component_type::TOC) {
+                return make_ready_future<>();
+            }
+            auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
+            return ::link_file(this->filename(comp), dst);
         });
+    }).then([dir] {
+        return sync_directory(dir);
+    }).then([dir, this, generation] {
+        auto src = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TOC);
+        return engine().rename_file(src, dst);
+    }).then([dir] {
+        return sync_directory(dir);
     });
 }
 
