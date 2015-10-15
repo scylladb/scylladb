@@ -188,6 +188,10 @@ public:
 
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
+    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
+
+    virtual bool depends_on_column_family(const sstring& cf_name) const override;
+
     void add_operation(::shared_ptr<operation> op) {
         if (op->column.is_static()) {
             _sets_static_columns = true;

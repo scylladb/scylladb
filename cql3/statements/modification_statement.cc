@@ -541,6 +541,14 @@ modification_statement::validate(distributed<service::storage_proxy>&, const ser
     }
 }
 
+bool modification_statement::depends_on_keyspace(const sstring& ks_name) const {
+    return keyspace() == ks_name;
+}
+
+bool modification_statement::depends_on_column_family(const sstring& cf_name) const {
+    return column_family() == cf_name;
+}
+
 }
 
 }

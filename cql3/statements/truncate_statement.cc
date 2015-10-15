@@ -68,6 +68,16 @@ bool truncate_statement::uses_function(const sstring& ks_name, const sstring& fu
     return parsed_statement::uses_function(ks_name, function_name);
 }
 
+bool truncate_statement::depends_on_keyspace(const sstring& ks_name) const
+{
+    return false;
+}
+
+bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
+{
+    return false;
+}
+
 void truncate_statement::check_access(const service::client_state& state)
 {
     warn(unimplemented::cause::AUTH);

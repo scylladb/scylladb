@@ -45,6 +45,16 @@ namespace statements {
 
 logging::logger batch_statement::_logger("BatchStatement");
 
+bool batch_statement::depends_on_keyspace(const sstring& ks_name) const
+{
+    return false;
+}
+
+bool batch_statement::depends_on_column_family(const sstring& cf_name) const
+{
+    return false;
+}
+
 }
 
 }

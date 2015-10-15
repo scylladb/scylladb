@@ -168,7 +168,7 @@ int main(int ac, char** av) {
 
     distributed<database> db;
     debug::db = &db;
-    distributed<cql3::query_processor> qp;
+    auto& qp = cql3::get_query_processor();
     auto& proxy = service::get_storage_proxy();
     auto& mm = service::get_migration_manager();
     api::http_context ctx(db, proxy);
