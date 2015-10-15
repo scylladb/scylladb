@@ -29,8 +29,7 @@
 
 #include "tests/test-utils.hh"
 #include "utils/flush_queue.hh"
-
-#include <iostream>
+#include "log.hh"
 
 std::random_device rd;
 std::default_random_engine e1(rd());
@@ -42,10 +41,9 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
         utils::flush_queue<int> queue;
         std::vector<promise<>> promises;
         std::vector<int> result;
-        promise<> end;
     };
 
-    auto r = boost::irange(0, 20);
+    auto r = boost::irange(0, 100);
 
     return do_for_each(r, [](int) {
         constexpr size_t num_ops = 1000;
@@ -54,17 +52,17 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
 
         int i = 0;
         for (auto& p : e->promises) {
-            e->queue.run_with_ordered_post_op(i, [&p] {
-                return p.get_future();
-            }, [i, e] {
-                //std::cout << "POST " << i << "(" << e->result.size() << ")" << std::endl;
+            e->queue.run_with_ordered_post_op(i, [&p, i] {
+                return p.get_future().then([i] {
+                    return make_ready_future<int>(i);
+                });
+            }, [e](int i) {
                 e->result.emplace_back(i);
-                if (e->result.size() == e->promises.size()) {
-                    e->end.set_value();
-                }
             });
             ++i;
         }
+
+        auto res = e->queue.wait_for_pending();
 
         std::uniform_int_distribution<size_t> dist(0, num_ops - 1);
         std::bitset<num_ops> set;
@@ -72,17 +70,14 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
         while (!set.all()) {
             size_t i = dist(e1);
             if (!set.test(i)) {
-                //std::cout << "SET " << i << "(" << e->result.size() << ")" << std::endl;
                 set[i] = true;
                 e->promises[i].set_value();
             }
         }
 
-        return e->end.get_future().then([e] {
+        return res.then([e] {
             BOOST_CHECK_EQUAL(e->result.size(), e->promises.size());
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
-        }).finally([e] {
-            //std::cout <<  "Bulle" << std::endl;
-        });
+        }).finally([e] {});
     });
 }
