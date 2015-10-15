@@ -1452,6 +1452,25 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
     });
 }
 
+future<> sstable::set_generation(int64_t new_generation) {
+    return create_links(_dir, new_generation).then([this] {
+        return remove_file(filename(component_type::TOC)).then([this] {
+            return sync_directory(_dir);
+        }).then([this] {
+            return parallel_for_each(_components, [this] (auto comp) {
+                if (comp == component_type::TOC) {
+                    return make_ready_future<>();
+                }
+                return remove_file(this->filename(comp));
+            });
+        });
+    }).then([this, new_generation] {
+        return sync_directory(_dir).then([this, new_generation] {
+            _generation = new_generation;
+        });
+    });
+}
+
 entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
     static std::regex la("la-(\\d+)-(\\w+)-(.*)");
     static std::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");

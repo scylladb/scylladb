@@ -185,9 +185,8 @@ public:
     future<> load();
     future<> open_data();
 
-    void set_generation(int64_t generation) {
-        _generation = generation;
-    }
+    future<> set_generation(int64_t generation);
+
     int64_t generation() const {
         return _generation;
     }
