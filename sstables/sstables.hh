@@ -293,7 +293,11 @@ public:
         return _collector;
     }
 
-    future<> create_links(sstring dir) const;
+    future<> create_links(sstring dir, int64_t generation) const;
+
+    future<> create_links(sstring dir) const {
+        return create_links(dir, _generation);
+    }
 
     /**
      * Note. This is using the Origin definition of

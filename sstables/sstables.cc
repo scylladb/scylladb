@@ -1427,12 +1427,10 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
-future<> sstable::create_links(sstring dir) const {
-    return parallel_for_each(component_filenames(), [this, dir](sstring f) {
-        auto sdir = get_dir();
-        auto name = f.substr(sdir.size());
-        auto dst = dir + name;
-        return ::link_file(f, dst);
+future<> sstable::create_links(sstring dir, int64_t generation) const {
+    return parallel_for_each(_components, [this, dir, generation] (auto comp) {
+        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
+        return ::link_file(this->filename(comp), dst);
     }).then([dir] {
         // sync dir
         return ::open_directory(dir).then([](file df) {
