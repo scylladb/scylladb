@@ -38,6 +38,7 @@
 #include "utils/UUID_gen.hh"
 #include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
+#include "log.hh"
 
 using namespace db;
 
@@ -223,6 +224,7 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment){
 
 
 SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
+    //logging::logger_registry().set_logger_level("commitlog", logging::log_level::trace);
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
     return make_commitlog(cfg).then([](tmplog_ptr log) {
@@ -257,13 +259,17 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
                     }).then([log, state]() {
                         return count_files(log->first.path).then([log, state](size_t n) {
                                     BOOST_REQUIRE(n > 1);
-                                    for (auto & p : state->rps) {
-                                        log->second.discard_completed_segments(p.first, p.second);
-                                    }
-                                    return count_files(log->first.path).then([n](size_t nn) {
-                                                BOOST_REQUIRE(nn > 0);
-                                                BOOST_REQUIRE(nn < n);
-                                            });
+                                    // sync all so we have no outstanding async sync ops that
+                                    // might prevent discard_completed_segments to actually dispose
+                                    // of clean segments (shared_ptr in task)
+                                    return log->second.sync_all_segments().then([log, state, n] {
+                                        for (auto & p : state->rps) {
+                                            log->second.discard_completed_segments(p.first, p.second);
+                                        }
+                                        size_t nn = log->second.get_num_segments_destroyed();
+                                        BOOST_REQUIRE(nn > 0);
+                                        BOOST_REQUIRE(nn <= n);
+                                    });
                                 });
                     }).finally([log]() {
                         return log->second.clear().then([log] {});
