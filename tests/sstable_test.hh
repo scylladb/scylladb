@@ -96,6 +96,10 @@ public:
         return _sst->binary_search(entries, sk);
     }
 
+    void change_generation_number(int64_t generation) {
+        _sst->_generation = generation;
+    }
+
     future<> store() {
         _sst->_components.erase(sstable::component_type::Index);
         _sst->_components.erase(sstable::component_type::Data);

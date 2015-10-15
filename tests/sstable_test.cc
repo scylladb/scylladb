@@ -172,7 +172,7 @@ SEASTAR_TEST_CASE(big_summary_query_32) {
 static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>("ks", "cf", dir, generation, la, big);
     return sst->load().then([sst, generation] {
-        sst->set_generation(generation + 1);
+        sstables::test(sst).change_generation_number(generation + 1);
         auto fut = sstables::test(sst).store();
         return std::move(fut).then([sst = std::move(sst)] {
             return make_ready_future<sstable_ptr>(std::move(sst));
