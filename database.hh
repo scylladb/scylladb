@@ -241,6 +241,20 @@ public:
         _sstables_lock.write_unlock();
         return std::chrono::high_resolution_clock::now() - _sstable_writes_disabled_at;
     }
+
+    // Make sure the generation numbers are sequential, starting from "start".
+    // Generations before "start" are left untouched.
+    //
+    // Return the highest generation number seen so far
+    //
+    // Word of warning: although this function will reshuffle anything over "start", it is
+    // very dangerous to do that with live SSTables. This is meant to be used with SSTables
+    // that are not yet managed by the system.
+    //
+    // An example usage would query all shards asking what is the highest SSTable number known
+    // to them, and then pass that + 1 as "start".
+    future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(int64_t start);
+
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
