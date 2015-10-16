@@ -370,7 +370,6 @@ private:
     template <sstable::component_type Type, typename T>
     void write_simple(T& comp);
 
-    future<> read_toc();
     void generate_toc(compressor c, double filter_fp_chance);
     void write_toc();
     void seal_sstable();
@@ -449,6 +448,8 @@ private:
     void write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t);
     void write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation::view collection);
 public:
+    future<> read_toc();
+
     bool filter_has_key(const schema& s, const partition_key& key) {
         return filter_has_key(key::from_partition_key(s, key));
     }
