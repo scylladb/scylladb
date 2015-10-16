@@ -200,21 +200,33 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
     });
 }
 
+struct sstdesc {
+    sstring dir;
+    int64_t gen;
+};
+
+static future<> compare_files(sstdesc file1, sstdesc file2, sstable::component_type component) {
+    auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
+    return read_file(file_path).then([component, file2] (auto ret) {
+        auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
+        return read_file(file_path).then([ret] (auto ret2) {
+            // assert that both files have the same size.
+            BOOST_REQUIRE(ret.second == ret2.second);
+            // assert that both files have the same content.
+            BOOST_REQUIRE(::memcmp(ret.first, ret2.first, ret.second) == 0);
+            // free buf from both files.
+            ::free(ret.first);
+            ::free(ret2.first);
+        });
+    });
+
+}
+
 static future<> check_component_integrity(sstable::component_type component) {
     return write_sst_info("tests/sstables/compressed", 1).then([component] {
-        auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 1, big, component);
-        return read_file(file_path).then([component] (auto ret) {
-            auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 2, big, component);
-            return read_file(file_path).then([ret] (auto ret2) {
-                // assert that both files have the same size.
-                BOOST_REQUIRE(ret.second == ret2.second);
-                // assert that both files have the same content.
-                BOOST_REQUIRE(::memcmp(ret.first, ret2.first, ret.second) == 0);
-                // free buf from both files.
-                ::free(ret.first);
-                ::free(ret2.first);
-            });
-        });
+        return compare_files(sstdesc{"tests/sstables/compressed", 1 },
+                             sstdesc{"tests/sstables/compressed", 2 },
+                             component);
     });
 }
 
