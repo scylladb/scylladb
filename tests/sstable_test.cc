@@ -796,4 +796,37 @@ SEASTAR_TEST_CASE(wrong_range) {
         });
     });
 }
- 
+
+static future<>
+test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
+    auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, sstable::component_type::Data);
+    return engine().open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
+        if (exists) {
+            BOOST_CHECK_NO_THROW(f.get0());
+        } else {
+            BOOST_REQUIRE_THROW(f.get0(), std::system_error);
+        }
+        return make_ready_future<>();
+    });
+}
+
+// We need to be careful not to allow failures in this test to contaminate subsequent runs.
+// We will therefore run it in an empty directory, and first link a known SSTable from another
+// directory to it.
+SEASTAR_TEST_CASE(set_generation) {
+    return test_setup::do_with_test_directory([] {
+        return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+            return sstp->create_links("tests/sstables/generation").then([sstp] {});
+        }).then([] {
+            return reusable_sst("tests/sstables/generation", 1).then([] (auto sstp) {
+                return sstp->set_generation(2).then([sstp] {});
+            });
+        }).then([] {
+            return test_sstable_exists("tests/sstables/generation", 1, false);
+        }).then([] {
+            return compare_files(sstdesc{"tests/sstables/uncompressed", 1 },
+                                 sstdesc{"tests/sstables/generation", 2 },
+                                 sstable::component_type::Data);
+        });
+    }, "tests/sstables/generation");
+}
