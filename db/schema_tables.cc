@@ -1327,8 +1327,8 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
         builder.set_speculative_retry(table_row.get_nonnull<sstring>("speculative_retry"));
     }
 
-    if (table_row.has("compaction_strategy")) {
-        auto strategy = table_row.get_nonnull<sstring>("compression_strategy_class");
+    if (table_row.has("compaction_strategy_class")) {
+        auto strategy = table_row.get_nonnull<sstring>("compaction_strategy_class");
         builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
     }
 
