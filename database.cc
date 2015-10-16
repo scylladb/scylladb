@@ -1151,7 +1151,7 @@ keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
 
 future<>
 keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
-    return make_directory(column_family_directory(name, uuid));
+    return touch_directory(column_family_directory(name, uuid));
 }
 
 no_such_keyspace::no_such_keyspace(const sstring& ks_name)
