@@ -830,3 +830,40 @@ SEASTAR_TEST_CASE(set_generation) {
         });
     }, "tests/sstables/generation");
 }
+
+SEASTAR_TEST_CASE(reshuffle) {
+    return test_setup::do_with_test_directory([] {
+        return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+            return sstp->create_links("tests/sstables/generation", 1).then([sstp] {
+                return sstp->create_links("tests/sstables/generation", 5).then([sstp] {
+                    return sstp->create_links("tests/sstables/generation", 10);
+                });
+            }).then([sstp] {});
+        }).then([] {
+            auto cm = make_lw_shared<compaction_manager>();
+            cm->start(2); // starting two task handlers.
+
+            column_family::config cfg;
+            cfg.datadir = "tests/sstables/generation";
+            cfg.enable_commitlog = false;
+            cfg.enable_incremental_backups = false;
+            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm);
+            cf->start();
+            return cf->reshuffle_sstables(3).then([cm, cf] (std::vector<sstables::entry_descriptor> reshuffled) {
+                BOOST_REQUIRE(reshuffled.size() == 2);
+                BOOST_REQUIRE(reshuffled[0].generation  == 3);
+                BOOST_REQUIRE(reshuffled[1].generation  == 4);
+                return when_all(
+                    test_sstable_exists("tests/sstables/generation", 1, true),
+                    test_sstable_exists("tests/sstables/generation", 2, false),
+                    test_sstable_exists("tests/sstables/generation", 3, true),
+                    test_sstable_exists("tests/sstables/generation", 4, true),
+                    test_sstable_exists("tests/sstables/generation", 5, false),
+                    test_sstable_exists("tests/sstables/generation", 10, false)
+                ).discard_result().then([cm] {
+                    return cm->stop();
+                });
+            }).then([cm, cf] {});
+        });
+    }, "tests/sstables/generation");
+}
