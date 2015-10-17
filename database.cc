@@ -1709,7 +1709,7 @@ future<> column_family::snapshot(sstring name) {
                 } else {
                     return make_ready_future<>();
                 }
-            }).then([this, &tables, jsondir] {
+            }).finally([this, &tables, jsondir] {
                 auto shard = std::hash<sstring>()(jsondir) % smp::count;
                 std::unordered_set<sstring> table_names;
                 for (auto& sst : tables) {
