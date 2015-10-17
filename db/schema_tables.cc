@@ -670,6 +670,8 @@ future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&
                 if (engine().cpu_id() == 0) {
                     for (auto&& cfm : created) {
                         service::migration_manager::notify_create_column_family(cfm).get0();
+                        auto& ks = db.find_keyspace(cfm->ks_name());
+                        ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
                     }
                     for (auto&& cfm : dropped) {
                         service::migration_manager::notify_drop_column_family(cfm).get0();

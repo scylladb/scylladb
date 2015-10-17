@@ -264,6 +264,12 @@ int main(int ac, char** av) {
             }).then([&db] {
                 return db.invoke_on_all([] (database& db) {
                     return db.init_system_keyspace();
+                }).then([&db] {
+                    auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
+                    return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+                        auto cfm = pair.second;
+                        return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+                    });
                 });
             }).then([&db, &proxy] {
                 return db.invoke_on_all([&proxy] (database& db) {
