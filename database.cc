@@ -1688,7 +1688,18 @@ future<> column_family::snapshot(sstring name) {
             return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
                 auto dir = sstable->get_dir() + "/snapshots/" + name;
                 return recursive_touch_directory(dir).then([sstable, dir] {
-                    return sstable->create_links(dir);
+                    return sstable->create_links(dir).then_wrapped([] (future<> f) {
+                        // If the SSTables are shared, one of the CPUs will fail here.
+                        // That is completely fine, though. We only need one link.
+                        try {
+                            f.get();
+                        } catch (std::system_error& e) {
+                            if (e.code() != std::error_code(EEXIST, std::system_category())) {
+                                throw;
+                            }
+                        }
+                        return make_ready_future<>();
+                    });
                 });
             }).then([jsondir, &tables] {
                 // This is not just an optimization. If we have no files, jsondir may not have been created,
