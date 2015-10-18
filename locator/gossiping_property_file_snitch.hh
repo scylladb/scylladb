@@ -75,7 +75,7 @@ public:
     }
 
     gossiping_property_file_snitch(
-        const sstring& fname = snitch_properties_filename,
+        const sstring& fname = "",
         unsigned io_cpuid = 0);
 
 private:
