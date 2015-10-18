@@ -38,6 +38,7 @@
 #include "hinted_handoff.hh"
 #include "http/exception.hh"
 #include "stream_manager.hh"
+#include "system.hh"
 
 namespace api {
 
@@ -108,6 +109,10 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "stream_manager",
                 "The stream manager API");
         set_stream_manager(ctx, r);
+        rb->register_function(r, "system",
+                "The system related API");
+        set_system(ctx, r);
+
     });
 }
 
