@@ -121,6 +121,7 @@ if __name__ == "__main__":
     for n, test in enumerate(test_to_run):
         path = test[0]
         prefix = '[%d/%d]' % (n + 1, n_total)
+        path += ' --collectd 0'
         print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
