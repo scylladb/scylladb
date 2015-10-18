@@ -426,6 +426,7 @@ api = ['api/api.cc',
        'api/lsa.cc',
        'api/api-doc/stream_manager.json',
        'api/stream_manager.cc',
+       'api/api-doc/system.json',
        ]
 
 urchin_tests_dependencies = urchin_core + [
