@@ -42,7 +42,9 @@ namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
     return engine().open_file_dma(_prop_file_name, open_flags::ro)
     .then([this](file f) {
-        return f.stat();
+        return do_with(std::move(f), [] (file& f) {
+            return f.stat();
+        });
     }).then_wrapped([this] (auto&& f) {
         try {
             auto st = std::get<0>(f.get());
