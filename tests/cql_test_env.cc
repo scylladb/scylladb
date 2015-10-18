@@ -268,6 +268,14 @@ public:
             cfg->data_file_directories() = { _data_dir->path };
             boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
             db->start(std::move(*cfg)).get();
+            db->invoke_on_all([this] (database& db) {
+                return db.init_system_keyspace();
+            }).get();
+            auto& ks = db->local().find_keyspace(db::system_keyspace::NAME);
+            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+                auto cfm = pair.second;
+                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+             }).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
