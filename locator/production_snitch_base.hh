@@ -197,7 +197,6 @@ protected:
     std::unordered_map<sstring, sstring> _prop_values;
 
 private:
-    lw_shared_ptr<file> _sf;
     size_t _prop_file_size;
 };
 } // namespace locator
