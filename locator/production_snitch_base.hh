@@ -73,7 +73,7 @@ public:
     static constexpr const char* dc_suffix_property_key    = "dc_suffix";
     const std::unordered_set<sstring> allowed_property_keys;
 
-    production_snitch_base(const sstring prop_file_name = "")
+    production_snitch_base(const sstring& prop_file_name = "")
     : allowed_property_keys({ dc_property_key,
                               rack_property_key,
                               prefer_local_property_key,
