@@ -181,7 +181,10 @@ public:
             auto cf_schema = builder.build(schema_builder::compact_storage::no);
             auto& ks = db.find_keyspace(ks_name);
             auto cfg = ks.make_column_family_config(*cf_schema);
-            db.add_column_family(std::move(cf_schema), std::move(cfg));
+            db.add_column_family(cf_schema, std::move(cfg));
+            return do_with(std::move(cf_schema), [&ks, id] (schema_ptr& cf_schema) {
+                return ks.make_directory_for_column_family(cf_schema->cf_name(), id);
+            });
         });
     }
 
