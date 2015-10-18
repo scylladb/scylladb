@@ -35,6 +35,7 @@ public:
         return "org.apache.cassandra.locator.EC2Snitch";
     }
 protected:
+    future<> load_config();
     future<sstring> aws_api_call(sstring addr, const sstring cmd);
     future<sstring> read_property_file();
 private:
