@@ -38,10 +38,6 @@ if [ ! -f ragel-6.8-3.fc22.src.rpm ]; then
    wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/r/ragel-6.8-3.fc22.src.rpm
 fi
 
-if [ ! -f re2c-0.13.5-9.fc22.src.rpm ]; then
-   wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/r/re2c-0.13.5-9.fc22.src.rpm
-fi
-
 cd -
 
 sudo yum install -y epel-release
@@ -90,17 +86,12 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-boost-1.57.0-6.el7.centos.x86_64.rpm ]; t
 fi
 do_install scylla-boost*
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/re2c-0.13.5-9.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/re2c-0.13.5-9.fc22.src.rpm
-fi
-do_install re2c-0.13.5-9.el7.centos.x86_64.rpm
-
-if [ ! -f $RPMBUILD/RPMS/x86_64/ninja-build-1.5.3-2.el7.centos.x86_64.rpm ]; then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm ]; then
    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ninja-build-1.5.3-2.fc22.src.rpm
    patch $RPMBUILD/SPECS/ninja-build.spec < dist/redhat/centos_dep/ninja-build.diff
    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ninja-build.spec
 fi
-do_install ninja-build-1.5.3-2.el7.centos.x86_64.rpm
+do_install scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/ragel-6.8-3.el7.centos.x86_64.rpm ]; then
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-3.fc22.src.rpm
