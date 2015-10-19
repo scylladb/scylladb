@@ -124,6 +124,7 @@ public:
 
         // check if end is greater than or equal to start, taking into account if either is inclusive.
         auto greater_than_or_equal = [cmp] (const optional<bound>& end, const optional<bound>& start) {
+            // !start means -inf, whereas !end means +inf
             if (!end || !start) {
                 return true;
             }
