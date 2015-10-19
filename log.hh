@@ -145,6 +145,8 @@ public:
 
 sstring pretty_type_name(const std::type_info&);
 
+sstring level_name(log_level level);
+
 registry& logger_registry();
 
 template <typename T>
