@@ -1,6 +1,6 @@
 %global antlr_version 3.5.2
 
-Name:		antlr3-tool
+Name:		scylla-antlr3-tool
 Version:	%{antlr_version}
 Release:	1%{?dist}
 Summary:	ANother Tool for Language Recognition
@@ -11,6 +11,7 @@ Source0:	%{name}-%{version}.tar.xz
 
 BuildArch:	noarch
 Requires:	java-1.7.0-openjdk
+%define _prefix /opt/scylladb
 
 %description
 ANother Tool for Language Recognition, is a language tool

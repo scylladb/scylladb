@@ -8,9 +8,23 @@ do_install()
     echo Install $name done
 }
 
+mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+
 sudo yum install -y wget yum-utils rpm-build rpmdevtools gcc gcc-c++ make patch
 mkdir -p build/srpms
 cd build/srpms
+
+if [ ! -f binutils-2.25-5.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/releases/22/Everything/source/SRPMS/b/binutils-2.25-5.fc22.src.rpm
+fi
+
+if [ ! -f isl-0.14-3.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/releases/22/Everything/source/SRPMS/i/isl-0.14-3.fc22.src.rpm
+fi
+
+if [ ! -f gcc-5.1.1-4.fc22.src.rpm ]; then
+    wget http://ftp.riken.jp/Linux/fedora/updates/22/SRPMS/g/gcc-5.1.1-4.fc22.src.rpm
+fi
 
 if [ ! -f boost-1.57.0-6.fc22.src.rpm ]; then
     wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/b/boost-1.57.0-6.fc22.src.rpm
@@ -24,10 +38,6 @@ if [ ! -f ragel-6.8-3.fc22.src.rpm ]; then
    wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/r/ragel-6.8-3.fc22.src.rpm
 fi
 
-if [ ! -f re2c-0.13.5-9.fc22.src.rpm ]; then
-   wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/r/re2c-0.13.5-9.fc22.src.rpm
-fi
-
 cd -
 
 sudo yum install -y epel-release
@@ -37,63 +47,75 @@ sudo ln -sf /usr/bin/python3.4 /usr/bin/python3
 sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc++-devel bzip2-devel zlib-devel
 sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc libstdc++-static gmp-devel texinfo texinfo-tex systemtap-sdt-devel mpfr-devel libmpc-devel elfutils-devel elfutils-libelf-devel glibc-devel.x86_64 glibc-devel.i686 gcc-gnat libgnat doxygen graphviz dblatex texlive-collection-latex docbook5-style-xsl python-sphinx cmake
 sudo yum install -y gcc-objc
+sudo yum install -y asciidoc
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
+    cd dist/redhat/centos_dep
+    tar cpf $RPMBUILD/SOURCES/scylla-env-1.0.tar scylla-env-1.0
+    cd -
+    rpmbuild --define "_topdir $RPMBUILD" --ba dist/redhat/centos_dep/scylla-env.spec
 fi
-do_install binutils-2.25-5.el7.centos.x86_64.rpm
+do_install scylla-env-1.0-1.el7.centos.noarch.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/isl-0.14-3.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/isl-0.14-3.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-binutils-2.25-5.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/binutils-2.25-5.fc22.src.rpm
+    patch $RPMBUILD/SPECS/binutils.spec < dist/redhat/centos_dep/binutils.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/binutils.spec
 fi
-do_install isl-0.14-3.el7.centos.x86_64.rpm
-do_install isl-devel-0.14-3.el7.centos.x86_64.rpm
+do_install scylla-binutils-2.25-5.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/gcc-5.1.1-4.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --define "fedora 21" --rebuild build/srpms/gcc-5.1.1-4.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-isl-0.14-3.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/isl-0.14-3.fc22.src.rpm
+    patch $RPMBUILD/SPECS/isl.spec < dist/redhat/centos_dep/isl.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/isl.spec
 fi
-do_install *5.1.1-4*
+do_install scylla-isl-0.14-3.el7.centos.x86_64.rpm
+do_install scylla-isl-devel-0.14-3.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --without python3 --rebuild build/srpms/boost-1.57.0-6.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-gcc-5.1.1-4.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/gcc-5.1.1-4.fc22.src.rpm
+    patch $RPMBUILD/SPECS/gcc.spec < dist/redhat/centos_dep/gcc.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/gcc.spec
 fi
-do_install boost*
+do_install scylla-*5.1.1-4*
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/re2c-0.13.5-9.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/re2c-0.13.5-9.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-boost-1.57.0-6.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/boost-1.57.0-6.fc22.src.rpm
+    patch $RPMBUILD/SPECS/boost.spec < dist/redhat/centos_dep/boost.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/boost.spec
 fi
-do_install re2c-0.13.5-9.el7.centos.x86_64.rpm
+do_install scylla-boost*
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/ninja-build-1.5.3-2.el7.centos.x86_64.rpm ]; then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm ]; then
    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ninja-build-1.5.3-2.fc22.src.rpm
    patch $RPMBUILD/SPECS/ninja-build.spec < dist/redhat/centos_dep/ninja-build.diff
    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ninja-build.spec
 fi
-do_install ninja-build-1.5.3-2.el7.centos.x86_64.rpm
+do_install scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/ragel-6.8-3.el7.centos.x86_64.rpm ]; then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ragel-6.8-3.el7.centos.x86_64.rpm ]; then
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-3.fc22.src.rpm
     patch $RPMBUILD/SPECS/ragel.spec < dist/redhat/centos_dep/ragel.diff
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ragel.spec
 fi
-do_install ragel-6.8-3.el7.centos.x86_64.rpm
+do_install scylla-ragel-6.8-3.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/noarch/antlr3-tool-3.5.2-1.el7.centos.noarch.rpm ]; then
-   mkdir build/antlr3-tool-3.5.2
-   cp dist/redhat/centos_dep/antlr3 build/antlr3-tool-3.5.2
-   cd build/antlr3-tool-3.5.2
+if [ ! -f $RPMBUILD/RPMS/noarch/scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm ]; then
+   mkdir build/scylla-antlr3-tool-3.5.2
+   cp dist/redhat/centos_dep/antlr3 build/scylla-antlr3-tool-3.5.2
+   cd build/scylla-antlr3-tool-3.5.2
    wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
    cd -
    cd build
-   tar cJpf $RPMBUILD/SOURCES/antlr3-tool-3.5.2.tar.xz antlr3-tool-3.5.2
+   tar cJpf $RPMBUILD/SOURCES/scylla-antlr3-tool-3.5.2.tar.xz scylla-antlr3-tool-3.5.2
    cd -
-   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/antlr3-tool.spec
+   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/scylla-antlr3-tool.spec
 fi
-do_install antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
+do_install scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm ];then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm ];then
    wget -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
    mv build/3.5.2.tar.gz $RPMBUILD/SOURCES
-   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/antlr3-C++-devel.spec
+   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/scylla-antlr3-C++-devel.spec
 fi
-do_install antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm
+do_install scylla-antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm
