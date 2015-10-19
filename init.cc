@@ -24,6 +24,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
+#include "service/pending_range_calculator_service.hh"
 
 //
 // NOTE: there functions are (temporarily)
@@ -31,9 +32,14 @@
 // until proper shutdown is done.
 
 future<> init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db).then([] {
+    return service::get_pending_range_calculator_service().start(std::ref(db)).then([] {
         // #293 - do not stop anything
-        //engine().at_exit([] { return service::deinit_storage_service(); });
+        // engine().at_exit([] { return service::get_pending_range_calculator_service().stop(); });
+    }).then([&db] {
+        return service::init_storage_service(db).then([] {
+            // #293 - do not stop anything
+            //engine().at_exit([] { return service::deinit_storage_service(); });
+        });
     });
 }
 
