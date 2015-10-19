@@ -1223,7 +1223,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 ///  @param out holds an output stream to data file.
 ///
 void sstable::do_write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, file_writer& out) {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out) {
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
@@ -1238,7 +1238,12 @@ void sstable::do_write_components(::mutation_reader mr,
 
     // Iterate through CQL partitions, then CQL rows, then CQL columns.
     // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
-    while (mutation_opt mut = mr().get0()) {
+    while (out.offset() < max_sstable_size) {
+        mutation_opt mut = mr().get0();
+        if (!mut) {
+            break;
+        }
+
         // Set current index of data to later compute row size.
         _c_stats.start_offset = out.offset();
 
@@ -1318,13 +1323,14 @@ void sstable::do_write_components(::mutation_reader mr,
     seal_statistics(_statistics, _collector, dht::global_partitioner().name(), filter_fp_chance);
 }
 
-void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
+void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema,
+        uint64_t max_sstable_size) {
     // CRC component must only be present when compression isn't enabled.
     bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
         auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
@@ -1333,7 +1339,7 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     } else {
         prepare_compression(_compression, *schema);
         auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), *w);
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
@@ -1344,16 +1350,17 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
 future<> sstable::write_components(const memtable& mt) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(),
-            mt.partition_count(), mt.schema());
+            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max());
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] () mutable {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size] () mutable {
+        // FIXME: write all components
         generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
         write_toc();
         create_data().get();
-        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
+        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size);
         write_summary();
         write_filter();
         write_statistics();
@@ -1503,12 +1510,40 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
 
 partition_key
 sstable::get_first_partition_key(const schema& s) const {
+    if (_summary.first_key.value.empty()) {
+        throw std::runtime_error("first key of summary is empty");
+    }
     return key::from_bytes(_summary.first_key.value).to_partition_key(s);
 }
 
 partition_key
 sstable::get_last_partition_key(const schema& s) const {
+    if (_summary.last_key.value.empty()) {
+        throw std::runtime_error("last key of summary is empty");
+    }
     return key::from_bytes(_summary.last_key.value).to_partition_key(s);
+}
+
+dht::decorated_key sstable::get_first_decorated_key(const schema& s) const {
+    // FIXME: we can avoid generating the decorated key over and over again by
+    // storing it in the sstable object. The same applies to last().
+    auto pk = get_first_partition_key(s);
+    return dht::global_partitioner().decorate_key(s, std::move(pk));
+}
+
+dht::decorated_key sstable::get_last_decorated_key(const schema& s) const {
+    auto pk = get_last_partition_key(s);
+    return dht::global_partitioner().decorate_key(s, std::move(pk));
+}
+
+int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
+    return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
+}
+
+int sstable::compare_by_max_timestamp(const sstable& other) const {
+    auto ts1 = get_stats_metadata().max_timestamp;
+    auto ts2 = other.get_stats_metadata().max_timestamp;
+    return (ts1 > ts2 ? 1 : (ts1 == ts2 ? 0 : -1));
 }
 
 sstable::~sstable() {

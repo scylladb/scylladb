@@ -26,8 +26,35 @@
 #include <functional>
 
 namespace sstables {
+
+    struct compaction_descriptor {
+        // List of sstables to be compacted.
+        std::vector<sstables::shared_sstable> sstables;
+        // Level of sstable(s) created by compaction procedure.
+        int level = 0;
+        // Threshold size for sstable(s) to be created.
+        uint64_t max_sstable_bytes = std::numeric_limits<uint64_t>::max();
+
+        compaction_descriptor() = default;
+
+        compaction_descriptor(std::vector<sstables::shared_sstable> sstables, int level, long max_sstable_bytes)
+            : sstables(std::move(sstables))
+            , level(level)
+            , max_sstable_bytes(max_sstable_bytes) {}
+
+        compaction_descriptor(std::vector<sstables::shared_sstable> sstables)
+            : sstables(std::move(sstables)) {}
+    };
+
+    // Compact a list of N sstables into M sstables.
+    // creator is used to get a sstable object for a new sstable that will be written.
+    // max_sstable_size is a relaxed limit size for a sstable to be generated.
+    // Example: It's okay for the size of a new sstable to go beyond max_sstable_size
+    // when writing its last partition.
+    // sstable_level will be level of the sstable(s) to be created by this function.
     future<> compact_sstables(std::vector<shared_sstable> sstables,
-            column_family& cf, std::function<shared_sstable()> creator);
+            column_family& cf, std::function<shared_sstable()> creator,
+            uint64_t max_sstable_size, uint32_t sstable_level);
 
     // Return the most interesting bucket applying the size-tiered strategy.
     // NOTE: currently used for purposes of testing. May also be used by leveled compaction strategy.

@@ -222,7 +222,7 @@ public:
     // Write sstable components from a memtable.
     future<> write_components(const memtable& mt);
     future<> write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size);
 
     uint64_t get_estimated_key_count() const {
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
@@ -270,6 +270,17 @@ public:
     partition_key get_first_partition_key(const schema& s) const;
     partition_key get_last_partition_key(const schema& s) const;
 
+    dht::decorated_key get_first_decorated_key(const schema& s) const;
+    dht::decorated_key get_last_decorated_key(const schema& s) const;
+
+    // SSTable comparator using the first key (decorated key).
+    // Return values are those of a trichotomic comparison.
+    int compare_by_first_key(const schema& s, const sstable& other) const;
+
+    // SSTable comparator using the max timestamp.
+    // Return values are those of a trichotomic comparison.
+    int compare_by_max_timestamp(const sstable& other) const;
+
     const sstring get_filename() const {
         return filename(component_type::Data);
     }
@@ -309,9 +320,9 @@ private:
     size_t sstable_buffer_size = 128*1024;
 
     void do_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out);
     void prepare_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size);
     static future<> shared_remove_by_toc_name(sstring toc_name, bool shared);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -482,6 +493,10 @@ public:
         }
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
+    }
+
+    uint32_t get_sstable_level() const {
+        return get_stats_metadata().sstable_level;
     }
 
     // Allow the test cases from sstable_test.cc to test private methods. We use

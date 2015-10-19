@@ -67,6 +67,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
+#include "sstables/compaction.hh"
 
 class frozen_mutation;
 class reconcilable_result;
@@ -215,7 +216,7 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
-    future<> compact_sstables(std::vector<lw_shared_ptr<sstables::sstable>> sstables);
+    future<> compact_sstables(sstables::compaction_descriptor descriptor);
 
     future<> snapshot(sstring name);
 

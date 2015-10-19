@@ -96,6 +96,43 @@ public:
         }
         return false;
     }
+    // check if two ranges overlap.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    bool overlap(const range& other, Comparator&& cmp) const {
+        bool this_wraps = is_wrap_around(cmp);
+        bool other_wraps = other.is_wrap_around(cmp);
+
+        if (this_wraps && other_wraps) {
+            return true;
+        } else if (this_wraps) {
+            auto unwrapped = unwrap();
+            return other.overlap(unwrapped.first, cmp) || other.overlap(unwrapped.second, cmp);
+        } else if (other_wraps) {
+            auto unwrapped = other.unwrap();
+            return overlap(unwrapped.first, cmp) || overlap(unwrapped.second, cmp);
+        }
+
+        // No range should reach this point as wrap around.
+        assert(!this_wraps);
+        assert(!other_wraps);
+
+        // if both this and other have an open start, the two ranges will overlap.
+        if (!start() && !other.start()) {
+            return true;
+        }
+
+        // check if end is greater than or equal to start, taking into account if either is inclusive.
+        auto greater_than_or_equal = [cmp] (const optional<bound>& end, const optional<bound>& start) {
+            if (!end || !start) {
+                return true;
+            }
+            return cmp(end->value(), start->value())
+                >= (!end->is_inclusive() || !start->is_inclusive());
+        };
+
+        return greater_than_or_equal(end(), other.start()) && greater_than_or_equal(other.end(), start());
+    }
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
     }
