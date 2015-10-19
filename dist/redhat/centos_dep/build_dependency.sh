@@ -68,11 +68,13 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-binutils-2.25-5.el7.centos.x86_64.rpm ]; 
 fi
 do_install scylla-binutils-2.25-5.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/isl-0.14-3.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/isl-0.14-3.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-isl-0.14-3.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/isl-0.14-3.fc22.src.rpm
+    patch $RPMBUILD/SPECS/isl.spec < dist/redhat/centos_dep/isl.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/isl.spec
 fi
-do_install isl-0.14-3.el7.centos.x86_64.rpm
-do_install isl-devel-0.14-3.el7.centos.x86_64.rpm
+do_install scylla-isl-0.14-3.el7.centos.x86_64.rpm
+do_install scylla-isl-devel-0.14-3.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/gcc-5.1.1-4.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --define "fedora 21" --rebuild build/srpms/gcc-5.1.1-4.fc22.src.rpm
