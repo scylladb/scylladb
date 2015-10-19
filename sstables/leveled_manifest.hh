@@ -581,7 +581,7 @@ public:
         for (auto& candidate : sstables) {
             auto candidate_range = ::range<dht::token>::make(candidate->get_first_decorated_key(s)._token, candidate->get_last_decorated_key(s)._token);
 
-            if (range.overlap(candidate_range, dht::token_comparator())) {
+            if (range.overlaps(candidate_range, dht::token_comparator())) {
                 overlapped.push_back(candidate);
             }
         }

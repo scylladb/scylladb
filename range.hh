@@ -99,7 +99,7 @@ public:
     // check if two ranges overlap.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    bool overlap(const range& other, Comparator&& cmp) const {
+    bool overlaps(const range& other, Comparator&& cmp) const {
         bool this_wraps = is_wrap_around(cmp);
         bool other_wraps = other.is_wrap_around(cmp);
 
@@ -107,10 +107,10 @@ public:
             return true;
         } else if (this_wraps) {
             auto unwrapped = unwrap();
-            return other.overlap(unwrapped.first, cmp) || other.overlap(unwrapped.second, cmp);
+            return other.overlaps(unwrapped.first, cmp) || other.overlaps(unwrapped.second, cmp);
         } else if (other_wraps) {
             auto unwrapped = other.unwrap();
-            return overlap(unwrapped.first, cmp) || overlap(unwrapped.second, cmp);
+            return overlaps(unwrapped.first, cmp) || overlaps(unwrapped.second, cmp);
         }
 
         // No range should reach this point as wrap around.

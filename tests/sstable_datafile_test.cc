@@ -1628,7 +1628,7 @@ static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, unsig
 static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
     auto range1 = create_token_range_from_keys(a, b);
     auto range2 = create_token_range_from_keys(c, d);
-    return range1.overlap(range2, dht::token_comparator());
+    return range1.overlaps(range2, dht::token_comparator());
 }
 
 static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, unsigned long generation) {
@@ -1646,7 +1646,7 @@ static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, unsigned lo
     auto range1 = range<dht::token>::make(candidate1->get_first_decorated_key(s)._token, candidate1->get_last_decorated_key(s)._token);
     auto candidate2 = get_sstable(cf, gen2);
     auto range2 = range<dht::token>::make(candidate2->get_first_decorated_key(s)._token, candidate2->get_last_decorated_key(s)._token);
-    return range1.overlap(range2, dht::token_comparator());
+    return range1.overlaps(range2, dht::token_comparator());
 }
 
 SEASTAR_TEST_CASE(leveled_01) {

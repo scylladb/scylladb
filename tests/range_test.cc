@@ -339,55 +339,55 @@ BOOST_AUTO_TEST_CASE(range_overlap_tests) {
 
     auto range0 = range<unsigned>::make(max, max);
     auto range1 = range<unsigned>::make(min, max);
-    BOOST_REQUIRE(range0.overlap(range1, unsigned_comparator()) == true);
-    BOOST_REQUIRE(range1.overlap(range1, unsigned_comparator()) == true);
-    BOOST_REQUIRE(range1.overlap(range0, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range0.overlaps(range1, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range1.overlaps(range1, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range1.overlaps(range0, unsigned_comparator()) == true);
 
     auto range2 = range<unsigned>::make(1, max);
-    BOOST_REQUIRE(range1.overlap(range2, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range1.overlaps(range2, unsigned_comparator()) == true);
 
     auto range3 = range<unsigned>::make(min, max-2);
-    BOOST_REQUIRE(range2.overlap(range3, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range2.overlaps(range3, unsigned_comparator()) == true);
 
     auto range4 = range<unsigned>::make(2, 10);
     auto range5 = range<unsigned>::make(12, 20);
     auto range6 = range<unsigned>::make(22, 40);
-    BOOST_REQUIRE(range4.overlap(range5, unsigned_comparator()) == false);
-    BOOST_REQUIRE(range5.overlap(range4, unsigned_comparator()) == false);
-    BOOST_REQUIRE(range4.overlap(range6, unsigned_comparator()) == false);
+    BOOST_REQUIRE(range4.overlaps(range5, unsigned_comparator()) == false);
+    BOOST_REQUIRE(range5.overlaps(range4, unsigned_comparator()) == false);
+    BOOST_REQUIRE(range4.overlaps(range6, unsigned_comparator()) == false);
 
     auto range7 = range<unsigned>::make(2, 10);
     auto range8 = range<unsigned>::make(10, 20);
     auto range9 = range<unsigned>::make(min, 100);
-    BOOST_REQUIRE(range7.overlap(range8, unsigned_comparator()) == true);
-    BOOST_REQUIRE(range6.overlap(range8, unsigned_comparator()) == false);
-    BOOST_REQUIRE(range8.overlap(range9, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range7.overlaps(range8, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range6.overlaps(range8, unsigned_comparator()) == false);
+    BOOST_REQUIRE(range8.overlaps(range9, unsigned_comparator()) == true);
 
     // wrap around checks
     auto range10 = range<unsigned>::make(25, 15);
-    BOOST_REQUIRE(range9.overlap(range10, unsigned_comparator()) == true);
-    BOOST_REQUIRE(range10.overlap(range<unsigned>({20}, {18}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(range9.overlaps(range10, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range10.overlaps(range<unsigned>({20}, {18}), unsigned_comparator()) == true);
     auto range11 = range<unsigned>({}, {2});
-    BOOST_REQUIRE(range11.overlap(range10, unsigned_comparator()) == true);
+    BOOST_REQUIRE(range11.overlaps(range10, unsigned_comparator()) == true);
     auto range12 = range<unsigned>::make(18, 20);
-    BOOST_REQUIRE(range12.overlap(range10, unsigned_comparator()) == false);
+    BOOST_REQUIRE(range12.overlaps(range10, unsigned_comparator()) == false);
 
-    BOOST_REQUIRE(range<unsigned>({1}, {{2, false}}).overlap(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({1}, {{2, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
 
     // open and infinite bound checks
-    BOOST_REQUIRE(range<unsigned>({1}, {}).overlap(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({5}, {}).overlap(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(range<unsigned>({}, {{3, false}}).overlap(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({}, {{2, false}}).overlap(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
-    BOOST_REQUIRE(range<unsigned>({}, {2}).overlap(range<unsigned>({2}, {}), unsigned_comparator()) == true);
-    BOOST_REQUIRE(range<unsigned>({}, {2}).overlap(range<unsigned>({3}, {4}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({1}, {}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(range<unsigned>({5}, {}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({}, {{3, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(range<unsigned>({}, {{2, false}}).overlaps(range<unsigned>({2}, {3}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({}, {2}).overlaps(range<unsigned>({2}, {}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(range<unsigned>({}, {2}).overlaps(range<unsigned>({3}, {4}), unsigned_comparator()) == false);
 
     // [3,4] and [4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlap(range<unsigned>({4}, {5}), unsigned_comparator()) == true);
+    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlaps(range<unsigned>({4}, {5}), unsigned_comparator()) == true);
     // [3,4) and [4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlap(range<unsigned>({4}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlaps(range<unsigned>({4}, {5}), unsigned_comparator()) == false);
     // [3,4] and (4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlap(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({3}, {4}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
     // [3,4) and (4,5]
-    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlap(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+    BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
 }
