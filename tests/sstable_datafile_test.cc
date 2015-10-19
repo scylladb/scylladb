@@ -1870,18 +1870,20 @@ SEASTAR_TEST_CASE(leveled_04) {
 
 SEASTAR_TEST_CASE(leveled_05) {
     // NOTE: Generations from 48 to 51 are used here.
+    return test_setup::do_with_test_directory([] {
 
-    // Check compaction code with leveled strategy. In this test, two sstables of level 0 will be created.
-    return compact_sstables({ 48, 49 }, 50, true, 1024*1024, compaction_strategy_type::leveled).then([] (auto generations) {
-        BOOST_REQUIRE(generations.size() == 2);
-        BOOST_REQUIRE(generations[0] == 50);
-        BOOST_REQUIRE(generations[1] == 51);
+        // Check compaction code with leveled strategy. In this test, two sstables of level 0 will be created.
+        return compact_sstables({ 48, 49 }, 50, true, 1024*1024, compaction_strategy_type::leveled).then([] (auto generations) {
+            BOOST_REQUIRE(generations.size() == 2);
+            BOOST_REQUIRE(generations[0] == 50);
+            BOOST_REQUIRE(generations[1] == 51);
 
-        return seastar::async([&, generations = std::move(generations)] {
-            for (auto gen : generations) {
-                auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, gen, big, sstable::component_type::Data);
-                BOOST_REQUIRE(file_size(fname).get0() >= 1024*1024);
-            }
+            return seastar::async([&, generations = std::move(generations)] {
+                for (auto gen : generations) {
+                    auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, gen, big, sstable::component_type::Data);
+                    BOOST_REQUIRE(file_size(fname).get0() >= 1024*1024);
+                }
+            });
         });
     });
 }
