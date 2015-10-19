@@ -93,12 +93,12 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 fi
 do_install scylla-ninja-build-1.5.3-2.el7.centos.x86_64.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/ragel-6.8-3.el7.centos.x86_64.rpm ]; then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ragel-6.8-3.el7.centos.x86_64.rpm ]; then
     rpm --define "_topdir $RPMBUILD" -ivh build/srpms/ragel-6.8-3.fc22.src.rpm
     patch $RPMBUILD/SPECS/ragel.spec < dist/redhat/centos_dep/ragel.diff
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ragel.spec
 fi
-do_install ragel-6.8-3.el7.centos.x86_64.rpm
+do_install scylla-ragel-6.8-3.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/noarch/antlr3-tool-3.5.2-1.el7.centos.noarch.rpm ]; then
    mkdir build/antlr3-tool-3.5.2
