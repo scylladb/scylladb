@@ -219,6 +219,8 @@ public:
     // Compact all sstables provided in the vector.
     future<> compact_sstables(sstables::compaction_descriptor descriptor);
 
+    future<bool> snapshot_exists(sstring name);
+
     future<> snapshot(sstring name);
     future<> clear_snapshot(sstring name);
 

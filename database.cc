@@ -1754,6 +1754,21 @@ future<> column_family::snapshot(sstring name) {
     });
 }
 
+future<bool> column_family::snapshot_exists(sstring tag) {
+    sstring jsondir = _config.datadir + "/snapshots/";
+    return engine().open_directory(std::move(jsondir)).then_wrapped([] (future<file> f) {
+        try {
+            f.get0();
+            return make_ready_future<bool>(true);
+        } catch (std::system_error& e) {
+            if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                throw;
+            }
+            return make_ready_future<bool>(false);
+        }
+    });
+}
+
 enum class missing { no, yes };
 static missing
 file_missing(future<> f) {
