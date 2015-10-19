@@ -53,6 +53,7 @@
 #include "locator/local_strategy.hh"
 #include "version.hh"
 #include "unimplemented.hh"
+#include "service/pending_range_calculator_service.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -246,7 +247,7 @@ void storage_service::join_token_ring(int delay) {
 #endif
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
-        //PendingRangeCalculatorService.instance.blockUntilFinished();
+        get_local_pending_range_calculator_service().block_until_finished().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 #if 0
@@ -418,7 +419,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
     // FIXME
-    // PendingRangeCalculatorService.instance.update();
+    get_local_pending_range_calculator_service().update().get();
 
     auto& gossiper = gms::get_local_gossiper();
     if (gossiper.uses_host_id(endpoint)) {
@@ -545,7 +546,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }).get();
     }
 
-    // PendingRangeCalculatorService.instance.update();
+    get_local_pending_range_calculator_service().update().get();
     if (logger.is_enabled(logging::log_level::debug)) {
         auto ver = _token_metadata.get_ring_version();
         for (auto& x : _token_metadata.get_token_to_endpoint()) {
@@ -579,8 +580,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // normally
 #if 0
     _token_metadata.addLeavingEndpoint(endpoint);
-    PendingRangeCalculatorService.instance.update();
 #endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -600,8 +601,8 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     logger.debug("Node {} state moving, new token {}", endpoint, token);
 #if 0
     _token_metadata.addMovingEndpoint(token, endpoint);
-    PendingRangeCalculatorService.instance.update();
 #endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
@@ -717,9 +718,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 void storage_service::on_remove(gms::inet_address endpoint) {
     logger.debug("on_remove endpoint={}", endpoint);
     _token_metadata.remove_endpoint(endpoint);
-#if 0
-    PendingRangeCalculatorService.instance.update();
-#endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
