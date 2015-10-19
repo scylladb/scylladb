@@ -157,6 +157,11 @@ private:
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
+
+    // update the sstable generation, making sure that new new sstables don't overwrite this one.
+    void update_sstables_known_generation(unsigned generation) {
+        _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
+    }
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).

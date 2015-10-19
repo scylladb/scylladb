@@ -410,8 +410,7 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
         return make_ready_future<entry_descriptor>(std::move(comps));
     }
 
-    // Make sure new sstables don't overwrite this one.
-    _sstable_generation = std::max<uint64_t>(_sstable_generation, comps.generation /  smp::count + 1);
+    update_sstables_known_generation(comps.generation);
     assert(_sstables->count(comps.generation) == 0);
 
     auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
