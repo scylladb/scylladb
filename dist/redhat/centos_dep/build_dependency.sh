@@ -8,6 +8,8 @@ do_install()
     echo Install $name done
 }
 
+mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+
 sudo yum install -y wget yum-utils rpm-build rpmdevtools gcc gcc-c++ make patch
 mkdir -p build/srpms
 cd build/srpms
