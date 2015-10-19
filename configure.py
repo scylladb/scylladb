@@ -132,7 +132,7 @@ modes = {
     },
 }
 
-urchin_tests = [
+scylla_tests = [
     'tests/mutation_test',
     'tests/range_test',
     'tests/types_test',
@@ -188,7 +188,7 @@ apps = [
     'scylla',
     ]
 
-tests = urchin_tests
+tests = scylla_tests
 
 all_artifacts = apps + tests
 
@@ -225,13 +225,13 @@ add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
 
 defines = []
-urchin_libs = '-llz4 -lsnappy -lz -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
+scylla_libs = '-llz4 -lsnappy -lz -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
 
 extra_cxxflags = {}
 
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
-urchin_core = (['database.cc',
+scylla_core = (['database.cc',
                  'schema.cc',
                  'bytes.cc',
                  'mutation.cc',
@@ -428,20 +428,20 @@ api = ['api/api.cc',
        'api/stream_manager.cc',
        ]
 
-urchin_tests_dependencies = urchin_core + [
+scylla_tests_dependencies = scylla_core + [
     'tests/cql_test_env.cc',
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
     'tests/mutation_source_test.cc',
 ]
 
-urchin_tests_seastar_deps = [
+scylla_tests_seastar_deps = [
     'seastar/tests/test-utils.cc',
     'seastar/tests/test_runner.cc',
 ]
 
 deps = {
-    'scylla': ['main.cc'] + urchin_core + api,
+    'scylla': ['main.cc'] + scylla_core + api,
 }
 
 tests_not_using_seastar_test_framework = set([
@@ -471,13 +471,13 @@ tests_not_using_seastar_test_framework = set([
 ])
 
 for t in tests_not_using_seastar_test_framework:
-    if not t in urchin_tests:
-        raise Exception("Test %s not found in urchin_tests" % (t))
+    if not t in scylla_tests:
+        raise Exception("Test %s not found in scylla_tests" % (t))
 
-for t in urchin_tests:
-    deps[t] = urchin_tests_dependencies + [t + '.cc']
+for t in scylla_tests:
+    deps[t] = scylla_tests_dependencies + [t + '.cc']
     if t not in tests_not_using_seastar_test_framework:
-        deps[t] += urchin_tests_seastar_deps
+        deps[t] += scylla_tests_seastar_deps
 
 deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 

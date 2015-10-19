@@ -69,7 +69,7 @@ enum class messaging_verb : int32_t {
     READ_REPAIR,
     READ,
     READ_DATA,
-    READ_MUTATION_DATA, // urchin-only
+    READ_MUTATION_DATA, // scylla-only
     READ_DIGEST,
     REQUEST_RESPONSE, // client-initiated reads and writes
     STREAM_INITIATE, // Deprecated

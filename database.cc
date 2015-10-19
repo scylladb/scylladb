@@ -265,8 +265,8 @@ column_family::make_reader(const query::partition_range& range) const {
     // range queries in cache, so that scans can always be satisfied form
     // memtable and cache only, as long as data is not evicted.
     //
-    // https://github.com/cloudius-systems/urchin/issues/309
-    // https://github.com/cloudius-systems/urchin/issues/185
+    // https://github.com/scylladb/scylla/issues/309
+    // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
         readers.emplace_back(mt->make_reader(range));

@@ -159,7 +159,7 @@ public:
      *  type:   is the value type (bool, uint32_t etc)
      *  status: is the current _usage_ of the opt. I.e. if you actually use the value, set it to "Used".
      *          Most values are set to "Unused", as in "will probably have an effect eventually".
-     *          Values set to "Invalid" have no meaning/usage in urchin, and should (and will currently)
+     *          Values set to "Invalid" have no meaning/usage in scylla, and should (and will currently)
      *          be signaled to a user providing a config with them, that these settings are pointless.
      *  desc:   documentation.
      *  value...: enumerated valid values if any. Not currently used, but why not...

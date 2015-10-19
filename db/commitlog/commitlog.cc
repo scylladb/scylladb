@@ -1286,7 +1286,7 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 auto checksum = in.read<uint32_t>();
 
                 if (size == 0) {
-                    // special urchin case: zero padding due to dma blocks
+                    // special scylla case: zero padding due to dma blocks
                     auto slack = next - pos;
                     return skip(slack);
                 }
