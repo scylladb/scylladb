@@ -2263,61 +2263,6 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 }
 
 #if 0
-    /**
-     * Performs the truncate operatoin, which effectively deletes all data from
-     * the column family cfname
-     * @param keyspace
-     * @param cfname
-     * @throws UnavailableException If some of the hosts in the ring are down.
-     * @throws TimeoutException
-     * @throws IOException
-     */
-    public static void truncateBlocking(String keyspace, String cfname) throws UnavailableException, TimeoutException, IOException
-    {
-        logger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
-        if (isAnyStorageHostDown())
-        {
-            logger.info("Cannot perform truncate, some hosts are down");
-            // Since the truncate operation is so aggressive and is typically only
-            // invoked by an admin, for simplicity we require that all nodes are up
-            // to perform the operation.
-            int liveMembers = Gossiper.instance.getLiveMembers().size();
-            throw new UnavailableException(ConsistencyLevel.ALL, liveMembers + Gossiper.instance.getUnreachableMembers().size(), liveMembers);
-        }
-
-        Set<InetAddress> allEndpoints = Gossiper.instance.getLiveTokenOwners();
-
-        int blockFor = allEndpoints.size();
-        final TruncateResponseHandler responseHandler = new TruncateResponseHandler(blockFor);
-
-        // Send out the truncate calls and track the responses with the callbacks.
-        Tracing.trace("Enqueuing truncate messages to hosts {}", allEndpoints);
-        final Truncation truncation = new Truncation(keyspace, cfname);
-        MessageOut<Truncation> message = truncation.createMessage();
-        for (InetAddress endpoint : allEndpoints)
-            MessagingService.instance().sendRR(message, endpoint, responseHandler);
-
-        // Wait for all
-        try
-        {
-            responseHandler.get();
-        }
-        catch (TimeoutException e)
-        {
-            Tracing.trace("Timed out");
-            throw e;
-        }
-    }
-
-    /**
-     * Asks the gossiper if there are any nodes that are currently down.
-     * @return true if the gossiper thinks all nodes are up.
-     */
-    private static boolean isAnyStorageHostDown()
-    {
-        return !Gossiper.instance.getUnreachableTokenOwners().isEmpty();
-    }
-
     public interface WritePerformer
     {
         public void apply(IMutation mutation,
