@@ -1,44 +1,14 @@
---- ragel.spec	2014-08-18 11:55:49.000000000 +0000
-+++ ragel.spec.1	2015-10-18 12:18:23.000000000 +0000
-@@ -1,17 +1,20 @@
--Name:           ragel   
-+Name:           scylla-ragel   
-+%define orig_name ragel
- Version:        6.8
- Release:        3%{?dist}
- Summary:        Finite state machine compiler
+--- rpmbuild/SPECS/ragel.spec	2014-08-18 07:55:49.000000000 -0400
++++ rpmbuild/SPECS/ragel.spec.1	2015-09-17 22:06:27.623000000 -0400
+@@ -49,8 +49,10 @@
  
- Group:          Development/Tools
- License:        GPLv2+
--URL:            http://www.complang.org/%{name}/
--Source0:        http://www.complang.org/%{name}/%{name}-%{version}.tar.gz
-+URL:            http://www.complang.org/%{orig_name}/
-+Source0:        http://www.complang.org/%{orig_name}/%{orig_name}-%{version}.tar.gz
- BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
- 
- # for documentation building
- BuildRequires:  gcc-objc, autoconf, gcc-c++
-+Requires:	scylla-env
- Requires:       gawk
-+%define _prefix /opt/scylladb
- 
- %description
- Ragel compiles finite state machines from regular languages into executable C,
-@@ -21,7 +24,7 @@
- done using inline operators that do not disrupt the regular language syntax.
- 
- %prep
--%setup -q
-+%setup -q -n %{orig_name}-%{version}
- 
- # Pass fedora cflags correctly
- sed -i.flags \
-@@ -34,7 +37,7 @@
- 
- %build
- # set the names of the other programming commandline programs
--%configure --docdir=%{_docdir}/%{name} RUBY=ruby JAVAC=javac GMCS=gmcs 
-+%configure --docdir=%{_docdir}/%{name}-%{version} RUBY=ruby JAVAC=javac GMCS=gmcs 
- 
- make %{?_smp_mflags}
+ %files
+ %defattr(-,root,root,-)
+-%doc COPYING ragel.vim CREDITS ChangeLog
++%doc COPYING ragel.vim 
+ %doc doc/ragel-guide.pdf
++%{_docdir}/%{name}/CREDITS 
++%{_docdir}/%{name}/ChangeLog
+ %{_bindir}/ragel
+ %{_mandir}/*/*
  
