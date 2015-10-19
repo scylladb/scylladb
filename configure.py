@@ -539,7 +539,8 @@ if args.dpdk:
 elif args.dpdk_target:
     seastar_flags += ['--dpdk-target', args.dpdk_target]
 
-seastar_flags += ['--compiler', args.cxx, '--cflags=-march=nehalem']
+seastar_cflags = args.user_cflags + " -march=nehalem"
+seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
 
 status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
 
