@@ -61,10 +61,12 @@ if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
 fi
 do_install scylla-env-1.0-1.el7.centos.noarch.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
-    rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-binutils-2.25-5.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/binutils-2.25-5.fc22.src.rpm
+    patch $RPMBUILD/SPECS/binutils.spec < dist/redhat/centos_dep/binutils.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/binutils.spec
 fi
-do_install binutils-2.25-5.el7.centos.x86_64.rpm
+do_install scylla-binutils-2.25-5.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/x86_64/isl-0.14-3.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/isl-0.14-3.fc22.src.rpm
