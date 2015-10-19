@@ -113,9 +113,9 @@ if [ ! -f $RPMBUILD/RPMS/noarch/scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
 fi
 do_install scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm
 
-if [ ! -f $RPMBUILD/RPMS/x86_64/antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm ];then
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm ];then
    wget -O build/3.5.2.tar.gz https://github.com/antlr/antlr3/archive/3.5.2.tar.gz
    mv build/3.5.2.tar.gz $RPMBUILD/SOURCES
-   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/antlr3-C++-devel.spec
+   rpmbuild --define "_topdir $RPMBUILD" -ba dist/redhat/centos_dep/scylla-antlr3-C++-devel.spec
 fi
-do_install antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm
+do_install scylla-antlr3-C++-devel-3.5.2-1.el7.centos.x86_64.rpm
