@@ -269,7 +269,9 @@ public:
             auto cfg = make_lw_shared<db::config>();
             _data_dir = make_lw_shared<tmpdir>();
             cfg->data_file_directories() = { _data_dir->path };
+            cfg->commitlog_directory() = _data_dir->path + "/commitlog.dir";
             boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
+            boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
             db->start(std::move(*cfg)).get();
             db->invoke_on_all([this] (database& db) {
                 return db.init_system_keyspace();
