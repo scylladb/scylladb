@@ -581,31 +581,24 @@ public:
             return tm;
         }
     }
-
+#endif
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave operations have finished.
      *
      * @return new token metadata
      */
-    public TokenMetadata cloneAfterAllLeft()
-    {
-        lock.readLock().lock();
-        try
-        {
-            TokenMetadata allLeftMetadata = cloneOnlyTokenMap();
+    token_metadata clone_after_all_left() {
+        auto all_left_metadata = clone_only_token_map();
 
-            for (InetAddress endpoint : _leaving_endpoints)
-                allLeftMetadata.removeEndpoint(endpoint);
+        for (auto endpoint : _leaving_endpoints) {
+            all_left_metadata.remove_endpoint(endpoint);
+        }
 
-            return allLeftMetadata;
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
+        return all_left_metadata;
     }
 
+#if 0
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave, and move operations have finished.
