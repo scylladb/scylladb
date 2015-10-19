@@ -53,6 +53,14 @@ sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc lib
 sudo yum install -y gcc-objc
 sudo yum install -y asciidoc
 
+if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
+    cd dist/redhat/centos_dep
+    tar cpf $RPMBUILD/SOURCES/scylla-env-1.0.tar scylla-env-1.0
+    cd -
+    rpmbuild --define "_topdir $RPMBUILD" --ba dist/redhat/centos_dep/scylla-env.spec
+fi
+do_install scylla-env-1.0-1.el7.centos.noarch.rpm
+
 if [ ! -f $RPMBUILD/RPMS/x86_64/binutils-2.25-5.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" --rebuild build/srpms/binutils-2.25-5.fc22.src.rpm
 fi
