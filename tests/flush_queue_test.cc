@@ -26,6 +26,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/range/irange.hpp>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/reactor.hh>
 
 #include "tests/test-utils.hh"
 #include "utils/flush_queue.hh"
@@ -77,6 +78,51 @@ SEASTAR_TEST_CASE(test_queue_ordering_random_ops) {
 
         return res.then([e] {
             BOOST_CHECK_EQUAL(e->result.size(), e->promises.size());
+            BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
+        }).finally([e] {});
+    });
+}
+
+SEASTAR_TEST_CASE(test_queue_ordering_multi_ops) {
+    struct env {
+        env() : sem(0) {}
+
+        utils::flush_queue<int> queue;
+        std::vector<int> result;
+        semaphore sem;
+        size_t n = 0;
+    };
+
+    auto r = boost::irange(0, 100);
+
+    return do_for_each(r, [](int) {
+        constexpr size_t num_ops = 1000;
+
+        auto e = make_lw_shared<env>();
+
+        std::uniform_int_distribution<size_t> dist(0, num_ops - 1);
+
+        for (size_t k = 0; k < num_ops*10; ++k) {
+            int i = dist(e1);
+
+            if (e->queue.has_operation(i) || (!e->queue.empty() && e->queue.highest_key() < i)) {
+                e->queue.run_with_ordered_post_op(i, [e, i] {
+                    return e->sem.wait().then([i] {
+                        return make_ready_future<int>(i);
+                    });
+                }, [e](int i) {
+                    e->result.emplace_back(i);
+                });
+                ++e->n;
+            }
+        }
+
+        auto res = e->queue.wait_for_pending();
+
+        e->sem.signal(e->n);
+
+        return res.then([e] {
+            BOOST_CHECK_EQUAL(e->result.size(), e->n);
             BOOST_REQUIRE(std::is_sorted(e->result.begin(), e->result.end()));
         }).finally([e] {});
     });
