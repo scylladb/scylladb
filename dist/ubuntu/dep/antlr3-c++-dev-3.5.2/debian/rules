@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+
+override_dh_auto_install:
+	mkdir -p $(CURDIR)/debian/antlr3-c++-dev/usr/include
+	cp $(CURDIR)/runtime/Cpp/include/* \
+		$(CURDIR)/debian/antlr3-c++-dev/usr/include
+%:
+	dh $@
