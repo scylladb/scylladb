@@ -65,6 +65,14 @@ namespace service {
  * of other nodes in the cluster.
  */
 class storage_service : public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
+public:
+    struct snapshot_details {
+        int64_t live;
+        int64_t total;
+        sstring cf;
+        sstring ks;
+    };
+private:
     using token = dht::token;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
@@ -1009,34 +1017,9 @@ public:
      * If no tag is specified we will remove all snapshots.
      */
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
+
+    future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
 #if 0
-
-    public Map<String, TabularData> getSnapshotDetails()
-    {
-        Map<String, TabularData> snapshotMap = new HashMap<>();
-        for (Keyspace keyspace : Keyspace.all())
-        {
-            if (SystemKeyspace.NAME.equals(keyspace.getName()))
-                continue;
-
-            for (ColumnFamilyStore cfStore : keyspace.getColumnFamilyStores())
-            {
-                for (Map.Entry<String, Pair<Long,Long>> snapshotDetail : cfStore.getSnapshotDetails().entrySet())
-                {
-                    TabularDataSupport data = (TabularDataSupport)snapshotMap.get(snapshotDetail.getKey());
-                    if (data == null)
-                    {
-                        data = new TabularDataSupport(SnapshotDetailsTabularData.TABULAR_TYPE);
-                        snapshotMap.put(snapshotDetail.getKey(), data);
-                    }
-
-                    SnapshotDetailsTabularData.from(snapshotDetail.getKey(), keyspace.getName(), cfStore.getColumnFamilyName(), snapshotDetail, data);
-                }
-            }
-        }
-        return snapshotMap;
-    }
-
     public long trueSnapshotsSize()
     {
         long total = 0;
