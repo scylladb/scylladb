@@ -47,6 +47,7 @@
 #include "service/migration_manager.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
+#include "gms/failure_detector.hh"
 #include <seastar/core/thread.hh>
 #include <sstream>
 #include <algorithm>
@@ -1370,76 +1371,82 @@ future<> storage_service::decommission() {
 
 future<> storage_service::remove_node(sstring host_id_string) {
     fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    InetAddress myAddress = FBUtilities.getBroadcastAddress();
-    UUID localHostId = _token_metadata.getHostId(myAddress);
-    UUID hostId = UUID.fromString(hostIdString);
-    InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
-
-    if (endpoint == null)
-        throw new UnsupportedOperationException("Host ID not found.");
-
-    Collection<Token> tokens = _token_metadata.getTokens(endpoint);
-
-    if (endpoint.equals(myAddress))
-         throw new UnsupportedOperationException("Cannot remove self");
-
-    if (Gossiper.instance.getLiveMembers().contains(endpoint))
-        throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
-
-    // A leaving endpoint that is dead is already being removed.
-    if (_token_metadata.isLeaving(endpoint))
-        logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-
-    if (!replicatingNodes.isEmpty())
-        throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-
-    // Find the endpoints that are going to become responsible for data
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-        if (Keyspace.open(keyspaceName).getReplicationStrategy().getReplicationFactor() == 1)
-            continue;
-
-        // get all ranges that change ownership (that is, a node needs
-        // to take responsibility for new range)
-        Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-        IFailureDetector failureDetector = FailureDetector.instance;
-        for (InetAddress ep : changedRanges.values())
-        {
-            if (failureDetector.isAlive(ep))
-                replicatingNodes.add(ep);
-            else
-                logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+    return seastar::async([this, host_id_string] {
+        auto my_address = get_broadcast_address();
+        auto local_host_id = _token_metadata.get_host_id(my_address);
+        auto host_id = utils::UUID(host_id_string);
+        auto endpoint_opt = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto& gossiper = gms::get_local_gossiper();
+        if (!endpoint_opt) {
+            throw std::runtime_error("Host ID not found.");
         }
-    }
-    removingNode = endpoint;
+        auto endpoint = *endpoint_opt;
 
-    _token_metadata.addLeavingEndpoint(endpoint);
-    PendingRangeCalculatorService.instance.update();
+        auto tokens = _token_metadata.get_tokens(endpoint);
 
-    // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-    // we add our own token so other nodes to let us know when they're done
-    Gossiper.instance.advertiseRemoving(endpoint, hostId, localHostId);
+        if (endpoint == my_address) {
+            throw std::runtime_error("Cannot remove self");
+        }
 
-    // kick off streaming commands
-    restoreReplicaCount(endpoint, myAddress);
+        if (gossiper.get_live_members().count(endpoint)) {
+            throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
+        }
 
-    // wait for ReplicationFinishedVerbHandler to signal we're done
-    while (!replicatingNodes.isEmpty())
-    {
-        Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-    }
+        // A leaving endpoint that is dead is already being removed.
+        if (_token_metadata.is_leaving(endpoint)) {
+            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+        }
 
-    excise(tokens, endpoint);
+        if (!_replicating_nodes.empty()) {
+            throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
+        }
 
-    // gossiper will indicate the token has left
-    Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        // Find the endpoints that are going to become responsible for data
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            auto& ks = _db.local().find_keyspace(keyspace_name);
+            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+            if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                continue;
+            }
 
-    replicatingNodes.clear();
-    removingNode = null;
-#endif
-    return make_ready_future<>();
+            // get all ranges that change ownership (that is, a node needs
+            // to take responsibility for new range)
+            std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
+            auto fd = gms::get_local_failure_detector();
+            for (auto& x: changed_ranges) {
+                auto ep = x.second;
+                if (fd.is_alive(ep)) {
+                    _replicating_nodes.emplace(ep);
+                } else {
+                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                }
+            }
+        }
+        _removing_node = endpoint;
+        _token_metadata.add_leaving_endpoint(endpoint);
+        get_local_pending_range_calculator_service().update().get();
+
+        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+        // we add our own token so other nodes to let us know when they're done
+        gossiper.advertise_removing(endpoint, host_id, local_host_id);
+
+        // kick off streaming commands
+        // restoreReplicaCount(endpoint, myAddress);
+
+        // wait for ReplicationFinishedVerbHandler to signal we're done
+        while (!_replicating_nodes.empty()) {
+            sleep(std::chrono::milliseconds(100)).get();
+        }
+
+        // excise(tokens, endpoint);
+
+        // gossiper will indicate the token has left
+        gossiper.advertise_token_removed(endpoint, host_id);
+
+        _replicating_nodes.clear();
+        _removing_node = {};
+    });
 }
 
 future<> storage_service::drain() {
