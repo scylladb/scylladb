@@ -345,41 +345,41 @@ cql_server::connection::read_frame() {
     }
 }
 
-future<shared_ptr<cql_server::response>>
-cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream) {
-    return make_ready_future<>().then([this, op, stream, buf = std::move(buf)] () mutable {
+future<response_type>
+cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state) {
+    return make_ready_future<>().then([this, op, stream, buf = std::move(buf), client_state] () mutable {
         switch (static_cast<cql_binary_opcode>(op)) {
-        case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf));
-        case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf));
-        case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(buf));
-        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(buf));
-        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(buf));
-        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(buf));
-        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(buf));
-        case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(buf));
+        case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::QUERY:         return process_query(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::PREPARE:       return process_prepare(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(buf), std::move(client_state));
+        case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(buf), std::move(client_state));
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", op));
         }
-    }).then_wrapped([stream, this] (future<shared_ptr<cql_server::response>> f) {
+    }).then_wrapped([this, stream, client_state] (future<response_type> f) {
         --_server._requests_serving;
         try {
             auto response = f.get();
-            return make_ready_future<shared_ptr<cql_server::response>>(response);
+            return make_ready_future<response_type>(response);
         } catch (const exceptions::unavailable_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive));
+            return make_ready_future<response_type>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive), client_state));
         } catch (const exceptions::read_timeout_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present));
+            return make_ready_future<response_type>(std::make_pair(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present), client_state));
         } catch (const exceptions::mutation_write_timeout_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type));
+            return make_ready_future<response_type>(std::make_pair(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type), client_state));
         } catch (const exceptions::already_exists_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name));
+            return make_ready_future<response_type>(std::make_pair(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name), client_state));
         } catch (const exceptions::prepared_query_not_found_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_unprepared_error(stream, ex.code(), ex.what(), ex.id));
+            return make_ready_future<response_type>(std::make_pair(make_unprepared_error(stream, ex.code(), ex.what(), ex.id), client_state));
         } catch (const exceptions::cassandra_exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_error(stream, ex.code(), ex.what()));
+            return make_ready_future<response_type>(std::make_pair(make_error(stream, ex.code(), ex.what()), client_state));
         } catch (std::exception& ex) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what()));
+            return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what()), client_state));
         } catch (...) {
-            return make_ready_future<shared_ptr<cql_server::response>>(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error"));
+            return make_ready_future<response_type>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error"), client_state));
         }
     });
 }
@@ -450,9 +450,9 @@ future<> cql_server::connection::process_request() {
 
             with_gate(_pending_requests_gate, [this, op, stream, buf = std::move(buf)] () mutable {
                 auto view = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                return this->process_request_one(view, op, stream).then([this] (auto&& response) {
-                    // FIXME: reconcile client state
-                    return this->write_response(response);
+                return this->process_request_one(view, op, stream, _client_state).then([this] (auto&& response) {
+                    _client_state.merge(response.second);
+                    return this->write_response(response.first);
                 }).then([buf = std::move(buf)] {
                     // Keep buf alive.
                 });
@@ -465,21 +465,20 @@ future<> cql_server::connection::process_request() {
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_startup(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_startup(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     /*auto string_map =*/ read_string_map(buf);
-    return make_ready_future<shared_ptr<cql_server::response>>(make_ready(stream));
+    return make_ready_future<response_type>(std::make_pair(make_ready(stream), client_state));
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     assert(0);
-    return make_ready_future<shared_ptr<cql_server::response>>();
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_options(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_options(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
-    return make_ready_future<shared_ptr<cql_server::response>>(make_supported(stream));
+    return make_ready_future<response_type>(std::make_pair(make_supported(stream), client_state));
 }
 
 void
@@ -491,28 +490,27 @@ cql_server::connection::init_serialization_format() {
     }
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_query(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_query(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     auto query = read_long_string_view(buf);
-    auto q_state = std::make_unique<cql_query_state>(_client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     q_state->options = read_options(buf);
     auto& options = *q_state->options;
-    return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
+    return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf), &query_state] (auto msg) {
          return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-        _client_state.merge(q_state->query_state.get_client_state());
-        return make_ready_future<shared_ptr<cql_server::response>>(response);
+        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_prepare(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state_)
 {
     auto query = read_long_string_view(buf).to_string();
     auto cpu_id = engine().cpu_id();
     auto cpus = boost::irange(0u, smp::count);
-    auto client_state = std::make_unique<service::client_state>(_client_state);
+    auto client_state = std::make_unique<service::client_state>(client_state_);
     const auto& cs = *client_state;
     return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, &cs] (unsigned int c) mutable {
         if (c != cpu_id) {
@@ -523,21 +521,24 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_prepare
         } else {
             return make_ready_future<>();
         }
-    }).then([this, query, stream, client_state = std::move(client_state)] {
-        return _server._query_processor.local().prepare(query, *client_state, false).then([this, stream] (auto msg) {
-             return this->make_result(stream, msg);
+    }).then([this, query, stream, &cs] {
+        return _server._query_processor.local().prepare(query, cs, false).then([this, stream] (auto msg) {
+            return this->make_result(stream, msg);
         });
+    }).then([client_state = std::move(client_state)] (auto&& response) {
+        /* keep client_state alive */
+        return make_ready_future<response_type>(std::make_pair(response, *client_state));
     });
 }
 
-future<shared_ptr<cql_server::response>> cql_server::connection::process_execute(uint16_t stream, bytes_view buf)
+future<response_type> cql_server::connection::process_execute(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     auto id = read_short_bytes(buf);
     auto prepared = _server._query_processor.local().get_prepared(id);
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
     }
-    auto q_state = std::make_unique<cql_query_state>(_client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     q_state->options = read_options(buf);
     auto& options = *q_state->options;
@@ -547,16 +548,15 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_execute
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
     return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
-         return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state), this] (auto&& response) {
+        return this->make_result(stream, msg);
+    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-        _client_state.merge(q_state->query_state.get_client_state());
-        return make_ready_future<shared_ptr<cql_server::response>>(response);
+        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
 
-future<shared_ptr<cql_server::response>>
-cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
+future<response_type>
+cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     if (_version == 1) {
         throw exceptions::protocol_exception("BATCH messages are not support in version 1 of the protocol");
@@ -579,8 +579,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
         switch (kind) {
         case 0: {
             auto query = read_long_string_view(buf).to_string();
-            ps = _server._query_processor.local().get_statement(query,
-                    _client_state);
+            ps = _server._query_processor.local().get_statement(query, client_state);
             break;
         }
         case 1: {
@@ -614,7 +613,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
         values.emplace_back(std::move(tmp));
     }
 
-    auto q_state = std::make_unique<cql_query_state>(_client_state);
+    auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
     q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf)), std::move(values));
     auto& options = *q_state->options;
@@ -622,15 +621,14 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
     auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
         return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-        _client_state.merge(q_state->query_state.get_client_state());
-        return make_ready_future<shared_ptr<cql_server::response>>(response);
+        return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
 
-future<shared_ptr<cql_server::response>>
-cql_server::connection::process_register(uint16_t stream, bytes_view buf)
+future<response_type>
+cql_server::connection::process_register(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     std::vector<sstring> event_types;
     read_string_list(buf, event_types);
@@ -638,11 +636,10 @@ cql_server::connection::process_register(uint16_t stream, bytes_view buf)
         auto et = parse_event_type(event_type);
         _server._notifier->register_event(et, this);
     }
-    return make_ready_future<shared_ptr<cql_server::response>>(make_ready(stream));
+    return make_ready_future<response_type>(std::make_pair(make_ready(stream), client_state));
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive)
+shared_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -653,8 +650,7 @@ cql_server::connection::make_unavailable_error(int16_t stream, exceptions::excep
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present)
+shared_ptr<cql_server::response> cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -666,8 +662,7 @@ cql_server::connection::make_read_timeout_error(int16_t stream, exceptions::exce
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type)
+shared_ptr<cql_server::response> cql_server::connection::make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -679,8 +674,7 @@ cql_server::connection::make_mutation_write_timeout_error(int16_t stream, except
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name)
+shared_ptr<cql_server::response> cql_server::connection::make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -690,8 +684,7 @@ cql_server::connection::make_already_exists_error(int16_t stream, exceptions::ex
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id)
+shared_ptr<cql_server::response> cql_server::connection::make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -700,8 +693,7 @@ cql_server::connection::make_unprepared_error(int16_t stream, exceptions::except
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_error(int16_t stream, exceptions::exception_code err, sstring msg)
+shared_ptr<cql_server::response> cql_server::connection::make_error(int16_t stream, exceptions::exception_code err, sstring msg)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
@@ -709,14 +701,12 @@ cql_server::connection::make_error(int16_t stream, exceptions::exception_code er
     return response;
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_ready(int16_t stream)
+shared_ptr<cql_server::response> cql_server::connection::make_ready(int16_t stream)
 {
     return make_shared<cql_server::response>(stream, cql_binary_opcode::READY);
 }
 
-shared_ptr<cql_server::response>
-cql_server::connection::make_supported(int16_t stream)
+shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream)
 {
     std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});

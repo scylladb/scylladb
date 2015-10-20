@@ -86,10 +86,11 @@ public:
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
     future<> stop();
+public:
+    class response;
 private:
     class fmt_visitor;
     class connection;
-    class response;
     friend class type_codec;
 };
 
@@ -139,6 +140,8 @@ struct cql_query_state {
     { }
 };
 
+using response_type = std::pair<shared_ptr<cql_server::response>, service::client_state>;
+
 class cql_server::connection {
     cql_server& _server;
     connected_socket _fd;
@@ -156,18 +159,18 @@ public:
     future<> process();
     future<> process_request();
 private:
-    future<shared_ptr<cql_server::response>> process_request_one(bytes_view buf, uint8_t op, uint16_t stream);
+    future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state);
     unsigned frame_size() const;
     cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
     future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
-    future<shared_ptr<cql_server::response>> process_startup(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_auth_response(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_options(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_query(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_prepare(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_execute(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_batch(uint16_t stream, bytes_view buf);
-    future<shared_ptr<cql_server::response>> process_register(uint16_t stream, bytes_view buf);
+    future<response_type> process_startup(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_options(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_query(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_execute(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_batch(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_register(uint16_t stream, bytes_view buf, service::client_state client_state);
 
     shared_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
     shared_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
