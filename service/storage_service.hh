@@ -824,15 +824,16 @@ private:
         return sourceRanges;
 #endif
     }
-#if 0
+
+private:
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
      *
      * @param remote node to send notification to
      */
-    private void sendReplicationNotification(InetAddress remote)
-    {
+    void send_replication_notification(inet_address remote) {
+#if 0
         // notify the remote token
         MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
         IFailureDetector failureDetector = FailureDetector.instance;
@@ -851,8 +852,10 @@ private:
                 // try again
             }
         }
+#endif
     }
 
+private:
     /**
      * Called when an endpoint is removed from the ring. This function checks
      * whether this node becomes responsible for new ranges as a
