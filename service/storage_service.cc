@@ -1601,4 +1601,65 @@ future<bool> storage_service::is_initialized() {
     });
 }
 
+std::unordered_multimap<range<token>, inet_address> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
+    return std::unordered_multimap<range<token>, inet_address>();
+    // First get all ranges the leaving endpoint is responsible for
+    auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
+
+    logger.debug("Node {} ranges [{}]", endpoint, ranges);
+
+    std::unordered_map<range<token>, std::vector<inet_address>> current_replica_endpoints;
+
+    // Find (for each range) all nodes that store replicas for these ranges as well
+    auto metadata = _token_metadata.clone_only_token_map(); // don't do this in the loop! #7758
+    for (auto& r : ranges) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), metadata);
+        current_replica_endpoints.emplace(r, std::move(eps));
+    }
+
+    auto temp = _token_metadata.clone_after_all_left();
+
+    // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
+    // command was used), it is still present in temp and must be removed.
+    if (temp.is_member(endpoint)) {
+        temp.remove_endpoint(endpoint);
+    }
+
+    std::unordered_multimap<range<token>, inet_address> changed_ranges;
+
+    // Go through the ranges and for each range check who will be
+    // storing replicas for these ranges when the leaving endpoint
+    // is gone. Whoever is present in newReplicaEndpoints list, but
+    // not in the currentReplicaEndpoints list, will be needing the
+    // range.
+    for (auto& r : ranges) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), temp);
+
+        auto rg = current_replica_endpoints.equal_range(r);
+        for (auto it = rg.first; it != rg.second; it++) {
+            logger.debug("Remove range={}, eps={} from new_replica_endpoints={}", it->first, it->second, new_replica_endpoints);
+            auto beg = new_replica_endpoints.begin();
+            auto end = new_replica_endpoints.end();
+            for (auto ep : it->second) {
+                new_replica_endpoints.erase(std::remove(beg, end, ep), end);
+            }
+        }
+
+        if (logger.is_enabled(logging::log_level::debug)) {
+            if (new_replica_endpoints.empty()) {
+                logger.debug("Range {} already in all replicas", r);
+            } else {
+                logger.debug("Range {} will be responsibility of {}", r, new_replica_endpoints);
+            }
+        }
+        for (auto& ep : new_replica_endpoints) {
+            changed_ranges.emplace(r, ep);
+        }
+    }
+
+    return changed_ranges;
+}
+
 } // namespace service
