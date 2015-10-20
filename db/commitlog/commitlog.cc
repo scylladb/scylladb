@@ -391,25 +391,20 @@ public:
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
                     ++_segment_manager->totals.pending_operations;
-                    return _file.flush().handle_exception([](auto ex) {
+                    return _file.flush().then_wrapped([this, pos, me = std::move(me)](auto f) {
+                                --_segment_manager->totals.pending_operations;
                                 try {
-                                    std::rethrow_exception(ex);
+                                    f.get();
                                     // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                                     // we fast-fail the whole commit.
-                                } catch (std::exception& e) {
-                                    logger.error("Failed to flush commits to disk: {}", e.what());
-                                    throw;
+                                    _flush_pos = std::max(pos, _flush_pos);
+                                    ++_segment_manager->totals.flush_count;
+                                    logger.trace("{} synced to {}", *this, _flush_pos);
+                                    return make_ready_future<sseg_ptr>(std::move(me));
                                 } catch (...) {
-                                    logger.error("Failed to flush commits to disk.");
+                                    logger.error("Failed to flush commits to disk: {}", std::current_exception());
                                     throw;
                                 }
-                            }).then([this, pos, me = std::move(me)]() {
-                                _flush_pos = std::max(pos, _flush_pos);
-                                ++_segment_manager->totals.flush_count;
-                                logger.trace("{} synced to {}", *this, _flush_pos);
-                                return make_ready_future<sseg_ptr>(std::move(me));
-                            }).finally([this] {
-                                --_segment_manager->totals.pending_operations;
                             });
                 });
     }
