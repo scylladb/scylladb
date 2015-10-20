@@ -1772,4 +1772,26 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     });
 }
 
+// Runs inside seastar::async context
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
+    logger.info("Removing tokens {} for {}", tokens, endpoint);
+    // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
+    remove_endpoint(endpoint);
+    _token_metadata.remove_endpoint(endpoint);
+    _token_metadata.remove_bootstrap_tokens(tokens);
+
+    // FIXME: IEndpointLifecycleSubscriber
+#if 0
+    for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers) {
+        subscriber.onLeaveCluster(endpoint);
+    }
+#endif
+    get_local_pending_range_calculator_service().update().get();
+}
+
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time) {
+    // FIXME: addExpireTimeIfFound(endpoint, expireTime);
+    excise(tokens, endpoint);
+}
+
 } // namespace service

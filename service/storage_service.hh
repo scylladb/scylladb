@@ -750,28 +750,10 @@ private:
      */
     void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
-#if 0
-    private void excise(Collection<Token> tokens, InetAddress endpoint)
-    {
-        logger.info("Removing tokens {} for {}", tokens, endpoint);
-        HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-        removeEndpoint(endpoint);
-        _token_metadata.removeEndpoint(endpoint);
-        _token_metadata.removeBootstrapTokens(tokens);
-
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onLeaveCluster(endpoint);
-        PendingRangeCalculatorService.instance.update();
-    }
-
-    private void excise(Collection<Token> tokens, InetAddress endpoint, long expireTime)
-    {
-        addExpireTimeIfFound(endpoint, expireTime);
-        excise(tokens, endpoint);
-    }
-#endif
-
 private:
+    void excise(std::unordered_set<token> tokens, inet_address endpoint);
+    void excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time);
+
     /** unlike excise we just need this endpoint gone without going through any notifications **/
     void remove_endpoint(inet_address endpoint);
 #if 0
