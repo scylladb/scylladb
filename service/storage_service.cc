@@ -1332,41 +1332,41 @@ bool storage_service::is_native_transport_running() {
 
 future<> storage_service::decommission() {
     fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
-        throw new UnsupportedOperationException("local node is not a member of the token ring yet");
-    if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
-        throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
-
-    PendingRangeCalculatorService.instance.blockUntilFinished();
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
-            throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
-    }
-
-    if (logger.isDebugEnabled())
-        logger.debug("DECOMMISSIONING");
-    startLeaving();
-    long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-    setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
-    Thread.sleep(timeout);
-
-    Runnable finishLeaving = new Runnable()
-    {
-        public void run()
-        {
-            shutdownClientServers();
-            Gossiper.instance.stop();
-            MessagingService.instance().shutdown();
-            StageManager.shutdownNow();
-            setMode(Mode.DECOMMISSIONED, true);
-            // let op be responsible for killing the process
+    return seastar::async([this] {
+        if (!_token_metadata.is_member(get_broadcast_address())) {
+            throw std::runtime_error("local node is not a member of the token ring yet");
         }
-    };
-    unbootstrap(finishLeaving);
-#endif
-    return make_ready_future<>();
+
+        if (_token_metadata.clone_after_all_left().sorted_tokens().size() < 2) {
+            throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
+        }
+
+        get_local_pending_range_calculator_service().block_until_finished().get();
+
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            if (_token_metadata.get_pending_ranges(keyspace_name, get_broadcast_address()).size() > 0) {
+                throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+            }
+        }
+
+        logger.debug("DECOMMISSIONING");
+        // FIXME: startLeaving();
+        // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
+        long timeout = get_ring_delay();
+        set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
+        sleep(std::chrono::milliseconds(timeout)).get();
+
+        unbootstrap().finally([this] {
+            // FIXME: proper shutdown
+            // shutdownClientServers();
+            gms::get_local_gossiper().stop();
+            // MessagingService.instance().shutdown();
+            // StageManager.shutdownNow();
+            set_mode(mode::DECOMMISSIONED, true);
+            // let op be responsible for killing the process
+        }).get();
+    });
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
