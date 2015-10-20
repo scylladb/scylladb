@@ -633,16 +633,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
       });
 
-    ss::get_cluster_name.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(json_void());
+    ss::get_cluster_name.set(r, [](const_req req) {
+        return gms::get_local_gossiper().get_cluster_name();
     });
 
-    ss::get_partitioner_name.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(json_void());
+    ss::get_partitioner_name.set(r, [](const_req req) {
+        return gms::get_local_gossiper().get_partitioner_name();
     });
 
     ss::get_tombstone_warn_threshold.set(r, [](std::unique_ptr<request> req) {
