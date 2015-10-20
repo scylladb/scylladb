@@ -1969,9 +1969,9 @@
          "id":"snapshot",
          "description":"Snapshot detail",
          "properties":{
-            "key":{
+            "ks":{
                "type":"string",
-               "description":"The key snapshot key"
+               "description":"The key space snapshot key"
             },
             "cf":{
                "type":"string",
@@ -1993,7 +1993,7 @@
          "properties":{
             "key":{
                "type":"string",
-               "description":"The keyspace"
+               "description":"The snapshot key"
             },
             "value":{
                "type":"array",
