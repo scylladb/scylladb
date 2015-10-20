@@ -67,9 +67,12 @@ future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed
         return gms::get_gossiper().start().then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
-            gossiper.set_cluster_name(cluster_name);
             // #293 - do not stop anything
             //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+        }).then([cluster_name] {
+            return gms::get_gossiper().invoke_on_all([cluster_name](gms::gossiper& g) {
+                g.set_cluster_name(cluster_name);
+            });
         });
     });
 }
