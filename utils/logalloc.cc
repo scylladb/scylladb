@@ -815,12 +815,12 @@ public:
         seg_desc.record_free(desc->size() + sizeof(object_descriptor) + desc->padding());
 
         if (seg != _active) {
+            _segments.increase(seg_desc.heap_handle());
             if (seg_desc.is_empty()) {
                 _segments.erase(seg_desc.heap_handle());
                 free_segment(seg);
             } else {
                 _closed_occupancy += seg_desc.occupancy();
-                _segments.increase(seg_desc.heap_handle());
             }
         }
     }
