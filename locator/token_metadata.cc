@@ -464,6 +464,10 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
     }
 }
 
+void token_metadata::add_leaving_endpoint(inet_address endpoint) {
+     _leaving_endpoints.emplace(endpoint);
+}
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();

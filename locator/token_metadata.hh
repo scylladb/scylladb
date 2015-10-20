@@ -461,23 +461,10 @@ public:
     void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
 
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
+
+    void add_leaving_endpoint(inet_address endpoint);
+
 #if 0
-
-    public void addLeavingEndpoint(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-            _leaving_endpoints.add(endpoint);
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
-
     /**
      * Add a new moving endpoint
      * @param token token which is node moving to
