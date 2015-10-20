@@ -691,7 +691,7 @@ private:
 
         for_each_live(seg, [this] (object_descriptor* desc, void* obj) {
             auto dst = alloc_small(desc->migrator(), desc->size(), desc->alignment());
-            desc->migrator()(obj, dst, desc->size());
+            desc->migrator()->migrate(obj, dst, desc->size());
         });
 
         free_segment(seg);

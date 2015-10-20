@@ -174,7 +174,7 @@ public:
         if (new_capacity <= _capacity) {
             return;
         }
-        auto ptr = current_allocator().alloc(standard_migrator<external>,
+        auto ptr = current_allocator().alloc(&standard_migrator<external>::object,
             sizeof(external) + sizeof(T) * new_capacity, alignof(external));
         auto ext = static_cast<external*>(ptr);
         ext->_backref = this;

@@ -24,16 +24,33 @@
 #include <cstdlib>
 #include <seastar/core/memory.hh>
 
-template <typename T>
-inline
-void standard_migrator(void* src, void* dst, size_t) noexcept {
-    static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move-constructible.");
-    static_assert(std::is_nothrow_destructible<T>::value, "T must be nothrow destructible.");
+// A function used by compacting collectors to migrate objects during
+// compaction. The function should reconstruct the object located at src
+// in the location pointed by dst. The object at old location should be
+// destroyed. See standard_migrator() above for example. Both src and dst
+// are aligned as requested during alloc()/construct().
+class migrate_fn_type {
+public:
+    virtual ~migrate_fn_type() {}
+    virtual void migrate(void* src, void* dst, size_t size) const noexcept = 0;
+};
 
-    T* src_t = static_cast<T*>(src);
-    new (static_cast<T*>(dst)) T(std::move(*src_t));
-    src_t->~T();
-}
+template <typename T>
+class standard_migrator final : public migrate_fn_type {
+public:
+    virtual void migrate(void* src, void* dst, size_t) const noexcept override {
+        static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move-constructible.");
+        static_assert(std::is_nothrow_destructible<T>::value, "T must be nothrow destructible.");
+
+        T* src_t = static_cast<T*>(src);
+        new (static_cast<T*>(dst)) T(std::move(*src_t));
+        src_t->~T();
+    }
+    static standard_migrator object;  // would like to use variable templates, but only available in gcc 5
+};
+
+template <typename T>
+standard_migrator<T> standard_migrator<T>::object;
 
 //
 // Abstracts allocation strategy for managed objects.
@@ -59,12 +76,7 @@ void standard_migrator(void* src, void* dst, size_t) noexcept {
 //
 class allocation_strategy {
 public:
-    // A function used by compacting collectors to migrate objects during
-    // compaction. The function should reconstruct the object located at src
-    // in the location pointed by dst. The object at old location should be
-    // destroyed. See standard_migrator() above for example. Both src and dst
-    // are aligned as requested during alloc()/construct().
-    using migrate_fn = void (*)(void* src, void* dst, size_t size) noexcept;
+    using migrate_fn = migrate_fn_type*;
 
     virtual ~allocation_strategy() {}
 
@@ -88,7 +100,7 @@ public:
     // requirement.
     template<typename T, typename... Args>
     T* construct(Args&&... args) {
-        void* storage = alloc(standard_migrator<T>, sizeof(T), alignof(T));
+        void* storage = alloc(&standard_migrator<T>::object, sizeof(T), alignof(T));
         try {
             return new (storage) T(std::forward<Args>(args)...);
         } catch (...) {
