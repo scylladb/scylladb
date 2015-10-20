@@ -189,10 +189,26 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        std::vector<ss::snapshots> res;
-        return make_ready_future<json::json_return_type>(res);
+        return service::get_local_storage_service().get_snapshot_details().then([] (auto result) {
+            std::vector<ss::snapshots> res;
+            for (auto& map: result) {
+                ss::snapshots all_snapshots;
+                all_snapshots.key = map.first;
+
+                std::vector<ss::snapshot> snapshot;
+                for (auto& cf: map.second) {
+                    ss::snapshot s;
+                    s.ks = cf.ks;
+                    s.cf = cf.cf;
+                    s.live = cf.live;
+                    s.total = cf.total;
+                    snapshot.push_back(std::move(s));
+                }
+                all_snapshots.value = std::move(snapshot);
+                res.push_back(std::move(all_snapshots));
+            }
+            return make_ready_future<json::json_return_type>(std::move(res));
+        });
     });
 
     ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
