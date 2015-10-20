@@ -500,9 +500,10 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_query(u
     auto& options = *q_state->options;
     return _server._query_processor.local().process(query, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
          return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state)] (auto&& response) {
+    }).then([q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-         return make_ready_future<shared_ptr<cql_server::response>>(response);
+        _client_state.merge(q_state->query_state.get_client_state());
+        return make_ready_future<shared_ptr<cql_server::response>>(response);
     });
 }
 
@@ -547,9 +548,10 @@ future<shared_ptr<cql_server::response>> cql_server::connection::process_execute
     }
     return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf)] (auto msg) {
          return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state)] (auto&& response) {
+    }).then([q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-         return make_ready_future<shared_ptr<cql_server::response>>(response);
+        _client_state.merge(q_state->query_state.get_client_state());
+        return make_ready_future<shared_ptr<cql_server::response>>(response);
     });
 }
 
@@ -620,9 +622,10 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf)
     auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
     return _server._query_processor.local().process_batch(batch, query_state, options).then([this, stream, batch] (auto msg) {
         return this->make_result(stream, msg);
-    }).then([q_state = std::move(q_state)] (auto&& response) {
+    }).then([q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
-         return make_ready_future<shared_ptr<cql_server::response>>(response);
+        _client_state.merge(q_state->query_state.get_client_state());
+        return make_ready_future<shared_ptr<cql_server::response>>(response);
     });
 }
 

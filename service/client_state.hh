@@ -84,10 +84,12 @@ public:
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
-    const bool _is_internal;
+    bool _is_internal;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     api::timestamp_type _last_timestamp_micros = 0;
+
+    bool _dirty = false;
 
     // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
     // anywhere so I didn't bother converting it.
@@ -100,6 +102,13 @@ public:
     }
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
+
+    void merge(const client_state& other) {
+        if (other._dirty) {
+            _keyspace = other._keyspace;
+        }
+        _last_timestamp_micros = std::max(_last_timestamp_micros, other._last_timestamp_micros);
+    }
 
     virtual bool is_thrift() const {
         return false;
@@ -169,6 +178,7 @@ public:
             throw exceptions::invalid_request_exception(sprint("Keyspace '%s' does not exist", keyspace));
         }
         _keyspace = keyspace;
+        _dirty = true;
     }
 
     const sstring& get_keyspace() const {
