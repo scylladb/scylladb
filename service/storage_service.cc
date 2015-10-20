@@ -1669,4 +1669,56 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
     return changed_ranges;
 }
 
+future<> storage_service::unbootstrap() {
+    return make_ready_future<>();
+#if 0
+    Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<>();
+
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+    {
+        Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(keyspaceName, FBUtilities.getBroadcastAddress());
+
+        if (logger.isDebugEnabled())
+            logger.debug("Ranges needing transfer are [{}]", StringUtils.join(rangesMM.keySet(), ","));
+
+        rangesToStream.put(keyspaceName, rangesMM);
+    }
+
+    setMode(Mode.LEAVING, "replaying batch log and streaming data to other nodes", true);
+
+    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
+    Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
+    Future<StreamState> streamSuccess = streamRanges(rangesToStream);
+
+    // Wait for batch log to complete before streaming hints.
+    logger.debug("waiting for batch log processing.");
+    try
+    {
+        batchlogReplay.get();
+    }
+    catch (ExecutionException | InterruptedException e)
+    {
+        throw new RuntimeException(e);
+    }
+
+    setMode(Mode.LEAVING, "streaming hints to other nodes", true);
+
+    Future<StreamState> hintsSuccess = streamHints();
+
+    // wait for the transfer runnables to signal the latch.
+    logger.debug("waiting for stream acks.");
+    try
+    {
+        streamSuccess.get();
+        hintsSuccess.get();
+    }
+    catch (ExecutionException | InterruptedException e)
+    {
+        throw new RuntimeException(e);
+    }
+    logger.debug("stream acks all received.");
+    leaveRing();
+    onFinish.run();
+#endif
+}
 } // namespace service

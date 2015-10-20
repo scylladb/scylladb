@@ -2042,57 +2042,10 @@ public:
         logger.info("Announcing that I have left the ring for {}ms", delay);
         Uninterruptibles.sleepUninterruptibly(delay, TimeUnit.MILLISECONDS);
     }
-
-    private void unbootstrap(Runnable onFinish)
-    {
-        Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<>();
-
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(keyspaceName, FBUtilities.getBroadcastAddress());
-
-            if (logger.isDebugEnabled())
-                logger.debug("Ranges needing transfer are [{}]", StringUtils.join(rangesMM.keySet(), ","));
-
-            rangesToStream.put(keyspaceName, rangesMM);
-        }
-
-        setMode(Mode.LEAVING, "replaying batch log and streaming data to other nodes", true);
-
-        // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-        Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
-        Future<StreamState> streamSuccess = streamRanges(rangesToStream);
-
-        // Wait for batch log to complete before streaming hints.
-        logger.debug("waiting for batch log processing.");
-        try
-        {
-            batchlogReplay.get();
-        }
-        catch (ExecutionException | InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        setMode(Mode.LEAVING, "streaming hints to other nodes", true);
-
-        Future<StreamState> hintsSuccess = streamHints();
-
-        // wait for the transfer runnables to signal the latch.
-        logger.debug("waiting for stream acks.");
-        try
-        {
-            streamSuccess.get();
-            hintsSuccess.get();
-        }
-        catch (ExecutionException | InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-        logger.debug("stream acks all received.");
-        leaveRing();
-        onFinish.run();
-    }
+#endif
+private:
+    future<> unbootstrap();
+#if 0
 
     private Future<StreamState> streamHints()
     {
@@ -2395,6 +2348,7 @@ public:
         }
     }
 #endif
+public:
     /**
      * Remove a node that has died, attempting to restore the replica count.
      * If the node is alive, decommission should be attempted.  If decommission
