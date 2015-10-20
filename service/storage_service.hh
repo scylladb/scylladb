@@ -866,59 +866,8 @@ private:
      *
      * @param endpoint the node that left
      */
-    private void restoreReplicaCount(InetAddress endpoint, final InetAddress notifyEndpoint)
-    {
-        Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> rangesToFetch = HashMultimap.create();
+    future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
 
-        InetAddress myAddress = FBUtilities.getBroadcastAddress();
-
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-            Set<Range<Token>> myNewRanges = new HashSet<>();
-            for (Map.Entry<Range<Token>, InetAddress> entry : changedRanges.entries())
-            {
-                if (entry.getValue().equals(myAddress))
-                    myNewRanges.add(entry.getKey());
-            }
-            Multimap<InetAddress, Range<Token>> sourceRanges = getNewSourceRanges(keyspaceName, myNewRanges);
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : sourceRanges.asMap().entrySet())
-            {
-                rangesToFetch.put(keyspaceName, entry);
-            }
-        }
-
-        StreamPlan stream = new StreamPlan("Restore replica count");
-        for (String keyspaceName : rangesToFetch.keySet())
-        {
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : rangesToFetch.get(keyspaceName))
-            {
-                InetAddress source = entry.getKey();
-                InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-                Collection<Range<Token>> ranges = entry.getValue();
-                if (logger.isDebugEnabled())
-                    logger.debug("Requesting from {} ranges {}", source, StringUtils.join(ranges, ", "));
-                stream.requestRanges(source, preferred, keyspaceName, ranges);
-            }
-        }
-        StreamResultFuture future = stream.execute();
-        Futures.addCallback(future, new FutureCallback<StreamState>()
-        {
-            public void onSuccess(StreamState finalState)
-            {
-                sendReplicationNotification(notifyEndpoint);
-            }
-
-            public void onFailure(Throwable t)
-            {
-                logger.warn("Streaming to restore replica count failed", t);
-                // We still want to send the notification
-                sendReplicationNotification(notifyEndpoint);
-            }
-        });
-    }
-#endif
-private:
     // needs to be modified to accept either a keyspace or ARS.
     std::unordered_multimap<range<token>, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 public:

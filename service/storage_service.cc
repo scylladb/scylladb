@@ -55,6 +55,8 @@
 #include "version.hh"
 #include "unimplemented.hh"
 #include "service/pending_range_calculator_service.hh"
+#include "streaming/stream_plan.hh"
+#include "streaming/stream_state.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1721,4 +1723,53 @@ future<> storage_service::unbootstrap() {
     onFinish.run();
 #endif
 }
+
+future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+    using stream_plan = streaming::stream_plan;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> ranges_to_fetch;
+
+    auto my_address = get_broadcast_address();
+
+    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+    for (const auto& keyspace_name : non_system_keyspaces) {
+        std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
+        std::vector<range<token>> my_new_ranges;
+        for (auto& x : changed_ranges) {
+            if (x.second == my_address) {
+                my_new_ranges.emplace_back(x.first);
+            }
+        }
+        std::unordered_multimap<inet_address, range<token>> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
+        std::unordered_map<inet_address, std::vector<range<token>>> tmp;
+        for (auto& x : source_ranges) {
+            tmp[x.first].emplace_back(x.second);
+        }
+        ranges_to_fetch.emplace(keyspace_name, std::move(tmp));
+    }
+    stream_plan sp("Restore replica count", true);
+    for (auto& x: ranges_to_fetch) {
+        const sstring& keyspace_name = x.first;
+        std::unordered_map<inet_address, std::vector<range<token>>>& maps = x.second;
+        for (auto& m : maps) {
+            auto source = m.first;
+            auto ranges = m.second;
+            // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
+            auto preferred = source;
+            logger.debug("Requesting from {} ranges {}", source, ranges);
+            sp.request_ranges(source, preferred, keyspace_name, ranges);
+        }
+    }
+    return sp.execute().then_wrapped([this, notify_endpoint] (auto&& f) {
+        try {
+            auto state = f.get0();
+            this->send_replication_notification(notify_endpoint);
+        } catch (...) {
+            logger.warn("Streaming to restore replica count failed: {}", std::current_exception());
+            // We still want to send the notification
+            this->send_replication_notification(notify_endpoint);
+        }
+        return make_ready_future<>();
+    });
+}
+
 } // namespace service
