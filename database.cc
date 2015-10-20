@@ -60,8 +60,23 @@ using namespace std::chrono_literals;
 
 logging::logger dblog("database");
 
-// Do this to avoid having to include or forward-declare template in our header.
-class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {};
+// Slight extension to the flush_queue type.
+class column_family::memtable_flush_queue : public utils::flush_queue<db::replay_position> {
+public:
+    template<typename Func, typename Post>
+    auto run_cf_flush(db::replay_position rp, Func&& func, Post&& post) {
+        // special case: empty rp, yet still data.
+        // We generate a few memtables with no valid, "high_rp", yet
+        // still containing data -> actual flush.
+        // And to make matters worse, we can initiate a flush of N such
+        // tables at the same time.
+        // Just queue them at the end of the queue and treat them as such.
+        if (rp == db::replay_position() && !empty()) {
+            rp = highest_key();
+        }
+        return run_with_ordered_post_op(rp, std::forward<Func>(func), std::forward<Post>(post));
+    }
+};
 
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
@@ -483,7 +498,7 @@ column_family::seal_active_memtable() {
     );
     _highest_flushed_rp = old->replay_position();
 
-    return _flush_queue->run_with_ordered_post_op(old->replay_position(), [old, this] {
+    return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
         return repeat([this, old] {
             _flush_queue->check_open_gate();
             return try_flush_memtable_to_sstable(old);
