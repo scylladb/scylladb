@@ -131,12 +131,12 @@ public:
     {
         return DatabaseDescriptor.getPartitioner();
     }
-
-    public Collection<Range<Token>> getLocalRanges(String keyspaceName)
-    {
-        return getRangesForEndpoint(keyspaceName, FBUtilities.getBroadcastAddress());
+#endif
+public:
+    std::vector<range<token>> get_local_ranges(const sstring& keyspace_name) {
+        return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
-
+#if 0
     public Collection<Range<Token>> getPrimaryRanges(String keyspace)
     {
         return getPrimaryRangesForEndpoint(keyspace, FBUtilities.getBroadcastAddress());

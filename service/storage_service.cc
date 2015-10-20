@@ -57,6 +57,7 @@
 #include "service/pending_range_calculator_service.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
+#include "dht/range_streamer.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1565,34 +1566,30 @@ std::map<sstring, sstring> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
-    fail(unimplemented::cause::STORAGE_SERVICE);
+    using range_streamer = dht::range_streamer;
+    logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+    range_streamer streamer(_db, _token_metadata, get_broadcast_address(), "Rebuild");
+    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+    // FIXME: SingleDatacenterFilter
 #if 0
-    logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
-
-    RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
-    streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
-    if (sourceDc != null)
+    if (source_dc != "")
         streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
-
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        streamer.addRanges(keyspaceName, getLocalRanges(keyspaceName));
-
-    try
-    {
-        streamer.fetchAsync().get();
-    }
-    catch (InterruptedException e)
-    {
-        throw new RuntimeException("Interrupted while waiting on rebuild streaming");
-    }
-    catch (ExecutionException e)
-    {
-        // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-        logger.error("Error while rebuilding node", e.getCause());
-        throw new RuntimeException("Error while rebuilding node: " + e.getCause().getMessage());
-    }
 #endif
-    return make_ready_future<>();
+
+    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
+        streamer.add_ranges(keyspace_name, get_local_ranges(keyspace_name));
+    }
+
+    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+        try {
+            auto state = f.get0();
+        } catch (...) {
+            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+            logger.error("Error while rebuilding node: {}", std::current_exception());
+            throw std::runtime_error(sprint("Error while rebuilding node: %s", std::current_exception()));
+        }
+        return make_ready_future<>();
+    });
 }
 
 int32_t storage_service::get_exception_count() {
