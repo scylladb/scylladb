@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+
+DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
+SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
+LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
+LIBS = $(CURDIR)/debian/scylla-server/usr/lib
+
+override_dh_auto_build:
+	./configure.py --disable-xen --enable-dpdk --mode=release --compiler=g++-4.9
+	ninja
+
+override_dh_auto_clean:
+	rm -rf build seastar/build
+	rm -rf Cql.tokens
+	rm -rf build.ninja seastar/build.ninja
+
+override_dh_auto_install:
+	mkdir -p $(CURDIR)/debian/scylla-server/etc/default/ && \
+	cp $(CURDIR)/dist/redhat/sysconfig/scylla-server  \
+		$(CURDIR)/debian/scylla-server/etc/default/
+
+	mkdir -p $(LIMITS) && \
+	cp $(CURDIR)/debian/limits.d/scylla.conf  $(LIMITS)
+
+	mkdir -p $(DOC) && \
+	cp $(CURDIR)/*.md $(DOC)
+	cp $(CURDIR)/NOTICE.txt $(DOC)
+	cp $(CURDIR)/ORIGIN $(DOC)
+	cp -r $(CURDIR)/licenses $(DOC)
+
+	mkdir -p $(SCRIPTS) && \
+	cp $(CURDIR)/seastar/dpdk/tools/dpdk_nic_bind.py $(SCRIPTS)
+	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
+
+	mkdir -p $(CURDIR)/debian/scylla-server/usr/bin/ && \
+	cp $(CURDIR)/build/release/scylla \
+		$(CURDIR)/debian/scylla-server/usr/bin/
+
+	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
+	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog
+	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/conf
+	cp $(CURDIR)/conf/scylla.yaml \
+		$(CURDIR)/debian/scylla-server/var/lib/scylla/conf
+
+%:
+	dh $@

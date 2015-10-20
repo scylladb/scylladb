@@ -1,0 +1,37 @@
+# scylla-server - ScyllaDB
+#
+# ScyllaDB
+
+description	"ScyllaDB server"
+
+start on runlevel [2345]
+stop on runlevel [!2345]
+
+respawn
+respawn limit 10 5
+umask 022
+
+expect daemon
+
+console log
+
+pre-start script
+    cd /var/lib/scylla
+    . /etc/default/scylla-server
+    export OPTS_FILE NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_ARGS
+    sh -x -e /usr/lib/scylla/scylla_prepare
+end script
+
+script
+    cd /var/lib/scylla
+    . /etc/default/scylla-server
+    export OPTS_FILE NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_ARGS
+    exec sh -x -e /usr/lib/scylla/scylla_run
+end script
+
+post-stop script
+    cd /var/lib/scylla
+    . /etc/default/scylla-server
+    export OPTS_FILE NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_ARGS
+    exec sh -x -e /usr/lib/scylla/scylla_stop
+end script

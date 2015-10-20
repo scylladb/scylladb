@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = configure ]; then
+    adduser --system \
+            --quiet \
+            --home /var/lib/scylla \
+            --no-create-home \
+            --disabled-password \
+            --group scylla
+    chown -R scylla:scylla /var/lib/scylla
+fi
+
+# Automatically added by dh_installinit
+if [ -x "/etc/init.d/scylla-server" ]; then
+	if [ ! -e "/etc/init/scylla-server.conf" ]; then
+		update-rc.d scylla-server defaults >/dev/null
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installinit
+update-rc.d -f scylla-server remove >/dev/null || exit $?
+# End automatically added section

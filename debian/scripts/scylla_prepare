@@ -1,0 +1,17 @@
+#!/bin/sh -e
+
+if [ "$NETWORK_MODE" = "virtio" ]; then
+    ip tuntap del mode tap dev $TAP
+    ip tuntap add mode tap dev $TAP user $USER one_queue vnet_hdr
+    ip link set dev $TAP up
+    ip link set dev $TAP master $BRIDGE
+    chown $USER.$GROUP /dev/vhost-net
+elif [ "$NETWORK_MODE" = "dpdk" ]; then
+    modprobe uio
+    modprobe uio_pci_generic
+    /usr/lib/scylla/dpdk_nic_bind.py --force --bind=uio_pci_generic $ETHPCIID
+    for n in /sys/devices/system/node/node?; do
+        echo $NR_HUGEPAGES > $n/hugepages/hugepages-2048kB/nr_hugepages
+    done
+fi
+hugeadm --create-mounts

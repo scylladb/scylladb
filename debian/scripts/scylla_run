@@ -1,0 +1,13 @@
+#!/bin/sh -e
+
+args="--datadir $DATA_DIR --commitlog-directory $COMMITLOG_DIR $SCYLLA_ARGS"
+
+if [ "$NETWORK_MODE" = "virtio" ]; then
+    args="$args --network-stack native"
+elif [ "$NETWORK_MODE" = "dpdk" ]; then
+    args="$args --network-stack native --dpdk-pmd"
+elif [ "$NETWORK_MODE" = "posix" ]; then
+    args="$args --network-stack posix"
+fi
+
+exec sudo -u $USER env HOME=/var/lib/scylla /usr/bin/scylla $args

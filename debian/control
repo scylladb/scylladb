@@ -1,0 +1,13 @@
+Source: scylla-server
+Maintainer: Takuya ASADA <syuu@scylladb.com>
+Homepage: http://scylladb.com
+Section: database
+Priority: optional
+Standards-Version: 3.9.2
+Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, libcrypto++-dev, libjsoncpp-dev, libaio-dev, libthrift-dev, thrift-compiler, antlr3-tool, antlr3-c++-dev, ragel, g++-4.9, ninja-build, git, libboost-program-options1.55-dev, libboost-filesystem1.55-dev, libboost-system1.55-dev, libboost-thread1.55-dev, libboost-test1.55-dev
+
+Package: scylla-server
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}, hugepages
+Description: Scylla database server binaries 
+ Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
