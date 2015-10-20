@@ -731,7 +731,7 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             subscriber->on_down(endpoint);
         }
-    });
+    }).get();
 }
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
