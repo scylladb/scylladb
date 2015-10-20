@@ -787,7 +787,7 @@ private:
     {
         return Long.parseLong(pieces[2]);
     }
-
+#endif
     /**
      * Finds living endpoints responsible for the given ranges
      *
@@ -795,8 +795,9 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    private Multimap<InetAddress, Range<Token>> getNewSourceRanges(String keyspaceName, Set<Range<Token>> ranges)
-    {
+    std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges) {
+        return std::unordered_multimap<inet_address, range<token>>();
+#if 0
         InetAddress myAddress = FBUtilities.getBroadcastAddress();
         Multimap<Range<Token>, InetAddress> rangeAddresses = Keyspace.open(keyspaceName).getReplicationStrategy().getRangeAddresses(_token_metadata.cloneOnlyTokenMap());
         Multimap<InetAddress, Range<Token>> sourceRanges = HashMultimap.create();
@@ -821,7 +822,9 @@ private:
             }
         }
         return sourceRanges;
+#endif
     }
+#if 0
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
