@@ -147,14 +147,14 @@ public:
         return getPrimaryRangeForEndpointWithinDC(keyspace, FBUtilities.getBroadcastAddress());
     }
 
-    private final Set<InetAddress> replicatingNodes = Collections.synchronizedSet(new HashSet<InetAddress>());
     private CassandraDaemon daemon;
-
-    private InetAddress removingNode;
-
 #endif
-
 private:
+
+    std::unordered_set<inet_address> _replicating_nodes;
+
+    inet_address _removing_node;
+
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
 
