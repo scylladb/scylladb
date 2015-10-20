@@ -131,12 +131,12 @@ public:
     {
         return DatabaseDescriptor.getPartitioner();
     }
-
-    public Collection<Range<Token>> getLocalRanges(String keyspaceName)
-    {
-        return getRangesForEndpoint(keyspaceName, FBUtilities.getBroadcastAddress());
+#endif
+public:
+    std::vector<range<token>> get_local_ranges(const sstring& keyspace_name) {
+        return get_ranges_for_endpoint(keyspace_name, get_broadcast_address());
     }
-
+#if 0
     public Collection<Range<Token>> getPrimaryRanges(String keyspace)
     {
         return getPrimaryRangesForEndpoint(keyspace, FBUtilities.getBroadcastAddress());
@@ -147,14 +147,14 @@ public:
         return getPrimaryRangeForEndpointWithinDC(keyspace, FBUtilities.getBroadcastAddress());
     }
 
-    private final Set<InetAddress> replicatingNodes = Collections.synchronizedSet(new HashSet<InetAddress>());
     private CassandraDaemon daemon;
-
-    private InetAddress removingNode;
-
 #endif
-
 private:
+
+    std::unordered_set<inet_address> _replicating_nodes;
+
+    inet_address _removing_node;
+
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
 
@@ -750,28 +750,10 @@ private:
      */
     void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
-#if 0
-    private void excise(Collection<Token> tokens, InetAddress endpoint)
-    {
-        logger.info("Removing tokens {} for {}", tokens, endpoint);
-        HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
-        removeEndpoint(endpoint);
-        _token_metadata.removeEndpoint(endpoint);
-        _token_metadata.removeBootstrapTokens(tokens);
-
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onLeaveCluster(endpoint);
-        PendingRangeCalculatorService.instance.update();
-    }
-
-    private void excise(Collection<Token> tokens, InetAddress endpoint, long expireTime)
-    {
-        addExpireTimeIfFound(endpoint, expireTime);
-        excise(tokens, endpoint);
-    }
-#endif
-
 private:
+    void excise(std::unordered_set<token> tokens, inet_address endpoint);
+    void excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time);
+
     /** unlike excise we just need this endpoint gone without going through any notifications **/
     void remove_endpoint(inet_address endpoint);
 #if 0
@@ -787,7 +769,7 @@ private:
     {
         return Long.parseLong(pieces[2]);
     }
-
+#endif
     /**
      * Finds living endpoints responsible for the given ranges
      *
@@ -795,8 +777,9 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    private Multimap<InetAddress, Range<Token>> getNewSourceRanges(String keyspaceName, Set<Range<Token>> ranges)
-    {
+    std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges) {
+        return std::unordered_multimap<inet_address, range<token>>();
+#if 0
         InetAddress myAddress = FBUtilities.getBroadcastAddress();
         Multimap<Range<Token>, InetAddress> rangeAddresses = Keyspace.open(keyspaceName).getReplicationStrategy().getRangeAddresses(_token_metadata.cloneOnlyTokenMap());
         Multimap<InetAddress, Range<Token>> sourceRanges = HashMultimap.create();
@@ -821,15 +804,18 @@ private:
             }
         }
         return sourceRanges;
+#endif
     }
+
+private:
 
     /**
      * Sends a notification to a node indicating we have finished replicating data.
      *
      * @param remote node to send notification to
      */
-    private void sendReplicationNotification(InetAddress remote)
-    {
+    void send_replication_notification(inet_address remote) {
+#if 0
         // notify the remote token
         MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
         IFailureDetector failureDetector = FailureDetector.instance;
@@ -848,8 +834,10 @@ private:
                 // try again
             }
         }
+#endif
     }
 
+private:
     /**
      * Called when an endpoint is removed from the ring. This function checks
      * whether this node becomes responsible for new ranges as a
@@ -860,103 +848,10 @@ private:
      *
      * @param endpoint the node that left
      */
-    private void restoreReplicaCount(InetAddress endpoint, final InetAddress notifyEndpoint)
-    {
-        Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> rangesToFetch = HashMultimap.create();
-
-        InetAddress myAddress = FBUtilities.getBroadcastAddress();
-
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-            Set<Range<Token>> myNewRanges = new HashSet<>();
-            for (Map.Entry<Range<Token>, InetAddress> entry : changedRanges.entries())
-            {
-                if (entry.getValue().equals(myAddress))
-                    myNewRanges.add(entry.getKey());
-            }
-            Multimap<InetAddress, Range<Token>> sourceRanges = getNewSourceRanges(keyspaceName, myNewRanges);
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : sourceRanges.asMap().entrySet())
-            {
-                rangesToFetch.put(keyspaceName, entry);
-            }
-        }
-
-        StreamPlan stream = new StreamPlan("Restore replica count");
-        for (String keyspaceName : rangesToFetch.keySet())
-        {
-            for (Map.Entry<InetAddress, Collection<Range<Token>>> entry : rangesToFetch.get(keyspaceName))
-            {
-                InetAddress source = entry.getKey();
-                InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-                Collection<Range<Token>> ranges = entry.getValue();
-                if (logger.isDebugEnabled())
-                    logger.debug("Requesting from {} ranges {}", source, StringUtils.join(ranges, ", "));
-                stream.requestRanges(source, preferred, keyspaceName, ranges);
-            }
-        }
-        StreamResultFuture future = stream.execute();
-        Futures.addCallback(future, new FutureCallback<StreamState>()
-        {
-            public void onSuccess(StreamState finalState)
-            {
-                sendReplicationNotification(notifyEndpoint);
-            }
-
-            public void onFailure(Throwable t)
-            {
-                logger.warn("Streaming to restore replica count failed", t);
-                // We still want to send the notification
-                sendReplicationNotification(notifyEndpoint);
-            }
-        });
-    }
+    future<> restore_replica_count(inet_address endpoint, inet_address notify_endpoint);
 
     // needs to be modified to accept either a keyspace or ARS.
-    private Multimap<Range<Token>, InetAddress> getChangedRangesForLeaving(String keyspaceName, InetAddress endpoint)
-    {
-        // First get all ranges the leaving endpoint is responsible for
-        Collection<Range<Token>> ranges = getRangesForEndpoint(keyspaceName, endpoint);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} ranges [{}]", endpoint, StringUtils.join(ranges, ", "));
-
-        Map<Range<Token>, List<InetAddress>> currentReplicaEndpoints = new HashMap<>(ranges.size());
-
-        // Find (for each range) all nodes that store replicas for these ranges as well
-        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap(); // don't do this in the loop! #7758
-        for (Range<Token> range : ranges)
-            currentReplicaEndpoints.put(range, Keyspace.open(keyspaceName).getReplicationStrategy().calculateNaturalEndpoints(range.right, metadata));
-
-        TokenMetadata temp = _token_metadata.cloneAfterAllLeft();
-
-        // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
-        // command was used), it is still present in temp and must be removed.
-        if (temp.isMember(endpoint))
-            temp.removeEndpoint(endpoint);
-
-        Multimap<Range<Token>, InetAddress> changedRanges = HashMultimap.create();
-
-        // Go through the ranges and for each range check who will be
-        // storing replicas for these ranges when the leaving endpoint
-        // is gone. Whoever is present in newReplicaEndpoints list, but
-        // not in the currentReplicaEndpoints list, will be needing the
-        // range.
-        for (Range<Token> range : ranges)
-        {
-            Collection<InetAddress> newReplicaEndpoints = Keyspace.open(keyspaceName).getReplicationStrategy().calculateNaturalEndpoints(range.right, temp);
-            newReplicaEndpoints.removeAll(currentReplicaEndpoints.get(range));
-            if (logger.isDebugEnabled())
-                if (newReplicaEndpoints.isEmpty())
-                    logger.debug("Range {} already in all replicas", range);
-                else
-                    logger.debug("Range {} will be responsibility of {}", range, StringUtils.join(newReplicaEndpoints, ", "));
-            changedRanges.putAll(range, newReplicaEndpoints);
-        }
-
-        return changedRanges;
-    }
-#endif
+    std::unordered_multimap<range<token>, inet_address> get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint);
 public:
     /** raw load value */
     double get_load();
@@ -2084,57 +1979,10 @@ public:
         logger.info("Announcing that I have left the ring for {}ms", delay);
         Uninterruptibles.sleepUninterruptibly(delay, TimeUnit.MILLISECONDS);
     }
-
-    private void unbootstrap(Runnable onFinish)
-    {
-        Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<>();
-
-        for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        {
-            Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(keyspaceName, FBUtilities.getBroadcastAddress());
-
-            if (logger.isDebugEnabled())
-                logger.debug("Ranges needing transfer are [{}]", StringUtils.join(rangesMM.keySet(), ","));
-
-            rangesToStream.put(keyspaceName, rangesMM);
-        }
-
-        setMode(Mode.LEAVING, "replaying batch log and streaming data to other nodes", true);
-
-        // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-        Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
-        Future<StreamState> streamSuccess = streamRanges(rangesToStream);
-
-        // Wait for batch log to complete before streaming hints.
-        logger.debug("waiting for batch log processing.");
-        try
-        {
-            batchlogReplay.get();
-        }
-        catch (ExecutionException | InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        setMode(Mode.LEAVING, "streaming hints to other nodes", true);
-
-        Future<StreamState> hintsSuccess = streamHints();
-
-        // wait for the transfer runnables to signal the latch.
-        logger.debug("waiting for stream acks.");
-        try
-        {
-            streamSuccess.get();
-            hintsSuccess.get();
-        }
-        catch (ExecutionException | InterruptedException e)
-        {
-            throw new RuntimeException(e);
-        }
-        logger.debug("stream acks all received.");
-        leaveRing();
-        onFinish.run();
-    }
+#endif
+private:
+    future<> unbootstrap();
+#if 0
 
     private Future<StreamState> streamHints()
     {
@@ -2437,6 +2285,7 @@ public:
         }
     }
 #endif
+public:
     /**
      * Remove a node that has died, attempting to restore the replica count.
      * If the node is alive, decommission should be attempted.  If decommission

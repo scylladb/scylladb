@@ -47,12 +47,17 @@
 #include "service/migration_manager.hh"
 #include "to_string.hh"
 #include "gms/gossiper.hh"
+#include "gms/failure_detector.hh"
 #include <seastar/core/thread.hh>
 #include <sstream>
 #include <algorithm>
 #include "locator/local_strategy.hh"
 #include "version.hh"
 #include "unimplemented.hh"
+#include "service/pending_range_calculator_service.hh"
+#include "streaming/stream_plan.hh"
+#include "streaming/stream_state.hh"
+#include "dht/range_streamer.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -246,7 +251,7 @@ void storage_service::join_token_ring(int delay) {
 #endif
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
-        //PendingRangeCalculatorService.instance.blockUntilFinished();
+        get_local_pending_range_calculator_service().block_until_finished().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 #if 0
@@ -418,7 +423,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
     // FIXME
-    // PendingRangeCalculatorService.instance.update();
+    get_local_pending_range_calculator_service().update().get();
 
     auto& gossiper = gms::get_local_gossiper();
     if (gossiper.uses_host_id(endpoint)) {
@@ -545,7 +550,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }).get();
     }
 
-    // PendingRangeCalculatorService.instance.update();
+    get_local_pending_range_calculator_service().update().get();
     if (logger.is_enabled(logging::log_level::debug)) {
         auto ver = _token_metadata.get_ring_version();
         for (auto& x : _token_metadata.get_token_to_endpoint()) {
@@ -579,8 +584,8 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // normally
 #if 0
     _token_metadata.addLeavingEndpoint(endpoint);
-    PendingRangeCalculatorService.instance.update();
 #endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -600,8 +605,8 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     logger.debug("Node {} state moving, new token {}", endpoint, token);
 #if 0
     _token_metadata.addMovingEndpoint(token, endpoint);
-    PendingRangeCalculatorService.instance.update();
 #endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
@@ -717,9 +722,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 void storage_service::on_remove(gms::inet_address endpoint) {
     logger.debug("on_remove endpoint={}", endpoint);
     _token_metadata.remove_endpoint(endpoint);
-#if 0
-    PendingRangeCalculatorService.instance.update();
-#endif
+    get_local_pending_range_calculator_service().update().get();
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -1332,115 +1335,121 @@ bool storage_service::is_native_transport_running() {
 
 future<> storage_service::decommission() {
     fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
-        throw new UnsupportedOperationException("local node is not a member of the token ring yet");
-    if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
-        throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
-
-    PendingRangeCalculatorService.instance.blockUntilFinished();
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
-            throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
-    }
-
-    if (logger.isDebugEnabled())
-        logger.debug("DECOMMISSIONING");
-    startLeaving();
-    long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-    setMode(Mode.LEAVING, "sleeping " + timeout + " ms for batch processing and pending range setup", true);
-    Thread.sleep(timeout);
-
-    Runnable finishLeaving = new Runnable()
-    {
-        public void run()
-        {
-            shutdownClientServers();
-            Gossiper.instance.stop();
-            MessagingService.instance().shutdown();
-            StageManager.shutdownNow();
-            setMode(Mode.DECOMMISSIONED, true);
-            // let op be responsible for killing the process
+    return seastar::async([this] {
+        if (!_token_metadata.is_member(get_broadcast_address())) {
+            throw std::runtime_error("local node is not a member of the token ring yet");
         }
-    };
-    unbootstrap(finishLeaving);
-#endif
-    return make_ready_future<>();
+
+        if (_token_metadata.clone_after_all_left().sorted_tokens().size() < 2) {
+            throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
+        }
+
+        get_local_pending_range_calculator_service().block_until_finished().get();
+
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            if (_token_metadata.get_pending_ranges(keyspace_name, get_broadcast_address()).size() > 0) {
+                throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+            }
+        }
+
+        logger.debug("DECOMMISSIONING");
+        // FIXME: startLeaving();
+        // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
+        long timeout = get_ring_delay();
+        set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
+        sleep(std::chrono::milliseconds(timeout)).get();
+
+        unbootstrap().finally([this] {
+            // FIXME: proper shutdown
+            // shutdownClientServers();
+            gms::get_local_gossiper().stop();
+            // MessagingService.instance().shutdown();
+            // StageManager.shutdownNow();
+            set_mode(mode::DECOMMISSIONED, true);
+            // let op be responsible for killing the process
+        }).get();
+    });
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
     fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    InetAddress myAddress = FBUtilities.getBroadcastAddress();
-    UUID localHostId = _token_metadata.getHostId(myAddress);
-    UUID hostId = UUID.fromString(hostIdString);
-    InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
-
-    if (endpoint == null)
-        throw new UnsupportedOperationException("Host ID not found.");
-
-    Collection<Token> tokens = _token_metadata.getTokens(endpoint);
-
-    if (endpoint.equals(myAddress))
-         throw new UnsupportedOperationException("Cannot remove self");
-
-    if (Gossiper.instance.getLiveMembers().contains(endpoint))
-        throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
-
-    // A leaving endpoint that is dead is already being removed.
-    if (_token_metadata.isLeaving(endpoint))
-        logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-
-    if (!replicatingNodes.isEmpty())
-        throw new UnsupportedOperationException("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-
-    // Find the endpoints that are going to become responsible for data
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-        if (Keyspace.open(keyspaceName).getReplicationStrategy().getReplicationFactor() == 1)
-            continue;
-
-        // get all ranges that change ownership (that is, a node needs
-        // to take responsibility for new range)
-        Multimap<Range<Token>, InetAddress> changedRanges = getChangedRangesForLeaving(keyspaceName, endpoint);
-        IFailureDetector failureDetector = FailureDetector.instance;
-        for (InetAddress ep : changedRanges.values())
-        {
-            if (failureDetector.isAlive(ep))
-                replicatingNodes.add(ep);
-            else
-                logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+    return seastar::async([this, host_id_string] {
+        auto my_address = get_broadcast_address();
+        auto local_host_id = _token_metadata.get_host_id(my_address);
+        auto host_id = utils::UUID(host_id_string);
+        auto endpoint_opt = _token_metadata.get_endpoint_for_host_id(host_id);
+        auto& gossiper = gms::get_local_gossiper();
+        if (!endpoint_opt) {
+            throw std::runtime_error("Host ID not found.");
         }
-    }
-    removingNode = endpoint;
+        auto endpoint = *endpoint_opt;
 
-    _token_metadata.addLeavingEndpoint(endpoint);
-    PendingRangeCalculatorService.instance.update();
+        auto tokens = _token_metadata.get_tokens(endpoint);
 
-    // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-    // we add our own token so other nodes to let us know when they're done
-    Gossiper.instance.advertiseRemoving(endpoint, hostId, localHostId);
+        if (endpoint == my_address) {
+            throw std::runtime_error("Cannot remove self");
+        }
 
-    // kick off streaming commands
-    restoreReplicaCount(endpoint, myAddress);
+        if (gossiper.get_live_members().count(endpoint)) {
+            throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
+        }
 
-    // wait for ReplicationFinishedVerbHandler to signal we're done
-    while (!replicatingNodes.isEmpty())
-    {
-        Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-    }
+        // A leaving endpoint that is dead is already being removed.
+        if (_token_metadata.is_leaving(endpoint)) {
+            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+        }
 
-    excise(tokens, endpoint);
+        if (!_replicating_nodes.empty()) {
+            throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
+        }
 
-    // gossiper will indicate the token has left
-    Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
+        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+        // Find the endpoints that are going to become responsible for data
+        for (const auto& keyspace_name : non_system_keyspaces) {
+            auto& ks = _db.local().find_keyspace(keyspace_name);
+            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+            if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                continue;
+            }
 
-    replicatingNodes.clear();
-    removingNode = null;
-#endif
-    return make_ready_future<>();
+            // get all ranges that change ownership (that is, a node needs
+            // to take responsibility for new range)
+            std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
+            auto fd = gms::get_local_failure_detector();
+            for (auto& x: changed_ranges) {
+                auto ep = x.second;
+                if (fd.is_alive(ep)) {
+                    _replicating_nodes.emplace(ep);
+                } else {
+                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                }
+            }
+        }
+        _removing_node = endpoint;
+        _token_metadata.add_leaving_endpoint(endpoint);
+        get_local_pending_range_calculator_service().update().get();
+
+        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+        // we add our own token so other nodes to let us know when they're done
+        gossiper.advertise_removing(endpoint, host_id, local_host_id);
+
+        // kick off streaming commands
+        // restoreReplicaCount(endpoint, myAddress);
+
+        // wait for ReplicationFinishedVerbHandler to signal we're done
+        while (!_replicating_nodes.empty()) {
+            sleep(std::chrono::milliseconds(100)).get();
+        }
+
+        // excise(tokens, endpoint);
+
+        // gossiper will indicate the token has left
+        gossiper.advertise_token_removed(endpoint, host_id);
+
+        _replicating_nodes.clear();
+        _removing_node = {};
+    });
 }
 
 future<> storage_service::drain() {
@@ -1557,34 +1566,30 @@ std::map<sstring, sstring> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
-    fail(unimplemented::cause::STORAGE_SERVICE);
+    using range_streamer = dht::range_streamer;
+    logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+    range_streamer streamer(_db, _token_metadata, get_broadcast_address(), "Rebuild");
+    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+    // FIXME: SingleDatacenterFilter
 #if 0
-    logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
-
-    RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
-    streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
-    if (sourceDc != null)
+    if (source_dc != "")
         streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
-
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-        streamer.addRanges(keyspaceName, getLocalRanges(keyspaceName));
-
-    try
-    {
-        streamer.fetchAsync().get();
-    }
-    catch (InterruptedException e)
-    {
-        throw new RuntimeException("Interrupted while waiting on rebuild streaming");
-    }
-    catch (ExecutionException e)
-    {
-        // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-        logger.error("Error while rebuilding node", e.getCause());
-        throw new RuntimeException("Error while rebuilding node: " + e.getCause().getMessage());
-    }
 #endif
-    return make_ready_future<>();
+
+    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
+        streamer.add_ranges(keyspace_name, get_local_ranges(keyspace_name));
+    }
+
+    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+        try {
+            auto state = f.get0();
+        } catch (...) {
+            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+            logger.error("Error while rebuilding node: {}", std::current_exception());
+            throw std::runtime_error(sprint("Error while rebuilding node: %s", std::current_exception()));
+        }
+        return make_ready_future<>();
+    });
 }
 
 int32_t storage_service::get_exception_count() {
@@ -1600,6 +1605,190 @@ future<bool> storage_service::is_initialized() {
     return smp::submit_to(0, [] {
         return get_local_storage_service()._initialized;
     });
+}
+
+std::unordered_multimap<range<token>, inet_address> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
+    return std::unordered_multimap<range<token>, inet_address>();
+    // First get all ranges the leaving endpoint is responsible for
+    auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
+
+    logger.debug("Node {} ranges [{}]", endpoint, ranges);
+
+    std::unordered_map<range<token>, std::vector<inet_address>> current_replica_endpoints;
+
+    // Find (for each range) all nodes that store replicas for these ranges as well
+    auto metadata = _token_metadata.clone_only_token_map(); // don't do this in the loop! #7758
+    for (auto& r : ranges) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), metadata);
+        current_replica_endpoints.emplace(r, std::move(eps));
+    }
+
+    auto temp = _token_metadata.clone_after_all_left();
+
+    // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
+    // command was used), it is still present in temp and must be removed.
+    if (temp.is_member(endpoint)) {
+        temp.remove_endpoint(endpoint);
+    }
+
+    std::unordered_multimap<range<token>, inet_address> changed_ranges;
+
+    // Go through the ranges and for each range check who will be
+    // storing replicas for these ranges when the leaving endpoint
+    // is gone. Whoever is present in newReplicaEndpoints list, but
+    // not in the currentReplicaEndpoints list, will be needing the
+    // range.
+    for (auto& r : ranges) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), temp);
+
+        auto rg = current_replica_endpoints.equal_range(r);
+        for (auto it = rg.first; it != rg.second; it++) {
+            logger.debug("Remove range={}, eps={} from new_replica_endpoints={}", it->first, it->second, new_replica_endpoints);
+            auto beg = new_replica_endpoints.begin();
+            auto end = new_replica_endpoints.end();
+            for (auto ep : it->second) {
+                new_replica_endpoints.erase(std::remove(beg, end, ep), end);
+            }
+        }
+
+        if (logger.is_enabled(logging::log_level::debug)) {
+            if (new_replica_endpoints.empty()) {
+                logger.debug("Range {} already in all replicas", r);
+            } else {
+                logger.debug("Range {} will be responsibility of {}", r, new_replica_endpoints);
+            }
+        }
+        for (auto& ep : new_replica_endpoints) {
+            changed_ranges.emplace(r, ep);
+        }
+    }
+
+    return changed_ranges;
+}
+
+future<> storage_service::unbootstrap() {
+    return make_ready_future<>();
+#if 0
+    Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<>();
+
+    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+    {
+        Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(keyspaceName, FBUtilities.getBroadcastAddress());
+
+        if (logger.isDebugEnabled())
+            logger.debug("Ranges needing transfer are [{}]", StringUtils.join(rangesMM.keySet(), ","));
+
+        rangesToStream.put(keyspaceName, rangesMM);
+    }
+
+    setMode(Mode.LEAVING, "replaying batch log and streaming data to other nodes", true);
+
+    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
+    Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
+    Future<StreamState> streamSuccess = streamRanges(rangesToStream);
+
+    // Wait for batch log to complete before streaming hints.
+    logger.debug("waiting for batch log processing.");
+    try
+    {
+        batchlogReplay.get();
+    }
+    catch (ExecutionException | InterruptedException e)
+    {
+        throw new RuntimeException(e);
+    }
+
+    setMode(Mode.LEAVING, "streaming hints to other nodes", true);
+
+    Future<StreamState> hintsSuccess = streamHints();
+
+    // wait for the transfer runnables to signal the latch.
+    logger.debug("waiting for stream acks.");
+    try
+    {
+        streamSuccess.get();
+        hintsSuccess.get();
+    }
+    catch (ExecutionException | InterruptedException e)
+    {
+        throw new RuntimeException(e);
+    }
+    logger.debug("stream acks all received.");
+    leaveRing();
+    onFinish.run();
+#endif
+}
+
+future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
+    using stream_plan = streaming::stream_plan;
+    std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> ranges_to_fetch;
+
+    auto my_address = get_broadcast_address();
+
+    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+    for (const auto& keyspace_name : non_system_keyspaces) {
+        std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
+        std::vector<range<token>> my_new_ranges;
+        for (auto& x : changed_ranges) {
+            if (x.second == my_address) {
+                my_new_ranges.emplace_back(x.first);
+            }
+        }
+        std::unordered_multimap<inet_address, range<token>> source_ranges = get_new_source_ranges(keyspace_name, my_new_ranges);
+        std::unordered_map<inet_address, std::vector<range<token>>> tmp;
+        for (auto& x : source_ranges) {
+            tmp[x.first].emplace_back(x.second);
+        }
+        ranges_to_fetch.emplace(keyspace_name, std::move(tmp));
+    }
+    stream_plan sp("Restore replica count", true);
+    for (auto& x: ranges_to_fetch) {
+        const sstring& keyspace_name = x.first;
+        std::unordered_map<inet_address, std::vector<range<token>>>& maps = x.second;
+        for (auto& m : maps) {
+            auto source = m.first;
+            auto ranges = m.second;
+            // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
+            auto preferred = source;
+            logger.debug("Requesting from {} ranges {}", source, ranges);
+            sp.request_ranges(source, preferred, keyspace_name, ranges);
+        }
+    }
+    return sp.execute().then_wrapped([this, notify_endpoint] (auto&& f) {
+        try {
+            auto state = f.get0();
+            this->send_replication_notification(notify_endpoint);
+        } catch (...) {
+            logger.warn("Streaming to restore replica count failed: {}", std::current_exception());
+            // We still want to send the notification
+            this->send_replication_notification(notify_endpoint);
+        }
+        return make_ready_future<>();
+    });
+}
+
+// Runs inside seastar::async context
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint) {
+    logger.info("Removing tokens {} for {}", tokens, endpoint);
+    // FIXME: HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
+    remove_endpoint(endpoint);
+    _token_metadata.remove_endpoint(endpoint);
+    _token_metadata.remove_bootstrap_tokens(tokens);
+
+    // FIXME: IEndpointLifecycleSubscriber
+#if 0
+    for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers) {
+        subscriber.onLeaveCluster(endpoint);
+    }
+#endif
+    get_local_pending_range_calculator_service().update().get();
+}
+
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time) {
+    // FIXME: addExpireTimeIfFound(endpoint, expireTime);
+    excise(tokens, endpoint);
 }
 
 } // namespace service
