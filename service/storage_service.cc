@@ -583,9 +583,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
-#if 0
-    _token_metadata.addLeavingEndpoint(endpoint);
-#endif
+    _token_metadata.add_leaving_endpoint(endpoint);
     get_local_pending_range_calculator_service().update().get();
 }
 
