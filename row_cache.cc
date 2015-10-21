@@ -193,7 +193,7 @@ class just_cache_scanning_reader final : public mutation_reader::impl {
     size_t _last_modification_count;
 private:
     void update_iterators() {
-        auto cmp = cache_entry::ring_position_compare(_cache._schema);
+        auto cmp = cache_entry::compare(_cache._schema);
         auto update_end = [&] {
             if (_range.end()) {
                 if (_range.end()->is_inclusive()) {
