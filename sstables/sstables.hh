@@ -503,6 +503,8 @@ public:
         return get_stats_metadata().sstable_level;
     }
 
+    future<> mutate_sstable_level(uint32_t);
+
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.

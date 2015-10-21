@@ -1569,6 +1569,34 @@ int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
     return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
 }
 
+future<> sstable::mutate_sstable_level(uint32_t new_level) {
+    if (!has_component(component_type::Statistics)) {
+        return make_ready_future<>();
+    }
+
+    auto entry = _statistics.contents.find(metadata_type::Stats);
+    if (entry == _statistics.contents.end()) {
+        return make_ready_future<>();
+    }
+
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Statistics is malformed");
+    }
+    stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+    if (s.sstable_level == new_level) {
+        return make_ready_future<>();
+    }
+
+    s.sstable_level = new_level;
+    // Technically we don't have to write the whole file again. But the assumption that
+    // we will always write sequentially is a powerful one, and this does not merit an
+    // exception.
+    return seastar::async([this] {
+        write_statistics();
+    });
+}
+
 int sstable::compare_by_max_timestamp(const sstable& other) const {
     auto ts1 = get_stats_metadata().max_timestamp;
     auto ts2 = other.get_stats_metadata().max_timestamp;
