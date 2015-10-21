@@ -1458,15 +1458,15 @@ future<> storage_service::decommission() {
         set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
         sleep(std::chrono::milliseconds(timeout)).get();
 
-        unbootstrap().finally([this] {
-            // FIXME: proper shutdown
-            // shutdownClientServers();
-            gms::get_local_gossiper().stop();
-            // MessagingService.instance().shutdown();
-            // StageManager.shutdownNow();
-            set_mode(mode::DECOMMISSIONED, true);
-            // let op be responsible for killing the process
-        }).get();
+        unbootstrap();
+
+        // FIXME: proper shutdown
+        // shutdownClientServers();
+        gms::get_local_gossiper().stop();
+        // MessagingService.instance().shutdown();
+        // StageManager.shutdownNow();
+        set_mode(mode::DECOMMISSIONED, true);
+        // let op be responsible for killing the process
     });
 }
 
@@ -1766,27 +1766,29 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
     return changed_ranges;
 }
 
-future<> storage_service::unbootstrap() {
-    return make_ready_future<>();
-#if 0
-    Map<String, Multimap<Range<Token>, InetAddress>> rangesToStream = new HashMap<>();
+// Runs inside seastar::async context
+void storage_service::unbootstrap() {
+    std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream;
 
-    for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
-    {
-        Multimap<Range<Token>, InetAddress> rangesMM = getChangedRangesForLeaving(keyspaceName, FBUtilities.getBroadcastAddress());
-
-        if (logger.isDebugEnabled())
-            logger.debug("Ranges needing transfer are [{}]", StringUtils.join(rangesMM.keySet(), ","));
-
-        rangesToStream.put(keyspaceName, rangesMM);
+    auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
+    for (const auto& keyspace_name : non_system_keyspaces) {
+        auto ranges_mm = get_changed_ranges_for_leaving(keyspace_name, get_broadcast_address());
+        if (logger.is_enabled(logging::log_level::debug)) {
+            std::vector<range<token>> ranges;
+            for (auto& x : ranges_mm) {
+                ranges.push_back(x.first);
+            }
+            logger.debug("Ranges needing transfer are [{}]", ranges);
+        }
+        ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
     }
 
-    setMode(Mode.LEAVING, "replaying batch log and streaming data to other nodes", true);
+    set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
 
     // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-    Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
-    Future<StreamState> streamSuccess = streamRanges(rangesToStream);
-
+    // FIXME: Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
+    auto stream_success = stream_ranges(ranges_to_stream);
+#if 0
     // Wait for batch log to complete before streaming hints.
     logger.debug("waiting for batch log processing.");
     try
@@ -1797,26 +1799,23 @@ future<> storage_service::unbootstrap() {
     {
         throw new RuntimeException(e);
     }
+#endif
 
-    setMode(Mode.LEAVING, "streaming hints to other nodes", true);
+    set_mode(mode::LEAVING, "streaming hints to other nodes", true);
 
-    Future<StreamState> hintsSuccess = streamHints();
+    auto hints_success = stream_hints();
 
     // wait for the transfer runnables to signal the latch.
     logger.debug("waiting for stream acks.");
-    try
-    {
-        streamSuccess.get();
-        hintsSuccess.get();
-    }
-    catch (ExecutionException | InterruptedException e)
-    {
-        throw new RuntimeException(e);
+    try {
+        auto stream_state = stream_success.get0();
+        auto hints_state = hints_success.get0();
+    } catch (...) {
+        logger.warn("unbootstrap fails to stream : {}", std::current_exception());
+        throw;
     }
     logger.debug("stream acks all received.");
-    leaveRing();
-    onFinish.run();
-#endif
+    leave_ring();
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {

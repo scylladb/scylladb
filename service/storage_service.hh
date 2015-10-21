@@ -1890,7 +1890,7 @@ public:
 
 private:
     void leave_ring();
-    future<> unbootstrap();
+    void unbootstrap();
     future<streaming::stream_state> stream_hints();
 #if 0
 
