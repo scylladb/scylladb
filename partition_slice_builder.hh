@@ -50,6 +50,7 @@ public:
     partition_slice_builder& with_regular_column(bytes name);
     partition_slice_builder& with_no_regular_columns();
     partition_slice_builder& with_range(query::clustering_range range);
+    partition_slice_builder& reversed();
 
     query::partition_slice build();
 };
