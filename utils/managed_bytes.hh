@@ -85,7 +85,7 @@ public:
             _u.small.size = size;
         } else {
             _u.small.size = -1;
-            void* p = current_allocator().alloc(standard_migrator<blob_storage>,
+            void* p = current_allocator().alloc(&standard_migrator<blob_storage>::object,
                 sizeof(blob_storage) + size, alignof(blob_storage));
             new (p) blob_storage(&_u.ptr, size);
         }
