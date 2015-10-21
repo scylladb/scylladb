@@ -1536,7 +1536,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
         gossiper.advertise_removing(endpoint, host_id, local_host_id);
 
         // kick off streaming commands
-        // restoreReplicaCount(endpoint, myAddress);
+        restore_replica_count(endpoint, my_address).get();
 
         // wait for ReplicationFinishedVerbHandler to signal we're done
         while (!_replicating_nodes.empty()) {
