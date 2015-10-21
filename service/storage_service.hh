@@ -808,6 +808,9 @@ private:
 #endif
     }
 
+public:
+    void confirm_replication(inet_address node);
+
 private:
 
     /**
@@ -816,6 +819,7 @@ private:
      * @param remote node to send notification to
      */
     void send_replication_notification(inet_address remote);
+
     /**
      * Called when an endpoint is removed from the ring. This function checks
      * whether this node becomes responsible for new ranges as a
@@ -2166,22 +2170,6 @@ public:
      */
     future<> remove_node(sstring host_id_string);
 
-#if 0
-    public void confirmReplication(InetAddress node)
-    {
-        // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
-        // but restarted before all 'replication finished' messages arrived. In that case, we'll
-        // still go ahead and acknowledge it.
-        if (!replicatingNodes.isEmpty())
-        {
-            replicatingNodes.remove(node);
-        }
-        else
-        {
-            logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
-        }
-    }
-#endif
     future<sstring> get_operation_mode();
 
     future<bool> is_starting();

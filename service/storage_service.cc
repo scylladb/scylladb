@@ -1914,6 +1914,17 @@ void storage_service::send_replication_notification(inet_address remote) {
 #endif
 }
 
+void storage_service::confirm_replication(inet_address node) {
+    // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
+    // but restarted before all 'replication finished' messages arrived. In that case, we'll
+    // still go ahead and acknowledge it.
+    if (!_replicating_nodes.empty()) {
+        _replicating_nodes.erase(node);
+    } else {
+        logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
+    }
+}
+
 // Runs inside seastar::async context
 void storage_service::leave_ring() {
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
