@@ -280,6 +280,7 @@ public:
                         if (cmp) {
                             _next_key = std::move(dk);
                         }
+                        _cache.on_hit();
                         return make_ready_future<mutation_opt>(std::move(mo));
                     }
                 }
@@ -306,11 +307,13 @@ private:
                 _range = _original_range.split_after(_next_primary->decorated_key(), cmp);
                 _keys = _underlying_keys(_range);
                 _secondary_only = false;
+                _cache.on_hit();
                 return std::move(_next_primary);
             }
             if (mo) {
                 _cache.populate(*mo);
             }
+            _cache.on_miss();
             return std::move(mo);
         });
     }
