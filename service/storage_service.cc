@@ -58,6 +58,8 @@
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "dht/range_streamer.hh"
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1244,6 +1246,102 @@ future<> storage_service::stop_gossiping() {
         return make_ready_future<>();
     });
 }
+
+future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
+    auto& ks = db.find_keyspace(ks_name);
+    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
+        auto& cf = db.find_column_family(pair.second);
+        return cf.snapshot_exists(name).then([ks_name = std::move(ks_name), name] (bool exists) {
+            if (exists) {
+                throw std::runtime_error(sprint("Keyspace %s: snapshot %s already exists.", ks_name, name));
+            }
+        });
+    });
+}
+
+future<> storage_service::take_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+    if (tag.empty()) {
+        throw std::runtime_error("You must supply a snapshot name.");
+    }
+
+    if (keyspace_names.size() == 0) {
+        boost::copy(_db.local().get_keyspaces() | boost::adaptors::map_keys, std::back_inserter(keyspace_names));
+    };
+
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        if (mode == storage_service::mode::JOINING) {
+            throw std::runtime_error("Cannot snapshot until bootstrap completes");
+        }
+    }).then([tag = std::move(tag), keyspace_names = std::move(keyspace_names), this] {
+        return parallel_for_each(keyspace_names, [tag, this] (auto& ks_name) {
+            return check_snapshot_not_exist(_db.local(), ks_name, tag);
+        }).then([this, tag, keyspace_names] {
+            return _db.invoke_on_all([tag = std::move(tag), keyspace_names] (database& db) {
+                return parallel_for_each(keyspace_names, [&db, tag = std::move(tag)] (auto& ks_name) {
+                    auto& ks = db.find_keyspace(ks_name);
+                    return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, tag = std::move(tag)] (auto& pair) {
+                        auto& cf = db.find_column_family(pair.second);
+                        return cf.snapshot(tag);
+                    });
+                });
+            });
+        });
+    });
+}
+
+future<> storage_service::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag) {
+    if (ks_name.empty()) {
+        throw std::runtime_error("You must supply a keyspace name");
+    }
+    if (cf_name.empty()) {
+        throw std::runtime_error("You must supply a table name");
+    }
+    if (cf_name.find(".") != sstring::npos) {
+        throw std::invalid_argument("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
+    }
+
+    if (tag.empty()) {
+        throw std::runtime_error("You must supply a snapshot name.");
+    }
+
+    return smp::submit_to(0, [] {
+        auto mode = get_local_storage_service()._operation_mode;
+        if (mode == storage_service::mode::JOINING) {
+            throw std::runtime_error("Cannot snapshot until bootstrap completes");
+        }
+    }).then([this, ks_name = std::move(ks_name), cf_name = std::move(cf_name), tag = std::move(tag)] {
+        return check_snapshot_not_exist(_db.local(), ks_name, tag).then([this, ks_name, cf_name, tag] {
+            return _db.invoke_on_all([ks_name, cf_name, tag] (database &db) {
+                auto& cf = db.find_column_family(ks_name, cf_name);
+                return cf.snapshot(tag);
+            });
+        });
+    });
+}
+
+// For the filesystem operations, this code will assume that all keyspaces are visible in all shards
+// (as we have been doing for a lot of the other operations, like the snapshot itself).
+future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+    std::vector<std::reference_wrapper<keyspace>> keyspaces;
+    for (auto& ksname: keyspace_names) {
+        try {
+            keyspaces.push_back(std::reference_wrapper<keyspace>(_db.local().find_keyspace(ksname)));
+        } catch (no_such_keyspace& e) {
+            return make_exception_future(std::current_exception());
+        }
+    }
+
+    auto deleted_keyspaces = make_lw_shared<std::vector<sstring>>();
+    return parallel_for_each(keyspaces, [this, tag, deleted_keyspaces] (auto& ks) {
+        return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
+            auto& cf = _db.local().find_column_family(pair.second);
+            return cf.clear_snapshot(tag);
+         });
+    });
+    logger.debug("Cleared out snapshot directories");
+}
+
 
 future<> storage_service::start_rpc_server() {
     fail(unimplemented::cause::STORAGE_SERVICE);

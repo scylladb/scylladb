@@ -53,6 +53,7 @@
 #include "mutation_query.hh"
 #include "sstable_mutation_readers.hh"
 #include <core/fstream.hh>
+#include <seastar/core/enum.hh>
 #include "utils/latency.hh"
 #include "utils/flush_queue.hh"
 
@@ -336,14 +337,17 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 }
 
 class lister {
+public:
+    using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
+private:
     file _f;
     std::function<future<> (directory_entry de)> _walker;
-    directory_entry_type _expected_type;
+    dir_entry_types _expected_type;
     subscription<directory_entry> _listing;
     sstring _dirname;
 
 public:
-    lister(file f, directory_entry_type type, std::function<future<> (directory_entry)> walker, sstring dirname)
+    lister(file f, dir_entry_types type, std::function<future<> (directory_entry)> walker, sstring dirname)
             : _f(std::move(f))
             , _walker(std::move(walker))
             , _expected_type(type)
@@ -351,13 +355,13 @@ public:
             , _dirname(dirname) {
     }
 
-    static future<> scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker);
+    static future<> scan_dir(sstring name, dir_entry_types type, std::function<future<> (directory_entry)> walker);
 protected:
     future<> _visit(directory_entry de) {
 
         return guarantee_type(std::move(de)).then([this] (directory_entry de) {
             // Hide all synthetic directories and hidden files.
-            if ((de.type != _expected_type) || (de.name[0] == '.')) {
+            if ((!_expected_type.count(*(de.type))) || (de.name[0] == '.')) {
                 return make_ready_future<>();
             }
             return _walker(de);
@@ -380,8 +384,7 @@ private:
 };
 
 
-future<> lister::scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker) {
-
+future<> lister::scan_dir(sstring name, lister::dir_entry_types type, std::function<future<> (directory_entry)> walker) {
     return engine().open_directory(name).then([type, walker = std::move(walker), name] (file f) {
         auto l = make_lw_shared<lister>(std::move(f), type, walker, name);
         return l->done().then([l] { });
@@ -731,7 +734,7 @@ future<> column_family::populate(sstring sstdir) {
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
     auto descriptor = make_lw_shared<sstable_descriptor>();
 
-    return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir, verifier, descriptor] (directory_entry de) {
+    return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
         return probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
             if (verifier->count(entry.generation)) {
@@ -838,7 +841,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
         dblog.warn("Skipping undefined keyspace: {}", ks_name);
     } else {
         dblog.info("Populating Keyspace {}", ks_name);
-        return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
+        return lister::scan_dir(ksdir, { directory_entry_type::directory }, [this, ksdir, ks_name] (directory_entry de) {
             auto comps = parse_fname(de.name);
             if (comps.size() < 2) {
                 dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
@@ -863,7 +866,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
 }
 
 future<> database::populate(sstring datadir) {
-    return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
+    return lister::scan_dir(datadir, { directory_entry_type::directory }, [this, datadir] (directory_entry de) {
         auto& ks_name = de.name;
         if (ks_name == "system") {
             return make_ready_future<>();
@@ -1762,6 +1765,80 @@ future<> column_family::snapshot(sstring name) {
                     }).then([snapshot] {});
                 });
             });
+        });
+    });
+}
+
+future<bool> column_family::snapshot_exists(sstring tag) {
+    sstring jsondir = _config.datadir + "/snapshots/";
+    return engine().open_directory(std::move(jsondir)).then_wrapped([] (future<file> f) {
+        try {
+            f.get0();
+            return make_ready_future<bool>(true);
+        } catch (std::system_error& e) {
+            if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                throw;
+            }
+            return make_ready_future<bool>(false);
+        }
+    });
+}
+
+enum class missing { no, yes };
+static missing
+file_missing(future<> f) {
+    try {
+        f.get();
+        return missing::no;
+    } catch (std::system_error& e) {
+        if (e.code() != std::error_code(ENOENT, std::system_category())) {
+            throw;
+        }
+        return missing::yes;
+    }
+}
+
+future<> column_family::clear_snapshot(sstring tag) {
+    sstring jsondir = _config.datadir + "/snapshots/";
+    sstring parent = _config.datadir;
+    if (!tag.empty()) {
+        jsondir += tag;
+        parent += "/snapshots/";
+    }
+
+    lister::dir_entry_types dir_and_files = { directory_entry_type::regular, directory_entry_type::directory };
+    return lister::scan_dir(jsondir, dir_and_files, [this, curr_dir = jsondir, dir_and_files, tag] (directory_entry de) {
+        // FIXME: We really need a better directory walker. This should eventually be part of the seastar infrastructure.
+        // It's hard to write this in a fully recursive manner because we need to keep information about the parent directory,
+        // so we can remove the file. For now, we'll take advantage of the fact that we will at most visit 2 levels and keep
+        // it ugly but simple.
+        auto recurse = make_ready_future<>();
+        if (de.type == directory_entry_type::directory) {
+            // Should only recurse when tag is empty, meaning delete all snapshots
+            if (!tag.empty()) {
+                throw std::runtime_error(sprint("Unexpected directory %s found at %s! Aborting", de.name, curr_dir));
+            }
+            auto newdir = curr_dir + "/" + de.name;
+            recurse = lister::scan_dir(newdir, dir_and_files, [this, curr_dir = newdir] (directory_entry de) {
+                return remove_file(curr_dir + "/" + de.name);
+            });
+        }
+        return recurse.then([fname = curr_dir + "/" + de.name] {
+            return remove_file(fname);
+        });
+    }).then_wrapped([jsondir] (future<> f) {
+        // Fine if directory does not exist. If it did, we delete it
+        if (file_missing(std::move(f)) == missing::no) {
+            return remove_file(jsondir);
+        }
+        return make_ready_future<>();
+    }).then([parent] {
+        return sync_directory(parent).then_wrapped([] (future<> f) {
+            // Should always exist for empty tags, but may not exist for a single tag if we never took
+            // snapshots. We will check this here just to mask out the exception, without silencing
+            // unexpected ones.
+            file_missing(std::move(f));
+            return make_ready_future<>();
         });
     });
 }

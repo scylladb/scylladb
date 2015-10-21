@@ -984,41 +984,23 @@ public:
         }
     }
 
+#endif
+    /**
+     * Takes the snapshot for all keyspaces. A snapshot name must be specified.
+     *
+     * @param tag the tag given to the snapshot; may not be null or empty
+     */
+    future<> take_snapshot(sstring tag) {
+        return take_snapshot(tag, {});
+    }
+
     /**
      * Takes the snapshot for the given keyspaces. A snapshot name must be specified.
      *
      * @param tag the tag given to the snapshot; may not be null or empty
      * @param keyspaceNames the names of the keyspaces to snapshot; empty means "all."
      */
-    public void takeSnapshot(String tag, String... keyspaceNames) throws IOException
-    {
-        if (operationMode == Mode.JOINING)
-            throw new IOException("Cannot snapshot until bootstrap completes");
-        if (tag == null || tag.equals(""))
-            throw new IOException("You must supply a snapshot name.");
-
-        Iterable<Keyspace> keyspaces;
-        if (keyspaceNames.length == 0)
-        {
-            keyspaces = Keyspace.all();
-        }
-        else
-        {
-            ArrayList<Keyspace> t = new ArrayList<>(keyspaceNames.length);
-            for (String keyspaceName : keyspaceNames)
-                t.add(getValidKeyspace(keyspaceName));
-            keyspaces = t;
-        }
-
-        // Do a check to see if this snapshot exists before we actually snapshot
-        for (Keyspace keyspace : keyspaces)
-            if (keyspace.snapshotExists(tag))
-                throw new IOException("Snapshot " + tag + " already exists.");
-
-
-        for (Keyspace keyspace : keyspaces)
-            keyspace.snapshot(tag, null);
-    }
+    future<> take_snapshot(sstring tag, std::vector<sstring> keyspace_names);
 
     /**
      * Takes the snapshot of a specific column family. A snapshot name must be specified.
@@ -1027,27 +1009,8 @@ public:
      * @param columnFamilyName the column family to snapshot
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    public void takeColumnFamilySnapshot(String keyspaceName, String columnFamilyName, String tag) throws IOException
-    {
-        if (keyspaceName == null)
-            throw new IOException("You must supply a keyspace name");
-        if (operationMode == Mode.JOINING)
-            throw new IOException("Cannot snapshot until bootstrap completes");
-
-        if (columnFamilyName == null)
-            throw new IOException("You must supply a table name");
-        if (columnFamilyName.contains("."))
-            throw new IllegalArgumentException("Cannot take a snapshot of a secondary index by itself. Run snapshot on the table that owns the index.");
-
-        if (tag == null || tag.equals(""))
-            throw new IOException("You must supply a snapshot name.");
-
-        Keyspace keyspace = getValidKeyspace(keyspaceName);
-        if (keyspace.snapshotExists(tag))
-            throw new IOException("Snapshot " + tag + " already exists.");
-
-        keyspace.snapshot(tag, columnFamilyName);
-    }
+    future<> take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag);
+#if 0
 
     private Keyspace getValidKeyspace(String keyspaceName) throws IOException
     {
@@ -1057,34 +1020,14 @@ public:
         }
         return Keyspace.open(keyspaceName);
     }
+#endif
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
      * If no tag is specified we will remove all snapshots.
      */
-    public void clearSnapshot(String tag, String... keyspaceNames) throws IOException
-    {
-        if(tag == null)
-            tag = "";
-
-        Set<String> keyspaces = new HashSet<>();
-        for (String dataDir : DatabaseDescriptor.getAllDataFileLocations())
-        {
-            for(String keyspaceDir : new File(dataDir).list())
-            {
-                // Only add a ks if it has been specified as a param, assuming params were actually provided.
-                if (keyspaceNames.length > 0 && !Arrays.asList(keyspaceNames).contains(keyspaceDir))
-                    continue;
-                keyspaces.add(keyspaceDir);
-            }
-        }
-
-        for (String keyspace : keyspaces)
-            Keyspace.clearSnapshot(tag, keyspace);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Cleared out snapshot directories");
-    }
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
+#if 0
 
     public Map<String, TabularData> getSnapshotDetails()
     {

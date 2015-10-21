@@ -196,20 +196,32 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::take_snapshot.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         auto tag = req->get_query_param("tag");
-        auto keyname = req->get_query_param("kn");
         auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>(json_void());
+
+        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
+
+        auto resp = make_ready_future<>();
+        if (column_family.empty()) {
+            resp = service::get_local_storage_service().take_snapshot(tag, keynames);
+        } else {
+            if (keynames.size() > 1) {
+                throw httpd::bad_param_exception("Only one keyspace allowed when specifying a column family");
+            }
+            resp = service::get_local_storage_service().take_column_family_snapshot(keynames[0], column_family, tag);
+        }
+        return resp.then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::del_snapshot.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         auto tag = req->get_query_param("tag");
-        auto keyname = req->get_query_param("kn");
-        return make_ready_future<json::json_return_type>(json_void());
+
+        std::vector<sstring> keynames = split(req->get_query_param("kn"), ",");
+        return service::get_local_storage_service().clear_snapshot(tag, keynames).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {

@@ -219,7 +219,10 @@ public:
     // Compact all sstables provided in the vector.
     future<> compact_sstables(sstables::compaction_descriptor descriptor);
 
+    future<bool> snapshot_exists(sstring name);
+
     future<> snapshot(sstring name);
+    future<> clear_snapshot(sstring name);
 
     const bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
