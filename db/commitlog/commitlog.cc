@@ -628,13 +628,19 @@ public:
     bool is_still_allocating() const {
         return !_closed && position() < _segment_manager->max_size;
     }
-    bool is_clean() {
+    bool is_clean() const {
         return _cf_dirty.empty();
     }
-    bool is_unused() {
+    bool is_unused() const {
         return !is_still_allocating() && is_clean();
     }
-    bool contains(const replay_position& pos) {
+    bool is_flushed() const {
+        return position() <= _flush_pos;
+    }
+    bool can_delete() const {
+        return is_unused() && is_flushed();
+    }
+    bool contains(const replay_position& pos) const {
         return pos.id == _desc.id;
     }
     sstring get_segment_name() const {
@@ -893,14 +899,16 @@ std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
 
 void db::commitlog::segment_manager::discard_unused_segments() {
     auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto& s) {
-        if (s->is_unused()) {
+        if (s->can_delete()) {
             logger.debug("Segment {} is unused", *s);
             return true;
         }
         if (s->is_still_allocating()) {
             logger.debug("Not safe to delete segment {}; still allocating.", s);
-        } else {
+        } else if (!s->is_clean()) {
             logger.debug("Not safe to delete segment {}; dirty is {}", s, segment::cf_mark {*s});
+        } else {
+            logger.debug("Not safe to delete segment {}; disk ops pending", s);
         }
         return false;
     });
@@ -942,11 +950,13 @@ future<> db::commitlog::segment_manager::clear() {
     _shutdown = true;
     _timer.cancel();
     flush_segments(true);
-    return sync_all_segments().then([this] {
-        for (auto& s : _segments) {
-            s->mark_clean();
-        }
-       _segments.clear();
+    return shutdown().then([this] {
+        return sync_all_segments().then([this] {
+            for (auto& s : _segments) {
+                s->mark_clean();
+            }
+           _segments.clear();
+        });
     });
 }
 /**
