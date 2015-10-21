@@ -896,12 +896,12 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                         }()) {
         }
 
-        future<> send_batchlog_mutation(mutation m) {
-            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+        future<> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
+            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
-            }).then([this] (std::vector<response_id_type> ids) {
-                return _p.mutate_begin(std::move(ids), db::consistency_level::ONE, _local_dc);
+            }).then([this, cl] (std::vector<response_id_type> ids) {
+                return _p.mutate_begin(std::move(ids), cl, _local_dc);
             });
         }
         future<> sync_write_to_batchlog() {
@@ -916,7 +916,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             mutation m(key, schema);
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
 
-            send_batchlog_mutation(std::move(m));
+            send_batchlog_mutation(std::move(m), db::consistency_level::ANY);
         };
 
         future<> run() {
@@ -930,8 +930,8 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                         boost::for_each(ids, std::bind(&storage_proxy::remove_response_handler, &_p, std::placeholders::_1));
                         throw;
                     }
-                });
-            }).finally(std::bind(&context::async_remove_from_batchlog, this));
+                }).then(std::bind(&context::async_remove_from_batchlog, this));
+            });
         }
     };
 
