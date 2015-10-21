@@ -627,18 +627,24 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
             // excise(removeTokens, endpoint, extractExpireTime(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
-#if 0
+            auto& gossiper = gms::get_local_gossiper();
             logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
-
             // Note that the endpoint is being removed
-            _token_metadata.addLeavingEndpoint(endpoint);
-            PendingRangeCalculatorService.instance.update();
+            _token_metadata.add_leaving_endpoint(endpoint);
+            get_local_pending_range_calculator_service().update().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
-            String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
-            UUID hostId = UUID.fromString(coordinator[1]);
+            auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+            assert(state);
+            auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
+            assert(value);
+            std::vector<sstring> coordinator;
+            boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+            assert(coordinator.size() == 2);
+            UUID host_id(coordinator[1]);
             // grab any data we are now responsible for and notify responsible node
-            restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
-#endif
+            auto ep = _token_metadata.get_endpoint_for_host_id(host_id);
+            assert(ep);
+            restore_replica_count(endpoint, ep.value()).get();
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
