@@ -1926,4 +1926,43 @@ void storage_service::leave_ring() {
     sleep(delay).get();
 }
 
+future<streaming::stream_state>
+storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace) {
+    using stream_plan = streaming::stream_plan;
+    // First, we build a list of ranges to stream to each host, per table
+    std::unordered_map<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> sessions_to_stream_by_keyspace;
+    for (auto& entry : ranges_to_stream_by_keyspace) {
+        const auto& keyspace = entry.first;
+        auto& ranges_with_endpoints = entry.second;
+
+        if (ranges_with_endpoints.empty()) {
+            continue;
+        }
+
+        std::unordered_map<inet_address, std::vector<range<token>>> ranges_per_endpoint;
+        for (auto& end_point_entry : ranges_with_endpoints) {
+            range<token> r = end_point_entry.first;
+            inet_address endpoint = end_point_entry.second;
+            ranges_per_endpoint[endpoint].emplace_back(r);
+        }
+        sessions_to_stream_by_keyspace.emplace(keyspace, std::move(ranges_per_endpoint));
+    }
+    stream_plan sp("Unbootstrap", true);
+    for (auto& entry : sessions_to_stream_by_keyspace) {
+        const auto& keyspace_name = entry.first;
+        // TODO: we can move to avoid copy of std::vector
+        auto& ranges_per_endpoint = entry.second;
+
+        for (auto& ranges_entry : ranges_per_endpoint) {
+            auto& ranges = ranges_entry.second;
+            auto new_endpoint = ranges_entry.first;
+            auto preferred = new_endpoint; // FIXME: SystemKeyspace.getPreferredIP(newEndpoint);
+
+            // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
+            sp.transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
+        }
+    }
+    return sp.execute();
+}
+
 } // namespace service
