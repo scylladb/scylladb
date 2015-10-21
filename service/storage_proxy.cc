@@ -897,11 +897,11 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         }
 
         future<> send_batchlog_mutation(mutation m) {
-            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, _cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, db::consistency_level::ONE, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
             }).then([this] (std::vector<response_id_type> ids) {
-                return _p.mutate_begin(std::move(ids), _cl, _local_dc);
+                return _p.mutate_begin(std::move(ids), db::consistency_level::ONE, _local_dc);
             });
         }
         future<> sync_write_to_batchlog() {
