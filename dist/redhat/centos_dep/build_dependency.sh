@@ -46,6 +46,7 @@ sudo yum install -y python-devel libicu-devel openmpi-devel mpich-devel libstdc+
 sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc libstdc++-static gmp-devel texinfo texinfo-tex systemtap-sdt-devel mpfr-devel libmpc-devel elfutils-devel elfutils-libelf-devel glibc-devel.x86_64 glibc-devel.i686 gcc-gnat libgnat doxygen graphviz dblatex texlive-collection-latex docbook5-style-xsl python-sphinx cmake
 sudo yum install -y gcc-objc
 sudo yum install -y asciidoc
+sudo yum install -y gettext
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
     cd dist/redhat/centos_dep
