@@ -241,9 +241,9 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::true_snapshots_size.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+        return service::get_local_storage_service().true_snapshots_size().then([] (int64_t size) {
+            return make_ready_future<json::json_return_type>(size);
+        });
     });
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
