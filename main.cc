@@ -153,6 +153,8 @@ private:
         _locks;
 };
 
+class bad_configuration_error : public std::exception {};
+
 int main(int ac, char** av) {
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
@@ -204,6 +206,17 @@ int main(int ac, char** av) {
             sstring rpc_address = cfg->rpc_address();
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             auto seed_provider= cfg->seed_provider();
+            sstring broadcast_address = cfg->broadcast_address();
+
+            if (!broadcast_address.empty()) {
+                utils::fb_utilities::set_broadcast_address(broadcast_address);
+            } else if (!listen_address.empty()) {
+                utils::fb_utilities::set_broadcast_address(listen_address);
+            } else {
+                startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
+                throw bad_configuration_error();
+            }
+
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 // #293 - do not stop anything

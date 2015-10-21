@@ -51,28 +51,28 @@ using inet_address = gms::inet_address;
 
 // FIXME: stub
 class fb_utilities {
+private:
+    static std::experimental::optional<inet_address>& broadcast_address() {
+        static std::experimental::optional<inet_address> broadcast_inet_address;
+
+        return broadcast_inet_address;
+    }
 public:
    static const int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
 
+   static void set_broadcast_address(inet_address addr) {
+       broadcast_address() = addr;
+   }
+
    static const inet_address get_broadcast_address() {
-       static std::experimental::optional<inet_address> broadcast_inet_address;
 #if 0
         if (_broadcast_inet_address == nullptr)
             _broadcast_inet_address = DatabaseDescriptor.getBroadcastAddress() == nullptr
                                  ? getLocalAddress()
                                  : DatabaseDescriptor.getBroadcastAddress();
-#else
-       // TODO: Remove this when database_descriptor is implemented
-       if (!broadcast_inet_address) {
-           if (net::get_messaging_service().local_is_initialized()) {
-               broadcast_inet_address =
-                            net::get_local_messaging_service().listen_address();
-           } else {
-               return inet_address("127.0.0.1");
-           }
-       }
 #endif
-       return broadcast_inet_address.value();
+       assert(broadcast_address());
+       return *broadcast_address();
    }
 };
 }
