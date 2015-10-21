@@ -575,9 +575,21 @@ public:
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 private:
-    uint32_t do_compact(const schema& s, gc_clock::time_point now,
-        const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit,
+    uint32_t do_compact(const schema& s,
+        gc_clock::time_point now,
+        const std::vector<query::clustering_range>& row_ranges,
+        bool reverse,
+        uint32_t row_limit,
         api::timestamp_type max_purgeable);
+
+    // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
+    // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
+    // If reversed is true, func will be called on entries in reverse order. In that case row_ranges
+    // must be already in reverse order.
+    template<bool reversed, typename Func>
+    void trim_rows(const schema& s,
+        const std::vector<query::clustering_range>& row_ranges,
+        Func&& func);
 public:
     // Performs the following:
     //   - throws out data which doesn't belong to row_ranges
@@ -596,7 +608,7 @@ public:
     // The row_limit parameter must be > 0.
     //
     uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
-        const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit);
+        const std::vector<query::clustering_range>& row_ranges, bool reversed, uint32_t row_limit);
 
     // Performs the following:
     //   - expires cells based on compaction_time

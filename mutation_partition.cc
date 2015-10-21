@@ -23,6 +23,70 @@
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
 
+template<bool reversed>
+struct reversion_traits;
+
+template<>
+struct reversion_traits<false> {
+    template <typename Container>
+    static auto begin(Container& c) {
+        return c.begin();
+    }
+
+    template <typename Container>
+    static auto end(Container& c) {
+        return c.end();
+    }
+
+    template <typename Container, typename Disposer>
+    static typename Container::iterator erase_and_dispose(Container& c,
+        typename Container::iterator begin,
+        typename Container::iterator end,
+        Disposer disposer)
+    {
+        return c.erase_and_dispose(begin, end, std::move(disposer));
+    }
+
+    template <typename Container>
+    static boost::iterator_range<typename Container::iterator> maybe_reverse(
+        Container& c, boost::iterator_range<typename Container::iterator> r)
+    {
+        return r;
+    }
+};
+
+template<>
+struct reversion_traits<true> {
+    template <typename Container>
+    static auto begin(Container& c) {
+        return c.rbegin();
+    }
+
+    template <typename Container>
+    static auto end(Container& c) {
+        return c.rend();
+    }
+
+    template <typename Container, typename Disposer>
+    static typename Container::reverse_iterator erase_and_dispose(Container& c,
+        typename Container::reverse_iterator begin,
+        typename Container::reverse_iterator end,
+        Disposer disposer)
+    {
+        return typename Container::reverse_iterator(
+            c.erase_and_dispose(end.base(), begin.base(), disposer)
+        );
+    }
+
+    template <typename Container>
+    static boost::iterator_range<typename Container::reverse_iterator> maybe_reverse(
+        Container& c, boost::iterator_range<typename Container::iterator> r)
+    {
+        using reverse_iterator = typename Container::reverse_iterator;
+        return boost::make_iterator_range(reverse_iterator(r.end()), reverse_iterator(r.begin()));
+    }
+};
+
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
         , _static_row(x._static_row)
@@ -570,11 +634,55 @@ row::find_cell(column_id id) const {
     }
 }
 
-uint32_t mutation_partition::do_compact(const schema& s, gc_clock::time_point query_time,
-    const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit, api::timestamp_type max_purgeable)
+template <typename Container>
+boost::iterator_range<typename Container::iterator>
+unconst(Container& c, boost::iterator_range<typename Container::const_iterator> r) {
+    return boost::make_iterator_range(
+        c.erase(r.begin(), r.begin()),
+        c.erase(r.end(), r.end())
+    );
+}
+
+template<bool reversed, typename Func>
+void mutation_partition::trim_rows(const schema& s,
+    const std::vector<query::clustering_range>& row_ranges,
+    Func&& func)
+{
+    static_assert(std::is_same<stop_iteration, std::result_of_t<Func(rows_entry&)>>::value, "Bad func signature");
+
+    bool stop = false;
+    auto last = reversion_traits<reversed>::begin(_rows);
+    auto deleter = current_deleter<rows_entry>();
+
+    for (auto&& row_range : row_ranges) {
+        if (stop) {
+            break;
+        }
+
+        auto it_range = reversion_traits<reversed>::maybe_reverse(_rows, unconst(_rows, range(s, row_range)));
+        last = reversion_traits<reversed>::erase_and_dispose(_rows, last, it_range.begin(), deleter);
+
+        while (last != it_range.end()) {
+            rows_entry& e = *last;
+            if (func(e) == stop_iteration::yes) {
+                stop = true;
+                break;
+            }
+            ++last;
+        }
+    }
+
+    reversion_traits<reversed>::erase_and_dispose(_rows, last, reversion_traits<reversed>::end(_rows), deleter);
+}
+
+uint32_t mutation_partition::do_compact(const schema& s,
+    gc_clock::time_point query_time,
+    const std::vector<query::clustering_range>& row_ranges,
+    bool reverse,
+    uint32_t row_limit,
+    api::timestamp_type max_purgeable)
 {
     assert(row_limit > 0);
-    bool stop = false;
 
     auto gc_before = query_time - s.gc_grace_seconds();
 
@@ -583,44 +691,37 @@ uint32_t mutation_partition::do_compact(const schema& s, gc_clock::time_point qu
 
     uint32_t row_count = 0;
 
-    auto last = _rows.begin();
-    for (auto&& row_range : row_ranges) {
-        if (stop) {
-            break;
-        }
+    auto row_callback = [&] (rows_entry& e) {
+        deletable_row& row = e.row();
 
-        auto it_range = range(s, row_range);
-        last = _rows.erase_and_dispose(last, it_range.begin(), current_deleter<rows_entry>());
+        tombstone tomb = tombstone_for_row(s, e);
 
-        while (last != it_range.end()) {
-            rows_entry& e = *last;
-            deletable_row& row = e.row();
+        bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
+        is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
 
-            tombstone tomb = tombstone_for_row(s, e);
-
-            bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
-            is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
-
-            // when row_limit is reached, do not exit immediately,
-            // iterate to the next live_row instead to include trailing
-            // tombstones in the mutation. This is how Origin deals with
-            // https://issues.apache.org/jira/browse/CASSANDRA-8933
-            if (is_live) {
-                if (row_count == row_limit) {
-                    stop = true;
-                    break;
-                }
-                ++row_count;
+        // when row_limit is reached, do not exit immediately,
+        // iterate to the next live_row instead to include trailing
+        // tombstones in the mutation. This is how Origin deals with
+        // https://issues.apache.org/jira/browse/CASSANDRA-8933
+        if (is_live) {
+            if (row_count == row_limit) {
+                return stop_iteration::yes;
             }
-            ++last;
+            ++row_count;
         }
+
+        return stop_iteration::no;
+    };
+
+    if (reverse) {
+        trim_rows<true>(s, row_ranges, row_callback);
+    } else {
+        trim_rows<false>(s, row_ranges, row_callback);
     }
 
     if (row_count == 0 && static_row_live) {
         ++row_count;
     }
-
-    _rows.erase_and_dispose(last, _rows.end(), current_deleter<rows_entry>());
 
     auto can_purge_tombstone = [&] (const tombstone& t) {
         return t.timestamp < max_purgeable && t.deletion_time < gc_before;
@@ -648,9 +749,10 @@ mutation_partition::compact_for_query(
     const schema& s,
     gc_clock::time_point query_time,
     const std::vector<query::clustering_range>& row_ranges,
+    bool reverse,
     uint32_t row_limit)
 {
-    return do_compact(s, query_time, row_ranges, row_limit, api::max_timestamp);
+    return do_compact(s, query_time, row_ranges, reverse, row_limit, api::max_timestamp);
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
@@ -660,7 +762,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
         query::clustering_range::make_open_ended_both_sides()
     };
 
-    do_compact(s, compaction_time, all_rows, query::max_rows, max_purgeable);
+    do_compact(s, compaction_time, all_rows, false, query::max_rows, max_purgeable);
 }
 
 // Returns true if there is no live data or tombstones.
