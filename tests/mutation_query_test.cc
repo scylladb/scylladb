@@ -171,6 +171,201 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
     });
 }
 
+SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto now = gc_clock::now();
+
+        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", bytes("A_v1"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", bytes("B_v1"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", bytes("C_v1"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("D")), "v1", bytes("D_v1"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("E")), "v1", bytes("E_v1"), 1);
+
+        auto src = make_source({m1});
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .reversed()
+                .build();
+
+            reconcilable_result result = mutation_query(src,
+                query::full_partition_range, slice, 3, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(3)
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("E"))
+                    .with_column("v1", bytes("E_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("D"))
+                    .with_column("v1", bytes("D_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("C"))
+                    .with_column("v1", bytes("C_v1")));
+        }
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("E"))))
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("D"))))
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("C"))))
+                .reversed()
+                .build();
+
+            reconcilable_result result = mutation_query(src,
+                query::full_partition_range, slice, 3, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(3)
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("E"))
+                    .with_column("v1", bytes("E_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("D"))
+                    .with_column("v1", bytes("D_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("C"))
+                    .with_column("v1", bytes("C_v1")));
+        }
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range(
+                    {clustering_key_prefix::from_single_value(*s, bytes("C"))},
+                    {clustering_key_prefix::from_single_value(*s, bytes("E"))}))
+                .reversed()
+                .build();
+
+            {
+                reconcilable_result result = mutation_query(src,
+                    query::full_partition_range, slice, 10, now).get0();
+
+                assert_that(to_result_set(result, s, slice))
+                    .has_size(3)
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("E"))
+                        .with_column("v1", bytes("E_v1")))
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("D"))
+                        .with_column("v1", bytes("D_v1")))
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("C"))
+                        .with_column("v1", bytes("C_v1")));
+            }
+
+            {
+                reconcilable_result result = mutation_query(src,
+                    query::full_partition_range, slice, 1, now).get0();
+
+                assert_that(to_result_set(result, s, slice))
+                    .has_size(1)
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("E"))
+                        .with_column("v1", bytes("E_v1")));
+            }
+
+            {
+                reconcilable_result result = mutation_query(src,
+                    query::full_partition_range, slice, 2, now).get0();
+
+                assert_that(to_result_set(result, s, slice))
+                    .has_size(2)
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("E"))
+                        .with_column("v1", bytes("E_v1")))
+                    .has(a_row()
+                        .with_column("pk", bytes("key1"))
+                        .with_column("ck", bytes("D"))
+                        .with_column("v1", bytes("D_v1")));
+            }
+        }
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("E"))))
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("D"))))
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("C"))))
+                .reversed()
+                .build();
+
+            reconcilable_result result = mutation_query(src,
+                query::full_partition_range, slice, 2, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(2)
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("E"))
+                    .with_column("v1", bytes("E_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("D"))
+                    .with_column("v1", bytes("D_v1")));
+        }
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("E"))))
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("C"))))
+                .reversed()
+                .build();
+
+            reconcilable_result result = mutation_query(src,
+                query::full_partition_range, slice, 3, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_size(2)
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("E"))
+                    .with_column("v1", bytes("E_v1")))
+                .has(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("C"))
+                    .with_column("v1", bytes("C_v1")));
+        }
+
+        {
+            auto slice = partition_slice_builder(*s)
+                .with_range(query::clustering_range::make_singular(
+                    clustering_key_prefix::from_single_value(*s, bytes("B"))))
+                .reversed()
+                .build();
+
+            reconcilable_result result = mutation_query(src,
+                query::full_partition_range, slice, 3, now).get0();
+
+            assert_that(to_result_set(result, s, slice))
+                .has_only(a_row()
+                    .with_column("pk", bytes("key1"))
+                    .with_column("ck", bytes("B"))
+                    .with_column("v1", bytes("B_v1")));
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
     return seastar::async([] {
         auto s = make_schema();
