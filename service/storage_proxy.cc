@@ -2517,6 +2517,11 @@ void storage_proxy::init_messaging_service() {
             return sp._db.local().truncate(truncated_at, ksname, cfname);
         });
     });
+
+    ms.register_replication_finished([] (gms::inet_address from) {
+        get_local_storage_service().confirm_replication(from);
+        return make_ready_future<>();
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {
@@ -2529,6 +2534,7 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_read_mutation_data();
     ms.unregister_read_digest();
     ms.unregister_truncate();
+    ms.unregister_replication_finished();
 }
 
 // Merges reconcilable_result:s from different shards into one
