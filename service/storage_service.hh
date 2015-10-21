@@ -814,30 +814,7 @@ private:
      *
      * @param remote node to send notification to
      */
-    void send_replication_notification(inet_address remote) {
-#if 0
-        // notify the remote token
-        MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
-        IFailureDetector failureDetector = FailureDetector.instance;
-        if (logger.isDebugEnabled())
-            logger.debug("Notifying {} of replication completion\n", remote);
-        while (failureDetector.isAlive(remote))
-        {
-            AsyncOneResponse iar = MessagingService.instance().sendRR(msg, remote);
-            try
-            {
-                iar.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
-                return; // done
-            }
-            catch(TimeoutException e)
-            {
-                // try again
-            }
-        }
-#endif
-    }
-
-private:
+    void send_replication_notification(inet_address remote);
     /**
      * Called when an endpoint is removed from the ring. This function checks
      * whether this node becomes responsible for new ranges as a

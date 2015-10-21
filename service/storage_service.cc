@@ -1889,4 +1889,27 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     excise(tokens, endpoint);
 }
 
+void storage_service::send_replication_notification(inet_address remote) {
+#if 0
+    // notify the remote token
+    MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
+    IFailureDetector failureDetector = FailureDetector.instance;
+    if (logger.isDebugEnabled())
+        logger.debug("Notifying {} of replication completion\n", remote);
+    while (failureDetector.isAlive(remote))
+    {
+        AsyncOneResponse iar = MessagingService.instance().sendRR(msg, remote);
+        try
+        {
+            iar.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
+            return; // done
+        }
+        catch(TimeoutException e)
+        {
+            // try again
+        }
+    }
+#endif
+}
+
 } // namespace service
