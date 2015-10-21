@@ -453,10 +453,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (gossiper.uses_host_id(endpoint)) {
         auto host_id = gossiper.get_host_id(endpoint);
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
-        // if (DatabaseDescriptor.isReplacing() &&
-        //     Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null &&
-        //     (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress())))) {
-        if (false) {
+        if (is_replacing() &&
+            get_replace_address() &&
+            gossiper.get_endpoint_state_for_endpoint(get_replace_address().value())  &&
+            (host_id == gossiper.get_host_id(get_replace_address().value()))) {
             logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
             if (existing && *existing != endpoint) {
