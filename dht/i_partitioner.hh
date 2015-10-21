@@ -159,6 +159,8 @@ public:
     }
 };
 
+using decorated_key_opt = std::experimental::optional<decorated_key>;
+
 class i_partitioner {
 public:
     virtual ~i_partitioner() {}

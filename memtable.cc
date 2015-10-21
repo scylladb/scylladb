@@ -231,6 +231,12 @@ mutation_source memtable::as_data_source() {
     };
 }
 
+key_source memtable::as_key_source() {
+    return [mt = shared_from_this()] (const query::partition_range& range) {
+        return make_key_from_mutation_reader(mt->make_reader(range));
+    };
+}
+
 size_t memtable::partition_count() const {
     return partitions.size();
 }

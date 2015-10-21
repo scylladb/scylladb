@@ -27,8 +27,11 @@
 #include <seastar/util/defer.hh>
 #include "memtable.hh"
 #include <chrono>
+#include "utils/move.hh"
 
 using namespace std::chrono_literals;
+
+namespace stdx = std::experimental;
 
 static logging::logger logger("cache");
 
@@ -50,6 +53,7 @@ cache_tracker::cache_tracker() {
             }
             _lru.pop_back_and_dispose(current_deleter<cache_entry>());
             --_partitions;
+            ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
         });
     });
@@ -105,6 +109,7 @@ void cache_tracker::clear() {
         _lru.clear_and_dispose(current_deleter<cache_entry>());
     });
     _partitions = 0;
+    ++_modification_count;
 }
 
 void cache_tracker::touch(cache_entry& e) {
@@ -115,11 +120,13 @@ void cache_tracker::touch(cache_entry& e) {
 void cache_tracker::insert(cache_entry& entry) {
     ++_insertions;
     ++_partitions;
+    ++_modification_count;
     _lru.push_front(entry);
 }
 
 void cache_tracker::on_erase() {
     --_partitions;
+    ++_modification_count;
 }
 
 void cache_tracker::on_merge() {
@@ -176,10 +183,148 @@ void row_cache::on_miss() {
     _tracker.on_miss();
 }
 
+class just_cache_scanning_reader final : public mutation_reader::impl {
+    row_cache& _cache;
+    row_cache::partitions_type::const_iterator _it;
+    row_cache::partitions_type::const_iterator _end;
+    const query::partition_range& _range;
+    stdx::optional<dht::decorated_key> _last;
+    uint64_t _last_reclaim_count;
+    size_t _last_modification_count;
+private:
+    void update_iterators() {
+        auto cmp = cache_entry::ring_position_compare(_cache._schema);
+        auto update_end = [&] {
+            if (_range.end()) {
+                if (_range.end()->is_inclusive()) {
+                    _end = _cache._partitions.upper_bound(_range.end()->value(), cmp);
+                } else {
+                    _end = _cache._partitions.lower_bound(_range.end()->value(), cmp);
+                }
+            } else {
+                _end = _cache._partitions.end();
+            }
+        };
+
+        auto reclaim_count = _cache.get_cache_tracker().region().reclaim_counter();
+        auto modification_count = _cache.get_cache_tracker().modification_count();
+        if (!_last) {
+            if (_range.start()) {
+                if (_range.start()->is_inclusive()) {
+                    _it = _cache._partitions.lower_bound(_range.start()->value(), cmp);
+                } else {
+                    _it = _cache._partitions.upper_bound(_range.start()->value(), cmp);
+                }
+            } else {
+                _it = _cache._partitions.begin();
+            }
+            update_end();
+        } else if (reclaim_count != _last_reclaim_count || modification_count != _last_modification_count) {
+            _it = _cache._partitions.upper_bound(*_last, cmp);
+            update_end();
+        }
+        _last_reclaim_count = reclaim_count;
+        _last_modification_count = modification_count;
+    }
+public:
+    just_cache_scanning_reader(row_cache& cache, const query::partition_range& range) : _cache(cache), _range(range) { }
+    virtual future<mutation_opt> operator()() override {
+        return _cache._read_section(_cache._tracker.region(), [this] {
+            update_iterators();
+            if (_it == _end) {
+                return make_ready_future<mutation_opt>();
+            }
+            auto& ce = *_it;
+            ++_it;
+            _last = ce.key();
+            return make_ready_future<mutation_opt>(mutation(_cache._schema, ce.key(), ce.partition()));
+        });
+    }
+};
+
+class scanning_and_populating_reader final : public mutation_reader::impl {
+    row_cache& _cache;
+    schema_ptr _schema;
+    mutation_reader _primary;
+    bool _secondary_only = false;
+    mutation_opt _next_primary;
+    mutation_source& _underlying;
+    mutation_reader _secondary;
+    const query::partition_range& _original_range;
+    query::partition_range _range;
+    key_source& _underlying_keys;
+    key_reader _keys;
+    dht::decorated_key_opt _next_key;
+public:
+    scanning_and_populating_reader(row_cache& cache, const query::partition_range& range)
+        : _cache(cache), _schema(cache._schema),
+          _primary(make_mutation_reader<just_cache_scanning_reader>(cache, range)),
+          _underlying(cache._underlying), _original_range(range), _underlying_keys(cache._underlying_keys),
+          _keys(_underlying_keys(range))
+    { }
+    virtual future<mutation_opt> operator()() override {
+        // FIXME: store in cache information whether the immediate successor
+        // of the current entry is present. As long as it is consulting
+        // index_reader is not necessary.
+        if (_secondary_only) {
+            return next_secondary();
+        }
+        return next_key().then([this] (dht::decorated_key_opt dk) mutable {
+            return _primary().then([this, dk = std::move(dk)] (mutation_opt&& mo) {
+                if (!mo && !dk) {
+                    return make_ready_future<mutation_opt>();
+                }
+                if (mo) {
+                    auto cmp = dk ? dk->tri_compare(*_schema, mo->decorated_key()) : 0;
+                    if (cmp >= 0) {
+                        if (cmp) {
+                            _next_key = std::move(dk);
+                        }
+                        return make_ready_future<mutation_opt>(std::move(mo));
+                    }
+                }
+                _next_primary = std::move(mo);
+
+                stdx::optional<query::partition_range::bound> end;
+                if (_next_primary) {
+                    end = query::partition_range::bound(_next_primary->decorated_key(), false);
+                } else {
+                    end = _original_range.end();
+                }
+                _range = query::partition_range(query::partition_range::bound { std::move(*dk), true }, std::move(end));
+                _secondary = _underlying(_range);
+                _secondary_only = true;
+                return next_secondary();
+            });
+        });
+    }
+private:
+    future<mutation_opt> next_secondary() {
+        return _secondary().then([this] (mutation_opt&& mo) {
+            if (!mo && _next_primary) {
+                auto cmp = dht::ring_position_comparator(*_schema);
+                _range = _original_range.split_after(_next_primary->decorated_key(), cmp);
+                _keys = _underlying_keys(_range);
+                _secondary_only = false;
+                return std::move(_next_primary);
+            }
+            if (mo) {
+                _cache.populate(*mo);
+            }
+            return std::move(mo);
+        });
+    }
+    future<dht::decorated_key_opt> next_key() {
+        if (_next_key) {
+            return make_ready_future<dht::decorated_key_opt>(move_and_disengage(_next_key));
+        }
+        return _keys();
+    }
+};
+
 mutation_reader
 row_cache::make_scanning_reader(const query::partition_range& range) {
-    warn(unimplemented::cause::RANGE_QUERIES);
-    return make_mutation_reader<populating_reader>(*this, _underlying(range));
+    return make_mutation_reader<scanning_and_populating_reader>(*this, range);
 }
 
 mutation_reader
@@ -312,11 +457,13 @@ void row_cache::touch(const dht::decorated_key& dk) {
     }
 }
 
-row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, cache_tracker& tracker)
+row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
+    cache_tracker& tracker)
     : _tracker(tracker)
     , _schema(std::move(s))
     , _partitions(cache_entry::compare(_schema))
     , _underlying(std::move(fallback_factory))
+    , _underlying_keys(std::move(underlying_keys))
 { }
 
 cache_entry::cache_entry(cache_entry&& o) noexcept

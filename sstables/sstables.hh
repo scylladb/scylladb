@@ -45,6 +45,8 @@
 #include "filter.hh"
 #include "exceptions.hh"
 #include "mutation_reader.hh"
+#include "query-request.hh"
+#include "key_reader.hh"
 
 namespace sstables {
 
@@ -503,10 +505,14 @@ public:
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
     friend class test;
+
+    friend class key_reader;
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::map<unsigned long, shared_sstable>;
+
+::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range);
 
 struct entry_descriptor {
     sstring ks;
@@ -523,4 +529,5 @@ struct entry_descriptor {
                      sstable::component_type component)
         : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
+
 }

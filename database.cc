@@ -84,7 +84,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
     , _config(std::move(config))
     , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
-    , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
+    , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
@@ -100,7 +100,7 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
     , _config(std::move(config))
     , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
-    , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
+    , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
@@ -216,6 +216,24 @@ column_family::make_sstable_reader(const query::partition_range& pr) const {
         // range_sstable_reader is not movable so we need to wrap it
         return make_mutation_reader<range_sstable_reader>(_schema, _sstables, pr);
     }
+}
+
+key_source column_family::sstables_as_key_source() const {
+    return [this] (const query::partition_range& range) {
+        std::vector<key_reader> readers;
+        readers.reserve(_sstables->size());
+        std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& entry) {
+            auto& sst = entry.second;
+            auto rd = sstables::make_key_reader(_schema, sst, range);
+            if (sst->is_shared()) {
+                rd = make_filtering_reader(std::move(rd), [] (const dht::decorated_key& dk) {
+                    return dht::shard_of(dk.token()) == engine().cpu_id();
+                });
+            }
+            return rd;
+        });
+        return make_combined_reader(_schema, std::move(readers));
+    };
 }
 
 // Exposed for testing, not performance critical.

@@ -41,6 +41,8 @@ private:
         data(schema_ptr&& schema, dht::decorated_key&& key, mutation_partition&& mp);
     };
     std::unique_ptr<data> _ptr;
+private:
+    mutation() = default;
 public:
     mutation(dht::decorated_key key, schema_ptr schema)
         : _ptr(std::make_unique<data>(std::move(key), std::move(schema)))
@@ -85,13 +87,68 @@ public:
     size_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
+    friend class mutation_opt;
 };
 
 struct mutation_decorated_key_less_comparator {
     bool operator()(const mutation& m1, const mutation& m2) const;
 };
 
-using mutation_opt = std::experimental::optional<mutation>;
+class mutation_opt {
+private:
+    mutation _mutation;
+public:
+    mutation_opt() = default;
+    mutation_opt(std::experimental::nullopt_t) noexcept { }
+    mutation_opt(const mutation& obj) : _mutation(obj) { }
+    mutation_opt(mutation&& obj) noexcept : _mutation(std::move(obj)) { }
+    mutation_opt(std::experimental::optional<mutation>&& obj) noexcept {
+        if (obj) {
+            _mutation = std::move(*obj);
+        }
+    }
+    mutation_opt(const mutation_opt&) = default;
+    mutation_opt(mutation_opt&&) = default;
+
+    mutation_opt& operator=(std::experimental::nullopt_t) noexcept {
+        _mutation = mutation();
+        return *this;
+    }
+    template<typename T>
+    std::enable_if_t<std::is_same<std::decay_t<T>, mutation>::value, mutation_opt&>
+    operator=(T&& obj) noexcept {
+        _mutation = std::forward<T>(obj);
+        return *this;
+    }
+    mutation_opt& operator=(mutation_opt&&) = default;
+
+    explicit operator bool() const noexcept {
+        return bool(_mutation._ptr);
+    }
+
+    mutation* operator->() noexcept { return &_mutation; }
+    const mutation* operator->() const noexcept { return &_mutation; }
+
+    mutation& operator*() noexcept { return _mutation; }
+    const mutation& operator*() const noexcept { return _mutation; }
+
+    bool operator==(const mutation_opt& other) const {
+        if (!*this && !other) {
+            return true;
+        }
+        if (!*this || !other) {
+            return false;
+        }
+        return _mutation == other._mutation;
+    }
+    bool operator!=(const mutation_opt& other) const {
+        return !(*this == other);
+    }
+};
+
+inline mutation_opt move_and_disengage(mutation_opt& opt) {
+    return std::move(opt);
+}
 
 inline
 void apply(mutation_opt& dst, mutation&& src) {

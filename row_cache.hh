@@ -30,6 +30,7 @@
 #include "mutation_reader.hh"
 #include "mutation_partition.hh"
 #include "utils/logalloc.hh"
+#include "key_reader.hh"
 
 namespace scollectd {
 
@@ -96,6 +97,26 @@ public:
             return _c(k1._key, k2);
         }
     };
+
+    struct ring_position_compare {
+        schema_ptr _s;
+
+        ring_position_compare(schema_ptr s)
+            : _s(std::move(s))
+        { }
+
+        bool operator()(const dht::ring_position& k1, const cache_entry& k2) const {
+            return k1.less_compare(*_s, dht::ring_position(k2.key()));
+        }
+
+        bool operator()(const cache_entry& k1, const cache_entry& k2) const {
+            return dht::ring_position(k1.key()).less_compare(*_s, dht::ring_position(k2.key()));
+        }
+
+        bool operator()(const cache_entry& k1, const dht::ring_position& k2) const {
+            return dht::ring_position(k1.key()).less_compare(*_s, k2);
+        }
+    };
 };
 
 // Tracks accesses and performs eviction of cache entries.
@@ -110,6 +131,7 @@ private:
     uint64_t _insertions = 0;
     uint64_t _merges = 0;
     uint64_t _partitions = 0;
+    uint64_t _modification_count = 0;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     logalloc::region _region;
     lru_type _lru;
@@ -128,6 +150,7 @@ public:
     allocation_strategy& allocator();
     logalloc::region& region();
     const logalloc::region& region() const;
+    uint64_t modification_count() const { return _modification_count; }
 };
 
 // Returns a reference to shard-wide cache_tracker.
@@ -162,6 +185,7 @@ private:
     schema_ptr _schema;
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
+    key_source _underlying_keys;
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
@@ -171,7 +195,7 @@ private:
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
-    row_cache(schema_ptr, mutation_source underlying, cache_tracker&);
+    row_cache(schema_ptr, mutation_source underlying, key_source, cache_tracker&);
     row_cache(row_cache&&) = default;
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
@@ -201,4 +225,7 @@ public:
     const cache_tracker& get_cache_tracker() const {
         return _tracker;
     }
+
+    friend class just_cache_scanning_reader;
+    friend class scanning_and_populating_reader;
 };

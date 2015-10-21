@@ -124,6 +124,7 @@ public:
     mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
 
     mutation_source as_data_source();
+    key_source as_key_source();
 
     bool empty() const { return partitions.empty(); }
     void mark_flushed(lw_shared_ptr<sstables::sstable> sst);
