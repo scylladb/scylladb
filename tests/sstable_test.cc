@@ -184,17 +184,19 @@ static future<> write_sst_info(sstring dir, unsigned long generation) {
     return do_write_sst(dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
-static future<std::pair<char*, size_t>> read_file(sstring file_path)
+using bufptr_t = std::unique_ptr<char [], free_deleter>;
+static future<std::pair<bufptr_t, size_t>> read_file(sstring file_path)
 {
     return engine().open_file_dma(file_path, open_flags::rw).then([] (file f) {
         return f.size().then([f] (auto size) mutable {
             auto aligned_size = align_up(size, 512UL);
-            auto rbuf = reinterpret_cast<char*>(::memalign(4096, aligned_size));
+            auto buf = allocate_aligned_buffer<char>(aligned_size, 512UL);
+            auto rbuf = buf.get();
             ::memset(rbuf, 0, aligned_size);
-            return f.dma_read(0, rbuf, aligned_size).then([size, rbuf, f] (auto ret) {
+            return f.dma_read(0, rbuf, aligned_size).then([size, buf = std::move(buf), f] (auto ret) mutable {
                 BOOST_REQUIRE(ret == size);
-                std::pair<char*, size_t> p = { rbuf, size };
-                return make_ready_future<std::pair<char*, size_t>>(p);
+                std::pair<bufptr_t, size_t> p(std::move(buf), std::move(size));
+                return make_ready_future<std::pair<bufptr_t, size_t>>(std::move(p));
             }).finally([f] () mutable { return f.close().finally([f] {}); });
         });
     });
@@ -209,14 +211,12 @@ static future<> compare_files(sstdesc file1, sstdesc file2, sstable::component_t
     auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
     return read_file(file_path).then([component, file2] (auto ret) {
         auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
-        return read_file(file_path).then([ret] (auto ret2) {
+        return read_file(file_path).then([ret = std::move(ret)] (auto ret2) {
             // assert that both files have the same size.
             BOOST_REQUIRE(ret.second == ret2.second);
             // assert that both files have the same content.
-            BOOST_REQUIRE(::memcmp(ret.first, ret2.first, ret.second) == 0);
+            BOOST_REQUIRE(::memcmp(ret.first.get(), ret2.first.get(), ret.second) == 0);
             // free buf from both files.
-            ::free(ret.first);
-            ::free(ret2.first);
         });
     });
 
