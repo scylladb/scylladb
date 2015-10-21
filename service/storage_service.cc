@@ -1859,11 +1859,11 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
     return sp.execute().then_wrapped([this, notify_endpoint] (auto&& f) {
         try {
             auto state = f.get0();
-            this->send_replication_notification(notify_endpoint);
+            return this->send_replication_notification(notify_endpoint);
         } catch (...) {
             logger.warn("Streaming to restore replica count failed: {}", std::current_exception());
             // We still want to send the notification
-            this->send_replication_notification(notify_endpoint);
+            return this->send_replication_notification(notify_endpoint);
         }
         return make_ready_future<>();
     });
@@ -1891,27 +1891,28 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     excise(tokens, endpoint);
 }
 
-void storage_service::send_replication_notification(inet_address remote) {
-#if 0
+future<> storage_service::send_replication_notification(inet_address remote) {
     // notify the remote token
-    MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
-    IFailureDetector failureDetector = FailureDetector.instance;
-    if (logger.isDebugEnabled())
-        logger.debug("Notifying {} of replication completion\n", remote);
-    while (failureDetector.isAlive(remote))
-    {
-        AsyncOneResponse iar = MessagingService.instance().sendRR(msg, remote);
-        try
-        {
-            iar.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
-            return; // done
+    auto done = make_shared<bool>(false);
+    auto local = get_broadcast_address();
+    logger.debug("Notifying {} of replication completion", remote);
+    return do_until(
+        [done, remote] {
+            return *done || !gms::get_local_failure_detector().is_alive(remote);
+        },
+        [done, remote, local] {
+            auto& ms = net::get_local_messaging_service();
+            net::shard_id id{remote, 0};
+            return ms.send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
+                try {
+                    f.get();
+                    *done = true;
+                } catch (...) {
+                    logger.warn("Fail to send REPLICATION_FINISHED to {}: {}", id, std::current_exception());
+                }
+            });
         }
-        catch(TimeoutException e)
-        {
-            // try again
-        }
-    }
-#endif
+    );
 }
 
 void storage_service::confirm_replication(inet_address node) {

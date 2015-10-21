@@ -818,7 +818,7 @@ private:
      *
      * @param remote node to send notification to
      */
-    void send_replication_notification(inet_address remote);
+    future<> send_replication_notification(inet_address remote);
 
     /**
      * Called when an endpoint is removed from the ring. This function checks
