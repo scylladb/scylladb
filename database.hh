@@ -137,7 +137,7 @@ private:
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
     mutable row_cache _cache; // Cache covers only sstables.
-    unsigned _sstable_generation = 1;
+    int64_t _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog

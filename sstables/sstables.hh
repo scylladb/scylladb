@@ -126,7 +126,7 @@ public:
     enum class version_types { ka, la };
     enum class format_types { big };
 public:
-    sstable(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
+    sstable(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : _ks(std::move(ks))
         , _cf(std::move(cf))
         , _dir(std::move(dir))
@@ -175,20 +175,20 @@ public:
     static component_type component_from_sstring(sstring& s);
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
+    static const sstring filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                   format_types format, component_type component);
     // WARNING: it should only be called to remove components of a sstable with
     // a temporary TOC file.
-    static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation,
+    static future<> remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation,
                                                  version_types v, format_types f);
 
     future<> load();
     future<> open_data();
 
-    void set_generation(unsigned long generation) {
+    void set_generation(int64_t generation) {
         _generation = generation;
     }
-    unsigned long generation() const {
+    int64_t generation() const {
         return _generation;
     }
 
@@ -239,7 +239,7 @@ public:
         return _marked_for_deletion;
     }
 
-    void add_ancestor(int generation) {
+    void add_ancestor(int64_t generation) {
         _collector.add_ancestor(generation);
     }
 
@@ -306,7 +306,7 @@ public:
     std::vector<sstring> component_filenames() const;
 
 private:
-    sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
+    sstable(size_t wbuffer_size, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : sstable_buffer_size(wbuffer_size)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
@@ -506,20 +506,20 @@ public:
 };
 
 using shared_sstable = lw_shared_ptr<sstable>;
-using sstable_list = std::map<unsigned long, shared_sstable>;
+using sstable_list = std::map<int64_t, shared_sstable>;
 
 struct entry_descriptor {
     sstring ks;
     sstring cf;
     sstable::version_types version;
-    unsigned long generation;
+    int64_t generation;
     sstable::format_types format;
     sstable::component_type component;
 
     static entry_descriptor make_descriptor(sstring fname);
 
     entry_descriptor(sstring ks, sstring cf, sstable::version_types version,
-                     unsigned long generation, sstable::format_types format,
+                     int64_t generation, sstable::format_types format,
                      sstable::component_type component)
         : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };

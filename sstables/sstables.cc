@@ -1412,7 +1412,7 @@ sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
+const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                 format_types format, component_type component) {
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
@@ -1658,7 +1658,7 @@ file_exists(sstring filename) {
 }
 
 future<>
-sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f) {
+sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
         auto toc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
         // assert that toc doesn't exist for sstable with temporary toc.
