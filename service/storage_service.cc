@@ -424,7 +424,6 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     }
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
-    // FIXME
     get_local_pending_range_calculator_service().update().get();
 
     auto& gossiper = gms::get_local_gossiper();
