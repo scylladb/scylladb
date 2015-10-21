@@ -1877,12 +1877,12 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     _token_metadata.remove_endpoint(endpoint);
     _token_metadata.remove_bootstrap_tokens(tokens);
 
-    // FIXME: IEndpointLifecycleSubscriber
-#if 0
-    for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers) {
-        subscriber.onLeaveCluster(endpoint);
-    }
-#endif
+    get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
+        for (auto&& subscriber : ss._lifecycle_subscribers) {
+            subscriber->on_leave_cluster(endpoint);
+        }
+    }).get();
+
     get_local_pending_range_calculator_service().update().get();
 }
 
