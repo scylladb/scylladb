@@ -1912,4 +1912,18 @@ void storage_service::send_replication_notification(inet_address remote) {
 #endif
 }
 
+// Runs inside seastar::async context
+void storage_service::leave_ring() {
+    db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
+    _token_metadata.remove_endpoint(get_broadcast_address());
+    get_local_pending_range_calculator_service().update().get();
+
+    auto& gossiper = gms::get_local_gossiper();
+    auto expire_time = gossiper.compute_expire_time().time_since_epoch().count();
+    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens(), expire_time));
+    auto delay = std::max(std::chrono::milliseconds(RING_DELAY), gms::gossiper::INTERVAL);
+    logger.info("Announcing that I have left the ring for {}ms", delay.count());
+    sleep(delay).get();
+}
+
 } // namespace service
