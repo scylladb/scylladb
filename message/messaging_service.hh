@@ -533,6 +533,11 @@ public:
     void unregister_truncate();
     future<> send_truncate(shard_id, std::chrono::milliseconds, sstring, sstring);
 
+    // Wrapper for REPLICATION_FINISHED verb
+    void register_replication_finished(std::function<future<> (inet_address from)>&& func);
+    void unregister_replication_finished();
+    future<> send_replication_finished(shard_id id, inet_address from);
+
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);

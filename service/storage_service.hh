@@ -54,6 +54,7 @@
 #include "utils/fb_utilities.hh"
 #include "database.hh"
 #include <seastar/core/distributed.hh>
+#include "streaming/stream_state.hh"
 
 namespace service {
 
@@ -807,6 +808,9 @@ private:
 #endif
     }
 
+public:
+    void confirm_replication(inet_address node);
+
 private:
 
     /**
@@ -814,30 +818,8 @@ private:
      *
      * @param remote node to send notification to
      */
-    void send_replication_notification(inet_address remote) {
-#if 0
-        // notify the remote token
-        MessageOut msg = new MessageOut(MessagingService.Verb.REPLICATION_FINISHED);
-        IFailureDetector failureDetector = FailureDetector.instance;
-        if (logger.isDebugEnabled())
-            logger.debug("Notifying {} of replication completion\n", remote);
-        while (failureDetector.isAlive(remote))
-        {
-            AsyncOneResponse iar = MessagingService.instance().sendRR(msg, remote);
-            try
-            {
-                iar.get(DatabaseDescriptor.getRpcTimeout(), TimeUnit.MILLISECONDS);
-                return; // done
-            }
-            catch(TimeoutException e)
-            {
-                // try again
-            }
-        }
-#endif
-    }
+    future<> send_replication_notification(inet_address remote);
 
-private:
     /**
      * Called when an endpoint is removed from the ring. This function checks
      * whether this node becomes responsible for new ranges as a
@@ -1910,63 +1892,11 @@ public:
 
     future<> decommission();
 
-#if 0
-    private void leaveRing()
-    {
-        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.NEEDS_BOOTSTRAP);
-        _token_metadata.removeEndpoint(FBUtilities.getBroadcastAddress());
-        PendingRangeCalculatorService.instance.update();
-
-        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.left(getLocalTokens(),Gossiper.computeExpireTime()));
-        int delay = Math.max(RING_DELAY, Gossiper.intervalInMillis * 2);
-        logger.info("Announcing that I have left the ring for {}ms", delay);
-        Uninterruptibles.sleepUninterruptibly(delay, TimeUnit.MILLISECONDS);
-    }
-#endif
 private:
-    future<> unbootstrap();
+    void leave_ring();
+    void unbootstrap();
+    future<streaming::stream_state> stream_hints();
 #if 0
-
-    private Future<StreamState> streamHints()
-    {
-        // StreamPlan will not fail if there are zero files to transfer, so flush anyway (need to get any in-memory hints, as well)
-        ColumnFamilyStore hintsCF = Keyspace.open(SystemKeyspace.NAME).getColumnFamilyStore(SystemKeyspace.HINTS);
-        FBUtilities.waitOnFuture(hintsCF.forceFlush());
-
-        // gather all live nodes in the cluster that aren't also leaving
-        List<InetAddress> candidates = new ArrayList<>(StorageService.instance.getTokenMetadata().cloneAfterAllLeft().getAllEndpoints());
-        candidates.remove(FBUtilities.getBroadcastAddress());
-        for (Iterator<InetAddress> iter = candidates.iterator(); iter.hasNext(); )
-        {
-            InetAddress address = iter.next();
-            if (!FailureDetector.instance.isAlive(address))
-                iter.remove();
-        }
-
-        if (candidates.isEmpty())
-        {
-            logger.warn("Unable to stream hints since no live endpoints seen");
-            return Futures.immediateFuture(null);
-        }
-        else
-        {
-            // stream to the closest peer as chosen by the snitch
-            DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getBroadcastAddress(), candidates);
-            InetAddress hintsDestinationHost = candidates.get(0);
-            InetAddress preferred = SystemKeyspace.getPreferredIP(hintsDestinationHost);
-
-            // stream all hints -- range list will be a singleton of "the entire ring"
-            Token token = StorageService.getPartitioner().getMinimumToken();
-            List<Range<Token>> ranges = Collections.singletonList(new Range<>(token, token));
-
-            return new StreamPlan("Hints").transferRanges(hintsDestinationHost,
-                                                          preferred,
-                                                          SystemKeyspace.NAME,
-                                                          ranges,
-                                                          SystemKeyspace.HINTS)
-                                          .execute();
-        }
-    }
 
     public void move(String newToken) throws IOException
     {
@@ -2240,22 +2170,6 @@ public:
      */
     future<> remove_node(sstring host_id_string);
 
-#if 0
-    public void confirmReplication(InetAddress node)
-    {
-        // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
-        // but restarted before all 'replication finished' messages arrived. In that case, we'll
-        // still go ahead and acknowledge it.
-        if (!replicatingNodes.isEmpty())
-        {
-            replicatingNodes.remove(node);
-        }
-        else
-        {
-            logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
-        }
-    }
-#endif
     future<sstring> get_operation_mode();
 
     future<bool> is_starting();
@@ -2437,62 +2351,18 @@ public:
         if (oldSnitch instanceof DynamicEndpointSnitch)
             ((DynamicEndpointSnitch)oldSnitch).unregisterMBean();
     }
+#endif
 
+private:
     /**
      * Seed data to the endpoints that will be responsible for it at the future
      *
      * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
      * @return async Future for whether stream was success
      */
-    private Future<StreamState> streamRanges(Map<String, Multimap<Range<Token>, InetAddress>> rangesToStreamByKeyspace)
-    {
-        // First, we build a list of ranges to stream to each host, per table
-        Map<String, Map<InetAddress, List<Range<Token>>>> sessionsToStreamByKeyspace = new HashMap<>();
-        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : rangesToStreamByKeyspace.entrySet())
-        {
-            String keyspace = entry.getKey();
-            Multimap<Range<Token>, InetAddress> rangesWithEndpoints = entry.getValue();
+    future<streaming::stream_state> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
-            if (rangesWithEndpoints.isEmpty())
-                continue;
-
-            Map<InetAddress, List<Range<Token>>> rangesPerEndpoint = new HashMap<>();
-            for (Map.Entry<Range<Token>, InetAddress> endPointEntry : rangesWithEndpoints.entries())
-            {
-                Range<Token> range = endPointEntry.getKey();
-                InetAddress endpoint = endPointEntry.getValue();
-
-                List<Range<Token>> curRanges = rangesPerEndpoint.get(endpoint);
-                if (curRanges == null)
-                {
-                    curRanges = new LinkedList<>();
-                    rangesPerEndpoint.put(endpoint, curRanges);
-                }
-                curRanges.add(range);
-            }
-
-            sessionsToStreamByKeyspace.put(keyspace, rangesPerEndpoint);
-        }
-
-        StreamPlan streamPlan = new StreamPlan("Unbootstrap");
-        for (Map.Entry<String, Map<InetAddress, List<Range<Token>>>> entry : sessionsToStreamByKeyspace.entrySet())
-        {
-            String keyspaceName = entry.getKey();
-            Map<InetAddress, List<Range<Token>>> rangesPerEndpoint = entry.getValue();
-
-            for (Map.Entry<InetAddress, List<Range<Token>>> rangesEntry : rangesPerEndpoint.entrySet())
-            {
-                List<Range<Token>> ranges = rangesEntry.getValue();
-                InetAddress newEndpoint = rangesEntry.getKey();
-                InetAddress preferred = SystemKeyspace.getPreferredIP(newEndpoint);
-
-                // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-                streamPlan.transferRanges(newEndpoint, preferred, keyspaceName, ranges);
-            }
-        }
-        return streamPlan.execute();
-    }
-
+#if 0
     /**
      * Calculate pair of ranges to stream/fetch for given two range collections
      * (current ranges for keyspace and ranges after move to new token)
@@ -2600,6 +2470,7 @@ public:
         return loader.stream();
     }
 #endif
+public:
     int32_t get_exception_count();
 #if 0
     public void rescheduleFailedDeletions()
