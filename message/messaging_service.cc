@@ -557,5 +557,16 @@ future<> messaging_service::send_truncate(shard_id id, std::chrono::milliseconds
     return send_message_timeout<void>(this, net::messaging_verb::TRUNCATE, std::move(id), std::move(timeout), std::move(ks), std::move(cf));
 }
 
+// Wrapper for REPLICATION_FINISHED
+void messaging_service::register_replication_finished(std::function<future<> (inet_address)>&& func) {
+    register_handler(this, messaging_verb::REPLICATION_FINISHED, std::move(func));
+}
+void messaging_service::unregister_replication_finished() {
+    _rpc->unregister_handler(messaging_verb::REPLICATION_FINISHED);
+}
+future<> messaging_service::send_replication_finished(shard_id id, inet_address from) {
+    // FIXME: getRpcTimeout : conf.request_timeout_in_ms
+    return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from));
+}
 
 } // namespace net
