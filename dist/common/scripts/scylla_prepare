@@ -14,3 +14,7 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
         echo $NR_HUGEPAGES > $n/hugepages/hugepages-2048kB/nr_hugepages
     done
 fi
+. /etc/os-release
+if [ "$NAME" = "Ubuntu" ]; then
+    hugeadm --create-mounts
+fi
