@@ -24,6 +24,7 @@
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/api-doc/utils.json.hh"
 #include "service/storage_service.hh"
+#include "db/config.hh"
 
 namespace api {
 
@@ -40,7 +41,9 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_hinted_handoff_enabled.set(r, [](std::unique_ptr<request> req)  {
         //TBD
-        unimplemented();
+        // FIXME
+        // hinted handoff is not supported currently,
+        // so we should return false
         return make_ready_future<json::json_return_type>(false);
     });
 
@@ -97,10 +100,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    sp::get_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(1);
+    sp::get_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().request_timeout_in_ms()/1000.0;
     });
 
     sp::set_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -110,10 +111,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().read_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_read_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -123,10 +122,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_write_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().write_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -136,11 +133,10 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_counter_write_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().counter_write_request_timeout_in_ms()/1000.0;
     });
+
     sp::set_counter_write_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
         //TBD
         unimplemented();
@@ -148,10 +144,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_cas_contention_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().cas_contention_timeout_in_ms()/1000.0;
     });
 
     sp::set_cas_contention_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -161,10 +155,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_range_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().range_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_range_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
@@ -174,10 +166,8 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_truncate_rpc_timeout.set(r, [&ctx](const_req req)  {
+        return ctx.db.local().get_config().truncate_request_timeout_in_ms()/1000.0;
     });
 
     sp::set_truncate_rpc_timeout.set(r, [](std::unique_ptr<request> req)  {
