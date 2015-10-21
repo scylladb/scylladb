@@ -1019,23 +1019,9 @@ public:
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
 
     future<std::unordered_map<sstring, std::vector<snapshot_details>>> get_snapshot_details();
+
+    future<int64_t> true_snapshots_size();
 #if 0
-    public long trueSnapshotsSize()
-    {
-        long total = 0;
-        for (Keyspace keyspace : Keyspace.all())
-        {
-            if (SystemKeyspace.NAME.equals(keyspace.getName()))
-                continue;
-
-            for (ColumnFamilyStore cfStore : keyspace.getColumnFamilyStores())
-            {
-                total += cfStore.trueSnapshotsSize();
-            }
-        }
-
-        return total;
-    }
 
     /**
      * @param allowIndexes Allow index CF names to be passed in
