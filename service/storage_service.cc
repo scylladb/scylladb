@@ -1781,7 +1781,7 @@ void storage_service::unbootstrap() {
             for (auto& x : ranges_mm) {
                 ranges.push_back(x.first);
             }
-            logger.debug("Ranges needing transfer are [{}]", ranges);
+            logger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
         }
         ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
     }
