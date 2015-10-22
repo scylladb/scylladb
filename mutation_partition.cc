@@ -701,7 +701,7 @@ void mutation_partition::trim_rows(const schema& s,
             break;
         }
 
-        auto it_range = reversal_traits<reversed>::maybe_reverse(_rows, unconst(_rows, range(s, row_range)));
+        auto it_range = reversal_traits<reversed>::maybe_reverse(_rows, range(s, row_range));
         last = reversal_traits<reversed>::erase_and_dispose(_rows, last, it_range.begin(), deleter);
 
         while (last != it_range.end()) {
