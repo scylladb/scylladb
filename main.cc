@@ -30,6 +30,7 @@
 #include "db/config.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
+#include "service/load_broadcaster.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
 #include "db/batchlog_manager.hh"
@@ -307,6 +308,12 @@ int main(int ac, char** av) {
                 return db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                     return b.start();
                 });
+            }).then([&db] {
+                // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
+                // casting to std::function<> will fail to compile
+                auto lb = make_lw_shared<load_broadcaster>(db, gms::get_local_gossiper());
+                lb->start_broadcasting();
+                engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
             }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port, start_thrift] (dns::hostent e) {
