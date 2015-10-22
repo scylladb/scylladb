@@ -1993,3 +1993,21 @@ SEASTAR_TEST_CASE(check_sstable_key_reader) {
         }).then([get_dk, s, keys, ssts] { });
     });
 }
+
+SEASTAR_TEST_CASE(check_read_indexes) {
+    auto builder = schema_builder("test", "summary_test")
+        .with_column("a", int32_type, column_kind::partition_key);
+    builder.set_min_index_interval(256);
+    auto s = builder.build();
+
+    auto sst = make_lw_shared<sstable>("test", "summary_test", "tests/sstables/summary_test", 1,
+        sstables::sstable::version_types::ka, big);
+
+    auto fut = sst->load();
+    return fut.then([sst] {
+        return sstables::test(sst).read_indexes(0).then([sst] (index_list list) {
+            BOOST_REQUIRE(list.size() == 130);
+            return make_ready_future<>();
+        });
+    });
+}
