@@ -198,6 +198,16 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
     clustered_row(s, key).apply(created_at);
 }
 
+void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
+    auto e = current_allocator().construct<rows_entry>(key, std::move(row));
+    _rows.insert(_rows.end(), *e);
+}
+
+void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
+    auto e = current_allocator().construct<rows_entry>(key, row);
+    _rows.insert(_rows.end(), *e);
+}
+
 const rows_entry*
 mutation_partition::find_entry(const schema& schema, const clustering_key_prefix& key) const {
     auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(schema)));

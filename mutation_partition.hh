@@ -448,6 +448,12 @@ public:
     rows_entry(const clustering_key& key)
         : _key(key)
     { }
+    rows_entry(const clustering_key& key, deletable_row&& row)
+        : _key(key), _row(std::move(row))
+    { }
+    rows_entry(const clustering_key& key, const deletable_row& row)
+        : _key(key), _row(row)
+    { }
     rows_entry(rows_entry&& o) noexcept;
     rows_entry(const rows_entry& e)
         : _key(e._key)
@@ -580,6 +586,9 @@ public:
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 private:
+    void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
+    void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);
+
     uint32_t do_compact(const schema& s, gc_clock::time_point now,
         const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit,
         api::timestamp_type max_purgeable);
