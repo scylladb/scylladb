@@ -246,6 +246,9 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
 
+class row_marker;
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right);
+
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
     static constexpr gc_clock::duration dead { -1 };

@@ -449,6 +449,34 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
 constexpr gc_clock::duration row_marker::no_ttl;
 constexpr gc_clock::duration row_marker::dead;
 
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) {
+    if (left.timestamp() != right.timestamp()) {
+        return left.timestamp() > right.timestamp() ? 1 : -1;
+    }
+    if (left.is_live() != right.is_live()) {
+        return left.is_live() ? -1 : 1;
+    }
+    if (left.is_live()) {
+        if (left.is_expiring()
+            && right.is_expiring()
+            && left.expiry() != right.expiry())
+        {
+            return left.expiry() < right.expiry() ? -1 : 1;
+        }
+    } else {
+        // Both are deleted
+        if (left.deletion_time() != right.deletion_time()) {
+            // Origin compares big-endian serialized deletion time. That's because it
+            // delegates to AbstractCell.reconcile() which compares values after
+            // comparing timestamps, which in case of deleted cells will hold
+            // serialized expiry.
+            return (uint32_t) left.deletion_time().time_since_epoch().count()
+                   < (uint32_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
     if (_deleted_at != other._deleted_at || _marker != other._marker) {
