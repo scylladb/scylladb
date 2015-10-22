@@ -765,12 +765,12 @@ private:
             Gossiper.instance.addExpireTimeForEndpoint(endpoint, expireTime);
         }
     }
-
-    protected long extractExpireTime(String[] pieces)
-    {
-        return Long.parseLong(pieces[2]);
-    }
 #endif
+
+    int64_t extract_expire_time(const std::vector<sstring>& pieces) {
+        return std::stoll(pieces[2]);
+    }
+
     /**
      * Finds living endpoints responsible for the given ranges
      *
