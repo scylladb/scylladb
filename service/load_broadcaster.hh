@@ -42,6 +42,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
 
+namespace service {
 class load_broadcaster : public gms::i_endpoint_state_change_subscriber
 {
 public:
@@ -94,4 +95,4 @@ public:
     void start_broadcasting();
     future<> stop_broadcasting();
 };
-
+}

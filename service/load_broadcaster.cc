@@ -40,6 +40,10 @@
 
 #include "load_broadcaster.hh"
 
+namespace service {
+
+constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
+
 logging::logger logger("load_broadcaster");
 
 void load_broadcaster::start_broadcasting() {
@@ -69,4 +73,6 @@ void load_broadcaster::start_broadcasting() {
 future<> load_broadcaster::stop_broadcasting() {
     _timer.cancel();
     return std::move(_done);
+}
+
 }
