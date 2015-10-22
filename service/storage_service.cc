@@ -1455,7 +1455,7 @@ future<> storage_service::decommission() {
         }
 
         logger.debug("DECOMMISSIONING");
-        // FIXME: startLeaving();
+        start_leaving().get();
         // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
         long timeout = get_ring_delay();
         set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
@@ -2017,6 +2017,13 @@ future<streaming::stream_state> storage_service::stream_hints() {
         sp.transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
         return sp.execute();
     }
+}
+
+future<> storage_service::start_leaving() {
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens()));
+    _token_metadata.add_leaving_endpoint(get_broadcast_address());
+    return get_local_pending_range_calculator_service().update();
 }
 
 } // namespace service

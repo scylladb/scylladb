@@ -1878,21 +1878,15 @@ public:
         FBUtilities.sortSampledKeys(keys, range);
         return keys;
     }
-
-    /**
-     * Broadcast leaving status and update local _token_metadata accordingly
-     */
-    private void startLeaving()
-    {
-        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.leaving(getLocalTokens()));
-        _token_metadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
-        PendingRangeCalculatorService.instance.update();
-    }
 #endif
-
+public:
     future<> decommission();
 
 private:
+    /**
+     * Broadcast leaving status and update local _token_metadata accordingly
+     */
+    future<> start_leaving();
     void leave_ring();
     void unbootstrap();
     future<streaming::stream_state> stream_hints();
