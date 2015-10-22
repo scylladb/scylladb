@@ -269,6 +269,9 @@ public:
     bool is_missing() const {
         return _timestamp == api::missing_timestamp;
     }
+    bool is_live() const {
+        return !is_missing() && _ttl != dead;
+    }
     bool is_live(tombstone t, gc_clock::time_point now) const {
         if (is_missing() || _ttl == dead) {
             return false;
