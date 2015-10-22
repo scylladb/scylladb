@@ -1346,6 +1346,87 @@ future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keysp
     logger.debug("Cleared out snapshot directories");
 }
 
+future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>
+storage_service::get_snapshot_details() {
+    using cf_snapshot_map = std::unordered_map<utils::UUID, column_family::snapshot_details>;
+    using snapshot_map = std::unordered_map<sstring, cf_snapshot_map>;
+
+    class snapshot_reducer {
+    private:
+        snapshot_map _result;
+    public:
+        future<> operator()(const snapshot_map& value) {
+            for (auto&& vp: value) {
+                if (_result.count(vp.first) == 0) {
+                    _result.emplace(vp.first, std::move(vp.second));
+                    continue;
+                }
+
+                auto& rp = _result.at(vp.first);
+                for (auto&& cf: vp.second) {
+                    if (rp.count(cf.first) == 0) {
+                        rp.emplace(cf.first, std::move(cf.second));
+                        continue;
+                    }
+                    auto& rcf = rp.at(cf.first);
+                    rcf.live = cf.second.live;
+                    rcf.total = cf.second.total;
+                }
+            }
+            return make_ready_future<>();
+        }
+        snapshot_map get() && {
+            return std::move(_result);
+        }
+    };
+
+    return _db.map_reduce(snapshot_reducer(), [] (database& db) {
+        auto local_snapshots = make_lw_shared<snapshot_map>();
+        return parallel_for_each(db.get_column_families(), [local_snapshots] (auto& cf_pair) {
+            return cf_pair.second->get_snapshot_details().then([uuid = cf_pair.first, local_snapshots] (auto map) {
+                for (auto&& snap_map: map) {
+                    if (local_snapshots->count(snap_map.first) == 0) {
+                        local_snapshots->emplace(snap_map.first, cf_snapshot_map());
+                    }
+                    local_snapshots->at(snap_map.first).emplace(uuid, snap_map.second);
+                }
+                return make_ready_future<>();
+            });
+        }).then([local_snapshots] {
+            return make_ready_future<snapshot_map>(std::move(*local_snapshots));
+        });
+    }).then([this] (snapshot_map&& map) {
+        std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>> result;
+        for (auto&& pair: map) {
+            std::vector<service::storage_service::snapshot_details> details;
+
+            for (auto&& snap_map: pair.second) {
+                auto& cf = _db.local().find_column_family(snap_map.first);
+                details.push_back({ snap_map.second.live, snap_map.second.total, cf.schema()->cf_name(), cf.schema()->ks_name() });
+            }
+            result.emplace(pair.first, std::move(details));
+        }
+
+        return make_ready_future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>(std::move(result));
+    });
+}
+
+future<int64_t> storage_service::true_snapshots_size() {
+    return _db.map_reduce(adder<int64_t>(), [] (database& db) {
+        return do_with(int64_t(0), [&db] (auto& local_total) {
+            return parallel_for_each(db.get_column_families(), [&local_total] (auto& cf_pair) {
+                return cf_pair.second->get_snapshot_details().then([&local_total] (auto map) {
+                    for (auto&& snap_map: map) {
+                        local_total += snap_map.second.live;
+                    }
+                    return make_ready_future<>();
+                 });
+            }).then([&local_total] {
+                return make_ready_future<int64_t>(local_total);
+            });
+        });
+    });
+}
 
 future<> storage_service::start_rpc_server() {
     fail(unimplemented::cause::STORAGE_SERVICE);
