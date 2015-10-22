@@ -128,6 +128,8 @@ public:
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_sstable_per_read;
+        utils::ihistogram tombstone_scanned;
+        utils::ihistogram live_scanned;
     };
 
 private:
