@@ -2603,7 +2603,8 @@ public:
                 // unfreeze -> trim -> freeze
                 mutation m = p.mut().unfreeze(_schema);
                 static const std::vector<query::clustering_range> all(1, query::clustering_range::make_open_ended_both_sides());
-                auto rc = m.partition().compact_for_query(*_schema, _cmd->timestamp, all, limit_left);
+                bool is_reversed = _cmd->slice.options.contains(query::partition_slice::option::reversed);
+                auto rc = m.partition().compact_for_query(*_schema, _cmd->timestamp, all, is_reversed, limit_left);
                 partitions.push_back(partition(rc, freeze(m)));
                 row_count += rc;
             } else {

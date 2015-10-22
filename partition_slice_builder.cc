@@ -120,3 +120,9 @@ partition_slice_builder::with_static_column(bytes name) {
     _static_columns->push_back(def->id);
     return *this;
 }
+
+partition_slice_builder&
+partition_slice_builder::reversed() {
+    _options.set<query::partition_slice::option::reversed>();
+    return *this;
+}
