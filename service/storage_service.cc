@@ -1710,7 +1710,6 @@ future<bool> storage_service::is_initialized() {
 }
 
 std::unordered_multimap<range<token>, inet_address> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
-    return std::unordered_multimap<range<token>, inet_address>();
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
 
