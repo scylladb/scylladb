@@ -303,7 +303,7 @@ public:
         return _timestamp;
     }
     void apply(const row_marker& rm) {
-        if (_timestamp <= rm._timestamp) {
+        if (compare_row_marker_for_merge(*this, rm) < 0) {
             *this = rm;
         }
     }
