@@ -626,6 +626,10 @@ public:
     void compact_for_compaction(const schema& s, api::timestamp_type max_purgeable,
         gc_clock::time_point compaction_time);
 
+    // Returns the minimal mutation_partition that when applied to "other" will
+    // create a mutation_partition equal to the sum of other and this one.
+    mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
+
     // Returns true if there is no live data or tombstones.
     bool empty() const;
 public:

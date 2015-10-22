@@ -993,3 +993,40 @@ row row::difference(const schema& s, column_kind kind, const row& other) const
     });
     return r;
 }
+
+mutation_partition mutation_partition::difference(schema_ptr s, const mutation_partition& other) const
+{
+    mutation_partition mp(s);
+    if (_tombstone > other._tombstone) {
+        mp.apply(_tombstone);
+    }
+    mp._static_row = _static_row.difference(*s, column_kind::static_column, other._static_row);
+
+    auto it_rt = other._row_tombstones.begin();
+    clustering_key_prefix::less_compare cmp_rt(*s);
+    for (auto&& rt : _row_tombstones) {
+        while (it_rt != other._row_tombstones.end() && cmp_rt(it_rt->prefix(), rt.prefix())) {
+            ++it_rt;
+        }
+        if (it_rt == other._row_tombstones.end() || !it_rt->prefix().equal(*s, rt.prefix()) || rt.t() > it_rt->t()) {
+            mp.apply_row_tombstone(*s, rt.prefix(), rt.t());
+        }
+    }
+
+    auto it_r = other._rows.begin();
+    rows_entry::compare cmp_r(*s);
+    for (auto&& r : _rows) {
+        while (it_r != other._rows.end() && cmp_r(*it_r, r)) {
+            ++it_r;
+        }
+        if (it_r == other._rows.end() || !it_r->key().equal(*s, r.key())) {
+            mp.insert_row(*s, r.key(), r.row());
+        } else {
+            auto dr = r.row().difference(*s, column_kind::regular_column, it_r->row());
+            if (!dr.empty()) {
+                mp.insert_row(*s, r.key(), std::move(dr));
+            }
+        }
+    }
+    return mp;
+}
