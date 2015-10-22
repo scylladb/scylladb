@@ -335,6 +335,19 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
     return boost::make_iterator_range(i1, i2);
 }
 
+template <typename Container>
+boost::iterator_range<typename Container::iterator>
+unconst(Container& c, boost::iterator_range<typename Container::const_iterator> r) {
+    return boost::make_iterator_range(
+        c.erase(r.begin(), r.begin()),
+        c.erase(r.end(), r.end())
+    );
+}
+
+boost::iterator_range<mutation_partition::rows_type::iterator>
+mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+    return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
+}
 
 template<typename Func>
 void mutation_partition::for_each_row(const schema& schema, const query::range<clustering_key_prefix>& row_range, bool reversed, Func&& func) const
@@ -670,15 +683,6 @@ row::find_cell(column_id id) const {
         }
         return &i->cell();
     }
-}
-
-template <typename Container>
-boost::iterator_range<typename Container::iterator>
-unconst(Container& c, boost::iterator_range<typename Container::const_iterator> r) {
-    return boost::make_iterator_range(
-        c.erase(r.begin(), r.begin()),
-        c.erase(r.end(), r.end())
-    );
 }
 
 template<bool reversed, typename Func>
