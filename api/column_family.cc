@@ -668,33 +668,12 @@ void set_column_family(http_context& ctx, routes& r) {
         sstables::merge, utils_json::estimated_histogram());
     });
 
-    cf::get_tombstone_scanned_histogram.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        httpd::utils_json::histogram res;
-        res.count = 0;
-        res.mean = 0;
-        res.max = 0;
-        res.min = 0;
-        res.sum = 0;
-        res.variance = 0;
-        return make_ready_future<json::json_return_type>(res);
+    cf::get_tombstone_scanned_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::tombstone_scanned);
     });
 
-    cf::get_live_scanned_histogram.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        //auto id = get_uuid(req->param["name"], ctx.db.local());
-        //std::vector<double> res;
-        httpd::utils_json::histogram res;
-        res.count = 0;
-        res.mean = 0;
-        res.max = 0;
-        res.min = 0;
-        res.sum = 0;
-        res.variance = 0;
-        return make_ready_future<json::json_return_type>(res);
+    cf::get_live_scanned_histogram.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return get_cf_histogram(ctx, req->param["name"], &column_family::stats::live_scanned);
     });
 
     cf::get_col_update_time_delta_histogram.set(r, [] (std::unique_ptr<request> req) {
