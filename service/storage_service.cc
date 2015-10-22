@@ -650,7 +650,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
-            // addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
+            add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         }
         remove_endpoint(endpoint);
     }
@@ -1885,8 +1885,8 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     get_local_pending_range_calculator_service().update().get();
 }
 
-void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time) {
-    // FIXME: addExpireTimeIfFound(endpoint, expireTime);
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
+    add_expire_time_if_found(endpoint, expire_time);
     excise(tokens, endpoint);
 }
 
