@@ -575,8 +575,10 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
         _token_metadata.update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = _token_metadata.get_tokens(endpoint);
-        if (!std::includes(tokens_.begin(), tokens_.end(), tokens.begin(), tokens.end())) {
+        std::set<token> tmp(tokens.begin(), tokens.end());
+        if (!std::includes(tokens_.begin(), tokens_.end(), tmp.begin(), tmp.end())) {
             logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            logger.debug("tokens_={}, tokens={}", tokens_, tmp);
             _token_metadata.update_normal_tokens(tokens, endpoint);
         }
     }
