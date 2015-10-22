@@ -1,0 +1,16 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ANTLR
+Upstream-Contact: http://www.antlr.org/
+Source: https://github.com/antlr/antlr3
+
+Files: antlr-3.5.2-complete-no-st3.jar
+Copyright: Copyright (c) 2013 Terence Parr
+License: BSD-3-clause
+
+Files: antlr3
+Copyright: Copyright (c) 2015 ScyllaDB
+License: AGPL-3.0
+
+Files: debian/*
+Copyright: Copyright (c) 2015 ScyllaDB
+License: AGPL-3.0

@@ -14,3 +14,4 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
         echo $NR_HUGEPAGES > $n/hugepages/hugepages-2048kB/nr_hugepages
     done
 fi
+hugeadm --create-mounts

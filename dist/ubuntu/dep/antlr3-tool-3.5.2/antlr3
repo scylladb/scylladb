@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec /usr/bin/java -jar /usr/share/java/antlr-3.5.2-complete-no-st3.jar $*

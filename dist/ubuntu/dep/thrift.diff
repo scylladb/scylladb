@@ -1,0 +1,252 @@
+diff -Nur debian/control /root/thrift-0.9.1/debian/control
+--- debian/control	2013-08-18 14:58:22.000000000 +0000
++++ /root/thrift-0.9.1/debian/control	2015-09-29 12:17:18.000000000 +0000
+@@ -1,12 +1,10 @@
+ Source: thrift
+ Section: devel
+ Priority: extra
+-Build-Depends: debhelper (>= 5), build-essential, mono-gmcs, python-dev, ant,
+-    mono-devel,  libmono-system-web2.0-cil, erlang-base, ruby1.8-dev, autoconf, python-support,
+-    automake, pkg-config, libtool, bison, flex, libboost-dev | libboost1.40-dev, python-all,
+-    python-all-dev, python-all-dbg, openjdk-6-jdk | java-sdk, libcommons-lang3-java,
+-    libboost-test-dev | libboost-test1.40-dev, libevent-dev, perl (>= 5.8.0-7),
+-    php5, php5-dev, libglib2.0-dev, libqt4-dev
++Build-Depends: debhelper (>= 5), build-essential, autoconf, 
++    automake, pkg-config, libtool, bison, flex, libboost-dev | libboost1.55-dev, 
++    libboost-test-dev | libboost-test1.55-dev, libevent-dev, 
++    libglib2.0-dev, libqt4-dev
+ Maintainer: Thrift Developer's <dev@thrift.apache.org>
+ Homepage: http://thrift.apache.org/
+ Vcs-Git: https://git-wip-us.apache.org/repos/asf/thrift.git
+@@ -26,98 +24,6 @@
+  from .thrift files (containing the definitions) to the language binding
+  for the supported languages.
+ 
+-Package: python-thrift
+-Architecture: any
+-Section: python
+-Depends: ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+-Recommends: python-twisted-core
+-Provides: ${python:Provides}
+-Description: Python bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Python bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to Python
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+-
+-Package: python-thrift-dbg
+-Architecture: any
+-Section: python
+-Depends: ${shlibs:Depends}, ${misc:Depends}, python-thrift (= ${binary:Version}), python-all-dbg
+-Provides: ${python:Provides}
+-Description: Python bindings for Thrift (debug version)
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Python bindings for Thrift with debugging symbols.
+- You will need the thrift tool (in the thrift-compiler package) to compile your
+- definition to Python classes, and then the modules in this package will allow
+- you to use those classes in your programs.
+-
+-Package: ruby-thrift
+-Architecture: all
+-Section: libs
+-Depends: ruby | ruby-interpreter, ${shlibs:Depends}, ${misc:Depends}
+-Provides: libthrift-ruby
+-Replaces: libthrift-ruby
+-Breaks: libthrift-ruby
+-Description: Ruby bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Ruby bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to Ruby
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+-
+-Package: libthrift-java
+-Architecture: all
+-Section: libs
+-Depends: java-gcj-compat | java1-runtime | java2-runtime, ${misc:Depends}
+-Recommends: libcommons-lang3-java
+-Description: Java bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Java bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to Java
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+-
+-Package: libthrift-cil
+-Architecture: all
+-Section: libs
+-Depends: cli-common, libmono-corlib1.0-cil (>= 1.0), libmono-system1.0-cil (>= 1.0), 
+-    libmono-system-web2.0-cil, ${misc:Depends}
+-Description: CLI bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the CLI bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to C#
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+-
+-Package: libthrift-perl
+-Architecture: all
+-Section: perl
+-Depends: perl (>= 5.8.0-7), ${misc:Depends}
+-Description: Perl bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the Perl bindings for Thrift. You will need the thrift
+- tool (in the thrift-compiler package) to compile your definition to Perl
+- classes, and then the modules in this package will allow you to use those
+- classes in your programs.
+-
+ Package: libthrift0
+ Architecture: any
+ Depends: ${shlibs:Depends}, ${misc:Depends}
+@@ -140,15 +46,3 @@
+  .
+  This package contains the development libraries required for writing C++
+  applications using Thrift.
+-
+-Package: php5-thrift
+-Architecture: any
+-Section: php
+-Depends: ${php:Depends}, ${shlibs:Depends}, ${misc:Depends}
+-Provides: ${php:Provides}
+-Description: PHP bindings for Thrift
+- Thrift is a software framework for scalable cross-language services
+- development. It combines a software stack with a code generation engine to
+- build services that work efficiently and seamlessly.
+- .
+- This package contains the PHP bindings for Thrift.
+diff -Nur debian/rules /root/thrift-0.9.1/debian/rules
+--- debian/rules	2013-08-15 14:04:29.000000000 +0000
++++ /root/thrift-0.9.1/debian/rules	2015-09-29 12:32:28.000000000 +0000
+@@ -45,18 +45,6 @@
+ 	# Compile C (glib) library
+ 	$(MAKE) -C $(CURDIR)/lib/c_glib
+ 
+-	# Python library
+-	cd $(CURDIR)/lib/py && \
+-    for py in $(PYVERS); do  \
+-        $$py setup.py build; \
+-        $$py-dbg setup.py build; \
+-    done
+-
+-	# PHP
+-	cd $(CURDIR)/lib/php/src/ext/thrift_protocol && \
+-		phpize && \
+-		./configure && make
+-
+ 	touch $@
+ 
+ build-indep: build-indep-stamp
+@@ -65,19 +53,6 @@
+ 	# Add here commands to compile the indep part of the package.
+ 	#$(MAKE) doc
+ 
+-	# Java
+-	cd $(CURDIR)/lib/java && \
+-		ant
+-
+-	# C#
+-	$(MAKE) -C $(CURDIR)/lib/csharp
+-
+-	# Ruby
+-	$(MAKE) -C $(CURDIR)/lib/rb
+-
+-	# Perl
+-	$(MAKE) -C $(CURDIR)/lib/perl INSTALLDIRS=vendor
+-
+ 	touch $@
+ 
+ clean:
+@@ -101,31 +76,6 @@
+ 	# debian/<package>-doc.
+ 	#INSTALLDOC#
+ 
+-        # Java
+-	mkdir -p $(CURDIR)/debian/libthrift-java/usr/share/java/ && \
+-	cp $(CURDIR)/lib/java/build/libthrift*.jar \
+-		$(CURDIR)/debian/libthrift-java/usr/share/java/
+-
+-        # Ruby
+-	mkdir -p $(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8 && \
+-	cp $(CURDIR)/lib/rb/lib/thrift.rb \
+-		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8
+-	cp -r $(CURDIR)/lib/rb/lib/thrift \
+-		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.8
+-	mkdir -p $(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.9.1 && \
+-	cp $(CURDIR)/lib/rb/lib/thrift.rb \
+-		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.9.1
+-	cp -r $(CURDIR)/lib/rb/lib/thrift \
+-		$(CURDIR)/debian/ruby-thrift/usr/lib/ruby/1.9.1
+-
+-	# C#
+-	mkdir -p $(CURDIR)/debian/libthrift-cil/usr/lib/cli/thrift/ && \
+-	cp $(CURDIR)/lib/csharp/Thrift.dll \
+-		$(CURDIR)/debian/libthrift-cil/usr/lib/cli/thrift/Thrift.dll
+-
+-	# Perl
+-	$(MAKE) -C $(CURDIR)/lib/perl install DESTDIR=$(CURDIR)/debian/libthrift-perl/usr
+-
+ 	dh_install -i
+ 
+ install-arch:
+@@ -144,23 +94,6 @@
+ 		$(CURDIR)/debian/thrift-compiler/usr/bin/thrift && \
+ 	rmdir $(CURDIR)/debian/thrift-compiler/usr/sbin
+ 
+-	# Python
+-	cd $(CURDIR)/lib/py && \
+-	for py in $(PYVERS); do \
+-		$$py setup.py install --no-compile --root=$(CURDIR)/debian/python-thrift; \
+-		$$py-dbg setup.py install --no-compile --root=$(CURDIR)/debian/python-thrift-dbg; \
+-	done
+-
+-	find $(CURDIR)/debian/python-thrift-dbg -name "*.pyc" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python-thrift-dbg -name "*.py" -print0 | xargs -0 rm -f
+-	find $(CURDIR)/debian/python-thrift-dbg -name "*.egg-info" -print0 | xargs -0 rm -rf
+-	find $(CURDIR)/debian/python-thrift-dbg -depth -type d -empty -exec rmdir {} \;
+-
+-	# PHP
+-	mkdir -p $(CURDIR)/debian/php5-thrift
+-	cd $(CURDIR)/lib/php && \
+-		$(MAKE) DESTDIR=$(CURDIR)/debian/php5-thrift install
+-
+ 	# C++ and C (glib)
+ 	mkdir -p $(CURDIR)/debian/tmp; \
+ 	cd $(CURDIR)/lib/cpp && \
+@@ -182,8 +115,8 @@
+ 	dh_installexamples
+ 	dh_installman
+ 	dh_link
+-	dh_strip -Npython-thrift-dbg -Nthrift-compiler -Nlibthrift0 --dbg=python-thrift-dbg
+-	dh_strip -Npython-thrift-dbg
++	dh_strip -Nthrift-compiler -Nlibthrift0
++	dh_strip
+ 	dh_compress
+ 	dh_fixperms
+ 	dh_pysupport
+@@ -200,7 +133,6 @@
+ 
+ # Build architecture dependant packages using the common target.
+ binary-arch: build-arch install-arch
+-	echo "php:Depends=phpapi-$(php-config5 --phpapi)" > debian/substvars
+ 	$(MAKE) -f debian/rules DH_OPTIONS=-s binary-common
+ 
+ binary: binary-arch binary-indep
