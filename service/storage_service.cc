@@ -2034,4 +2034,12 @@ future<> storage_service::start_leaving() {
     return get_local_pending_range_calculator_service().update();
 }
 
+void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t expire_time) {
+    if (expire_time != 0L) {
+        using clk = gms::gossiper::clk;
+        auto time = clk::time_point(clk::duration(expire_time));
+        gms::get_local_gossiper().add_expire_time_for_endpoint(endpoint, time);
+    }
+}
+
 } // namespace service
