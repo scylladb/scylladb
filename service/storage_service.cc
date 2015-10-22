@@ -2011,9 +2011,8 @@ future<> storage_service::stream_hints() {
         auto preferred = hints_destination_host; // FIXME: SystemKeyspace.getPreferredIP(hints_destination_host);
 
         // stream all hints -- range list will be a singleton of "the entire ring"
-        auto t = dht::global_partitioner().get_minimum_token();
-        std::vector<range<token>> ranges = {range<token>(t)};
-        logger.debug("stream_hints: token={}, ranges={}", t, ranges);
+        std::vector<range<token>> ranges = {range<token>::make_open_ended_both_sides()};
+        logger.debug("stream_hints: ranges={}", ranges);
 
         auto sp = make_lw_shared<streaming::stream_plan>("Hints");
         std::vector<sstring> column_families = { db::system_keyspace::HINTS };
