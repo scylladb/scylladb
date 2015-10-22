@@ -39,6 +39,7 @@
 #include "index_reader.hh"
 #include "remove.hh"
 #include "memtable.hh"
+#include "downsampling.hh"
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -782,6 +783,9 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
     write(w, digest);
     w.close().get();
 }
+
+thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
+thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
 future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     if (summary_idx >= _summary.header.size) {
