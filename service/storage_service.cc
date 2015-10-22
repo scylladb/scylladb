@@ -1827,7 +1827,9 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
-            logger.debug("Remove range={}, eps={} from new_replica_endpoints={}", it->first, it->second, new_replica_endpoints);
+            const range<token>& range_ = it->first;
+            std::vector<inet_address>& current_eps = it->second;
+            logger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
             auto beg = new_replica_endpoints.begin();
             auto end = new_replica_endpoints.end();
             for (auto ep : it->second) {
