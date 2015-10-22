@@ -575,8 +575,10 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
         _token_metadata.update_normal_tokens(tokens, endpoint);
     } else {
         auto tokens_ = _token_metadata.get_tokens(endpoint);
-        if (!std::includes(tokens_.begin(), tokens_.end(), tokens.begin(), tokens.end())) {
+        std::set<token> tmp(tokens.begin(), tokens.end());
+        if (!std::includes(tokens_.begin(), tokens_.end(), tmp.begin(), tmp.end())) {
             logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+            logger.debug("tokens_={}, tokens={}", tokens_, tmp);
             _token_metadata.update_normal_tokens(tokens, endpoint);
         }
     }
@@ -592,9 +594,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
     assert(pieces.size() >= 2);
     auto tokens = get_tokens_for(endpoint);
     logger.debug("Node {} state left, tokens {}", endpoint, tokens);
-#if 0
-     excise(tokens, endpoint, extractExpireTime(pieces));
-#endif
+    excise(tokens, endpoint, extract_expire_time(pieces));
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
@@ -625,7 +625,8 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         auto state = pieces[0];
         auto remove_tokens = _token_metadata.get_tokens(endpoint);
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
-            // excise(removeTokens, endpoint, extractExpireTime(pieces));
+            std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
+            excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
             auto& gossiper = gms::get_local_gossiper();
             logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
@@ -648,7 +649,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == pieces[0]) {
-            // addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
+            add_expire_time_if_found(endpoint, extract_expire_time(pieces));
         }
         remove_endpoint(endpoint);
     }
@@ -1435,7 +1436,6 @@ bool storage_service::is_native_transport_running() {
 }
 
 future<> storage_service::decommission() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
     return seastar::async([this] {
         if (!_token_metadata.is_member(get_broadcast_address())) {
             throw std::runtime_error("local node is not a member of the token ring yet");
@@ -1455,7 +1455,7 @@ future<> storage_service::decommission() {
         }
 
         logger.debug("DECOMMISSIONING");
-        // FIXME: startLeaving();
+        start_leaving().get();
         // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
         long timeout = get_ring_delay();
         set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
@@ -1543,7 +1543,8 @@ future<> storage_service::remove_node(sstring host_id_string) {
             sleep(std::chrono::milliseconds(100)).get();
         }
 
-        // excise(tokens, endpoint);
+        std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+        excise(std::move(tmp), endpoint);
 
         // gossiper will indicate the token has left
         gossiper.advertise_token_removed(endpoint, host_id);
@@ -1709,7 +1710,6 @@ future<bool> storage_service::is_initialized() {
 }
 
 std::unordered_multimap<range<token>, inet_address> storage_service::get_changed_ranges_for_leaving(sstring keyspace_name, inet_address endpoint) {
-    return std::unordered_multimap<range<token>, inet_address>();
     // First get all ranges the leaving endpoint is responsible for
     auto ranges = get_ranges_for_endpoint(keyspace_name, endpoint);
 
@@ -1781,7 +1781,7 @@ void storage_service::unbootstrap() {
             for (auto& x : ranges_mm) {
                 ranges.push_back(x.first);
             }
-            logger.debug("Ranges needing transfer are [{}]", ranges);
+            logger.debug("Ranges needing transfer for keyspace={} are [{}]", keyspace_name, ranges);
         }
         ranges_to_stream.emplace(keyspace_name, std::move(ranges_mm));
     }
@@ -1811,8 +1811,8 @@ void storage_service::unbootstrap() {
     // wait for the transfer runnables to signal the latch.
     logger.debug("waiting for stream acks.");
     try {
-        auto stream_state = stream_success.get0();
-        auto hints_state = hints_success.get0();
+        stream_success.get();
+        hints_success.get();
     } catch (...) {
         logger.warn("unbootstrap fails to stream : {}", std::current_exception());
         throw;
@@ -1822,7 +1822,6 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    using stream_plan = streaming::stream_plan;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> ranges_to_fetch;
 
     auto my_address = get_broadcast_address();
@@ -1843,7 +1842,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         ranges_to_fetch.emplace(keyspace_name, std::move(tmp));
     }
-    stream_plan sp("Restore replica count", true);
+    auto sp = make_lw_shared<streaming::stream_plan>("Restore replica count");
     for (auto& x: ranges_to_fetch) {
         const sstring& keyspace_name = x.first;
         std::unordered_map<inet_address, std::vector<range<token>>>& maps = x.second;
@@ -1853,10 +1852,10 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
             auto preferred = source;
             logger.debug("Requesting from {} ranges {}", source, ranges);
-            sp.request_ranges(source, preferred, keyspace_name, ranges);
+            sp->request_ranges(source, preferred, keyspace_name, ranges);
         }
     }
-    return sp.execute().then_wrapped([this, notify_endpoint] (auto&& f) {
+    return sp->execute().then_wrapped([this, sp, notify_endpoint] (auto&& f) {
         try {
             auto state = f.get0();
             return this->send_replication_notification(notify_endpoint);
@@ -1886,8 +1885,8 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
     get_local_pending_range_calculator_service().update().get();
 }
 
-void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, long expire_time) {
-    // FIXME: addExpireTimeIfFound(endpoint, expireTime);
+void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
+    add_expire_time_if_found(endpoint, expire_time);
     excise(tokens, endpoint);
 }
 
@@ -1940,9 +1939,8 @@ void storage_service::leave_ring() {
     sleep(delay).get();
 }
 
-future<streaming::stream_state>
+future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace) {
-    using stream_plan = streaming::stream_plan;
     // First, we build a list of ranges to stream to each host, per table
     std::unordered_map<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> sessions_to_stream_by_keyspace;
     for (auto& entry : ranges_to_stream_by_keyspace) {
@@ -1961,7 +1959,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         }
         sessions_to_stream_by_keyspace.emplace(keyspace, std::move(ranges_per_endpoint));
     }
-    stream_plan sp("Unbootstrap", true);
+    auto sp = make_lw_shared<streaming::stream_plan>("Unbootstrap");
     for (auto& entry : sessions_to_stream_by_keyspace) {
         const auto& keyspace_name = entry.first;
         // TODO: we can move to avoid copy of std::vector
@@ -1973,13 +1971,18 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             auto preferred = new_endpoint; // FIXME: SystemKeyspace.getPreferredIP(newEndpoint);
 
             // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-            sp.transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
+            sp->transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
         }
     }
-    return sp.execute();
+    return sp->execute().discard_result().then([sp] {
+        logger.info("stream_ranges successful");
+    }).handle_exception([] (auto ep) {
+        logger.info("stream_ranges failed: {}", ep);
+        return make_exception_future(std::runtime_error("stream_ranges failed"));
+    });
 }
 
-future<streaming::stream_state> storage_service::stream_hints() {
+future<> storage_service::stream_hints() {
     // FIXME: flush hits column family
 #if 0
     // StreamPlan will not fail if there are zero files to transfer, so flush anyway (need to get any in-memory hints, as well)
@@ -2008,14 +2011,34 @@ future<streaming::stream_state> storage_service::stream_hints() {
         auto preferred = hints_destination_host; // FIXME: SystemKeyspace.getPreferredIP(hints_destination_host);
 
         // stream all hints -- range list will be a singleton of "the entire ring"
-        auto t = dht::global_partitioner().get_minimum_token();
-        std::vector<range<token>> ranges = {range<token>(t)};
+        std::vector<range<token>> ranges = {range<token>::make_open_ended_both_sides()};
+        logger.debug("stream_hints: ranges={}", ranges);
 
-        streaming::stream_plan sp("Hints", true);
+        auto sp = make_lw_shared<streaming::stream_plan>("Hints");
         std::vector<sstring> column_families = { db::system_keyspace::HINTS };
         auto keyspace = db::system_keyspace::NAME;
-        sp.transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
-        return sp.execute();
+        sp->transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
+        return sp->execute().discard_result().then([sp] {
+            logger.info("stream_hints successful");
+        }).handle_exception([] (auto ep) {
+            logger.info("stream_hints failed: {}", ep);
+            return make_exception_future(std::runtime_error("stream_hints failed"));
+        });
+    }
+}
+
+future<> storage_service::start_leaving() {
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens()));
+    _token_metadata.add_leaving_endpoint(get_broadcast_address());
+    return get_local_pending_range_calculator_service().update();
+}
+
+void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t expire_time) {
+    if (expire_time != 0L) {
+        using clk = gms::gossiper::clk;
+        auto time = clk::time_point(clk::duration(expire_time));
+        gms::get_local_gossiper().add_expire_time_for_endpoint(endpoint, time);
     }
 }
 

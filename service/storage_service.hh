@@ -764,20 +764,13 @@ private:
 
     /** unlike excise we just need this endpoint gone without going through any notifications **/
     void remove_endpoint(inet_address endpoint);
-#if 0
-    protected void addExpireTimeIfFound(InetAddress endpoint, long expireTime)
-    {
-        if (expireTime != 0L)
-        {
-            Gossiper.instance.addExpireTimeForEndpoint(endpoint, expireTime);
-        }
+
+    void add_expire_time_if_found(inet_address endpoint, int64_t expire_time);
+
+    int64_t extract_expire_time(const std::vector<sstring>& pieces) {
+        return std::stoll(pieces[2]);
     }
 
-    protected long extractExpireTime(String[] pieces)
-    {
-        return Long.parseLong(pieces[2]);
-    }
-#endif
     /**
      * Finds living endpoints responsible for the given ranges
      *
@@ -1885,24 +1878,18 @@ public:
         FBUtilities.sortSampledKeys(keys, range);
         return keys;
     }
-
-    /**
-     * Broadcast leaving status and update local _token_metadata accordingly
-     */
-    private void startLeaving()
-    {
-        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.leaving(getLocalTokens()));
-        _token_metadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
-        PendingRangeCalculatorService.instance.update();
-    }
 #endif
-
+public:
     future<> decommission();
 
 private:
+    /**
+     * Broadcast leaving status and update local _token_metadata accordingly
+     */
+    future<> start_leaving();
     void leave_ring();
     void unbootstrap();
-    future<streaming::stream_state> stream_hints();
+    future<> stream_hints();
 #if 0
 
     public void move(String newToken) throws IOException
@@ -2367,7 +2354,7 @@ private:
      * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
      * @return async Future for whether stream was success
      */
-    future<streaming::stream_state> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
+    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
 #if 0
     /**
