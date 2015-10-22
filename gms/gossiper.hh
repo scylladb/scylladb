@@ -104,11 +104,11 @@ private:
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<clk> _scheduled_gossip_task;
     bool _enabled = false;
-    sstring get_cluster_name();
-    sstring get_partitioner_name();
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
 public:
+    sstring get_cluster_name();
+    sstring get_partitioner_name();
     inet_address get_broadcast_address() {
         return utils::fb_utilities::get_broadcast_address();
     }

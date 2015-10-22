@@ -23,6 +23,7 @@
 #include "service/storage_proxy.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/api-doc/utils.json.hh"
+#include "service/storage_service.hh"
 
 namespace api {
 
@@ -212,8 +213,14 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_schema_versions.set(r, [](std::unique_ptr<request> req)  {
         //TBD
-        unimplemented();
+        // FIXME
+        // describe_schema_versions is not implemented yet
+        // this is a work around
         std::vector<sp::mapper_list> res;
+        sp::mapper_list entry;
+        entry.key = boost::lexical_cast<std::string>(utils::fb_utilities::get_broadcast_address());
+        entry.value.push(service::get_local_storage_service().get_schema_version());
+        res.push_back(entry);
         return make_ready_future<json::json_return_type>(res);
     });
 
