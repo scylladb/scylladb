@@ -594,9 +594,7 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
     assert(pieces.size() >= 2);
     auto tokens = get_tokens_for(endpoint);
     logger.debug("Node {} state left, tokens {}", endpoint, tokens);
-#if 0
-     excise(tokens, endpoint, extractExpireTime(pieces));
-#endif
+    excise(tokens, endpoint, extract_expire_time(pieces));
 }
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
@@ -627,7 +625,8 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
         auto state = pieces[0];
         auto remove_tokens = _token_metadata.get_tokens(endpoint);
         if (sstring(gms::versioned_value::REMOVED_TOKEN) == state) {
-            // excise(removeTokens, endpoint, extractExpireTime(pieces));
+            std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
+            excise(std::move(tmp), endpoint, extract_expire_time(pieces));
         } else if (sstring(gms::versioned_value::REMOVING_TOKEN) == state) {
             auto& gossiper = gms::get_local_gossiper();
             logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
@@ -1544,7 +1543,8 @@ future<> storage_service::remove_node(sstring host_id_string) {
             sleep(std::chrono::milliseconds(100)).get();
         }
 
-        // excise(tokens, endpoint);
+        std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+        excise(std::move(tmp), endpoint);
 
         // gossiper will indicate the token has left
         gossiper.advertise_token_removed(endpoint, host_id);
