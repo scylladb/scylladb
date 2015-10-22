@@ -172,7 +172,7 @@ SEASTAR_TEST_CASE(big_summary_query_32) {
 static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>("ks", "cf", dir, generation, la, big);
     return sst->load().then([sst, generation] {
-        sst->set_generation(generation + 1);
+        sstables::test(sst).change_generation_number(generation + 1);
         auto fut = sstables::test(sst).store();
         return std::move(fut).then([sst = std::move(sst)] {
             return make_ready_future<sstable_ptr>(std::move(sst));
@@ -184,37 +184,49 @@ static future<> write_sst_info(sstring dir, unsigned long generation) {
     return do_write_sst(dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
-static future<std::pair<char*, size_t>> read_file(sstring file_path)
+using bufptr_t = std::unique_ptr<char [], free_deleter>;
+static future<std::pair<bufptr_t, size_t>> read_file(sstring file_path)
 {
     return engine().open_file_dma(file_path, open_flags::rw).then([] (file f) {
         return f.size().then([f] (auto size) mutable {
             auto aligned_size = align_up(size, 512UL);
-            auto rbuf = reinterpret_cast<char*>(::memalign(4096, aligned_size));
+            auto buf = allocate_aligned_buffer<char>(aligned_size, 512UL);
+            auto rbuf = buf.get();
             ::memset(rbuf, 0, aligned_size);
-            return f.dma_read(0, rbuf, aligned_size).then([size, rbuf, f] (auto ret) {
+            return f.dma_read(0, rbuf, aligned_size).then([size, buf = std::move(buf), f] (auto ret) mutable {
                 BOOST_REQUIRE(ret == size);
-                std::pair<char*, size_t> p = { rbuf, size };
-                return make_ready_future<std::pair<char*, size_t>>(p);
+                std::pair<bufptr_t, size_t> p(std::move(buf), std::move(size));
+                return make_ready_future<std::pair<bufptr_t, size_t>>(std::move(p));
             }).finally([f] () mutable { return f.close().finally([f] {}); });
         });
     });
 }
 
+struct sstdesc {
+    sstring dir;
+    int64_t gen;
+};
+
+static future<> compare_files(sstdesc file1, sstdesc file2, sstable::component_type component) {
+    auto file_path = sstable::filename(file1.dir, "ks", "cf", la, file1.gen, big, component);
+    return read_file(file_path).then([component, file2] (auto ret) {
+        auto file_path = sstable::filename(file2.dir, "ks", "cf", la, file2.gen, big, component);
+        return read_file(file_path).then([ret = std::move(ret)] (auto ret2) {
+            // assert that both files have the same size.
+            BOOST_REQUIRE(ret.second == ret2.second);
+            // assert that both files have the same content.
+            BOOST_REQUIRE(::memcmp(ret.first.get(), ret2.first.get(), ret.second) == 0);
+            // free buf from both files.
+        });
+    });
+
+}
+
 static future<> check_component_integrity(sstable::component_type component) {
     return write_sst_info("tests/sstables/compressed", 1).then([component] {
-        auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 1, big, component);
-        return read_file(file_path).then([component] (auto ret) {
-            auto file_path = sstable::filename("tests/sstables/compressed", "ks", "cf", la, 2, big, component);
-            return read_file(file_path).then([ret] (auto ret2) {
-                // assert that both files have the same size.
-                BOOST_REQUIRE(ret.second == ret2.second);
-                // assert that both files have the same content.
-                BOOST_REQUIRE(::memcmp(ret.first, ret2.first, ret.second) == 0);
-                // free buf from both files.
-                ::free(ret.first);
-                ::free(ret2.first);
-            });
-        });
+        return compare_files(sstdesc{"tests/sstables/compressed", 1 },
+                             sstdesc{"tests/sstables/compressed", 2 },
+                             component);
     });
 }
 
@@ -784,4 +796,74 @@ SEASTAR_TEST_CASE(wrong_range) {
         });
     });
 }
- 
+
+static future<>
+test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
+    auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, sstable::component_type::Data);
+    return engine().open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
+        if (exists) {
+            BOOST_CHECK_NO_THROW(f.get0());
+        } else {
+            BOOST_REQUIRE_THROW(f.get0(), std::system_error);
+        }
+        return make_ready_future<>();
+    });
+}
+
+// We need to be careful not to allow failures in this test to contaminate subsequent runs.
+// We will therefore run it in an empty directory, and first link a known SSTable from another
+// directory to it.
+SEASTAR_TEST_CASE(set_generation) {
+    return test_setup::do_with_test_directory([] {
+        return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+            return sstp->create_links("tests/sstables/generation").then([sstp] {});
+        }).then([] {
+            return reusable_sst("tests/sstables/generation", 1).then([] (auto sstp) {
+                return sstp->set_generation(2).then([sstp] {});
+            });
+        }).then([] {
+            return test_sstable_exists("tests/sstables/generation", 1, false);
+        }).then([] {
+            return compare_files(sstdesc{"tests/sstables/uncompressed", 1 },
+                                 sstdesc{"tests/sstables/generation", 2 },
+                                 sstable::component_type::Data);
+        });
+    }, "tests/sstables/generation");
+}
+
+SEASTAR_TEST_CASE(reshuffle) {
+    return test_setup::do_with_test_directory([] {
+        return reusable_sst("tests/sstables/uncompressed", 1).then([] (auto sstp) {
+            return sstp->create_links("tests/sstables/generation", 1).then([sstp] {
+                return sstp->create_links("tests/sstables/generation", 5).then([sstp] {
+                    return sstp->create_links("tests/sstables/generation", 10);
+                });
+            }).then([sstp] {});
+        }).then([] {
+            auto cm = make_lw_shared<compaction_manager>();
+            cm->start(2); // starting two task handlers.
+
+            column_family::config cfg;
+            cfg.datadir = "tests/sstables/generation";
+            cfg.enable_commitlog = false;
+            cfg.enable_incremental_backups = false;
+            auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm);
+            cf->start();
+            return cf->reshuffle_sstables(3).then([cm, cf] (std::vector<sstables::entry_descriptor> reshuffled) {
+                BOOST_REQUIRE(reshuffled.size() == 2);
+                BOOST_REQUIRE(reshuffled[0].generation  == 3);
+                BOOST_REQUIRE(reshuffled[1].generation  == 4);
+                return when_all(
+                    test_sstable_exists("tests/sstables/generation", 1, true),
+                    test_sstable_exists("tests/sstables/generation", 2, false),
+                    test_sstable_exists("tests/sstables/generation", 3, true),
+                    test_sstable_exists("tests/sstables/generation", 4, true),
+                    test_sstable_exists("tests/sstables/generation", 5, false),
+                    test_sstable_exists("tests/sstables/generation", 10, false)
+                ).discard_result().then([cm] {
+                    return cm->stop();
+                });
+            }).then([cm, cf] {});
+        });
+    }, "tests/sstables/generation");
+}

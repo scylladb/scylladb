@@ -1612,7 +1612,7 @@ static std::vector<std::pair<sstring, dht::token>> token_generation_for_current_
     return key_and_token_pair;
 }
 
-static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, unsigned long gen, uint64_t fake_data_size,
+static void add_sstable_for_leveled_test(lw_shared_ptr<column_family>& cf, int64_t gen, uint64_t fake_data_size,
                                          uint32_t sstable_level, sstring first_key, sstring last_key, int64_t max_timestamp = 0) {
     auto sst = make_lw_shared<sstable>("ks", "cf", "", gen, la, big);
     sstables::test(sst).set_values_for_leveled_strategy(fake_data_size, sstable_level, max_timestamp, std::move(first_key), std::move(last_key));
@@ -1631,7 +1631,7 @@ static bool key_range_overlaps(sstring a, sstring b, sstring c, sstring d) {
     return range1.overlaps(range2, dht::token_comparator());
 }
 
-static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, unsigned long generation) {
+static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, int64_t generation) {
     auto sstables = cf->get_sstables();
     auto entry = sstables->find(generation);
     assert(entry != sstables->end());
@@ -1640,7 +1640,7 @@ static shared_sstable get_sstable(const lw_shared_ptr<column_family>& cf, unsign
     return entry->second;
 }
 
-static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, unsigned long gen1, unsigned long gen2) {
+static bool sstable_overlaps(const lw_shared_ptr<column_family>& cf, int64_t gen1, int64_t gen2) {
     const schema& s = *cf->schema();
     auto candidate1 = get_sstable(cf, gen1);
     auto range1 = range<dht::token>::make(candidate1->get_first_decorated_key(s)._token, candidate1->get_last_decorated_key(s)._token);

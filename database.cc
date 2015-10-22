@@ -34,6 +34,7 @@
 #include "cql3/column_identifier.hh"
 #include "core/seastar.hh"
 #include <seastar/core/sleep.hh>
+#include <seastar/core/rwlock.hh>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -428,8 +429,7 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
         return make_ready_future<entry_descriptor>(std::move(comps));
     }
 
-    // Make sure new sstables don't overwrite this one.
-    _sstable_generation = std::max<uint64_t>(_sstable_generation, comps.generation /  smp::count + 1);
+    update_sstables_known_generation(comps.generation);
     assert(_sstables->count(comps.generation) == 0);
 
     auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
@@ -521,8 +521,10 @@ column_family::seal_active_memtable() {
 
     return _flush_queue->run_cf_flush(old->replay_position(), [old, this] {
         return repeat([this, old] {
-            _flush_queue->check_open_gate();
-            return try_flush_memtable_to_sstable(old);
+            return with_lock(_sstables_lock.for_read(), [this, old] {
+                _flush_queue->check_open_gate();
+                return try_flush_memtable_to_sstable(old);
+            });
         });
     }, [old, this] {
         if (_commitlog) {
@@ -607,6 +609,60 @@ column_family::stop() {
     });
 }
 
+
+future<std::vector<sstables::entry_descriptor>>
+column_family::reshuffle_sstables(int64_t start) {
+    struct work {
+        int64_t current_gen;
+        sstable_list sstables;
+        std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
+        std::vector<sstables::entry_descriptor> reshuffled;
+        work(int64_t start) : current_gen(start ? start : 1) {}
+    };
+
+    return do_with(work(start), [this] (work& work) {
+        return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (directory_entry de) {
+            auto comps = sstables::entry_descriptor::make_descriptor(de.name);
+            if (comps.component != sstables::sstable::component_type::TOC) {
+                return make_ready_future<>();
+            } else if (comps.generation < work.current_gen) {
+                return make_ready_future<>();
+            }
+            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
+                                                         _config.datadir, comps.generation,
+                                                         comps.version, comps.format);
+            work.sstables.emplace(comps.generation, std::move(sst));
+            work.descriptors.emplace(comps.generation, std::move(comps));
+            // FIXME: This is the only place in which we actually issue disk activity aside from
+            // directory metadata operations.
+            //
+            // But without the TOC information, we don't know which files we should link.
+            // The alternative to that would be to change create link to try creating a
+            // link for all possible files and handling the failures gracefuly, but that's not
+            // exactly fast either.
+            //
+            // Those SSTables are not known by anyone in the system. So we don't have any kind of
+            // object describing them. There isn't too much of a choice.
+            return work.sstables[comps.generation]->read_toc();
+        }).then([&work] {
+            // Note: cannot be parallel because we will be shuffling things around at this stage. Can't race.
+            return do_for_each(work.sstables, [&work] (auto& pair) {
+                auto&& comps = std::move(work.descriptors.at(pair.first));
+                comps.generation = work.current_gen;
+                work.reshuffled.push_back(std::move(comps));
+
+                if (pair.first == work.current_gen) {
+                    ++work.current_gen;
+                    return make_ready_future<>();
+                }
+                return pair.second->set_generation(work.current_gen++);
+            });
+        }).then([&work] {
+            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(work.reshuffled));
+        });
+    });
+}
+
 future<>
 column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
     if (!descriptor.sstables.size()) {
@@ -614,55 +670,70 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
         return make_ready_future<>();
     }
 
-    auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
+    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor)] {
+        auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
-    auto new_tables = make_lw_shared<std::vector<
-            std::pair<unsigned, sstables::shared_sstable>>>();
-    auto create_sstable = [this, new_tables] {
-            // FIXME: this generation calculation should be in a function.
-            auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
-            // FIXME: use "tmp" marker in names of incomplete sstable
-            auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
-                    sstables::sstable::version_types::ka,
-                    sstables::sstable::format_types::big);
-            sst->set_unshared();
-            new_tables->emplace_back(gen, sst);
-            return sst;
-    };
-    return sstables::compact_sstables(*sstables_to_compact, *this,
-            create_sstable, descriptor.max_sstable_bytes, descriptor.level).then([this, new_tables, sstables_to_compact] {
-        // Build a new list of _sstables: We remove from the existing list the
-        // tables we compacted (by now, there might be more sstables flushed
-        // later), and we add the new tables generated by the compaction.
-        // We create a new list rather than modifying it in-place, so that
-        // on-going reads can continue to use the old list.
-        auto current_sstables = _sstables;
-        _sstables = make_lw_shared<sstable_list>();
+        auto new_tables = make_lw_shared<std::vector<
+                std::pair<unsigned, sstables::shared_sstable>>>();
+        auto create_sstable = [this, new_tables] {
+                // FIXME: this generation calculation should be in a function.
+                auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+                // FIXME: use "tmp" marker in names of incomplete sstable
+                auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
+                        sstables::sstable::version_types::ka,
+                        sstables::sstable::format_types::big);
+                sst->set_unshared();
+                new_tables->emplace_back(gen, sst);
+                return sst;
+        };
+        return sstables::compact_sstables(*sstables_to_compact, *this,
+                create_sstable, descriptor.max_sstable_bytes, descriptor.level).then([this, new_tables, sstables_to_compact] {
+            // Build a new list of _sstables: We remove from the existing list the
+            // tables we compacted (by now, there might be more sstables flushed
+            // later), and we add the new tables generated by the compaction.
+            // We create a new list rather than modifying it in-place, so that
+            // on-going reads can continue to use the old list.
+            auto current_sstables = _sstables;
+            _sstables = make_lw_shared<sstable_list>();
 
-        // zeroing live_disk_space_used and live_sstable_count because the
-        // sstable list is re-created below.
-        _stats.live_disk_space_used = 0;
-        _stats.live_sstable_count = 0;
+            // zeroing live_disk_space_used and live_sstable_count because the
+            // sstable list is re-created below.
+            _stats.live_disk_space_used = 0;
+            _stats.live_sstable_count = 0;
 
-        std::unordered_set<sstables::shared_sstable> s(
-                sstables_to_compact->begin(), sstables_to_compact->end());
-        for (const auto& oldtab : *current_sstables) {
-            if (!s.count(oldtab.second)) {
-                update_stats_for_new_sstable(oldtab.second->data_size());
-                _sstables->emplace(oldtab.first, oldtab.second);
+            std::unordered_set<sstables::shared_sstable> s(
+                    sstables_to_compact->begin(), sstables_to_compact->end());
+            for (const auto& oldtab : *current_sstables) {
+                if (!s.count(oldtab.second)) {
+                    update_stats_for_new_sstable(oldtab.second->data_size());
+                    _sstables->emplace(oldtab.first, oldtab.second);
+                }
+
+                for (const auto& newtab : *new_tables) {
+                    // FIXME: rename the new sstable(s). Verify a rename doesn't cause
+                    // problems for the sstable object.
+                    update_stats_for_new_sstable(newtab.second->data_size());
+                    _sstables->emplace(newtab.first, newtab.second);
+                }
+
+                for (const auto& oldtab : *sstables_to_compact) {
+                    oldtab->mark_for_deletion();
+                }
             }
-        }
+        });
+    });
+}
 
-        for (const auto& newtab : *new_tables) {
-            // FIXME: rename the new sstable(s). Verify a rename doesn't cause
-            // problems for the sstable object.
-            update_stats_for_new_sstable(newtab.second->data_size());
-            _sstables->emplace(newtab.first, newtab.second);
-        }
-
-        for (const auto& oldtab : *sstables_to_compact) {
-            oldtab->mark_for_deletion();
-        }
+future<>
+column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tables) {
+    return parallel_for_each(new_tables, [this] (auto comps) {
+        auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, comps.generation, comps.version, comps.format);
+        return sst->load().then([this, sst] {
+            return sst->mutate_sstable_level(0);
+        }).then([this, sst] {
+            this->add_sstable(sst);
+            return make_ready_future<>();
+        });
     });
 }
 
@@ -1901,26 +1972,27 @@ void column_family::clear() {
 future<db::replay_position> column_family::discard_sstables(db_clock::time_point truncated_at) {
     assert(_stats.pending_compactions == 0);
 
-    db::replay_position rp;
-    auto gc_trunc = to_gc_clock(truncated_at);
+    return with_lock(_sstables_lock.for_read(), [this, truncated_at] {
+        db::replay_position rp;
+        auto gc_trunc = to_gc_clock(truncated_at);
 
-    auto pruned = make_lw_shared<sstable_list>();
+        auto pruned = make_lw_shared<sstable_list>();
 
-    for (auto&p : *_sstables) {
-        if (p.second->max_data_age() <= gc_trunc) {
-            rp = std::max(p.second->get_stats_metadata().position, rp);
-            p.second->mark_for_deletion();
-            continue;
+        for (auto&p : *_sstables) {
+            if (p.second->max_data_age() <= gc_trunc) {
+                rp = std::max(p.second->get_stats_metadata().position, rp);
+                p.second->mark_for_deletion();
+                continue;
+            }
+            pruned->emplace(p.first, p.second);
         }
-        pruned->emplace(p.first, p.second);
-    }
 
-    _sstables = std::move(pruned);
+        _sstables = std::move(pruned);
 
-    dblog.debug("cleaning out row cache");
-    _cache.clear();
-
-    return make_ready_future<db::replay_position>(rp);
+        dblog.debug("cleaning out row cache");
+        _cache.clear();
+        return make_ready_future<db::replay_position>(rp);
+    });
 }
 
 

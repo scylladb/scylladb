@@ -32,6 +32,7 @@
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
+#include <chrono>
 #include "core/distributed.hh"
 #include <functional>
 #include <cstdint>
@@ -69,6 +70,7 @@
 #include "sstables/estimated_histogram.hh"
 #include "sstables/compaction.hh"
 #include "key_reader.hh"
+#include <seastar/core/rwlock.hh>
 
 class frozen_mutation;
 class reconcilable_result;
@@ -139,8 +141,11 @@ private:
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    // There are situations in which we need to stop writing sstables. Flushers will take
+    // the read lock, and the ones that wish to stop that process will take the write lock.
+    rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
-    unsigned _sstable_generation = 1;
+    int64_t _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog
@@ -160,6 +165,11 @@ private:
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
+
+    // update the sstable generation, making sure that new new sstables don't overwrite this one.
+    void update_sstables_known_generation(unsigned generation) {
+        _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
+    }
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -169,6 +179,8 @@ private:
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
+    // We will use highres because hopefully it won't take more than a few usecs
+    std::chrono::high_resolution_clock::time_point _sstable_writes_disabled_at;
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -215,6 +227,38 @@ public:
     void clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
+    // Important warning: disabling writes will only have an effect in the current shard.
+    // The other shards will keep writing tables at will. Therefore, you very likely need
+    // to call this separately in all shards first, to guarantee that none of them are writing
+    // new data before you can safely assume that the whole node is disabled.
+    future<int64_t> disable_sstable_write() {
+        _sstable_writes_disabled_at = std::chrono::high_resolution_clock::now();
+        return _sstables_lock.write_lock().then([this] {
+            return make_ready_future<int64_t>((*_sstables->end()).first);
+        });
+    }
+
+    // SSTable writes are now allowed again, and generation is updated to new_generation
+    // returns the amount of microseconds elapsed since we disabled writes.
+    std::chrono::high_resolution_clock::duration enable_sstable_write(int64_t new_generation) {
+        update_sstables_known_generation(new_generation);
+        _sstables_lock.write_unlock();
+        return std::chrono::high_resolution_clock::now() - _sstable_writes_disabled_at;
+    }
+
+    // Make sure the generation numbers are sequential, starting from "start".
+    // Generations before "start" are left untouched.
+    //
+    // Return the highest generation number seen so far
+    //
+    // Word of warning: although this function will reshuffle anything over "start", it is
+    // very dangerous to do that with live SSTables. This is meant to be used with SSTables
+    // that are not yet managed by the system.
+    //
+    // An example usage would query all shards asking what is the highest SSTable number known
+    // to them, and then pass that + 1 as "start".
+    future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(int64_t start);
+
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
@@ -225,6 +269,7 @@ public:
 
     future<bool> snapshot_exists(sstring name);
 
+    future<> load_new_sstables(std::vector<sstables::entry_descriptor> new_tables);
     future<> snapshot(sstring name);
     future<> clear_snapshot(sstring name);
 

@@ -1412,7 +1412,7 @@ sstring sstable::toc_filename() const {
     return filename(component_type::TOC);
 }
 
-const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, unsigned long generation,
+const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_types version, int64_t generation,
                                 format_types format, component_type component) {
 
     static std::unordered_map<version_types, std::function<sstring (entry_descriptor d)>, enum_hash<version_types>> strmap = {
@@ -1427,17 +1427,46 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
     return dir + "/" + strmap[version](entry_descriptor(ks, cf, version, generation, format, component));
 }
 
-future<> sstable::create_links(sstring dir) const {
-    return parallel_for_each(component_filenames(), [this, dir](sstring f) {
-        auto sdir = get_dir();
-        auto name = f.substr(sdir.size());
-        auto dst = dir + name;
-        return ::link_file(f, dst);
+future<> sstable::create_links(sstring dir, int64_t generation) const {
+    // TemporaryTOC is always first, TOC is always last
+    auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+    return ::link_file(filename(component_type::TOC), dst).then([dir] {
+        return sync_directory(dir);
+    }).then([this, dir, generation] {
+        // FIXME: Should clean already-created links if we failed midway.
+        return parallel_for_each(_components, [this, dir, generation] (auto comp) {
+            if (comp == component_type::TOC) {
+                return make_ready_future<>();
+            }
+            auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
+            return ::link_file(this->filename(comp), dst);
+        });
     }).then([dir] {
-        // sync dir
-        return ::open_directory(dir).then([](file df) {
-            auto f = df.flush();
-            return f.finally([df = std::move(df)] {});
+        return sync_directory(dir);
+    }).then([dir, this, generation] {
+        auto src = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
+        auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TOC);
+        return engine().rename_file(src, dst);
+    }).then([dir] {
+        return sync_directory(dir);
+    });
+}
+
+future<> sstable::set_generation(int64_t new_generation) {
+    return create_links(_dir, new_generation).then([this] {
+        return remove_file(filename(component_type::TOC)).then([this] {
+            return sync_directory(_dir);
+        }).then([this] {
+            return parallel_for_each(_components, [this] (auto comp) {
+                if (comp == component_type::TOC) {
+                    return make_ready_future<>();
+                }
+                return remove_file(this->filename(comp));
+            });
+        });
+    }).then([this, new_generation] {
+        return sync_directory(_dir).then([this, new_generation] {
+            _generation = new_generation;
         });
     });
 }
@@ -1538,6 +1567,34 @@ dht::decorated_key sstable::get_last_decorated_key(const schema& s) const {
 
 int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
     return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
+}
+
+future<> sstable::mutate_sstable_level(uint32_t new_level) {
+    if (!has_component(component_type::Statistics)) {
+        return make_ready_future<>();
+    }
+
+    auto entry = _statistics.contents.find(metadata_type::Stats);
+    if (entry == _statistics.contents.end()) {
+        return make_ready_future<>();
+    }
+
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Statistics is malformed");
+    }
+    stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+    if (s.sstable_level == new_level) {
+        return make_ready_future<>();
+    }
+
+    s.sstable_level = new_level;
+    // Technically we don't have to write the whole file again. But the assumption that
+    // we will always write sequentially is a powerful one, and this does not merit an
+    // exception.
+    return seastar::async([this] {
+        write_statistics();
+    });
 }
 
 int sstable::compare_by_max_timestamp(const sstable& other) const {
@@ -1658,7 +1715,7 @@ file_exists(sstring filename) {
 }
 
 future<>
-sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, unsigned long generation, version_types v, format_types f) {
+sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
         auto toc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
         // assert that toc doesn't exist for sstable with temporary toc.
