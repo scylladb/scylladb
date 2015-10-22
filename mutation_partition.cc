@@ -834,6 +834,23 @@ void row::reserve(column_id last_column)
     }
 }
 
+template<typename Func>
+auto row::with_both_ranges(const row& other, Func&& func) const {
+    if (_type == storage_type::vector) {
+        if (other._type == storage_type::vector) {
+            return func(get_range_vector(), other.get_range_vector());
+        } else {
+            return func(get_range_vector(), other.get_range_set());
+        }
+    } else {
+        if (other._type == storage_type::vector) {
+            return func(get_range_set(), other.get_range_vector());
+        } else {
+            return func(get_range_set(), other.get_range_set());
+        }
+    }
+}
+
 bool row::operator==(const row& other) const {
     if (size() != other.size()) {
         return false;
@@ -842,19 +859,9 @@ bool row::operator==(const row& other) const {
     auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
         return c1.first == c2.first && c1.second == c2.second;
     };
-    if (_type == storage_type::vector) {
-        if (other._type == storage_type::vector) {
-            return boost::equal(get_range_vector(), other.get_range_vector(), cells_equal);
-        } else {
-            return boost::equal(get_range_vector(), other.get_range_set(), cells_equal);
-        }
-    } else {
-        if (other._type == storage_type::vector) {
-            return boost::equal(get_range_set(), other.get_range_vector(), cells_equal);
-        } else {
-            return boost::equal(get_range_set(), other.get_range_set(), cells_equal);
-        }
-    }
+    return with_both_ranges(other, [&] (auto r1, auto r2) {
+        return boost::equal(r1, r2, cells_equal);
+    });
 }
 
 row::row() {

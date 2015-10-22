@@ -156,6 +156,8 @@ private:
             return std::pair<column_id, const atomic_cell_or_collection&>(c.id(), c.cell());
         });
     }
+    template<typename Func>
+    auto with_both_ranges(const row& other, Func&& func) const;
 
     void vector_to_set();
 public:
