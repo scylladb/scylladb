@@ -156,28 +156,12 @@ struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc
 // This should be integrated into messaging_service proper.
 class messaging_service::rpc_protocol_client_wrapper {
     std::unique_ptr<rpc_protocol::client> _p;
-    bool _stopped = false;
 public:
     rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr())
             : _p(std::make_unique<rpc_protocol::client>(proto, addr, local)) {
     }
-    ~rpc_protocol_client_wrapper() {
-        if (_stopped) {
-            return;
-        }
-        auto fut = _p->stop();
-        // defer destruction until the "real" client is destroyed
-        fut.then_wrapped([p = std::move(_p)] (future<> f) {});
-    }
     auto get_stats() const { return _p->get_stats(); }
-    future<> stop() {
-        if (!_stopped) {
-            _stopped = true;
-            return _p->stop();
-        }
-        // FIXME: not really true, a previous stop could be in progress?
-        return make_ready_future<>();
-    }
+    future<> stop() { return _p->stop(); }
     bool error() {
         return _p->error();
     }
@@ -313,9 +297,23 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
+void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id) {
+    auto it = clients.find(id);
+    if (it != clients.end()) {
+        auto client = std::move(it->second.rpc_client);
+        clients.erase(it);
+        //
+        // Explicitly call rpc_protocol_client_wrapper::stop() for the erased
+        // item and hold the messaging_service shared pointer till it's over.
+        // This will make sure messaging_service::stop() blocks until
+        // client->stop() is over.
+        //
+        client->stop().finally([c = client, ms = shared_from_this()] {}).discard_result();
+    }
+}
+
 void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
-    auto idx = get_rpc_client_idx(verb);
-    _clients[idx].erase(id);
+    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id);
 }
 
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {

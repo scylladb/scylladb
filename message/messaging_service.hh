@@ -398,13 +398,15 @@ struct shard_id {
 
 class messaging_service : public seastar::async_sharded_service<messaging_service> {
 public:
-    using shard_id = net::shard_id;
-    using inet_address = gms::inet_address;
-    using UUID = utils::UUID;
-
     struct rpc_protocol_wrapper;
     struct rpc_protocol_client_wrapper;
     struct rpc_protocol_server_wrapper;
+    struct shard_info;
+
+    using shard_id = net::shard_id;
+    using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
+    using clients_map = std::unordered_map<shard_id, shard_info, shard_id::hash>;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
@@ -433,7 +435,7 @@ private:
     uint16_t _port;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
-    std::array<std::unordered_map<shard_id, shard_info, shard_id::hash>, 2> _clients;
+    std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
@@ -541,6 +543,7 @@ public:
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
+    void remove_rpc_client_one(clients_map& clients, shard_id id);
     void remove_rpc_client(messaging_verb verb, shard_id id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
