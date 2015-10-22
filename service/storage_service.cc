@@ -1435,7 +1435,6 @@ bool storage_service::is_native_transport_running() {
 }
 
 future<> storage_service::decommission() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
     return seastar::async([this] {
         if (!_token_metadata.is_member(get_broadcast_address())) {
             throw std::runtime_error("local node is not a member of the token ring yet");
