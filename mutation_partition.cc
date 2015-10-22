@@ -24,10 +24,10 @@
 #include "mutation_partition_applier.hh"
 
 template<bool reversed>
-struct reversion_traits;
+struct reversal_traits;
 
 template<>
-struct reversion_traits<false> {
+struct reversal_traits<false> {
     template <typename Container>
     static auto begin(Container& c) {
         return c.begin();
@@ -56,7 +56,7 @@ struct reversion_traits<false> {
 };
 
 template<>
-struct reversion_traits<true> {
+struct reversal_traits<true> {
     template <typename Container>
     static auto begin(Container& c) {
         return c.rbegin();
@@ -693,7 +693,7 @@ void mutation_partition::trim_rows(const schema& s,
     static_assert(std::is_same<stop_iteration, std::result_of_t<Func(rows_entry&)>>::value, "Bad func signature");
 
     bool stop = false;
-    auto last = reversion_traits<reversed>::begin(_rows);
+    auto last = reversal_traits<reversed>::begin(_rows);
     auto deleter = current_deleter<rows_entry>();
 
     for (auto&& row_range : row_ranges) {
@@ -701,8 +701,8 @@ void mutation_partition::trim_rows(const schema& s,
             break;
         }
 
-        auto it_range = reversion_traits<reversed>::maybe_reverse(_rows, unconst(_rows, range(s, row_range)));
-        last = reversion_traits<reversed>::erase_and_dispose(_rows, last, it_range.begin(), deleter);
+        auto it_range = reversal_traits<reversed>::maybe_reverse(_rows, unconst(_rows, range(s, row_range)));
+        last = reversal_traits<reversed>::erase_and_dispose(_rows, last, it_range.begin(), deleter);
 
         while (last != it_range.end()) {
             rows_entry& e = *last;
@@ -714,7 +714,7 @@ void mutation_partition::trim_rows(const schema& s,
         }
     }
 
-    reversion_traits<reversed>::erase_and_dispose(_rows, last, reversion_traits<reversed>::end(_rows), deleter);
+    reversal_traits<reversed>::erase_and_dispose(_rows, last, reversal_traits<reversed>::end(_rows), deleter);
 }
 
 uint32_t mutation_partition::do_compact(const schema& s,
