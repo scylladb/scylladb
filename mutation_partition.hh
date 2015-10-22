@@ -241,6 +241,8 @@ public:
     bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
         api::timestamp_type max_purgeable, gc_clock::time_point gc_before);
 
+    row difference(const schema&, column_kind, const row& other) const;
+
     bool operator==(const row&) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
@@ -375,6 +377,8 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
     bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
+    bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
+    deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
 
 class row_tombstones_entry {

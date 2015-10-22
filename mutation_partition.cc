@@ -953,3 +953,43 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
     });
     return any_live;
 }
+
+deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
+{
+    deletable_row dr;
+    if (_deleted_at > other._deleted_at) {
+        dr.apply(_deleted_at);
+    }
+    if (compare_row_marker_for_merge(_marker, other._marker) > 0) {
+        dr.apply(_marker);
+    }
+    dr._cells = _cells.difference(s, kind, other._cells);
+    return dr;
+}
+
+row row::difference(const schema& s, column_kind kind, const row& other) const
+{
+    row r;
+    with_both_ranges(other, [&] (auto this_range, auto other_range) {
+        auto it = other_range.begin();
+        for (auto&& c : this_range) {
+            while (it != other_range.end() && it->first < c.first) {
+                ++it;
+            }
+            if (it == other_range.end() || it->first != c.first) {
+                r.append_cell(c.first, c.second);
+            } else if (s.column_at(kind, c.first).is_atomic()) {
+                if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(), it->second.as_atomic_cell()) > 0) {
+                    r.append_cell(c.first, c.second);
+                }
+            } else {
+                auto ct = static_pointer_cast<const collection_type_impl>(s.column_at(kind, c.first).type);
+                auto diff = ct->difference(c.second.as_collection_mutation(), it->second.as_collection_mutation());
+                if (!ct->is_empty(diff)) {
+                    r.append_cell(c.first, std::move(diff));
+                }
+            }
+        }
+    });
+    return r;
+}
