@@ -1889,7 +1889,7 @@ private:
     future<> start_leaving();
     void leave_ring();
     void unbootstrap();
-    future<streaming::stream_state> stream_hints();
+    future<> stream_hints();
 #if 0
 
     public void move(String newToken) throws IOException
@@ -2354,7 +2354,7 @@ private:
      * @param rangesToStreamByKeyspace keyspaces and data ranges with endpoints included for each
      * @return async Future for whether stream was success
      */
-    future<streaming::stream_state> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
+    future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
 #if 0
     /**

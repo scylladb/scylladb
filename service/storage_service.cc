@@ -1812,8 +1812,8 @@ void storage_service::unbootstrap() {
     // wait for the transfer runnables to signal the latch.
     logger.debug("waiting for stream acks.");
     try {
-        auto stream_state = stream_success.get0();
-        auto hints_state = hints_success.get0();
+        stream_success.get();
+        hints_success.get();
     } catch (...) {
         logger.warn("unbootstrap fails to stream : {}", std::current_exception());
         throw;
@@ -1823,7 +1823,6 @@ void storage_service::unbootstrap() {
 }
 
 future<> storage_service::restore_replica_count(inet_address endpoint, inet_address notify_endpoint) {
-    using stream_plan = streaming::stream_plan;
     std::unordered_multimap<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> ranges_to_fetch;
 
     auto my_address = get_broadcast_address();
@@ -1844,7 +1843,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         }
         ranges_to_fetch.emplace(keyspace_name, std::move(tmp));
     }
-    stream_plan sp("Restore replica count", true);
+    auto sp = make_lw_shared<streaming::stream_plan>("Restore replica count");
     for (auto& x: ranges_to_fetch) {
         const sstring& keyspace_name = x.first;
         std::unordered_map<inet_address, std::vector<range<token>>>& maps = x.second;
@@ -1854,10 +1853,10 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
             // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
             auto preferred = source;
             logger.debug("Requesting from {} ranges {}", source, ranges);
-            sp.request_ranges(source, preferred, keyspace_name, ranges);
+            sp->request_ranges(source, preferred, keyspace_name, ranges);
         }
     }
-    return sp.execute().then_wrapped([this, notify_endpoint] (auto&& f) {
+    return sp->execute().then_wrapped([this, sp, notify_endpoint] (auto&& f) {
         try {
             auto state = f.get0();
             return this->send_replication_notification(notify_endpoint);
@@ -1941,9 +1940,8 @@ void storage_service::leave_ring() {
     sleep(delay).get();
 }
 
-future<streaming::stream_state>
+future<>
 storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace) {
-    using stream_plan = streaming::stream_plan;
     // First, we build a list of ranges to stream to each host, per table
     std::unordered_map<sstring, std::unordered_map<inet_address, std::vector<range<token>>>> sessions_to_stream_by_keyspace;
     for (auto& entry : ranges_to_stream_by_keyspace) {
@@ -1962,7 +1960,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         }
         sessions_to_stream_by_keyspace.emplace(keyspace, std::move(ranges_per_endpoint));
     }
-    stream_plan sp("Unbootstrap", true);
+    auto sp = make_lw_shared<streaming::stream_plan>("Unbootstrap");
     for (auto& entry : sessions_to_stream_by_keyspace) {
         const auto& keyspace_name = entry.first;
         // TODO: we can move to avoid copy of std::vector
@@ -1974,13 +1972,18 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
             auto preferred = new_endpoint; // FIXME: SystemKeyspace.getPreferredIP(newEndpoint);
 
             // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-            sp.transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
+            sp->transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
         }
     }
-    return sp.execute();
+    return sp->execute().discard_result().then([sp] {
+        logger.info("stream_ranges successful");
+    }).handle_exception([] (auto ep) {
+        logger.info("stream_ranges failed: {}", ep);
+        return make_exception_future(std::runtime_error("stream_ranges failed"));
+    });
 }
 
-future<streaming::stream_state> storage_service::stream_hints() {
+future<> storage_service::stream_hints() {
     // FIXME: flush hits column family
 #if 0
     // StreamPlan will not fail if there are zero files to transfer, so flush anyway (need to get any in-memory hints, as well)
@@ -2011,12 +2014,18 @@ future<streaming::stream_state> storage_service::stream_hints() {
         // stream all hints -- range list will be a singleton of "the entire ring"
         auto t = dht::global_partitioner().get_minimum_token();
         std::vector<range<token>> ranges = {range<token>(t)};
+        logger.debug("stream_hints: token={}, ranges={}", t, ranges);
 
-        streaming::stream_plan sp("Hints", true);
+        auto sp = make_lw_shared<streaming::stream_plan>("Hints");
         std::vector<sstring> column_families = { db::system_keyspace::HINTS };
         auto keyspace = db::system_keyspace::NAME;
-        sp.transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
-        return sp.execute();
+        sp->transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
+        return sp->execute().discard_result().then([sp] {
+            logger.info("stream_hints successful");
+        }).handle_exception([] (auto ep) {
+            logger.info("stream_hints failed: {}", ep);
+            return make_exception_future(std::runtime_error("stream_hints failed"));
+        });
     }
 }
 
