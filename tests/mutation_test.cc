@@ -680,3 +680,111 @@ SEASTAR_TEST_CASE(test_row_counting) {
         BOOST_REQUIRE_EQUAL(2, m.live_row_count());
     });
 }
+
+SEASTAR_TEST_CASE(test_mutation_diff) {
+    return seastar::async([] {
+        auto my_set_type = set_type_impl::get_instance(int32_type, true);
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("sc1", bytes_type, column_kind::static_column)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v1", bytes_type, column_kind::regular_column)
+            .with_column("v2", bytes_type, column_kind::regular_column)
+            .with_column("v3", my_set_type, column_kind::regular_column)
+            .build();
+
+        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A")));
+        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("B")));
+
+        mutation m1(partition_key::from_single_value(*s, "key1"), s);
+        m1.set_static_cell(*s->get_column_definition("sc1"),
+            atomic_cell::make_dead(2, gc_clock::now()));
+
+        m1.partition().apply(tombstone { 1, gc_clock::now() });
+        m1.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value1"))));
+        m1.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value2"))));
+
+        m1.partition().clustered_row(ckey2).apply(row_marker(3));
+        m1.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value4"))));
+        map_type_impl::mutation mset1 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(2), make_atomic_cell({})}}};
+        m1.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
+            my_set_type->serialize_mutation_form(mset1));
+
+        mutation m2(partition_key::from_single_value(*s, "key1"), s);
+        m2.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
+            atomic_cell::make_live(1, bytes_type->decompose(bytes("v1:value1a"))));
+        m2.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value2"))));
+
+        m2.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value3"))));
+        m2.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
+            atomic_cell::make_live(3, bytes_type->decompose(bytes("v2:value4a"))));
+        map_type_impl::mutation mset2 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(3), make_atomic_cell({})}}};
+        m2.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
+            my_set_type->serialize_mutation_form(mset2));
+
+        mutation m3(partition_key::from_single_value(*s, "key1"), s);
+        m3.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value1"))));
+
+        m3.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
+            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value3"))));
+        m3.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
+            atomic_cell::make_live(3, bytes_type->decompose(bytes("v2:value4a"))));
+        map_type_impl::mutation mset3 {{}, {{int32_type->decompose(1), make_atomic_cell({})}}};
+        m3.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
+            my_set_type->serialize_mutation_form(mset3));
+
+        mutation m12(partition_key::from_single_value(*s, "key1"), s);
+        m12.partition().apply(*s, m1.partition());
+        m12.partition().apply(*s, m2.partition());
+
+        auto m2_1 = m2.partition().difference(s, m1.partition());
+        BOOST_REQUIRE_EQUAL(m2_1.partition_tombstone(), tombstone());
+        BOOST_REQUIRE(!m2_1.static_row().size());
+        BOOST_REQUIRE(!m2_1.find_row(ckey1));
+        BOOST_REQUIRE(m2_1.find_row(ckey2));
+        BOOST_REQUIRE(m2_1.find_row(ckey2)->find_cell(2));
+        auto cmv = m2_1.find_row(ckey2)->find_cell(2)->as_collection_mutation();
+        auto cm = my_set_type->deserialize_mutation_form(cmv);
+        BOOST_REQUIRE(cm.cells.size() == 1);
+        BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
+
+        mutation m12_1(partition_key::from_single_value(*s, "key1"), s);
+        m12_1.partition().apply(*s, m1.partition());
+        m12_1.partition().apply(*s, m2_1);
+        BOOST_REQUIRE_EQUAL(m12, m12_1);
+
+        auto m1_2 = m1.partition().difference(s, m2.partition());
+        BOOST_REQUIRE_EQUAL(m1_2.partition_tombstone(), m12.partition().partition_tombstone());
+        BOOST_REQUIRE(m1_2.find_row(ckey1));
+        BOOST_REQUIRE(m1_2.find_row(ckey2));
+        BOOST_REQUIRE(!m1_2.find_row(ckey1)->find_cell(1));
+        BOOST_REQUIRE(!m1_2.find_row(ckey2)->find_cell(0));
+        BOOST_REQUIRE(!m1_2.find_row(ckey2)->find_cell(1));
+        cmv = m1_2.find_row(ckey2)->find_cell(2)->as_collection_mutation();
+        cm = my_set_type->deserialize_mutation_form(cmv);
+        BOOST_REQUIRE(cm.cells.size() == 1);
+        BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
+
+        mutation m12_2(partition_key::from_single_value(*s, "key1"), s);
+        m12_2.partition().apply(*s, m2.partition());
+        m12_2.partition().apply(*s, m1_2);
+        BOOST_REQUIRE_EQUAL(m12, m12_2);
+
+        auto m3_12 = m3.partition().difference(s, m12.partition());
+        BOOST_REQUIRE(m3_12.empty());
+
+        auto m12_3 = m12.partition().difference(s, m3.partition());
+        BOOST_REQUIRE_EQUAL(m12_3.partition_tombstone(), m12.partition().partition_tombstone());
+
+        mutation m123(partition_key::from_single_value(*s, "key1"), s);
+        m123.partition().apply(*s, m3.partition());
+        m123.partition().apply(*s, m12_3);
+        BOOST_REQUIRE_EQUAL(m12, m123);
+    });
+}

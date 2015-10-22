@@ -262,6 +262,16 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
     clustered_row(s, key).apply(created_at);
 }
 
+void mutation_partition::insert_row(const schema& s, const clustering_key& key, deletable_row&& row) {
+    auto e = current_allocator().construct<rows_entry>(key, std::move(row));
+    _rows.insert(_rows.end(), *e);
+}
+
+void mutation_partition::insert_row(const schema& s, const clustering_key& key, const deletable_row& row) {
+    auto e = current_allocator().construct<rows_entry>(key, row);
+    _rows.insert(_rows.end(), *e);
+}
+
 const rows_entry*
 mutation_partition::find_entry(const schema& schema, const clustering_key_prefix& key) const {
     auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(schema)));
@@ -512,6 +522,34 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
 
 constexpr gc_clock::duration row_marker::no_ttl;
 constexpr gc_clock::duration row_marker::dead;
+
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) {
+    if (left.timestamp() != right.timestamp()) {
+        return left.timestamp() > right.timestamp() ? 1 : -1;
+    }
+    if (left.is_live() != right.is_live()) {
+        return left.is_live() ? -1 : 1;
+    }
+    if (left.is_live()) {
+        if (left.is_expiring()
+            && right.is_expiring()
+            && left.expiry() != right.expiry())
+        {
+            return left.expiry() < right.expiry() ? -1 : 1;
+        }
+    } else {
+        // Both are deleted
+        if (left.deletion_time() != right.deletion_time()) {
+            // Origin compares big-endian serialized deletion time. That's because it
+            // delegates to AbstractCell.reconcile() which compares values after
+            // comparing timestamps, which in case of deleted cells will hold
+            // serialized expiry.
+            return (uint32_t) left.deletion_time().time_since_epoch().count()
+                   < (uint32_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
+        }
+    }
+    return 0;
+}
 
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
@@ -908,6 +946,23 @@ void row::reserve(column_id last_column)
     }
 }
 
+template<typename Func>
+auto row::with_both_ranges(const row& other, Func&& func) const {
+    if (_type == storage_type::vector) {
+        if (other._type == storage_type::vector) {
+            return func(get_range_vector(), other.get_range_vector());
+        } else {
+            return func(get_range_vector(), other.get_range_set());
+        }
+    } else {
+        if (other._type == storage_type::vector) {
+            return func(get_range_set(), other.get_range_vector());
+        } else {
+            return func(get_range_set(), other.get_range_set());
+        }
+    }
+}
+
 bool row::operator==(const row& other) const {
     if (size() != other.size()) {
         return false;
@@ -916,19 +971,9 @@ bool row::operator==(const row& other) const {
     auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
         return c1.first == c2.first && c1.second == c2.second;
     };
-    if (_type == storage_type::vector) {
-        if (other._type == storage_type::vector) {
-            return boost::equal(get_range_vector(), other.get_range_vector(), cells_equal);
-        } else {
-            return boost::equal(get_range_vector(), other.get_range_set(), cells_equal);
-        }
-    } else {
-        if (other._type == storage_type::vector) {
-            return boost::equal(get_range_set(), other.get_range_vector(), cells_equal);
-        } else {
-            return boost::equal(get_range_set(), other.get_range_set(), cells_equal);
-        }
-    }
+    return with_both_ranges(other, [&] (auto r1, auto r2) {
+        return boost::equal(r1, r2, cells_equal);
+    });
 }
 
 row::row() {
@@ -1009,4 +1054,81 @@ bool row::compact_and_expire(const schema& s, column_kind kind, tombstone tomb, 
         return erase;
     });
     return any_live;
+}
+
+deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
+{
+    deletable_row dr;
+    if (_deleted_at > other._deleted_at) {
+        dr.apply(_deleted_at);
+    }
+    if (compare_row_marker_for_merge(_marker, other._marker) > 0) {
+        dr.apply(_marker);
+    }
+    dr._cells = _cells.difference(s, kind, other._cells);
+    return dr;
+}
+
+row row::difference(const schema& s, column_kind kind, const row& other) const
+{
+    row r;
+    with_both_ranges(other, [&] (auto this_range, auto other_range) {
+        auto it = other_range.begin();
+        for (auto&& c : this_range) {
+            while (it != other_range.end() && it->first < c.first) {
+                ++it;
+            }
+            if (it == other_range.end() || it->first != c.first) {
+                r.append_cell(c.first, c.second);
+            } else if (s.column_at(kind, c.first).is_atomic()) {
+                if (compare_atomic_cell_for_merge(c.second.as_atomic_cell(), it->second.as_atomic_cell()) > 0) {
+                    r.append_cell(c.first, c.second);
+                }
+            } else {
+                auto ct = static_pointer_cast<const collection_type_impl>(s.column_at(kind, c.first).type);
+                auto diff = ct->difference(c.second.as_collection_mutation(), it->second.as_collection_mutation());
+                if (!ct->is_empty(diff)) {
+                    r.append_cell(c.first, std::move(diff));
+                }
+            }
+        }
+    });
+    return r;
+}
+
+mutation_partition mutation_partition::difference(schema_ptr s, const mutation_partition& other) const
+{
+    mutation_partition mp(s);
+    if (_tombstone > other._tombstone) {
+        mp.apply(_tombstone);
+    }
+    mp._static_row = _static_row.difference(*s, column_kind::static_column, other._static_row);
+
+    auto it_rt = other._row_tombstones.begin();
+    clustering_key_prefix::less_compare cmp_rt(*s);
+    for (auto&& rt : _row_tombstones) {
+        while (it_rt != other._row_tombstones.end() && cmp_rt(it_rt->prefix(), rt.prefix())) {
+            ++it_rt;
+        }
+        if (it_rt == other._row_tombstones.end() || !it_rt->prefix().equal(*s, rt.prefix()) || rt.t() > it_rt->t()) {
+            mp.apply_row_tombstone(*s, rt.prefix(), rt.t());
+        }
+    }
+
+    auto it_r = other._rows.begin();
+    rows_entry::compare cmp_r(*s);
+    for (auto&& r : _rows) {
+        while (it_r != other._rows.end() && cmp_r(*it_r, r)) {
+            ++it_r;
+        }
+        if (it_r == other._rows.end() || !it_r->key().equal(*s, r.key())) {
+            mp.insert_row(*s, r.key(), r.row());
+        } else {
+            auto dr = r.row().difference(*s, column_kind::regular_column, it_r->row());
+            if (!dr.empty()) {
+                mp.insert_row(*s, r.key(), std::move(dr));
+            }
+        }
+    }
+    return mp;
 }

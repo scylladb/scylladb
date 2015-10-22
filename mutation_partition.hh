@@ -156,6 +156,8 @@ private:
             return std::pair<column_id, const atomic_cell_or_collection&>(c.id(), c.cell());
         });
     }
+    template<typename Func>
+    auto with_both_ranges(const row& other, Func&& func) const;
 
     void vector_to_set();
 public:
@@ -239,12 +241,17 @@ public:
     bool compact_and_expire(const schema& s, column_kind kind, tombstone tomb, gc_clock::time_point query_time,
         api::timestamp_type max_purgeable, gc_clock::time_point gc_before);
 
+    row difference(const schema&, column_kind, const row& other) const;
+
     bool operator==(const row&) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
 
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
+
+class row_marker;
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right);
 
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
@@ -263,6 +270,9 @@ public:
     { }
     bool is_missing() const {
         return _timestamp == api::missing_timestamp;
+    }
+    bool is_live() const {
+        return !is_missing() && _ttl != dead;
     }
     bool is_live(tombstone t, gc_clock::time_point now) const {
         if (is_missing() || _ttl == dead) {
@@ -300,7 +310,7 @@ public:
         return _timestamp;
     }
     void apply(const row_marker& rm) {
-        if (_timestamp <= rm._timestamp) {
+        if (compare_row_marker_for_merge(*this, rm) < 0) {
             *this = rm;
         }
     }
@@ -367,6 +377,8 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
     bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
+    bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
+    deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
 
 class row_tombstones_entry {
@@ -442,6 +454,12 @@ public:
     { }
     rows_entry(const clustering_key& key)
         : _key(key)
+    { }
+    rows_entry(const clustering_key& key, deletable_row&& row)
+        : _key(key), _row(std::move(row))
+    { }
+    rows_entry(const clustering_key& key, const deletable_row& row)
+        : _key(key), _row(row)
     { }
     rows_entry(rows_entry&& o) noexcept;
     rows_entry(const rows_entry& e)
@@ -575,6 +593,9 @@ public:
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
 private:
+    void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
+    void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);
+
     uint32_t do_compact(const schema& s,
         gc_clock::time_point now,
         const std::vector<query::clustering_range>& row_ranges,
@@ -616,6 +637,10 @@ public:
     //   - drops expired tombstones which timestamp is before max_purgeable
     void compact_for_compaction(const schema& s, api::timestamp_type max_purgeable,
         gc_clock::time_point compaction_time);
+
+    // Returns the minimal mutation_partition that when applied to "other" will
+    // create a mutation_partition equal to the sum of other and this one.
+    mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
 
     // Returns true if there is no live data or tombstones.
     bool empty() const;
