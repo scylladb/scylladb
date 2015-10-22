@@ -25,12 +25,30 @@
 #include "api/api-doc/utils.json.hh"
 #include "service/storage_service.hh"
 #include "db/config.hh"
+#include "utils/histogram.hh"
 
 namespace api {
 
 namespace sp = httpd::storage_proxy_json;
 using proxy = service::storage_proxy;
 using namespace json;
+
+static future<json::json_return_type>  sum_estimated_histogram(http_context& ctx, sstables::estimated_histogram proxy::stats::*f) {
+    return ctx.sp.map_reduce0([f](const proxy& p) {return p.get_stats().*f;}, sstables::estimated_histogram(),
+            sstables::merge).then([](const sstables::estimated_histogram& val) {
+        utils_json::estimated_histogram res;
+        res = val;
+        return make_ready_future<json::json_return_type>(res);
+    });
+}
+
+static future<json::json_return_type>  total_latency(http_context& ctx, utils::ihistogram proxy::stats::*f) {
+    return ctx.sp.map_reduce0([f](const proxy& p) {return (p.get_stats().*f).mean * (p.get_stats().*f).count;}, 0.0,
+            std::plus<double>()).then([](double val) {
+        int64_t res = val;
+        return make_ready_future<json::json_return_type>(res);
+    });
+}
 
 void set_storage_proxy(http_context& ctx, routes& r) {
     sp::get_total_hints.set(r, [](std::unique_ptr<request> req)  {
@@ -312,6 +330,29 @@ void set_storage_proxy(http_context& ctx, routes& r) {
 
     sp::get_read_metrics_latency_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
         return sum_histogram_stats(ctx.sp, &proxy::stats::read);
+    });
+
+    sp::get_read_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_estimated_histogram(ctx, &proxy::stats::estimated_read);
+    });
+
+    sp::get_read_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+        return total_latency(ctx, &proxy::stats::read);
+    });
+    sp::get_write_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_estimated_histogram(ctx, &proxy::stats::estimated_write);
+    });
+
+    sp::get_write_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+        return total_latency(ctx, &proxy::stats::write);
+    });
+
+    sp::get_range_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {
+        return sum_histogram_stats(ctx.sp, &proxy::stats::read);
+    });
+
+    sp::get_range_latency.set(r, [&ctx](std::unique_ptr<request> req) {
+        return total_latency(ctx, &proxy::stats::range);
     });
 }
 
