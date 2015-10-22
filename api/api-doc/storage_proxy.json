@@ -717,7 +717,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/read/latency/histogram",
+      "path": "/storage_proxy/metrics/read/histogram",
       "operations": [
         {
           "method": "GET",
@@ -732,7 +732,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/range/latency/histogram",
+      "path": "/storage_proxy/metrics/range/histogram",
       "operations": [
         {
           "method": "GET",
@@ -807,7 +807,7 @@
       ]
     },
     {
-      "path": "/storage_proxy/metrics/write/latency/histogram",
+      "path": "/storage_proxy/metrics/write/histogram",
       "operations": [
         {
           "method": "GET",
@@ -820,7 +820,103 @@
           "parameters": []
         }
       ]
-    }
+    },
+    {
+         "path":"/storage_proxy/metrics/read/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_read_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/read",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get read latency",
+               "type":"int",
+               "nickname":"get_read_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/write/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_write_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/write",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get write latency",
+               "type":"int",
+               "nickname":"get_write_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/range/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_range_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_proxy/metrics/range",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get range latency",
+               "type":"int",
+               "nickname":"get_range_latency",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
    ],
    "models":{
       "mapper_list":{
