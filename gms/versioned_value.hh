@@ -161,9 +161,14 @@ public:
         }
 
         sstring make_token_string(const std::unordered_set<token>& tokens) {
-            // FIXME:
-            // return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
-            return "TOKENS";
+            sstring tokens_string;
+            for (auto it = tokens.cbegin(); it != tokens.cend(); ) {
+                tokens_string += dht::global_partitioner().to_sstring(*it);
+                if (++it != tokens.cend()) {
+                    tokens_string += ";";
+                }
+            }
+            return tokens_string;
         }
 
         static inline versioned_value load(double load)
@@ -198,29 +203,8 @@ public:
             return versioned_value(hostId.to_sstring());
         }
 
-        versioned_value tokens(const std::unordered_set<token> tokens) {
-            sstring tokens_string;
-            for (auto it = tokens.cbegin(); it != tokens.cend(); ) {
-                tokens_string += to_hex(it->_data);
-                if (++it != tokens.cend()) {
-                    tokens_string += ";";
-                }
-            }
-            // FIXME:
-            return versioned_value(tokens_string);
-#if 0
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(bos);
-            try
-            {
-                TokenSerializer.serialize(partitioner, tokens, out);
-            }
-            catch (IOException e)
-            {
-                throw new RuntimeException(e);
-            }
-            return new VersionedValue(new String(bos.toByteArray(), ISO_8859_1));
-#endif
+        versioned_value tokens(const std::unordered_set<token>& tokens) {
+            return versioned_value(make_token_string(tokens));
         }
 
         versioned_value removing_nonlocal(const utils::UUID& hostId)

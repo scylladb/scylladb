@@ -826,10 +826,9 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     std::unordered_set<token> ret;
     boost::split(tokens, tokens_string, boost::is_any_of(";"));
     for (auto str : tokens) {
-        logger.debug("token={}", str);
-        sstring_view sv(str);
-        bytes b = from_hex(sv);
-        ret.emplace(token::kind::key, b);
+        auto t = dht::global_partitioner().from_sstring(str);
+        logger.debug("token_str={} token={}", str, t);
+        ret.emplace(std::move(t));
     }
     return ret;
 }
