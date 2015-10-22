@@ -433,7 +433,7 @@ private:
     uint16_t _port;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
-    std::unordered_map<shard_id, shard_info, shard_id::hash> _clients[2];
+    std::array<std::unordered_map<shard_id, shard_info, shard_id::hash>, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));

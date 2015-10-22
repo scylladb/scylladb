@@ -269,12 +269,12 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop() {
-    return when_all(_server->stop(),
-        parallel_for_each(_clients[0], [](std::pair<const shard_id, shard_info>& c) {
-            return c.second.rpc_client->stop();
-        }),
-        parallel_for_each(_clients[1], [](std::pair<const shard_id, shard_info>& c) {
-            return c.second.rpc_client->stop();
+    return when_all(
+        _server->stop(),
+        parallel_for_each(_clients, [] (auto& m) {
+            return parallel_for_each(m, [] (std::pair<const shard_id, shard_info>& c) {
+                return c.second.rpc_client->stop();
+            });
         })
     ).discard_result();
 }
