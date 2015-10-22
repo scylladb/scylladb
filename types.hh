@@ -447,6 +447,7 @@ public:
     collection_mutation::one serialize_mutation_form(mutation_view mut) const;
     collection_mutation::one serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) const;
+    collection_mutation::one difference(collection_mutation::view a, collection_mutation::view b) const;
     virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const = 0;
     virtual boost::any deserialize(bytes_view v, serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, serialization_format sf) const {

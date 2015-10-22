@@ -1690,6 +1690,30 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     return serialize_mutation_form(merged);
 }
 
+collection_mutation::one
+collection_type_impl::difference(collection_mutation::view a, collection_mutation::view b) const
+{
+    auto aa = deserialize_mutation_form(a);
+    auto bb = deserialize_mutation_form(b);
+    mutation_view diff;
+    diff.cells.reserve(std::max(aa.cells.size(), bb.cells.size()));
+    auto key_type = name_comparator();
+    auto it = bb.cells.begin();
+    for (auto&& c : aa.cells) {
+        while (it != bb.cells.end() && key_type->less(it->first, c.first)) {
+            ++it;
+        }
+        if (it == bb.cells.end() || !key_type->equal(it->first, c.first)
+            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
+
+            auto cell = std::make_pair(c.first, c.second);
+            diff.cells.emplace_back(std::move(cell));
+        }
+    }
+    diff.tomb = std::max(aa.tomb, bb.tomb);
+    return serialize_mutation_form(diff);
+}
+
 bytes_opt
 collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) const {
     if (!v) {
