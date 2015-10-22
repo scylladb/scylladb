@@ -1,0 +1,114 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/system",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/system/logger",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all logger names",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_all_logger_names",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set all logger level",
+               "type":"void",
+               "nickname":"set_all_logger_level",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"level",
+                     "description":"The new log level",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":[
+                        "error",
+                        "warn",
+                        "info",
+                        "debug",
+                        "trace"
+                     ],
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/system/logger/{name}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get logger level",
+               "type":"string",
+               "nickname":"get_logger_level",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The logger to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set logger level",
+               "type":"void",
+               "nickname":"set_logger_level",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"name",
+                     "description":"The logger to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"level",
+                     "description":"The new log level",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "enum":[
+                        "error",
+                        "warn",
+                        "info",
+                        "debug",
+                        "trace"
+                     ],
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

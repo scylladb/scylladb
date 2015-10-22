@@ -197,6 +197,10 @@ registry& logger_registry() {
     return g_registry;
 }
 
+sstring level_name(log_level level) {
+    return  log_level_names.at(level);
+}
+
 }
 
 namespace boost {

@@ -430,6 +430,8 @@ api = ['api/api.cc',
        'api/lsa.cc',
        'api/api-doc/stream_manager.json',
        'api/stream_manager.cc',
+       'api/api-doc/system.json',
+       'api/system.cc'
        ]
 
 scylla_tests_dependencies = scylla_core + [
