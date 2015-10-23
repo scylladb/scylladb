@@ -1748,11 +1748,10 @@ future<> storage_service::rebuild(sstring source_dc) {
     logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
     auto streamer = make_lw_shared<dht::range_streamer>(_db, _token_metadata, get_broadcast_address(), "Rebuild");
     streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
-    // FIXME: SingleDatacenterFilter
-#if 0
-    if (source_dc != "")
-        streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
-#endif
+
+    if (source_dc != "") {
+        streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+    }
 
     for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
         streamer->add_ranges(keyspace_name, get_local_ranges(keyspace_name));
