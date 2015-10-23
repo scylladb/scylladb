@@ -793,7 +793,8 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     }
 
     uint64_t position = _summary.entries[summary_idx].position;
-    uint64_t quantity = _summary.header.sampling_level;
+    uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, _summary.header.sampling_level,
+        _summary.header.min_index_interval);
 
     uint64_t estimated_size;
     if (++summary_idx >= _summary.header.size) {
