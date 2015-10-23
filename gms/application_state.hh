@@ -38,6 +38,8 @@
 
 #pragma once
 
+#include <ostream>
+
 namespace gms {
 
 enum class application_state
@@ -68,5 +70,7 @@ enum class application_state
     X9,
     X10,
 };
+
+std::ostream& operator<<(std::ostream& os, const application_state& m);
 
 }
