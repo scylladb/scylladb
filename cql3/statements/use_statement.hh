@@ -42,17 +42,9 @@
 #pragma once
 
 #include "cql3/statements/parsed_statement.hh"
+#include "transport/messages_fwd.hh"
 #include "cql3/cql_statement.hh"
 
-namespace transport {
-
-namespace messages {
-
-class result_message;
-
-}
-
-}
 namespace cql3 {
 
 namespace statements {

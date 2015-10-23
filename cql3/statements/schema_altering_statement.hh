@@ -41,16 +41,7 @@
 
 #pragma once
 
-namespace transport {
-
-namespace messages {
-
-class result_message;
-
-}
-
-}
-
+#include "transport/messages_fwd.hh"
 #include "transport/event.hh"
 
 #include "cql3/statements/cf_statement.hh"
