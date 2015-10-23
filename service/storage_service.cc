@@ -768,7 +768,7 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
 
 // Runs inside seastar::async context
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    logger.debug("Update ep={}, state={}, value={}", endpoint, int(state), value.value);
+    logger.debug("Update ep={}, state={}, value={}", endpoint, state, value.value);
     if (state == application_state::RELEASE_VERSION) {
         update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {
@@ -1736,6 +1736,7 @@ future<std::map<sstring, sstring>> storage_service::get_load_map() {
         std::map<sstring, sstring> load_map;
         for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
             load_map.emplace(sprint("%s", x.first), sprint("%s", x.second));
+            logger.debug("get_load_map ep={}, load={}", x.first, x.second);
         }
         load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load_string());
         return load_map;
@@ -1744,21 +1745,19 @@ future<std::map<sstring, sstring>> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
-    using range_streamer = dht::range_streamer;
     logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-    range_streamer streamer(_db, _token_metadata, get_broadcast_address(), "Rebuild");
-    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
-    // FIXME: SingleDatacenterFilter
-#if 0
-    if (source_dc != "")
-        streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
-#endif
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _token_metadata, get_broadcast_address(), "Rebuild");
+    streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
 
-    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
-        streamer.add_ranges(keyspace_name, get_local_ranges(keyspace_name));
+    if (source_dc != "") {
+        streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
     }
 
-    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
+        streamer->add_ranges(keyspace_name, get_local_ranges(keyspace_name));
+    }
+
+    return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
         try {
             auto state = f.get0();
         } catch (...) {

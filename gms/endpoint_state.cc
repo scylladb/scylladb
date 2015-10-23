@@ -52,11 +52,11 @@ std::experimental::optional<versioned_value> endpoint_state::get_application_sta
 }
 
 std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
-    os << "EndpointState: HeartBeatState = " << x._heart_beat_state << ", AppStateMap = ";
+    os << "HeartBeatState = " << x._heart_beat_state << ", AppStateMap =";
     for (auto&entry : x._application_state) {
         const application_state& state = entry.first;
         const versioned_value& value = entry.second;
-        os << " { " << int32_t(state) << " : " << value << " } ";
+        os << " { " << state << " : " << value << " } ";
     }
     return os;
 }

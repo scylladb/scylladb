@@ -83,7 +83,7 @@ public:
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const heart_beat_state& h) {
-        return os << "generation = " << h._generation << ", version = " << h._version;
+        return os << "{ generation = " << h._generation << ", version = " << h._version << " }";
     }
 
     // The following replaces HeartBeatStateSerializer from the Java code
