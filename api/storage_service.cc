@@ -30,8 +30,6 @@
 #include "repair/repair.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
-#include <unordered_map>
-#include "utils/fb_utilities.hh"
 
 namespace api {
 
@@ -148,26 +146,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         return get_cf_stats(ctx, &column_family::stats::live_disk_space_used);
     });
 
-    ss::get_load_map.set(r, [&ctx](std::unique_ptr<request> req) {
-        // FIXME
-        // The function should return a mapping between inet address
-        // and the load (disk space used)
-        // in origin the implementation is based on the load broadcast
-        // we do not currently support.
-        // As a workaround, the local load is calculated (this part is similar
-        // to origin) and a map with a single entry is return.
-        return ctx.db.map_reduce0([](database& db) {
-            int64_t res = 0;
-            for (auto i : db.get_column_families()) {
-                res += i.second->get_stats().live_disk_space_used;
-            }
-            return res;
-        }, 0, std::plus<int64_t>()).then([](int64_t size) {
-            std::vector<ss::mapper> res;
-            std::unordered_map<gms::inet_address, double> load_map;
-            load_map[utils::fb_utilities::get_broadcast_address()] = size;
-            return make_ready_future<json::json_return_type>(map_to_key_value(load_map, res));
-        });
+    ss::get_load_map.set(r, [](const_req req) {
+        std::vector<ss::mapper> res;
+        auto load_map= service::get_local_storage_service().get_load_map();
+        return map_to_key_value(load_map, res);
     });
 
     ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
