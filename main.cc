@@ -311,8 +311,9 @@ int main(int ac, char** av) {
             }).then([&db] {
                 // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
                 // casting to std::function<> will fail to compile
-                auto lb = make_lw_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
+                auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
                 lb->start_broadcasting();
+                service::get_local_storage_service().set_load_broadcaster(lb);
                 engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
