@@ -1745,10 +1745,9 @@ future<std::map<sstring, sstring>> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
-    using range_streamer = dht::range_streamer;
     logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-    range_streamer streamer(_db, _token_metadata, get_broadcast_address(), "Rebuild");
-    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+    auto streamer = make_lw_shared<dht::range_streamer>(_db, _token_metadata, get_broadcast_address(), "Rebuild");
+    streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
     // FIXME: SingleDatacenterFilter
 #if 0
     if (source_dc != "")
@@ -1756,10 +1755,10 @@ future<> storage_service::rebuild(sstring source_dc) {
 #endif
 
     for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
-        streamer.add_ranges(keyspace_name, get_local_ranges(keyspace_name));
+        streamer->add_ranges(keyspace_name, get_local_ranges(keyspace_name));
     }
 
-    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+    return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
         try {
             auto state = f.get0();
         } catch (...) {
