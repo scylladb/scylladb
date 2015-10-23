@@ -49,17 +49,17 @@ namespace dht {
 future<> boot_strapper::bootstrap() {
     logger.debug("Beginning bootstrap process: sorted_tokens={}", _token_metadata.sorted_tokens());
 
-    range_streamer streamer(_db, _token_metadata, _tokens, _address, "Bootstrap");
-    streamer.add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+    auto streamer = make_lw_shared<range_streamer>(_db, _token_metadata, _tokens, _address, "Bootstrap");
+    streamer->add_source_filter(std::make_unique<range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
     for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
         auto& strategy = ks.get_replication_strategy();
         std::vector<range<token>> ranges = strategy.get_pending_address_ranges(_token_metadata, _tokens, _address);
         logger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
-        streamer.add_ranges(keyspace_name, ranges);
+        streamer->add_ranges(keyspace_name, ranges);
     }
 
-    return streamer.fetch_async().then_wrapped([this] (auto&& f) {
+    return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
         try {
             auto state = f.get0();
         } catch (...) {
