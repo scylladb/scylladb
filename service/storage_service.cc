@@ -768,7 +768,7 @@ static void update_table(gms::inet_address endpoint, sstring col, T value) {
 
 // Runs inside seastar::async context
 void storage_service::do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value) {
-    logger.debug("Update ep={}, state={}, value={}", endpoint, int(state), value.value);
+    logger.debug("Update ep={}, state={}, value={}", endpoint, state, value.value);
     if (state == application_state::RELEASE_VERSION) {
         update_table(endpoint, "release_version", value.value);
     } else if (state == application_state::DC) {

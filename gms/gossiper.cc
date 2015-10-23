@@ -986,7 +986,7 @@ std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigg
                 }
                 auto& key = entry.first;
                 // FIXME: Add operator<< for application_state
-                logger.trace("Adding state {}: {}" , int(key), value.value);
+                logger.trace("Adding state {}: {}" , key, value.value);
                 reqd_endpoint_state->add_application_state(key, value);
             }
         }
@@ -1426,7 +1426,6 @@ clk::time_point gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
-    logger.debug("----------- endpoint_state_map:  -----------");
     for (auto& x : endpoint_state_map) {
         logger.debug("ep={}, eps={}", x.first, x.second);
     }
