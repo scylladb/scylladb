@@ -39,6 +39,7 @@
 #pragma once
 
 #include "locator/token_metadata.hh"
+#include "locator/snitch_base.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
@@ -86,27 +87,21 @@ public:
         virtual bool should_include(inet_address endpoint) override { return _fd.is_alive(endpoint); }
     };
 
-#if 0
     /**
      * Source filter which excludes any endpoints that are not in a specific data center.
      */
-    public static class SingleDatacenterFilter implements ISourceFilter
-    {
-        private final String sourceDc;
-        private final IEndpointSnitch snitch;
-
-        public SingleDatacenterFilter(IEndpointSnitch snitch, String sourceDc)
-        {
-            this.sourceDc = sourceDc;
-            this.snitch = snitch;
+    class single_datacenter_filter : public i_source_filter {
+    private:
+        sstring _source_dc;
+    public:
+        single_datacenter_filter(const sstring& source_dc)
+            : _source_dc(source_dc) {
         }
-
-        public boolean shouldInclude(InetAddress endpoint)
-        {
-            return snitch.getDatacenter(endpoint).equals(sourceDc);
+        virtual bool should_include(inet_address endpoint) override {
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            return snitch_ptr->get_datacenter(endpoint) == _source_dc;
         }
-    }
-#endif
+    };
 
     range_streamer(distributed<database>& db, token_metadata& tm, std::unordered_set<token> tokens, inet_address address, sstring description)
         : _db(db)
