@@ -42,7 +42,8 @@ int main(int ac, char ** av) {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        service::init_storage_service(db).then([listen, config] {
+        auto vv = std::make_shared<gms::versioned_value::factory>();
+        service::init_storage_service(db).then([vv, listen, config] {
             return net::get_messaging_service().start(listen);
         }).then([config] {
             auto& server = net::get_local_messaging_service();
@@ -50,9 +51,9 @@ int main(int ac, char ** av) {
             auto listen = server.listen_address();
             print("Messaging server listening on ip %s port %d ...\n", listen, port);
             return gms::get_failure_detector().start();
-        }).then([config] {
+        }).then([vv, config] {
             return gms::get_gossiper().start();
-        }).then([config] {
+        }).then([vv, config] {
             std::set<gms::inet_address> seeds;
             for (auto s : config["seed"].as<std::vector<std::string>>()) {
                 seeds.emplace(std::move(s));
@@ -64,14 +65,14 @@ int main(int ac, char ** av) {
             gossiper.set_cluster_name("Test Cluster");
 
             std::map<gms::application_state, gms::versioned_value> app_states = {
-                { gms::application_state::LOAD, gms::versioned_value::versioned_value_factory::load(0.5) },
+                { gms::application_state::LOAD, vv->load(0.5) },
             };
 
             using namespace std::chrono;
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
             return gossiper.start(generation_number, app_states);
-        }).then([] () {
+        }).then([vv] {
             auto reporter = std::make_shared<timer<lowres_clock>>();
             reporter->set_callback ([reporter] {
                 auto& gossiper = gms::get_local_gossiper();
@@ -82,11 +83,11 @@ int main(int ac, char ** av) {
             reporter->arm_periodic(std::chrono::milliseconds(1000));
 
             auto app_state_adder = std::make_shared<timer<lowres_clock>>();
-            app_state_adder->set_callback ([app_state_adder] {
+            app_state_adder->set_callback ([vv, app_state_adder] {
                 static double load = 0.5;
                 auto& gossiper = gms::get_local_gossiper();
                 auto state = gms::application_state::LOAD;
-                auto value = gms::versioned_value::versioned_value_factory::load(load);
+                auto value = vv->load(load);
                 gossiper.add_local_application_state(state, value);
                 load += 0.0001;
             });

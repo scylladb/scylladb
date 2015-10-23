@@ -61,7 +61,7 @@ void load_broadcaster::start_broadcasting() {
             }
             return res;
         }, 0, std::plus<int64_t>()).then([this](int64_t size) {
-            gms::versioned_value::versioned_value_factory value_factory;
+            gms::versioned_value::factory value_factory;
             _gossiper.add_local_application_state(gms::application_state::LOAD, value_factory.load(size));
             _timer.arm(BROADCAST_INTERVAL);
         });
