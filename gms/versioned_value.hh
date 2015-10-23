@@ -46,10 +46,11 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "to_string.hh"
-#include <unordered_set>
-#include <vector>
 #include "message/messaging_service.hh"
 #include "version.hh"
+#include <unordered_set>
+#include <vector>
+#include <boost/range/adaptor/transformed.hpp>
 
 namespace gms {
 
@@ -134,14 +135,9 @@ public:
         using token = dht::token;
     public:
         sstring make_token_string(const std::unordered_set<token>& tokens) {
-            sstring tokens_string;
-            for (auto it = tokens.cbegin(); it != tokens.cend(); ) {
-                tokens_string += dht::global_partitioner().to_sstring(*it);
-                if (++it != tokens.cend()) {
-                    tokens_string += ";";
-                }
-            }
-            return tokens_string;
+            return ::join(";", tokens | boost::adaptors::transformed([] (const token& t) {
+                return dht::global_partitioner().to_sstring(t); })
+            );
         }
 
         versioned_value clone_with_higher_version(const versioned_value& value) {
