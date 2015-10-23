@@ -1713,7 +1713,6 @@ future<> storage_service::drain() {
 }
 
 double storage_service::get_load() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
     double bytes = 0;
 #if 0
     for (String keyspaceName : Schema.instance.getKeyspaces())
@@ -1732,19 +1731,15 @@ sstring storage_service::get_load_string() {
     return sprint("%f", get_load());
 }
 
-std::map<sstring, sstring> storage_service::get_load_map() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    Map<String, String> map = new HashMap<>();
-    for (Map.Entry<InetAddress,Double> entry : LoadBroadcaster.instance.getLoadInfo().entrySet())
-    {
-        map.put(entry.getKey().getHostAddress(), FileUtils.stringifyFileSize(entry.getValue()));
-    }
-    // gossiper doesn't see its own updates, so we need to special-case the local node
-    map.put(FBUtilities.getBroadcastAddress().getHostAddress(), getLoadString());
-    return map;
-#endif
-    return std::map<sstring, sstring>();
+future<std::map<sstring, sstring>> storage_service::get_load_map() {
+    return get_storage_service().invoke_on(0, [] (auto&& ss) {
+        std::map<sstring, sstring> load_map;
+        for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
+            load_map.emplace(sprint("%s", x.first), sprint("%s", x.second));
+        }
+        load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load_string());
+        return load_map;
+    });
 }
 
 
