@@ -58,6 +58,8 @@
 
 namespace service {
 
+class load_broadcaster;
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -93,6 +95,7 @@ private:
     // It shouldn't be impossible to actively serialize two callers if the need
     // ever arise.
     bool _loading_new_sstables = false;
+    shared_ptr<load_broadcaster> _lb;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -111,6 +114,9 @@ public:
     }
 
     void gossip_snitch_info();
+
+    void set_load_broadcaster(shared_ptr<load_broadcaster> lb);
+    shared_ptr<load_broadcaster>& get_load_broadcaster();
 
     distributed<database>& db() {
         return _db;

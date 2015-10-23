@@ -60,6 +60,7 @@
 #include "dht/range_streamer.hh"
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
+#include "service/load_broadcaster.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -2197,4 +2198,14 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         _loading_new_sstables = false;
     });
 }
+
+void storage_service::set_load_broadcaster(shared_ptr<load_broadcaster> lb) {
+    _lb = lb;
+}
+
+shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
+    return _lb;
+}
+
 } // namespace service
+
