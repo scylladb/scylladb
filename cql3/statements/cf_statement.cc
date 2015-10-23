@@ -17,9 +17,9 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2014-2015 ScyllaDB
  *
- * Modified by Cloudius Systems
+ * Modified by ScyllaDB
  */
 
 /*
@@ -39,35 +39,44 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
-
-#include "cql3/statements/parsed_statement.hh"
-#include "cql3/cf_name.hh"
-
-#include <experimental/optional>
+#include "cql3/statements/cf_statement.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-/**
- * Abstract class for statements that apply on a given column family.
- */
-class cf_statement : public parsed_statement {
-protected:
-    ::shared_ptr<cf_name> _cf_name;
+cf_statement::cf_statement(::shared_ptr<cf_name> cf_name)
+    : _cf_name(std::move(cf_name))
+{
+}
 
-    cf_statement(::shared_ptr<cf_name> cf_name);
-public:
-    virtual void prepare_keyspace(const service::client_state& state);
+void cf_statement::prepare_keyspace(const service::client_state& state)
+{
+    if (!_cf_name->has_keyspace()) {
+        // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
+        // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
+        // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
+        _cf_name->set_keyspace(state.get_keyspace(), true);
+    }
+}
 
-    // Only for internal calls, use the version with ClientState for user queries
-    virtual void prepare_keyspace(sstring keyspace);
+void cf_statement::prepare_keyspace(sstring keyspace)
+{
+    if (!_cf_name->has_keyspace()) {
+        _cf_name->set_keyspace(keyspace, true);
+    }
+}
 
-    virtual const sstring& keyspace() const;
+const sstring& cf_statement::keyspace() const
+{
+    assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
+    return _cf_name->get_keyspace();
+}
 
-    virtual const sstring& column_family() const;
-};
+const sstring& cf_statement::column_family() const
+{
+    return _cf_name->get_column_family();
+}
 
 }
 
