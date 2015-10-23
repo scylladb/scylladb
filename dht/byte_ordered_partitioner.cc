@@ -44,11 +44,19 @@ token byte_ordered_partitioner::midpoint(const token& t1, const token& t2) const
 
 unsigned
 byte_ordered_partitioner::shard_of(const token& t) const {
-    if (t._data.empty()) {
-        return 0;
+    switch (t._kind) {
+        case token::kind::before_all_keys:
+            return 0;
+        case token::kind::after_all_keys:
+            return smp::count - 1;
+        case token::kind::key:
+            if (t._data.empty()) {
+                return 0;
+            }
+            // treat first byte as a fraction in the range [0, 1) and divide it evenly:
+            return (uint8_t(t._data[0]) * smp::count) >> 8;
     }
-    // treat first byte as a fraction in the range [0, 1) and divide it evenly:
-    return (uint8_t(t._data[0]) * smp::count) >> 8;
+    assert(0);
 }
 
 using registry = class_registrator<i_partitioner, byte_ordered_partitioner>;
