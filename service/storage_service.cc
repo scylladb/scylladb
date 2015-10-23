@@ -1736,6 +1736,7 @@ future<std::map<sstring, sstring>> storage_service::get_load_map() {
         std::map<sstring, sstring> load_map;
         for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
             load_map.emplace(sprint("%s", x.first), sprint("%s", x.second));
+            logger.debug("get_load_map ep={}, load={}", x.first, x.second);
         }
         load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load_string());
         return load_map;
