@@ -64,15 +64,47 @@ SEASTAR_TEST_CASE(test_make_local_reader) {
                     "apply batch;").get();
 
             auto s = e.local_db().find_schema("ks2", "cf");
-            auto reader = service::get_storage_proxy().local().make_local_reader(s->id(), query::full_partition_range);
 
-            assert_that(to_result_set(s, reader))
-                .has_size(5)
-                .has(a_row().with_column(bytes("k"), bytes("\01")))
-                .has(a_row().with_column(bytes("k"), bytes("\02")))
-                .has(a_row().with_column(bytes("k"), bytes("\03")))
-                .has(a_row().with_column(bytes("k"), bytes("\04")))
-                .has(a_row().with_column(bytes("k"), bytes("\05")));
+            {
+                auto reader = service::get_storage_proxy().local().make_local_reader(s->id(), query::full_partition_range);
+                assert_that(to_result_set(s, reader))
+                    .has_size(5)
+                    .has(a_row().with_column(bytes("k"), bytes("\01")))
+                    .has(a_row().with_column(bytes("k"), bytes("\02")))
+                    .has(a_row().with_column(bytes("k"), bytes("\03")))
+                    .has(a_row().with_column(bytes("k"), bytes("\04")))
+                    .has(a_row().with_column(bytes("k"), bytes("\05")));
+            }
+
+            {
+                auto reader = service::get_storage_proxy().local().make_local_reader(s->id(),
+                    query::partition_range(
+                        {dht::ring_position(dht::minimum_token(), dht::ring_position::token_bound::start)},
+                        {dht::ring_position(dht::maximum_token(), dht::ring_position::token_bound::end)}));
+                assert_that(to_result_set(s, reader))
+                    .has_size(5)
+                    .has(a_row().with_column(bytes("k"), bytes("\01")))
+                    .has(a_row().with_column(bytes("k"), bytes("\02")))
+                    .has(a_row().with_column(bytes("k"), bytes("\03")))
+                    .has(a_row().with_column(bytes("k"), bytes("\04")))
+                    .has(a_row().with_column(bytes("k"), bytes("\05")));
+            }
+
+            {
+                auto reader = service::get_storage_proxy().local().make_local_reader(s->id(),
+                    query::partition_range(
+                        {dht::ring_position(dht::minimum_token(), dht::ring_position::token_bound::start)},
+                        {dht::ring_position(dht::minimum_token(), dht::ring_position::token_bound::start)}));
+                assert_that(to_result_set(s, reader)).is_empty();
+            }
+
+            {
+                auto reader = service::get_storage_proxy().local().make_local_reader(s->id(),
+                    query::partition_range(
+                        {dht::ring_position(dht::maximum_token(), dht::ring_position::token_bound::start)},
+                        {dht::ring_position(dht::maximum_token(), dht::ring_position::token_bound::start)}));
+                assert_that(to_result_set(s, reader)).is_empty();
+            }
         });
     });
 }
