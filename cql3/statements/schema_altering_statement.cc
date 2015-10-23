@@ -47,6 +47,23 @@ namespace cql3 {
 
 namespace statements {
 
+schema_altering_statement::schema_altering_statement()
+    : cf_statement{::shared_ptr<cf_name>{}}
+    , _is_column_family_level{false}
+{
+}
+
+schema_altering_statement::schema_altering_statement(::shared_ptr<cf_name> name)
+    : cf_statement{std::move(name)}
+    , _is_column_family_level{true}
+{
+}
+
+bool schema_altering_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
+{
+    return cf_statement::uses_function(ks_name, function_name);
+}
+
 bool schema_altering_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;
@@ -55,6 +72,23 @@ bool schema_altering_statement::depends_on_keyspace(const sstring& ks_name) cons
 bool schema_altering_statement::depends_on_column_family(const sstring& cf_name) const
 {
     return false;
+}
+
+uint32_t schema_altering_statement::get_bound_terms()
+{
+    return 0;
+}
+
+void schema_altering_statement::prepare_keyspace(const service::client_state& state)
+{
+    if (_is_column_family_level) {
+        cf_statement::prepare_keyspace(state);
+    }
+}
+
+::shared_ptr<parsed_statement::prepared> schema_altering_statement::prepare(database& db)
+{
+    return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
 }
 
 future<::shared_ptr<messages::result_message>>
