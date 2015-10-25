@@ -49,6 +49,7 @@
 #include "db/consistency_level.hh"
 #include "db/write_type.hh"
 #include "utils/histogram.hh"
+#include "sstables/estimated_histogram.hh"
 
 namespace service {
 
@@ -74,6 +75,9 @@ public:
         utils::ihistogram read;
         utils::ihistogram write;
         utils::ihistogram range;
+        sstables::estimated_histogram estimated_read;
+        sstables::estimated_histogram estimated_write;
+        sstables::estimated_histogram estimated_range;
     };
     using response_id_type = uint64_t;
 private:
