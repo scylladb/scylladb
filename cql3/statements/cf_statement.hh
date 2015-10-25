@@ -57,35 +57,16 @@ class cf_statement : public parsed_statement {
 protected:
     ::shared_ptr<cf_name> _cf_name;
 
-    cf_statement(::shared_ptr<cf_name> cf_name)
-        : _cf_name(std::move(cf_name))
-    { }
-
+    cf_statement(::shared_ptr<cf_name> cf_name);
 public:
-    virtual void prepare_keyspace(const service::client_state& state) {
-        if (!_cf_name->has_keyspace()) {
-            // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
-            // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
-            // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
-            _cf_name->set_keyspace(state.get_keyspace(), true);
-        }
-    }
+    virtual void prepare_keyspace(const service::client_state& state);
 
     // Only for internal calls, use the version with ClientState for user queries
-    virtual void prepare_keyspace(sstring keyspace) {
-        if (!_cf_name->has_keyspace()) {
-            _cf_name->set_keyspace(keyspace, true);
-        }
-    }
+    virtual void prepare_keyspace(sstring keyspace);
 
-    virtual const sstring& keyspace() const {
-        assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
-        return _cf_name->get_keyspace();
-    }
+    virtual const sstring& keyspace() const;
 
-    virtual const sstring& column_family() const {
-        return _cf_name->get_column_family();
-    }
+    virtual const sstring& column_family() const;
 };
 
 }

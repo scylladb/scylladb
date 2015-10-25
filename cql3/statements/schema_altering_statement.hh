@@ -41,16 +41,7 @@
 
 #pragma once
 
-namespace transport {
-
-namespace messages {
-
-class result_message;
-
-}
-
-}
-
+#include "transport/messages_fwd.hh"
 #include "transport/event.hh"
 
 #include "cql3/statements/cf_statement.hh"
@@ -76,37 +67,21 @@ private:
     future<::shared_ptr<messages::result_message>>
     execute0(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options, bool);
 protected:
-    schema_altering_statement()
-        : cf_statement{::shared_ptr<cf_name>{}}
-        , _is_column_family_level{false}
-    { }
+    schema_altering_statement();
 
-    schema_altering_statement(::shared_ptr<cf_name> name)
-        : cf_statement{std::move(name)}
-        , _is_column_family_level{true}
-    { }
+    schema_altering_statement(::shared_ptr<cf_name> name);
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        return cf_statement::uses_function(ks_name, function_name);
-    }
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
     virtual bool depends_on_keyspace(const sstring& ks_name) const override;
 
     virtual bool depends_on_column_family(const sstring& cf_name) const override;
 
-    virtual uint32_t get_bound_terms() override {
-        return 0;
-    }
+    virtual uint32_t get_bound_terms() override;
 
-    virtual void prepare_keyspace(const service::client_state& state) override {
-        if (_is_column_family_level) {
-            cf_statement::prepare_keyspace(state);
-        }
-    }
+    virtual void prepare_keyspace(const service::client_state& state) override;
 
-    virtual ::shared_ptr<prepared> prepare(database& db) override {
-        return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
-    }
+    virtual ::shared_ptr<prepared> prepare(database& db) override;
 
     virtual shared_ptr<transport::event::schema_change> change_event() = 0;
 

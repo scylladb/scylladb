@@ -47,6 +47,26 @@ namespace cql3 {
 
 namespace statements {
 
+use_statement::use_statement(sstring keyspace)
+    : _keyspace(keyspace)
+{
+}
+
+uint32_t use_statement::get_bound_terms()
+{
+    return 0;
+}
+
+::shared_ptr<parsed_statement::prepared> use_statement::prepare(database& db)
+{
+    return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
+}
+
+bool use_statement::uses_function(const sstring& ks_name, const sstring& function_name) const
+{
+    return parsed_statement::uses_function(ks_name, function_name);
+}
+
 bool use_statement::depends_on_keyspace(const sstring& ks_name) const
 {
     return false;
@@ -55,6 +75,15 @@ bool use_statement::depends_on_keyspace(const sstring& ks_name) const
 bool use_statement::depends_on_column_family(const sstring& cf_name) const
 {
     return false;
+}
+
+void use_statement::check_access(const service::client_state& state)
+{
+    state.validate_login();
+}
+
+void use_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+{
 }
 
 future<::shared_ptr<transport::messages::result_message>>

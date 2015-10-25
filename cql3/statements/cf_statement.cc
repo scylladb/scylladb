@@ -17,9 +17,9 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2014-2015 ScyllaDB
  *
- * Modified by Cloudius Systems
+ * Modified by ScyllaDB
  */
 
 /*
@@ -39,43 +39,44 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
-
-#include "cql3/statements/parsed_statement.hh"
-#include "transport/messages_fwd.hh"
-#include "cql3/cql_statement.hh"
+#include "cql3/statements/cf_statement.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-class use_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<use_statement> {
-private:
-    const sstring _keyspace;
+cf_statement::cf_statement(::shared_ptr<cf_name> cf_name)
+    : _cf_name(std::move(cf_name))
+{
+}
 
-public:
-    use_statement(sstring keyspace);
+void cf_statement::prepare_keyspace(const service::client_state& state)
+{
+    if (!_cf_name->has_keyspace()) {
+        // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
+        // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
+        // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
+        _cf_name->set_keyspace(state.get_keyspace(), true);
+    }
+}
 
-    virtual uint32_t get_bound_terms() override;
+void cf_statement::prepare_keyspace(sstring keyspace)
+{
+    if (!_cf_name->has_keyspace()) {
+        _cf_name->set_keyspace(keyspace, true);
+    }
+}
 
-    virtual ::shared_ptr<prepared> prepare(database& db) override;
+const sstring& cf_statement::keyspace() const
+{
+    assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
+    return _cf_name->get_keyspace();
+}
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
-
-    virtual bool depends_on_keyspace(const sstring& ks_name) const override;
-
-    virtual bool depends_on_column_family(const sstring& cf_name) const override;
-
-    virtual void check_access(const service::client_state& state) override;
-
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-
-    virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
-};
+const sstring& cf_statement::column_family() const
+{
+    return _cf_name->get_column_family();
+}
 
 }
 
