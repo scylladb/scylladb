@@ -1555,7 +1555,7 @@ protected:
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
     }
-    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
+    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
@@ -1580,15 +1580,15 @@ protected:
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
                     _retry_cmd->row_limit = rr.row_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / rr.row_count()) + 1;
-                    reconciliate(cl, timeout, _retry_cmd);
+                    reconcile(cl, timeout, _retry_cmd);
                 }
             } catch(read_timeout_exception& ex) {
                 _result_promise.set_exception(ex);
             }
         });
     }
-    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
-        reconciliate(cl, timeout, _cmd);
+    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
+        reconcile(cl, timeout, _cmd);
     }
 
 public:
@@ -1621,7 +1621,7 @@ public:
                     done.discard_result(); // no need for background check, discard done future explicitly
                 }
             } catch (digest_mismatch_exception& ex) {
-                exec->reconciliate(_cl, timeout);
+                exec->reconcile(_cl, timeout);
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
@@ -1692,7 +1692,7 @@ public:
     range_slice_read_executor(shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
                                     abstract_read_executor(std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets)) {}
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) override {
-        reconciliate(_cl, timeout);
+        reconcile(_cl, timeout);
         return _result_promise.get_future();
     }
 };
