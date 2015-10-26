@@ -890,8 +890,8 @@
                ],
                "parameters":[
                   {
-                     "name":"token",
-                     "description":"The token to remove",
+                     "name":"host_id",
+                     "description":"Remove the node with host_id from the cluster",
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
