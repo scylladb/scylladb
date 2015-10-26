@@ -1534,19 +1534,10 @@ future<> storage_service::stop_native_transport() {
     });
 }
 
-bool storage_service::is_native_transport_running() {
-#if 0
-    if ((daemon == null) || (daemon.nativeServer == null))
-    {
-        return false;
-    }
-    return daemon.nativeServer.isRunning();
-#endif
-    // FIXME
-    // We assume the native transport is running
-    // It will be change when the API to start and stop
-    // will be added.
-    return true;
+future<bool> storage_service::is_native_transport_running() {
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        return bool(ss._cql_server);
+    });
 }
 
 future<> storage_service::decommission() {

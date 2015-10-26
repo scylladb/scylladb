@@ -260,7 +260,7 @@ public:
 
     future<> stop_native_transport();
 
-    bool is_native_transport_running();
+    future<bool> is_native_transport_running();
 
 #if 0
     public void stopTransports()
