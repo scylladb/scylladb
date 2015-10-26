@@ -1127,20 +1127,18 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
     write(out, key, pos, promoted_index_size);
 }
 
-static constexpr int BASE_SAMPLING_LEVEL = 128;
-
 static void prepare_summary(summary& s, uint64_t expected_partition_count, const schema& schema) {
     assert(expected_partition_count >= 1);
 
     auto min_index_interval = schema.min_index_interval();
     s.header.min_index_interval = min_index_interval;
-    s.header.sampling_level = BASE_SAMPLING_LEVEL;
+    s.header.sampling_level = downsampling::BASE_SAMPLING_LEVEL;
     uint64_t max_expected_entries =
             (expected_partition_count / min_index_interval) +
             !!(expected_partition_count % min_index_interval);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
     if (max_expected_entries > std::numeric_limits<uint32_t>::max()) {
-        throw malformed_sstable_exception("Current sampling level (" + to_sstring(BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
+        throw malformed_sstable_exception("Current sampling level (" + to_sstring(downsampling::BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
     }
 
     s.keys_written = 0;
