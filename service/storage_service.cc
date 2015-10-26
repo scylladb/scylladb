@@ -1555,8 +1555,8 @@ future<> storage_service::decommission() {
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
-    fail(unimplemented::cause::STORAGE_SERVICE);
     return seastar::async([this, host_id_string] {
+        logger.debug("remove_node: host_id = {}", host_id_string);
         auto my_address = get_broadcast_address();
         auto local_host_id = _token_metadata.get_host_id(my_address);
         auto host_id = utils::UUID(host_id_string);
@@ -1568,6 +1568,8 @@ future<> storage_service::remove_node(sstring host_id_string) {
         auto endpoint = *endpoint_opt;
 
         auto tokens = _token_metadata.get_tokens(endpoint);
+
+        logger.debug("remove_node: endpoint = {}", endpoint);
 
         if (endpoint == my_address) {
             throw std::runtime_error("Cannot remove self");
