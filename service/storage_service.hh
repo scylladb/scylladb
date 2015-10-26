@@ -56,6 +56,11 @@
 #include <seastar/core/distributed.hh>
 #include "streaming/stream_state.hh"
 
+namespace transport {
+    class cql_server;
+}
+class thrift_server;
+
 namespace service {
 
 class load_broadcaster;
@@ -96,6 +101,8 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     shared_ptr<load_broadcaster> _lb;
+    shared_ptr<distributed<transport::cql_server>> _cql_server;
+    shared_ptr<distributed<thrift_server>> _thrift_server;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {

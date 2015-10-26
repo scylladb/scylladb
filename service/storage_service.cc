@@ -61,6 +61,9 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include "service/load_broadcaster.hh"
+#include "thrift/server.hh"
+#include "transport/server.hh"
+#include "dns.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1438,15 +1441,30 @@ future<int64_t> storage_service::true_snapshots_size() {
 }
 
 future<> storage_service::start_rpc_server() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    daemon.thriftServer.start();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        if (ss._thrift_server) {
+            return make_ready_future<>();
+        }
+
+        auto tserver = make_shared<distributed<thrift_server>>();
+        ss._thrift_server = tserver;
+
+        auto& cfg = ss._db.local().get_config();
+        auto port = cfg.rpc_port();
+        auto addr = cfg.rpc_address();
+        return dns::gethostbyname(addr).then([&ss, tserver, addr, port] (dns::hostent e) {
+            auto ip = e.addresses[0].in.s_addr;
+            return tserver->start(std::ref(ss._db)).then([tserver, port, addr, ip] {
+                // #293 - do not stop anything
+                //engine().at_exit([tserver] {
+                //    return tserver->stop();
+                //});
+                return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port});
+            });
+        }).then([addr, port] {
+            print("Thrift server listening on %s:%s ...\n", addr, port);
+        });
+    });
 }
 
 future<> storage_service::stop_rpc_server() {
@@ -1478,23 +1496,30 @@ bool storage_service::is_rpc_server_running() {
 }
 
 future<> storage_service::start_native_transport() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        if (ss._cql_server) {
+            return make_ready_future<>();
+        }
+        auto cserver = make_shared<distributed<transport::cql_server>>();
+        ss._cql_server = cserver;
 
-    try
-    {
-        daemon.nativeServer.start();
-    }
-    catch (Exception e)
-    {
-        throw new RuntimeException("Error starting native transport: " + e.getMessage());
-    }
-#endif
-    return make_ready_future<>();
+        auto& cfg = ss._db.local().get_config();
+        auto port = cfg.native_transport_port();
+        auto addr = cfg.rpc_address();
+        transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
+        return dns::gethostbyname(addr).then([cserver, addr, port, lb] (dns::hostent e) {
+            auto ip = e.addresses[0].in.s_addr;
+            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip] {
+                // #293 - do not stop anything
+                //engine().at_exit([cserver] {
+                //    return cserver->stop();
+                //});
+                return cserver->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, port});
+            });
+        }).then([addr, port] {
+            print("Starting listening for CQL clients on %s:%s...\n", addr, port);
+        });
+    });
 }
 
 future<> storage_service::stop_native_transport() {
