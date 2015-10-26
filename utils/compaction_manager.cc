@@ -54,7 +54,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     task->compaction_retry.reset();
 
                     // Re-schedule compaction for compacting_cf, if needed.
-                    if (task->compacting_cf->pending_compactions()) {
+                    if (!task->stopping && task->compacting_cf->pending_compactions()) {
                         // If there are pending compactions for compacting cf,
                         // push it into the back of the queue.
                         add_column_family(task->compacting_cf);
@@ -204,18 +204,31 @@ future<> compaction_manager::remove(column_family* cf) {
             return cf == entry;
         }),
         _cfs_to_compact.end());
+    _stats.pending_tasks = _cfs_to_compact.size();
     cf->set_compaction_manager_queued(false);
+    // We need to guarantee that a task being stopped will not re-queue the
+    // column family being removed.
+    auto tasks_to_stop = make_lw_shared<std::vector<lw_shared_ptr<task>>>();
+    for (auto& task : _tasks) {
+        if (task->compacting_cf == cf) {
+            tasks_to_stop->push_back(task);
+            task->stopping = true;
+        }
+    }
 
     // Wait for the termination of an ongoing compaction on cf, if any.
-    return do_for_each(_tasks, [this, cf] (auto& task) {
-        if (task->compacting_cf == cf) {
-            return this->task_stop(task).then([this, &task] {
-                // assert that task finished successfully.
-                assert(task->compacting_cf == nullptr);
-                this->task_start(task);
-                return make_ready_future<>();
-            });
+    return do_for_each(*tasks_to_stop, [this, cf] (auto& task) {
+        if (task->compacting_cf != cf) {
+            // There is no need to stop a task that is no longer compacting
+            // the column family being removed.
+            task->stopping = false;
+            return make_ready_future<>();
         }
-        return make_ready_future<>();
-    });
+        return this->task_stop(task).then([this, &task] {
+            // assert that task finished successfully.
+            assert(task->compacting_cf == nullptr);
+            this->task_start(task);
+            return make_ready_future<>();
+        });
+    }).then([tasks_to_stop] {});
 }
