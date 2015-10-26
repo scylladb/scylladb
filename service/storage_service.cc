@@ -1479,19 +1479,10 @@ future<> storage_service::stop_rpc_server() {
     });
 }
 
-bool storage_service::is_rpc_server_running() {
-#if 0
-    if ((daemon == null) || (daemon.thriftServer == null))
-    {
-        return false;
-    }
-    return daemon.thriftServer.isRunning();
-#endif
-    //FIXME
-    // We assude the rpc server is running.
-    // it will be changed when the API to start and stop
-    // it will be added.
-    return true;
+future<bool> storage_service::is_rpc_server_running() {
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        return bool(ss._thrift_server);
+    });
 }
 
 future<> storage_service::start_native_transport() {

@@ -254,7 +254,7 @@ public:
 
     future<> stop_rpc_server();
 
-    bool is_rpc_server_running();
+    future<bool> is_rpc_server_running();
 
     future<> start_native_transport();
 
