@@ -56,6 +56,13 @@ static future<tmplog_ptr> make_commitlog(commitlog::config cfg =
             });
 }
 
+#if 0
+static int loggo = [] {
+        logging::logger_registry().set_logger_level("commitlog", logging::log_level::trace);
+        return 0;
+}();
+#endif
+
 class file_lister {
     file _f;
     subscription<directory_entry> _listing;
