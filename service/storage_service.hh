@@ -303,7 +303,7 @@ public:
     }
 #endif
 public:
-    std::unordered_set<token> prepare_replacement_info();
+    future<std::unordered_set<token>> prepare_replacement_info();
 
     future<> check_for_endpoint_collision();
 #if 0
