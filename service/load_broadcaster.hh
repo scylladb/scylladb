@@ -38,6 +38,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#pragma once
+
 #include "database.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/gossiper.hh"
