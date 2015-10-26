@@ -1235,7 +1235,7 @@ void sstable::do_write_components(::mutation_reader mr,
 
     prepare_summary(_summary, estimated_partitions, *schema);
 
-    // FIXME: it's likely that we need to set both sstable_level and repaired_at stats at this point.
+    // FIXME: we may need to set repaired_at stats at this point.
 
     // Remember first and last keys, which we need for the summary file.
     std::experimental::optional<key> first_key, last_key;
