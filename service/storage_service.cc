@@ -1523,16 +1523,15 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::stop_native_transport() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    if (daemon.nativeServer != null)
-        daemon.nativeServer.stop();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        auto cserver = ss._cql_server;
+        ss._cql_server = {};
+        if (cserver) {
+            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
+            return cserver->stop();
+        }
+        return make_ready_future<>();
+    });
 }
 
 bool storage_service::is_native_transport_running() {
