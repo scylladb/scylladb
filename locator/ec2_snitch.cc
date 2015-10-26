@@ -8,13 +8,16 @@ ec2_snitch::ec2_snitch(const sstring& fname, unsigned io_cpuid) : production_sni
     }
 }
 
-future<> ec2_snitch::start() {
+/**
+ * Read AWS and property file configuration and distribute it among other shards
+ *
+ * @return
+ */
+future<> ec2_snitch::load_config() {
     using namespace boost::algorithm;
 
-    _state = snitch_state::initializing;
-
     if (engine().cpu_id() == io_cpu_id()) {
-        return aws_api_call(ZONE_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
+        return aws_api_call(AWS_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
             assert(az.size());
 
             std::vector<std::string> splits;
@@ -43,15 +46,20 @@ future<> ec2_snitch::start() {
                         local_s->set_my_dc(_my_dc);
                         local_s->set_my_rack(_my_rack);
                     }
-                }).then([this] {
-                    set_snitch_ready();
                 });
             });
         });
     }
 
-    set_snitch_ready();
     return make_ready_future<>();
+}
+
+future<> ec2_snitch::start() {
+    _state = snitch_state::initializing;
+
+    return load_config().then([this] {
+        set_snitch_ready();
+    });
 }
 
 future<sstring> ec2_snitch::aws_api_call(sstring addr, sstring cmd) {

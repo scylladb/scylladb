@@ -156,28 +156,12 @@ struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc
 // This should be integrated into messaging_service proper.
 class messaging_service::rpc_protocol_client_wrapper {
     std::unique_ptr<rpc_protocol::client> _p;
-    bool _stopped = false;
 public:
     rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr())
             : _p(std::make_unique<rpc_protocol::client>(proto, addr, local)) {
     }
-    ~rpc_protocol_client_wrapper() {
-        if (_stopped) {
-            return;
-        }
-        auto fut = _p->stop();
-        // defer destruction until the "real" client is destroyed
-        fut.then_wrapped([p = std::move(_p)] (future<> f) {});
-    }
     auto get_stats() const { return _p->get_stats(); }
-    future<> stop() {
-        if (!_stopped) {
-            _stopped = true;
-            return _p->stop();
-        }
-        // FIXME: not really true, a previous stop could be in progress?
-        return make_ready_future<>();
-    }
+    future<> stop() { return _p->stop(); }
     bool error() {
         return _p->error();
     }
@@ -269,12 +253,12 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop() {
-    return when_all(_server->stop(),
-        parallel_for_each(_clients[0], [](std::pair<const shard_id, shard_info>& c) {
-            return c.second.rpc_client->stop();
-        }),
-        parallel_for_each(_clients[1], [](std::pair<const shard_id, shard_info>& c) {
-            return c.second.rpc_client->stop();
+    return when_all(
+        _server->stop(),
+        parallel_for_each(_clients, [] (auto& m) {
+            return parallel_for_each(m, [] (std::pair<const shard_id, shard_info>& c) {
+                return c.second.rpc_client->stop();
+            });
         })
     ).discard_result();
 }
@@ -295,6 +279,53 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
     return idx;
 }
 
+/**
+ * Get an IP for a given endpoint to connect to
+ *
+ * @param ep endpoint to check
+ *
+ * @return preferred IP (local) for the given endpoint if exists and if the
+ *         given endpoint resides in the same data center with the current Node.
+ *         Otherwise 'ep' itself is returned.
+ */
+gms::inet_address messaging_service::get_preferred_ip(gms::inet_address ep) {
+    auto it = _preferred_ip_cache.find(ep);
+
+    if (it != _preferred_ip_cache.end()) {
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        auto my_addr = utils::fb_utilities::get_broadcast_address();
+
+        if (snitch_ptr->get_datacenter(ep) == snitch_ptr->get_datacenter(my_addr)) {
+            return it->second;
+        }
+    }
+
+    // If cache doesn't have an entry for this endpoint - return endpoint itself
+    return ep;
+}
+
+future<> messaging_service::init_local_preferred_ip_cache() {
+    return db::system_keyspace::get_preferred_ips().then([this] (auto ips_cache) {
+        _preferred_ip_cache = ips_cache;
+        //
+        // Reset the connections to the endpoints that have entries in
+        // _preferred_ip_cache so that they reopen with the preferred IPs we've
+        // just read.
+        //
+        for (auto& p : _preferred_ip_cache) {
+            shard_id id = {
+                .addr = p.first
+            };
+
+            this->remove_rpc_client(id);
+        }
+    });
+}
+
+void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_address ip) {
+    _preferred_ip_cache[ep] = ip;
+}
+
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, shard_id id) {
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
@@ -307,15 +338,35 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_rpc_client(verb, id);
     }
 
-    auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
+    auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), _port);
     auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
     return it->second.rpc_client;
 }
 
+void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id) {
+    auto it = clients.find(id);
+    if (it != clients.end()) {
+        auto client = std::move(it->second.rpc_client);
+        clients.erase(it);
+        //
+        // Explicitly call rpc_protocol_client_wrapper::stop() for the erased
+        // item and hold the messaging_service shared pointer till it's over.
+        // This will make sure messaging_service::stop() blocks until
+        // client->stop() is over.
+        //
+        client->stop().finally([c = client, ms = shared_from_this()] {}).discard_result();
+    }
+}
+
 void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
-    auto idx = get_rpc_client_idx(verb);
-    _clients[idx].erase(id);
+    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id);
+}
+
+void messaging_service::remove_rpc_client(shard_id id) {
+    for (auto& c : _clients) {
+        remove_rpc_client_one(c, id);
+    }
 }
 
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {

@@ -398,13 +398,15 @@ struct shard_id {
 
 class messaging_service : public seastar::async_sharded_service<messaging_service> {
 public:
-    using shard_id = net::shard_id;
-    using inet_address = gms::inet_address;
-    using UUID = utils::UUID;
-
     struct rpc_protocol_wrapper;
     struct rpc_protocol_client_wrapper;
     struct rpc_protocol_server_wrapper;
+    struct shard_info;
+
+    using shard_id = net::shard_id;
+    using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
+    using clients_map = std::unordered_map<shard_id, shard_info, shard_id::hash>;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
@@ -431,9 +433,11 @@ private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
+    // map: Node broadcast address -> Node internal IP for communication within the same data center
+    std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
-    std::unordered_map<shard_id, shard_info, shard_id::hash> _clients[2];
+    std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
@@ -444,6 +448,10 @@ public:
     future<> stop();
     static rpc::no_wait_type no_wait();
 public:
+    gms::inet_address get_preferred_ip(gms::inet_address ep);
+    future<> init_local_preferred_ip_cache();
+    void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
+
     // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
     future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
@@ -541,7 +549,9 @@ public:
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
+    void remove_rpc_client_one(clients_map& clients, shard_id id);
     void remove_rpc_client(messaging_verb verb, shard_id id);
+    void remove_rpc_client(shard_id id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 

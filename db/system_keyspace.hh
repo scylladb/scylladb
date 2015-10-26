@@ -94,6 +94,7 @@ future<> update_tokens(std::unordered_set<dht::token> tokens);
 future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> tokens);
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip);
+future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips();
 
 template <typename Value>
 future<> update_peer_info(gms::inet_address ep, sstring column_name, Value value);

@@ -505,6 +505,10 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
         return check_health();
     }).then([] {
         return db::schema_tables::save_system_keyspace_schema();
+    }).then([] {
+        return net::get_messaging_service().invoke_on_all([] (auto& ms){
+            return ms.init_local_preferred_ip_cache();
+        });
     });
     return make_ready_future<>();
 }
@@ -714,8 +718,25 @@ future<std::unordered_map<gms::inet_address, utils::UUID>> load_host_ids() {
 
 future<> update_preferred_ip(gms::inet_address ep, gms::inet_address preferred_ip) {
     sstring req = "INSERT INTO system.%s (peer, preferred_ip) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep.addr(), preferred_ip).discard_result().then([] {
+    return execute_cql(req, PEERS, ep.addr(), preferred_ip.addr()).discard_result().then([] {
         return force_blocking_flush(PEERS);
+    });
+}
+
+future<std::unordered_map<gms::inet_address, gms::inet_address>> get_preferred_ips() {
+    sstring req = "SELECT peer, preferred_ip FROM system.%s";
+
+    return execute_cql(req, PEERS).then([] (::shared_ptr<cql3::untyped_result_set> cql_res_set) {
+        std::unordered_map<gms::inet_address, gms::inet_address> res;
+
+        for (auto& r : *cql_res_set) {
+            if (r.has("preferred_ip")) {
+                res.emplace(gms::inet_address(r.get_as<net::ipv4_address>("peer")),
+                            gms::inet_address(r.get_as<net::ipv4_address>("preferred_ip")));
+            }
+        }
+
+        return res;
     });
 }
 
