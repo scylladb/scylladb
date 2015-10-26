@@ -1042,22 +1042,25 @@ future<> storage_service::check_for_endpoint_collision() {
             throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
                 "Use cassandra.replace_address if you want to replace this node.", addr));
         }
-#if 0
-        if (RangeStreamer.useStrictConsistency)
-        {
-            for (Map.Entry<InetAddress, EndpointState> entry : Gossiper.instance.getEndpointStates())
-            {
+        if (dht::range_streamer::use_strict_consistency()) {
+            for (auto& x : gossiper.get_endpoint_states()) {
+                auto status = x.second.get_application_state(application_state::STATUS);
+                if (!status) {
+                    continue;
+                }
 
-                if (entry.getValue().getApplicationState(ApplicationState.STATUS) == null)
-                        continue;
-                String[] pieces = entry.getValue().getApplicationState(ApplicationState.STATUS).value.split(VersionedValue.DELIMITER_STR, -1);
-                assert (pieces.length > 0);
-                String state = pieces[0];
-                if (state.equals(VersionedValue.STATUS_BOOTSTRAPPING) || state.equals(VersionedValue.STATUS_LEAVING) || state.equals(VersionedValue.STATUS_MOVING))
-                    throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                std::vector<sstring> pieces;
+                boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+                assert(pieces.size() > 0);
+                auto state = pieces[0];
+                logger.debug("Check node={}, state={}", x.first, state);
+                if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
+                    state == sstring(versioned_value::STATUS_LEAVING) ||
+                    state == sstring(versioned_value::STATUS_MOVING)) {
+                    throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                }
             }
         }
-#endif
         gossiper.reset_endpoint_state_map();
     });
 }
