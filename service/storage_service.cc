@@ -1468,16 +1468,15 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::stop_rpc_server() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    if (daemon.thriftServer != null)
-        daemon.thriftServer.stop();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        auto tserver = ss._thrift_server;
+        ss._thrift_server = {};
+        if (tserver) {
+            // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
+            return tserver->stop();
+        }
+        return make_ready_future<>();
+    });
 }
 
 bool storage_service::is_rpc_server_running() {
