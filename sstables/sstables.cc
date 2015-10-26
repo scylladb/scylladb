@@ -1129,14 +1129,15 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
 
 static constexpr int BASE_SAMPLING_LEVEL = 128;
 
-static void prepare_summary(summary& s, uint64_t expected_partition_count) {
+static void prepare_summary(summary& s, uint64_t expected_partition_count, const schema& schema) {
     assert(expected_partition_count >= 1);
 
-    s.header.min_index_interval = BASE_SAMPLING_LEVEL;
+    auto min_index_interval = schema.min_index_interval();
+    s.header.min_index_interval = min_index_interval;
     s.header.sampling_level = BASE_SAMPLING_LEVEL;
     uint64_t max_expected_entries =
-            (expected_partition_count / BASE_SAMPLING_LEVEL) +
-            !!(expected_partition_count % BASE_SAMPLING_LEVEL);
+            (expected_partition_count / min_index_interval) +
+            !!(expected_partition_count % min_index_interval);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
     if (max_expected_entries > std::numeric_limits<uint32_t>::max()) {
         throw malformed_sstable_exception("Current sampling level (" + to_sstring(BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
@@ -1234,7 +1235,7 @@ void sstable::do_write_components(::mutation_reader mr,
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
-    prepare_summary(_summary, estimated_partitions);
+    prepare_summary(_summary, estimated_partitions, *schema);
 
     // FIXME: it's likely that we need to set both sstable_level and repaired_at stats at this point.
 
