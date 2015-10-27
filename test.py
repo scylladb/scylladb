@@ -24,7 +24,6 @@ import sys
 import argparse
 import subprocess
 import signal
-import re
 
 boost_tests = [
     'bytes_ostream_test',
@@ -63,16 +62,20 @@ other_tests = [
 
 last_len = 0
 
+
 def print_status_short(msg):
     global last_len
-    print('\r' + ' '*last_len, end='')
+    print('\r' + ' ' * last_len, end='')
     last_len = len(msg)
     print('\r' + msg, end='')
 
 print_status_verbose = print
 
+
 class Alarm(Exception):
     pass
+
+
 def alarm_handler(signum, frame):
     raise Alarm
 
@@ -80,13 +83,18 @@ if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
     parser = argparse.ArgumentParser(description="Seastar test runner")
-    parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
-    parser.add_argument('--name',  action="store", help="Run only test whose name contains given string")
-    parser.add_argument('--mode', choices=all_modes, help="Run only tests for given build mode")
-    parser.add_argument('--timeout', action="store",default="300",type=int, help="timeout value for test execution")
-    parser.add_argument('--jenkins', action="store",help="jenkins output file prefix")
-    parser.add_argument('--verbose', '-v', action = 'store_true', default = False,
-                        help = 'Verbose reporting')
+    parser.add_argument('--fast',  action="store_true",
+                        help="Run only fast tests")
+    parser.add_argument('--name',  action="store",
+                        help="Run only test whose name contains given string")
+    parser.add_argument('--mode', choices=all_modes,
+                        help="Run only tests for given build mode")
+    parser.add_argument('--timeout', action="store", default="300", type=int,
+                        help="timeout value for test execution")
+    parser.add_argument('--jenkins', action="store",
+                        help="jenkins output file prefix")
+    parser.add_argument('--verbose', '-v', action='store_true', default=False,
+                        help='Verbose reporting')
     args = parser.parse_args()
 
     black_hole = open('/dev/null', 'w')
@@ -97,9 +105,9 @@ if __name__ == "__main__":
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         for test in other_tests:
-            test_to_run.append((os.path.join(prefix, test),'other'))
+            test_to_run.append((os.path.join(prefix, test), 'other'))
         for test in boost_tests:
-            test_to_run.append((os.path.join(prefix, test),'boost'))
+            test_to_run.append((os.path.join(prefix, test), 'boost'))
 
     if 'release' in modes_to_run:
         test_to_run.append(('build/release/tests/lsa_async_eviction_test -c1 -m200M --size 1024 --batch 3000 --count 2000000','other'))
@@ -110,7 +118,6 @@ if __name__ == "__main__":
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]
-
 
     all_ok = True
 
@@ -125,18 +132,21 @@ if __name__ == "__main__":
         print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
-           mode = 'release'
-           if test[0].startswith(os.path.join('build','debug')):
-              mode = 'debug'
-           xmlout = args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml"
-           path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
-           print(path)
-        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,preexec_fn=os.setsid)
+            mode = 'release'
+            if test[0].startswith(os.path.join('build', 'debug')):
+                mode = 'debug'
+            xmlout = (args.jenkins + "." + mode + "." +
+                      os.path.basename(test[0]) + ".boost.xml")
+            path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
+            print(path)
+        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                env=env, preexec_fn=os.setsid)
         signal.alarm(args.timeout)
         err = None
         out = None
         try:
-            out,err = proc.communicate()
+            out, err = proc.communicate()
             signal.alarm(0)
         except:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
