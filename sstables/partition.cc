@@ -636,6 +636,7 @@ class key_reader final : public ::key_reader::impl {
     index_list _bucket;
     int64_t _current_bucket_id;
     int64_t _end_bucket_id;
+    int64_t _begin_bucket_id;
     int64_t _position_in_bucket = 0;
     int64_t _end_of_bucket = 0;
     query::partition_range _range;
@@ -650,15 +651,17 @@ public:
     {
         auto& summary = _sst->_summary;
 
-        _current_bucket_id = -1;
+        _begin_bucket_id = 0;
         if (range.start()) {
             auto pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
                 range.start()->value(), index_comparator(*s));
-            _current_bucket_id = std::distance(summary.entries.begin(), pos) - 1;
-            if (_current_bucket_id >= 0) {
-                _current_bucket_id--;
+            _begin_bucket_id = std::distance(summary.entries.begin(), pos);
+            if (_begin_bucket_id) {
+                _begin_bucket_id--;
             }
         }
+        _current_bucket_id = _begin_bucket_id - 1;
+
         _end_bucket_id = summary.header.size;
         if (range.end()) {
             auto pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
@@ -681,22 +684,10 @@ future<dht::decorated_key_opt> key_reader::operator()()
     if (_current_bucket_id == _end_bucket_id) {
         return make_ready_future<dht::decorated_key_opt>();
     }
-    if (!_bucket.empty()) {
-        auto dk = decorate(_bucket.back());
-        auto cmp = dht::ring_position_comparator(*_s);
-        // It is possible that previous range_indexes() returned a range that
-        // contains all elements from the current bucket.
-        if (_range.contains(dk, cmp)) {
-            _range = _range.split_after(dk, cmp);
-        }
-    }
     return _sst->read_indexes(++_current_bucket_id).then([this] (index_list il) mutable {
         _bucket = std::move(il);
 
-        // FIXME: the following lookups could be done only once if
-        // read_indexes() guaranteed that the returned ranges of keys
-        // never overlap. See #475.
-        if (_range.start()) {
+        if (_range.start() && _current_bucket_id == _begin_bucket_id) {
             index_list::const_iterator pos;
             if (_range.start()->is_inclusive()) {
                 pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.start()->value(), index_comparator(*_s));
@@ -708,17 +699,12 @@ future<dht::decorated_key_opt> key_reader::operator()()
             _position_in_bucket = 0;
         }
 
-        if (_range.end()) {
+        if (_range.end() && _current_bucket_id == _end_bucket_id) {
             index_list::const_iterator pos;
             if (_range.end()->is_inclusive()) {
                 pos = std::upper_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
             } else {
                 pos = std::lower_bound(_bucket.begin(), _bucket.end(), _range.end()->value(), index_comparator(*_s));
-            }
-            if (pos != _bucket.end()) {
-                // Since, read_indexes() may read more than necessary we may
-                // find the end of the range in an earlier bucket.
-                _end_bucket_id = _current_bucket_id;
             }
             _end_of_bucket = std::distance(_bucket.cbegin(), pos);
         } else {
