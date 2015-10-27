@@ -412,9 +412,9 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& m
 // Runs inside seastar::async context
 void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([endpoint] (auto& subscriber) {
         subscriber->on_remove(endpoint);
-    }
+    });
 
     if(_seeds.count(endpoint)) {
         build_seeds_list();
@@ -607,11 +607,11 @@ bool gossiper::seen_any_seed() {
     return false;
 }
 
-void gossiper::register_(i_endpoint_state_change_subscriber* subscriber) {
+void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
     _subscribers.push_back(subscriber);
 }
 
-void gossiper::unregister_(i_endpoint_state_change_subscriber* subscriber) {
+void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
     _subscribers.remove(subscriber);
 }
 
@@ -1063,10 +1063,11 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
     logger.info("inet_address {} is now UP", addr);
-    for (auto& subscriber : _subscribers) {
+
+    _subscribers.for_each([addr, &local_state] (auto& subscriber) {
         subscriber->on_alive(addr, local_state);
-        logger.trace("Notified {}", subscriber);
-    }
+        logger.trace("Notified {}", subscriber.get());
+    });
 }
 
 // Runs inside seastar::async context
@@ -1076,10 +1077,10 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     _live_endpoints.erase(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("inet_address {} is now DOWN", addr);
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([addr, &local_state] (auto& subscriber) {
         subscriber->on_dead(addr, local_state);
-        logger.trace("Notified {}", subscriber);
-    }
+        logger.trace("Notified {}", subscriber.get());
+    });
 }
 
 // Runs inside seastar::async context
@@ -1097,9 +1098,9 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     auto& local_state = endpoint_state_map.at(ep);
 
     // the node restarted: it is up to the subscriber to take whatever action is necessary
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([ep, &local_state] (auto& subscriber) {
         subscriber->on_restart(ep, local_state);
-    }
+    });
 
     if (!is_dead_state(local_state)) {
         mark_alive(ep, local_state);
@@ -1107,9 +1108,9 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
         logger.debug("Not marking {} alive due to dead state", ep);
         mark_dead(ep, local_state);
     }
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([ep, &local_state] (auto& subscriber) {
         subscriber->on_join(ep, local_state);
-    }
+    });
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
@@ -1155,16 +1156,16 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
 
 // Runs inside seastar::async context
 void gossiper::do_before_change_notifications(inet_address addr, endpoint_state& ep_state, application_state& ap_state, versioned_value& new_value) {
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([addr, &ep_state, &ap_state, &new_value] (auto& subscriber) {
         subscriber->before_change(addr, ep_state, ap_state, new_value);
-    }
+    });
 }
 
 // Runs inside seastar::async context
 void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, versioned_value& value) {
-    for (auto& subscriber : _subscribers) {
+    _subscribers.for_each([addr, &state, &value] (auto& subscriber) {
         subscriber->on_change(addr, state, value);
-    }
+    });
 }
 
 void gossiper::request_all(gossip_digest& g_digest,

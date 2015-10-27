@@ -134,8 +134,41 @@ public:
 private:
 
     std::random_device _random;
-    /* subscribers for interest in EndpointState change */
-    std::list<i_endpoint_state_change_subscriber*> _subscribers;
+
+    /**
+     * subscribers for interest in EndpointState change
+     *
+     * @class subscribers_list - allows modifications of the list at the same
+     *        time as it's being iterated using for_each() method.
+     */
+    class subscribers_list {
+        std::list<shared_ptr<i_endpoint_state_change_subscriber>> _l;
+    public:
+        auto push_back(shared_ptr<i_endpoint_state_change_subscriber> s) {
+            return _l.push_back(s);
+        }
+
+       /**
+        * Remove the element pointing to the same object as the given one.
+        * @param s shared_ptr pointing to the same object as one of the elements
+        *          in the list.
+        */
+        void remove(shared_ptr<i_endpoint_state_change_subscriber> s) {
+            _l.remove(s);
+        }
+
+        /**
+         * Make a copy of the current list and iterate over a copy.
+         *
+         * @param Func - function to apply on each list element
+         */
+        template <typename Func>
+        void for_each(Func&& f) {
+            auto list_copy(_l);
+
+            std::for_each(list_copy.begin(), list_copy.end(), std::forward<Func>(f));
+        }
+    } _subscribers;
 
     /* live member set */
     std::set<inet_address> _live_endpoints;
@@ -176,14 +209,14 @@ public:
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void register_(i_endpoint_state_change_subscriber* subscriber);
+    void register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     /**
      * Unregister interest for state changes.
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void unregister_(i_endpoint_state_change_subscriber* subscriber);
+    void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     std::set<inet_address> get_live_members();
 
