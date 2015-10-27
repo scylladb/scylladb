@@ -64,6 +64,7 @@
 #include "thrift/server.hh"
 #include "transport/server.hh"
 #include "dns.hh"
+#include <seastar/core/rwlock.hh>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1529,8 +1530,8 @@ future<bool> storage_service::is_native_transport_running() {
 }
 
 future<> storage_service::decommission() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
-        return seastar::async([&ss] {
+    return run_with_write_api_lock([] (storage_service& ss) mutable {
+        return seastar::async([&ss] () mutable {
             auto& tm = ss.get_token_metadata();
             auto& db = ss.db().local();
             if (!tm.is_member(ss.get_broadcast_address())) {
