@@ -1948,8 +1948,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         for (auto& m : maps) {
             auto source = m.first;
             auto ranges = m.second;
-            // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-            auto preferred = source;
+            auto preferred = net::get_local_messaging_service().get_preferred_ip(source);
             logger.debug("Requesting from {} ranges {}", source, ranges);
             sp->request_ranges(source, preferred, keyspace_name, ranges);
         }
@@ -2067,7 +2066,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         for (auto& ranges_entry : ranges_per_endpoint) {
             auto& ranges = ranges_entry.second;
             auto new_endpoint = ranges_entry.first;
-            auto preferred = new_endpoint; // FIXME: SystemKeyspace.getPreferredIP(newEndpoint);
+            auto preferred = net::get_local_messaging_service().get_preferred_ip(new_endpoint);
 
             // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
             sp->transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
@@ -2107,7 +2106,7 @@ future<> storage_service::stream_hints() {
 
         snitch->sort_by_proximity(get_broadcast_address(), candidates);
         auto hints_destination_host = candidates.front();
-        auto preferred = hints_destination_host; // FIXME: SystemKeyspace.getPreferredIP(hints_destination_host);
+        auto preferred = net::get_local_messaging_service().get_preferred_ip(hints_destination_host);
 
         // stream all hints -- range list will be a singleton of "the entire ring"
         std::vector<range<token>> ranges = {range<token>::make_open_ended_both_sides()};
