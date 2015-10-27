@@ -50,28 +50,25 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_tokens.set(r, [](std::unique_ptr<request> req) {
-        return service::sorted_tokens().then([](const std::vector<dht::token>& tokens) {
-            return make_ready_future<json::json_return_type>(container_to_vec(tokens));
-        });
+    ss::get_tokens.set(r, [] (const_req req) {
+        auto tokens = service::get_local_storage_service().get_token_metadata().sorted_tokens();
+        return container_to_vec(tokens);
     });
 
-    ss::get_node_tokens.set(r, [](std::unique_ptr<request> req) {
-        gms::inet_address addr(req->param["endpoint"]);
-        return service::get_tokens(addr).then([](const std::vector<dht::token>& tokens) {
-            return make_ready_future<json::json_return_type>(container_to_vec(tokens));
-        });
+    ss::get_node_tokens.set(r, [] (const_req req) {
+        gms::inet_address addr(req.param["endpoint"]);
+        auto tokens = service::get_local_storage_service().get_token_metadata().get_tokens(addr);
+        return container_to_vec(tokens);
     });
 
     ss::get_commitlog.set(r, [&ctx](const_req req) {
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
 
-    ss::get_token_endpoint.set(r, [](std::unique_ptr<request> req) {
-        return service::get_token_to_endpoint().then([] (const std::map<dht::token, gms::inet_address>& tokens){
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(tokens, res));
-        });
+    ss::get_token_endpoint.set(r, [] (const_req req) {
+        auto token_to_ep = service::get_local_storage_service().get_token_metadata().get_token_to_endpoint();
+        std::vector<storage_service_json::mapper> res;
+        return map_to_key_value(token_to_ep, res);
     });
 
     ss::get_leaving_nodes.set(r, [](const_req req) {
@@ -155,7 +152,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
-        return gms::get_current_generation_number(ep).then([](int res) {
+        return gms::get_local_gossiper().get_current_generation_number(ep).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
@@ -349,11 +346,8 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::remove_node.set(r, [](std::unique_ptr<request> req) {
-        // FIXME: This api is incorrect. remove_node takes a host id string parameter instead of token.
         auto host_id = req->get_query_param("host_id");
-        return service::get_storage_service().invoke_on(0, [host_id = std::move(host_id)] (auto& ss) {
-            return ss.remove_node(std::move(host_id));
-        }).then([] {
+        return service::get_local_storage_service().remove_node(host_id).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
@@ -471,8 +465,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_rpc_server_running.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_rpc_server_running();
+    ss::is_rpc_server_running.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_rpc_server_running().then([] (bool running) {
+            return make_ready_future<json::json_return_type>(running);
+        });
     });
 
     ss::start_native_transport.set(r, [](std::unique_ptr<request> req) {
@@ -487,8 +483,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_native_transport_running.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_native_transport_running();
+    ss::is_native_transport_running.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_native_transport_running().then([] (bool running) {
+            return make_ready_future<json::json_return_type>(running);
+        });
     });
 
     ss::join_ring.set(r, [](std::unique_ptr<request> req) {

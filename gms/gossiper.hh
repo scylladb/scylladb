@@ -159,6 +159,7 @@ private:
     clk::time_point _last_processed_message_at = now();
 
     std::unordered_map<inet_address, endpoint_state> _shadow_endpoint_state_map;
+    std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     std::set<inet_address> _shadow_live_endpoints;
 
     void run();
@@ -304,8 +305,8 @@ public:
 public:
     bool is_known_endpoint(inet_address endpoint);
 
-    int get_current_generation_number(inet_address endpoint);
-    int get_current_heart_beat_version(inet_address endpoint);
+    future<int> get_current_generation_number(inet_address endpoint);
+    future<int> get_current_heart_beat_version(inet_address endpoint);
 
     bool is_gossip_only_member(inet_address endpoint);
 private:
@@ -458,13 +459,5 @@ inline gossiper& get_local_gossiper() {
 inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
-
-future<std::set<inet_address>> get_unreachable_members();
-future<std::set<inet_address>> get_live_members();
-future<int64_t> get_endpoint_downtime(inet_address ep);
-future<int> get_current_generation_number(inet_address ep);
-future<int> get_current_heart_beat_version(inet_address ep);
-future<> unsafe_assassinate_endpoint(sstring ep);
-future<> assassinate_endpoint(sstring ep);
 
 } // namespace gms

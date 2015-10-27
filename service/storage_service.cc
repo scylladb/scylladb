@@ -61,6 +61,10 @@
 #include <boost/range/adaptors.hpp>
 #include <boost/range/algorithm.hpp>
 #include "service/load_broadcaster.hh"
+#include "thrift/server.hh"
+#include "transport/server.hh"
+#include "dns.hh"
+#include <seastar/core/rwlock.hh>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -140,7 +144,7 @@ future<> storage_service::prepare_to_join() {
         return make_ready_future<>();
     }
 
-    std::map<gms::application_state, gms::versioned_value> app_states;
+    auto app_states = make_shared<std::map<gms::application_state, gms::versioned_value>>();
     auto f = make_ready_future<>();
     if (is_replacing() && !get_property_join_ring()) {
         throw std::runtime_error("Cannot set both join_ring=false and attempt to replace a node");
@@ -155,9 +159,11 @@ future<> storage_service::prepare_to_join() {
         if (!is_auto_bootstrap()) {
             throw std::runtime_error("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
         }
-        _bootstrap_tokens = prepare_replacement_info();
-        app_states.emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
-        app_states.emplace(gms::application_state::STATUS, value_factory.hibernate(true));
+        f = prepare_replacement_info().then([this, app_states] (auto&& tokens) {
+            _bootstrap_tokens = tokens;
+            app_states->emplace(gms::application_state::TOKENS, value_factory.tokens(_bootstrap_tokens));
+            app_states->emplace(gms::application_state::STATUS, value_factory.hibernate(true));
+        });
     } else if (should_bootstrap()) {
         f = check_for_endpoint_collision();
     }
@@ -166,23 +172,23 @@ future<> storage_service::prepare_to_join() {
     // for bootstrap to get the load info it needs.
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
-    return f.then([app_states = std::move(app_states)] {
+    return f.then([] {
         return db::system_keyspace::get_local_host_id();
-    }).then([this, app_states = std::move(app_states)] (auto local_host_id) mutable {
+    }).then([this, app_states] (auto local_host_id) mutable {
         _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
         // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
         auto broadcast_rpc_address = this->get_broadcast_address();
-        app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
-        app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
-        app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
-        app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+        app_states->emplace(gms::application_state::NET_VERSION, value_factory.network_version());
+        app_states->emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
+        app_states->emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
+        app_states->emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
         logger.info("Starting up server gossip");
 
         auto& gossiper = gms::get_local_gossiper();
         gossiper.register_(this);
         // FIXME: SystemKeyspace.incrementAndGetGeneration()
         print("Start gossiper service ...\n");
-        return gossiper.start(get_generation_number(), app_states).then([this] {
+        return gossiper.start(get_generation_number(), *app_states).then([this] {
 #if SS_DEBUG
             gms::get_local_gossiper().debug_show();
             _token_metadata.debug_show();
@@ -278,9 +284,7 @@ void storage_service::join_token_ring(int delay) {
             if (replace_addr && *replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
-                // FIXME: LoadBroadcaster.BROADCAST_INTERVAL
-                std::chrono::milliseconds broadcast_interval(60 * 1000);
-                sleep(broadcast_interval).get();
+                sleep(service::load_broadcaster::BROADCAST_INTERVAL).get();
 
                 // check for operator errors...
                 for (auto token : _bootstrap_tokens) {
@@ -1040,22 +1044,25 @@ future<> storage_service::check_for_endpoint_collision() {
             throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
                 "Use cassandra.replace_address if you want to replace this node.", addr));
         }
-#if 0
-        if (RangeStreamer.useStrictConsistency)
-        {
-            for (Map.Entry<InetAddress, EndpointState> entry : Gossiper.instance.getEndpointStates())
-            {
+        if (dht::range_streamer::use_strict_consistency()) {
+            for (auto& x : gossiper.get_endpoint_states()) {
+                auto status = x.second.get_application_state(application_state::STATUS);
+                if (!status) {
+                    continue;
+                }
 
-                if (entry.getValue().getApplicationState(ApplicationState.STATUS) == null)
-                        continue;
-                String[] pieces = entry.getValue().getApplicationState(ApplicationState.STATUS).value.split(VersionedValue.DELIMITER_STR, -1);
-                assert (pieces.length > 0);
-                String state = pieces[0];
-                if (state.equals(VersionedValue.STATUS_BOOTSTRAPPING) || state.equals(VersionedValue.STATUS_LEAVING) || state.equals(VersionedValue.STATUS_MOVING))
-                    throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                std::vector<sstring> pieces;
+                boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+                assert(pieces.size() > 0);
+                auto state = pieces[0];
+                logger.debug("Check node={}, state={}", x.first, state);
+                if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
+                    state == sstring(versioned_value::STATUS_LEAVING) ||
+                    state == sstring(versioned_value::STATUS_MOVING)) {
+                    throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                }
             }
         }
-#endif
         gossiper.reset_endpoint_state_map();
     });
 }
@@ -1074,36 +1081,40 @@ void storage_service::remove_endpoint(inet_address endpoint) {
     }).get();
 }
 
-std::unordered_set<token> storage_service::prepare_replacement_info() {
-    return std::unordered_set<token>();
-#if 0
-    logger.info("Gathering node replacement information for {}", DatabaseDescriptor.getReplaceAddress());
-    if (!MessagingService.instance().isListening())
-        MessagingService.instance().listen(FBUtilities.getLocalAddress());
+future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
+    if (!get_replace_address()) {
+        throw std::runtime_error(sprint("replace_address is empty"));
+    }
+    auto replace_address = get_replace_address().value();
+    logger.info("Gathering node replacement information for {}", replace_address);
+
+    // if (!MessagingService.instance().isListening())
+    //     MessagingService.instance().listen(FBUtilities.getLocalAddress());
 
     // make magic happen
-    Gossiper.instance.doShadowRound();
-
-    UUID hostId = null;
-    // now that we've gossiped at least once, we should be able to find the node we're replacing
-    if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress())== null)
-        throw new RuntimeException("Cannot replace_address " + DatabaseDescriptor.getReplaceAddress() + " because it doesn't exist in gossip");
-    hostId = Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress());
-    try
-    {
-        if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()).getApplicationState(ApplicationState.TOKENS) == null)
-            throw new RuntimeException("Could not find tokens for " + DatabaseDescriptor.getReplaceAddress() + " to replace");
-        Collection<Token> tokens = TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(get_application_state_value(DatabaseDescriptor.getReplaceAddress(), ApplicationState.TOKENS))));
-
-        SystemKeyspace.setLocalHostId(hostId); // use the replacee's host Id as our own so we receive hints, etc
-        Gossiper.instance.resetEndpointStateMap(); // clean up since we have what we need
-        return tokens;
-    }
-    catch (IOException e)
-    {
-        throw new RuntimeException(e);
-    }
-#endif
+    return gms::get_local_gossiper().do_shadow_round().then([this, replace_address] {
+        auto& gossiper = gms::get_local_gossiper();
+        // now that we've gossiped at least once, we should be able to find the node we're replacing
+        auto state = gossiper.get_endpoint_state_for_endpoint(replace_address);
+        if (!state) {
+            throw std::runtime_error(sprint("Cannot replace_address %s because it doesn't exist in gossip", replace_address));
+        }
+        auto host_id = gossiper.get_host_id(replace_address);
+        auto eps = gossiper.get_endpoint_state_for_endpoint(replace_address);
+        if (!eps) {
+            throw std::runtime_error(sprint("Cannot replace_address %s because can not find gossip endpoint state", replace_address));
+        }
+        auto value = eps->get_application_state(application_state::TOKENS);
+        if (!value) {
+            throw std::runtime_error(sprint("Could not find tokens for %s to replace", replace_address));
+        }
+        auto tokens = get_tokens_for(replace_address);
+        // use the replacee's host Id as our own so we receive hints, etc
+        return db::system_keyspace::set_local_host_id(host_id).discard_result().then([replace_address, tokens = std::move(tokens)] {
+            gms::get_local_gossiper().reset_endpoint_state_map(); // clean up since we have what we need
+            return make_ready_future<std::unordered_set<token>>(std::move(tokens));
+        });
+    });
 }
 
 std::map<gms::inet_address, float> storage_service::get_ownership() const {
@@ -1429,211 +1440,221 @@ future<int64_t> storage_service::true_snapshots_size() {
 }
 
 future<> storage_service::start_rpc_server() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    daemon.thriftServer.start();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        if (ss._thrift_server) {
+            return make_ready_future<>();
+        }
+
+        auto tserver = make_shared<distributed<thrift_server>>();
+        ss._thrift_server = tserver;
+
+        auto& cfg = ss._db.local().get_config();
+        auto port = cfg.rpc_port();
+        auto addr = cfg.rpc_address();
+        return dns::gethostbyname(addr).then([&ss, tserver, addr, port] (dns::hostent e) {
+            auto ip = e.addresses[0].in.s_addr;
+            return tserver->start(std::ref(ss._db)).then([tserver, port, addr, ip] {
+                // #293 - do not stop anything
+                //engine().at_exit([tserver] {
+                //    return tserver->stop();
+                //});
+                return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port});
+            });
+        }).then([addr, port] {
+            print("Thrift server listening on %s:%s ...\n", addr, port);
+        });
+    });
 }
 
 future<> storage_service::stop_rpc_server() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    if (daemon.thriftServer != null)
-        daemon.thriftServer.stop();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        auto tserver = ss._thrift_server;
+        ss._thrift_server = {};
+        if (tserver) {
+            // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
+            return tserver->stop();
+        }
+        return make_ready_future<>();
+    });
 }
 
-bool storage_service::is_rpc_server_running() {
-#if 0
-    if ((daemon == null) || (daemon.thriftServer == null))
-    {
-        return false;
-    }
-    return daemon.thriftServer.isRunning();
-#endif
-    //FIXME
-    // We assude the rpc server is running.
-    // it will be changed when the API to start and stop
-    // it will be added.
-    return true;
+future<bool> storage_service::is_rpc_server_running() {
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        return bool(ss._thrift_server);
+    });
 }
 
 future<> storage_service::start_native_transport() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        if (ss._cql_server) {
+            return make_ready_future<>();
+        }
+        auto cserver = make_shared<distributed<transport::cql_server>>();
+        ss._cql_server = cserver;
 
-    try
-    {
-        daemon.nativeServer.start();
-    }
-    catch (Exception e)
-    {
-        throw new RuntimeException("Error starting native transport: " + e.getMessage());
-    }
-#endif
-    return make_ready_future<>();
+        auto& cfg = ss._db.local().get_config();
+        auto port = cfg.native_transport_port();
+        auto addr = cfg.rpc_address();
+        transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
+        return dns::gethostbyname(addr).then([cserver, addr, port, lb] (dns::hostent e) {
+            auto ip = e.addresses[0].in.s_addr;
+            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip] {
+                // #293 - do not stop anything
+                //engine().at_exit([cserver] {
+                //    return cserver->stop();
+                //});
+                return cserver->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, port});
+            });
+        }).then([addr, port] {
+            print("Starting listening for CQL clients on %s:%s...\n", addr, port);
+        });
+    });
 }
 
 future<> storage_service::stop_native_transport() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
-#if 0
-    if (daemon == null)
-    {
-        throw new IllegalStateException("No configured daemon");
-    }
-    if (daemon.nativeServer != null)
-        daemon.nativeServer.stop();
-#endif
-    return make_ready_future<>();
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        auto cserver = ss._cql_server;
+        ss._cql_server = {};
+        if (cserver) {
+            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
+            return cserver->stop();
+        }
+        return make_ready_future<>();
+    });
 }
 
-bool storage_service::is_native_transport_running() {
-#if 0
-    if ((daemon == null) || (daemon.nativeServer == null))
-    {
-        return false;
-    }
-    return daemon.nativeServer.isRunning();
-#endif
-    // FIXME
-    // We assume the native transport is running
-    // It will be change when the API to start and stop
-    // will be added.
-    return true;
+future<bool> storage_service::is_native_transport_running() {
+    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+        return bool(ss._cql_server);
+    });
 }
 
 future<> storage_service::decommission() {
-    return seastar::async([this] {
-        if (!_token_metadata.is_member(get_broadcast_address())) {
-            throw std::runtime_error("local node is not a member of the token ring yet");
-        }
-
-        if (_token_metadata.clone_after_all_left().sorted_tokens().size() < 2) {
-            throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
-        }
-
-        get_local_pending_range_calculator_service().block_until_finished().get();
-
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-        for (const auto& keyspace_name : non_system_keyspaces) {
-            if (_token_metadata.get_pending_ranges(keyspace_name, get_broadcast_address()).size() > 0) {
-                throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+    return run_with_write_api_lock([] (storage_service& ss) mutable {
+        return seastar::async([&ss] () mutable {
+            auto& tm = ss.get_token_metadata();
+            auto& db = ss.db().local();
+            if (!tm.is_member(ss.get_broadcast_address())) {
+                throw std::runtime_error("local node is not a member of the token ring yet");
             }
-        }
 
-        logger.debug("DECOMMISSIONING");
-        start_leaving().get();
-        // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-        long timeout = get_ring_delay();
-        set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
-        sleep(std::chrono::milliseconds(timeout)).get();
+            if (tm.clone_after_all_left().sorted_tokens().size() < 2) {
+                throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
+            }
 
-        unbootstrap();
+            get_local_pending_range_calculator_service().block_until_finished().get();
 
-        // FIXME: proper shutdown
-        // shutdownClientServers();
-        gms::get_local_gossiper().stop();
-        // MessagingService.instance().shutdown();
-        // StageManager.shutdownNow();
-        set_mode(mode::DECOMMISSIONED, true);
-        // let op be responsible for killing the process
+            auto non_system_keyspaces = db.get_non_system_keyspaces();
+            for (const auto& keyspace_name : non_system_keyspaces) {
+                if (tm.get_pending_ranges(keyspace_name, ss.get_broadcast_address()).size() > 0) {
+                    throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+                }
+            }
+
+            logger.debug("DECOMMISSIONING");
+            ss.start_leaving().get();
+            // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
+            long timeout = ss.get_ring_delay();
+            ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
+            sleep(std::chrono::milliseconds(timeout)).get();
+
+            ss.unbootstrap();
+
+            // FIXME: proper shutdown
+            ss.shutdown_client_servers().get();
+            gms::get_local_gossiper().stop().get();
+            // MessagingService.instance().shutdown();
+            // StageManager.shutdownNow();
+            ss.set_mode(mode::DECOMMISSIONED, true);
+            // let op be responsible for killing the process
+        });
     });
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
-    return seastar::async([this, host_id_string] {
-        logger.debug("remove_node: host_id = {}", host_id_string);
-        auto my_address = get_broadcast_address();
-        auto local_host_id = _token_metadata.get_host_id(my_address);
-        auto host_id = utils::UUID(host_id_string);
-        auto endpoint_opt = _token_metadata.get_endpoint_for_host_id(host_id);
-        auto& gossiper = gms::get_local_gossiper();
-        if (!endpoint_opt) {
-            throw std::runtime_error("Host ID not found.");
-        }
-        auto endpoint = *endpoint_opt;
+    return get_storage_service().invoke_on(0, [host_id_string] (storage_service& ss) {
+        return seastar::async([&ss, host_id_string] {
+            logger.debug("remove_node: host_id = {}", host_id_string);
+            auto my_address = ss.get_broadcast_address();
+            auto& tm = ss._token_metadata;
+            auto local_host_id = tm.get_host_id(my_address);
+            auto host_id = utils::UUID(host_id_string);
+            auto endpoint_opt = tm.get_endpoint_for_host_id(host_id);
+            auto& gossiper = gms::get_local_gossiper();
+            if (!endpoint_opt) {
+                throw std::runtime_error("Host ID not found.");
+            }
+            auto endpoint = *endpoint_opt;
 
-        auto tokens = _token_metadata.get_tokens(endpoint);
+            auto tokens = tm.get_tokens(endpoint);
 
-        logger.debug("remove_node: endpoint = {}", endpoint);
+            logger.debug("remove_node: endpoint = {}", endpoint);
 
-        if (endpoint == my_address) {
-            throw std::runtime_error("Cannot remove self");
-        }
-
-        if (gossiper.get_live_members().count(endpoint)) {
-            throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
-        }
-
-        // A leaving endpoint that is dead is already being removed.
-        if (_token_metadata.is_leaving(endpoint)) {
-            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-        }
-
-        if (!_replicating_nodes.empty()) {
-            throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-        }
-
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-        // Find the endpoints that are going to become responsible for data
-        for (const auto& keyspace_name : non_system_keyspaces) {
-            auto& ks = _db.local().find_keyspace(keyspace_name);
-            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-            if (ks.get_replication_strategy().get_replication_factor() == 1) {
-                continue;
+            if (endpoint == my_address) {
+                throw std::runtime_error("Cannot remove self");
             }
 
-            // get all ranges that change ownership (that is, a node needs
-            // to take responsibility for new range)
-            std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
-            auto fd = gms::get_local_failure_detector();
-            for (auto& x: changed_ranges) {
-                auto ep = x.second;
-                if (fd.is_alive(ep)) {
-                    _replicating_nodes.emplace(ep);
-                } else {
-                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+            if (gossiper.get_live_members().count(endpoint)) {
+                throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
+            }
+
+            // A leaving endpoint that is dead is already being removed.
+            if (tm.is_leaving(endpoint)) {
+                logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+            }
+
+            if (!ss._replicating_nodes.empty()) {
+                throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
+            }
+
+            auto non_system_keyspaces = ss.db().local().get_non_system_keyspaces();
+            // Find the endpoints that are going to become responsible for data
+            for (const auto& keyspace_name : non_system_keyspaces) {
+                auto& ks = ss.db().local().find_keyspace(keyspace_name);
+                // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+                if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                    continue;
+                }
+
+                // get all ranges that change ownership (that is, a node needs
+                // to take responsibility for new range)
+                std::unordered_multimap<range<token>, inet_address> changed_ranges =
+                    ss.get_changed_ranges_for_leaving(keyspace_name, endpoint);
+                auto fd = gms::get_local_failure_detector();
+                for (auto& x: changed_ranges) {
+                    auto ep = x.second;
+                    if (fd.is_alive(ep)) {
+                        ss._replicating_nodes.emplace(ep);
+                    } else {
+                        logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                    }
                 }
             }
-        }
-        _removing_node = endpoint;
-        _token_metadata.add_leaving_endpoint(endpoint);
-        get_local_pending_range_calculator_service().update().get();
+            ss._removing_node = endpoint;
+            tm.add_leaving_endpoint(endpoint);
+            get_local_pending_range_calculator_service().update().get();
 
-        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-        // we add our own token so other nodes to let us know when they're done
-        gossiper.advertise_removing(endpoint, host_id, local_host_id);
+            // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+            // we add our own token so other nodes to let us know when they're done
+            gossiper.advertise_removing(endpoint, host_id, local_host_id);
 
-        // kick off streaming commands
-        restore_replica_count(endpoint, my_address).get();
+            // kick off streaming commands
+            ss.restore_replica_count(endpoint, my_address).get();
 
-        // wait for ReplicationFinishedVerbHandler to signal we're done
-        while (!_replicating_nodes.empty()) {
-            sleep(std::chrono::milliseconds(100)).get();
-        }
+            // wait for ReplicationFinishedVerbHandler to signal we're done
+            while (!ss._replicating_nodes.empty()) {
+                sleep(std::chrono::milliseconds(100)).get();
+            }
 
-        std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-        excise(std::move(tmp), endpoint);
+            std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+            ss.excise(std::move(tmp), endpoint);
 
-        // gossiper will indicate the token has left
-        gossiper.advertise_token_removed(endpoint, host_id);
+            // gossiper will indicate the token has left
+            gossiper.advertise_token_removed(endpoint, host_id);
 
-        _replicating_nodes.clear();
-        _removing_node = {};
+            ss._replicating_nodes.clear();
+            ss._removing_node = {};
+        });
     });
 }
 
@@ -1928,8 +1949,7 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         for (auto& m : maps) {
             auto source = m.first;
             auto ranges = m.second;
-            // FIXME: InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-            auto preferred = source;
+            auto preferred = net::get_local_messaging_service().get_preferred_ip(source);
             logger.debug("Requesting from {} ranges {}", source, ranges);
             sp->request_ranges(source, preferred, keyspace_name, ranges);
         }
@@ -2047,7 +2067,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         for (auto& ranges_entry : ranges_per_endpoint) {
             auto& ranges = ranges_entry.second;
             auto new_endpoint = ranges_entry.first;
-            auto preferred = new_endpoint; // FIXME: SystemKeyspace.getPreferredIP(newEndpoint);
+            auto preferred = net::get_local_messaging_service().get_preferred_ip(new_endpoint);
 
             // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
             sp->transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
@@ -2087,7 +2107,7 @@ future<> storage_service::stream_hints() {
 
         snitch->sort_by_proximity(get_broadcast_address(), candidates);
         auto hints_destination_host = candidates.front();
-        auto preferred = hints_destination_host; // FIXME: SystemKeyspace.getPreferredIP(hints_destination_host);
+        auto preferred = net::get_local_messaging_service().get_preferred_ip(hints_destination_host);
 
         // stream all hints -- range list will be a singleton of "the entire ring"
         std::vector<range<token>> ranges = {range<token>::make_open_ended_both_sides()};
@@ -2201,6 +2221,10 @@ void storage_service::set_load_broadcaster(shared_ptr<load_broadcaster> lb) {
 
 shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
     return _lb;
+}
+
+future<> storage_service::shutdown_client_servers() {
+    return stop_rpc_server().then([this] { return stop_native_transport(); });
 }
 
 } // namespace service

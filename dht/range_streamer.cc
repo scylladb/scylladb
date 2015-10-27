@@ -256,8 +256,7 @@ future<streaming::stream_state> range_streamer::fetch_async() {
         for (auto& x : fetch.second) {
             auto& source = x.first;
             auto& ranges = x.second;
-            // FIXME InetAddress preferred = SystemKeyspace.getPreferredIP(source);
-            auto preferred = source;
+            auto preferred = net::get_local_messaging_service().get_preferred_ip(source);
             /* Send messages to respective folks to stream data over to me */
             if (logger.is_enabled(logging::log_level::debug)) {
                 logger.debug("{}ing from {} ranges {}", _description, source, ranges);

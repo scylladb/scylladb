@@ -53,12 +53,28 @@
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
 #include "database.hh"
-#include <seastar/core/distributed.hh>
 #include "streaming/stream_state.hh"
+#include <seastar/core/distributed.hh>
+#include <seastar/core/rwlock.hh>
+
+namespace transport {
+    class cql_server;
+}
+class thrift_server;
 
 namespace service {
 
 class load_broadcaster;
+class storage_service;
+
+extern distributed<storage_service> _the_storage_service;
+inline distributed<storage_service>& get_storage_service() {
+    return _the_storage_service;
+}
+inline storage_service& get_local_storage_service() {
+    return _the_storage_service.local();
+}
+
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -96,6 +112,9 @@ private:
     // ever arise.
     bool _loading_new_sstables = false;
     shared_ptr<load_broadcaster> _lb;
+    shared_ptr<distributed<transport::cql_server>> _cql_server;
+    shared_ptr<distributed<thrift_server>> _thrift_server;
+    rwlock _api_lock;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -121,6 +140,10 @@ public:
     distributed<database>& db() {
         return _db;
     }
+
+    rwlock& api_lock() {
+        return _api_lock;
+    };
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() {
@@ -247,13 +270,13 @@ public:
 
     future<> stop_rpc_server();
 
-    bool is_rpc_server_running();
+    future<bool> is_rpc_server_running();
 
     future<> start_native_transport();
 
     future<> stop_native_transport();
 
-    bool is_native_transport_running();
+    future<bool> is_native_transport_running();
 
 #if 0
     public void stopTransports()
@@ -274,13 +297,10 @@ public:
             stopNativeTransport();
         }
     }
-
-    private void shutdownClientServers()
-    {
-        stopRPCServer();
-        stopNativeTransport();
-    }
-
+#endif
+private:
+    future<> shutdown_client_servers();
+#if 0
     public void stopClient()
     {
         Gossiper.instance.unregister(this);
@@ -303,7 +323,7 @@ public:
     }
 #endif
 public:
-    std::unordered_set<token> prepare_replacement_info();
+    future<std::unordered_set<token>> prepare_replacement_info();
 
     future<> check_for_endpoint_collision();
 #if 0
@@ -2563,34 +2583,16 @@ public:
         logger.info(String.format("Updated hinted_handoff_throttle_in_kb to %d", throttleInKB));
     }
 #endif
+
+    template <typename Func>
+    inline auto run_with_write_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return with_lock(ss.api_lock().for_write(), [&ss, func = std::forward<Func>(func)] () mutable {
+                return func(ss);
+            });
+        });
+    }
 };
-
-extern distributed<storage_service> _the_storage_service;
-
-inline distributed<storage_service>& get_storage_service() {
-    return _the_storage_service;
-}
-
-inline storage_service& get_local_storage_service() {
-    return _the_storage_service.local();
-}
-
-inline future<std::vector<dht::token>> sorted_tokens() {
-    return smp::submit_to(0, [] {
-        return get_local_storage_service().get_token_metadata().sorted_tokens();
-    });
-}
-inline future<std::vector<dht::token>> get_tokens(const gms::inet_address& addr) {
-    return smp::submit_to(0, [addr] {
-        return get_local_storage_service().get_token_metadata().get_tokens(addr);
-    });
-}
-
-inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
-    return smp::submit_to(0, [] {
-        return get_local_storage_service().get_token_metadata().get_token_to_endpoint();
-    });
-}
 
 inline future<> init_storage_service(distributed<database>& db) {
     return service::get_storage_service().start(std::ref(db)).then([] {
