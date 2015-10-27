@@ -159,6 +159,7 @@ private:
     clk::time_point _last_processed_message_at = now();
 
     std::unordered_map<inet_address, endpoint_state> _shadow_endpoint_state_map;
+    std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     std::set<inet_address> _shadow_live_endpoints;
 
     void run();

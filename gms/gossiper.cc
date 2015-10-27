@@ -542,8 +542,9 @@ void gossiper::run() {
         //
         bool endpoint_map_changed = (_shadow_endpoint_state_map != endpoint_state_map);
         bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
+        bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
 
-        if (endpoint_map_changed || live_endpoint_changed) {
+        if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
             if (endpoint_map_changed) {
                 _shadow_endpoint_state_map = endpoint_state_map;
             }
@@ -552,8 +553,12 @@ void gossiper::run() {
                 _shadow_live_endpoints = _live_endpoints;
             }
 
+            if (unreachable_endpoint_changed) {
+                _shadow_unreachable_endpoints = _unreachable_endpoints;
+            }
+
             _the_gossiper.invoke_on_all([this, endpoint_map_changed,
-                live_endpoint_changed] (gossiper& local_gossiper) {
+                live_endpoint_changed, unreachable_endpoint_changed] (gossiper& local_gossiper) {
                 // Don't copy gossiper(CPU0) maps into themselves!
                 if (engine().cpu_id() != 0) {
                     if (endpoint_map_changed) {
@@ -562,6 +567,10 @@ void gossiper::run() {
 
                     if (live_endpoint_changed) {
                         local_gossiper._live_endpoints = _shadow_live_endpoints;
+                    }
+
+                    if (unreachable_endpoint_changed) {
+                        local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
                     }
                 }
             }).get();
