@@ -149,9 +149,10 @@ if __name__ == "__main__":
                     print_status('TIMED OUT\n')
                 else:
                     print_status('  with error code {code}\n'.format(code=proc.returncode))
-                print('=== stdout START ===')
-                print(str(out, encoding='UTF-8'))
-                print('=== stdout END ===')
+                if out is not None:
+                    print('=== stdout START ===')
+                    print(str(out, encoding='UTF-8'))
+                    print('=== stdout END ===')
                 all_ok = False
             else:
                 print_status('%s PASSED %s' % (prefix, path))
