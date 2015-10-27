@@ -462,7 +462,5 @@ inline distributed<gossiper>& get_gossiper() {
 
 future<int> get_current_generation_number(inet_address ep);
 future<int> get_current_heart_beat_version(inet_address ep);
-future<> unsafe_assassinate_endpoint(sstring ep);
-future<> assassinate_endpoint(sstring ep);
 
 } // namespace gms

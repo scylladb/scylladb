@@ -793,51 +793,55 @@ future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
-    return seastar::async([this, g = this->shared_from_this(), address] {
-        inet_address endpoint(address);
-        auto is_exist = endpoint_state_map.count(endpoint);
-        int gen = std::chrono::duration_cast<std::chrono::seconds>((now() + std::chrono::seconds(60)).time_since_epoch()).count();
-        int ver = 9999;
-        endpoint_state&& ep_state = is_exist ? endpoint_state_map.at(endpoint) :
-                                               endpoint_state(heart_beat_state(gen, ver));
-        std::vector<dht::token> tokens;
-        logger.warn("Assassinating {} via gossip", endpoint);
-        if (is_exist) {
-            auto& ss = service::get_local_storage_service();
-            auto tokens = ss.get_token_metadata().get_tokens(endpoint);
-            if (tokens.empty()) {
-                logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-                throw std::runtime_error(sprint("Unable to calculate tokens for %s", endpoint));
-            }
-
-            int generation = ep_state.get_heart_beat_state().get_generation();
-            int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-            logger.info("Sleeping for {} ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
-            // make sure it did not change
-            sleep(storage_service_ring_delay()).get();
-
-            auto it = endpoint_state_map.find(endpoint);
-            if (it == endpoint_state_map.end()) {
-                logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-            } else {
-                auto& new_state = it->second;
-                if (new_state.get_heart_beat_state().get_generation() != generation) {
-                    throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
-                } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                    throw std::runtime_error(sprint("Endpoint still alive: %s heartbeat changed while trying to assassinate it", endpoint));
+    return get_gossiper().invoke_on(0, [address] (auto&& gossiper) {
+        return seastar::async([&gossiper, g = gossiper.shared_from_this(), address] {
+            inet_address endpoint(address);
+            auto& endpoint_state_map = gossiper.endpoint_state_map;
+            auto now = gossiper.now();
+            auto is_exist = endpoint_state_map.count(endpoint);
+            int gen = std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count();
+            int ver = 9999;
+            endpoint_state&& ep_state = is_exist ? endpoint_state_map.at(endpoint) :
+                                                   endpoint_state(heart_beat_state(gen, ver));
+            std::vector<dht::token> tokens;
+            logger.warn("Assassinating {} via gossip", endpoint);
+            if (is_exist) {
+                auto& ss = service::get_local_storage_service();
+                auto tokens = ss.get_token_metadata().get_tokens(endpoint);
+                if (tokens.empty()) {
+                    logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
+                    throw std::runtime_error(sprint("Unable to calculate tokens for %s", endpoint));
                 }
-            }
-            ep_state.update_timestamp(); // make sure we don't evict it too soon
-            ep_state.get_heart_beat_state().force_newer_generation_unsafe();
-        }
 
-        // do not pass go, do not collect 200 dollars, just gtfo
-        std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
-        auto expire_time = compute_expire_time();
-        ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().left(tokens_set, expire_time.time_since_epoch().count()));
-        handle_major_state_change(endpoint, ep_state);
-        sleep(INTERVAL * 4).get();
-        logger.warn("Finished assassinating {}", endpoint);
+                int generation = ep_state.get_heart_beat_state().get_generation();
+                int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+                logger.info("Sleeping for {} ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
+                // make sure it did not change
+                sleep(storage_service_ring_delay()).get();
+
+                auto it = endpoint_state_map.find(endpoint);
+                if (it == endpoint_state_map.end()) {
+                    logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
+                } else {
+                    auto& new_state = it->second;
+                    if (new_state.get_heart_beat_state().get_generation() != generation) {
+                        throw std::runtime_error(sprint("Endpoint still alive: %s generation changed while trying to assassinate it", endpoint));
+                    } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
+                        throw std::runtime_error(sprint("Endpoint still alive: %s heartbeat changed while trying to assassinate it", endpoint));
+                    }
+                }
+                ep_state.update_timestamp(); // make sure we don't evict it too soon
+                ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+            }
+
+            // do not pass go, do not collect 200 dollars, just gtfo
+            std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
+            auto expire_time = gossiper.compute_expire_time();
+            ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().left(tokens_set, expire_time.time_since_epoch().count()));
+            gossiper.handle_major_state_change(endpoint, ep_state);
+            sleep(INTERVAL * 4).get();
+            logger.warn("Finished assassinating {}", endpoint);
+        });
     });
 }
 
@@ -1473,18 +1477,6 @@ future<int> get_current_generation_number(inet_address ep) {
 future<int> get_current_heart_beat_version(inet_address ep) {
     return smp::submit_to(0, [ep] {
         return get_local_gossiper().get_current_heart_beat_version(ep);
-    });
-}
-
-future<> unsafe_assassinate_endpoint(sstring ep) {
-    return smp::submit_to(0, [ep] {
-        return get_local_gossiper().unsafe_assassinate_endpoint(ep);
-    });
-}
-
-future<> assassinate_endpoint(sstring ep) {
-    return smp::submit_to(0, [ep] {
-        return get_local_gossiper().assassinate_endpoint(ep);
     });
 }
 
