@@ -29,7 +29,7 @@ using namespace json;
 void set_gossiper(http_context& ctx, routes& r) {
     httpd::gossiper_json::get_down_endpoint.set(r, [] (const_req req) {
         auto res = gms::get_local_gossiper().get_unreachable_members();
-        return container_to_vec(res));
+        return container_to_vec(res);
     });
 
     httpd::gossiper_json::get_live_endpoint.set(r, [] (const_req req) {
@@ -37,11 +37,9 @@ void set_gossiper(http_context& ctx, routes& r) {
         return container_to_vec(res);
     });
 
-    httpd::gossiper_json::get_endpoint_downtime.set(r, [](std::unique_ptr<request> req) {
-        gms::inet_address ep(req->param["addr"]);
-        return gms::get_endpoint_downtime(ep).then([](int64_t res) {
-            return make_ready_future<json::json_return_type>(res);
-        });
+    httpd::gossiper_json::get_endpoint_downtime.set(r, [] (const_req req) {
+        gms::inet_address ep(req.param["addr"]);
+        return gms::get_local_gossiper().get_endpoint_downtime(ep);
     });
 
     httpd::gossiper_json::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {

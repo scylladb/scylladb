@@ -1464,12 +1464,6 @@ bool gossiper::is_alive(inet_address ep) {
     }
 }
 
-future<int64_t> get_endpoint_downtime(inet_address ep) {
-    return smp::submit_to(0, [ep] {
-        return get_local_gossiper().get_endpoint_downtime(ep);
-    });
-}
-
 future<int> get_current_generation_number(inet_address ep) {
     return smp::submit_to(0, [ep] {
         return get_local_gossiper().get_current_generation_number(ep);
