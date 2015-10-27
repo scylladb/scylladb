@@ -50,28 +50,25 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_tokens.set(r, [](std::unique_ptr<request> req) {
-        return service::sorted_tokens().then([](const std::vector<dht::token>& tokens) {
-            return make_ready_future<json::json_return_type>(container_to_vec(tokens));
-        });
+    ss::get_tokens.set(r, [] (const_req req) {
+        auto tokens = service::get_local_storage_service().get_token_metadata().sorted_tokens();
+        return container_to_vec(tokens);
     });
 
-    ss::get_node_tokens.set(r, [](std::unique_ptr<request> req) {
-        gms::inet_address addr(req->param["endpoint"]);
-        return service::get_tokens(addr).then([](const std::vector<dht::token>& tokens) {
-            return make_ready_future<json::json_return_type>(container_to_vec(tokens));
-        });
+    ss::get_node_tokens.set(r, [] (const_req req) {
+        gms::inet_address addr(req.param["endpoint"]);
+        auto tokens = service::get_local_storage_service().get_token_metadata().get_tokens(addr);
+        return container_to_vec(tokens);
     });
 
     ss::get_commitlog.set(r, [&ctx](const_req req) {
         return ctx.db.local().commitlog()->active_config().commit_log_location;
     });
 
-    ss::get_token_endpoint.set(r, [](std::unique_ptr<request> req) {
-        return service::get_token_to_endpoint().then([] (const std::map<dht::token, gms::inet_address>& tokens){
-            std::vector<storage_service_json::mapper> res;
-            return make_ready_future<json::json_return_type>(map_to_key_value(tokens, res));
-        });
+    ss::get_token_endpoint.set(r, [] (const_req req) {
+        auto token_to_ep = service::get_local_storage_service().get_token_metadata().get_token_to_endpoint();
+        std::vector<storage_service_json::mapper> res;
+        return map_to_key_value(token_to_ep, res);
     });
 
     ss::get_leaving_nodes.set(r, [](const_req req) {
