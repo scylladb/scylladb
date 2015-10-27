@@ -281,13 +281,10 @@ public:
             stopNativeTransport();
         }
     }
-
-    private void shutdownClientServers()
-    {
-        stopRPCServer();
-        stopNativeTransport();
-    }
-
+#endif
+private:
+    future<> shutdown_client_servers();
+#if 0
     public void stopClient()
     {
         Gossiper.instance.unregister(this);

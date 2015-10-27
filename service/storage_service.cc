@@ -1557,7 +1557,7 @@ future<> storage_service::decommission() {
         unbootstrap();
 
         // FIXME: proper shutdown
-        // shutdownClientServers();
+        shutdown_client_servers().get();
         gms::get_local_gossiper().stop();
         // MessagingService.instance().shutdown();
         // StageManager.shutdownNow();
@@ -2213,6 +2213,10 @@ void storage_service::set_load_broadcaster(shared_ptr<load_broadcaster> lb) {
 
 shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
     return _lb;
+}
+
+future<> storage_service::shutdown_client_servers() {
+    return stop_rpc_server().then([this] { return stop_native_transport(); });
 }
 
 } // namespace service
