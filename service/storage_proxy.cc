@@ -1231,6 +1231,26 @@ bool storage_proxy::submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::ine
     }
 #endif
 
+future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs) {
+    return parallel_for_each(diffs, [this] (std::pair<const gms::inet_address, std::vector<mutation>>& i) {
+        auto type = i.second.size() == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
+        utils::latency_counter lc;
+        lc.start();
+
+        return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+            auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+            return create_write_response_handler(ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
+        }).then([this] (std::vector<response_id_type> ids) {
+            auto local_addr = utils::fb_utilities::get_broadcast_address();
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            sstring local_dc = snitch_ptr->get_datacenter(local_addr);
+            return mutate_begin(std::move(ids), db::consistency_level::ONE, local_dc);
+        }).then_wrapped([this, lc] (future<> f) {
+            return mutate_end(std::move(f), lc);
+        });
+    }).finally([p = shared_from_this()] {});
+}
+
 class digest_mismatch_exception : public std::runtime_error {
 public:
     digest_mismatch_exception() : std::runtime_error("Digest mismatch") {}
@@ -1479,6 +1499,11 @@ public:
 
         return reconcilable_result(r.first, std::move(r.second));
     }
+
+    auto get_diffs_for_repair() {
+        return std::move(_diffs);
+    }
+
 };
 
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
@@ -1590,7 +1615,21 @@ protected:
                 // So in particular, if no host returned count live columns, we know it's not a short read.
                 if (data_resolver->max_live_count() < cmd->row_limit || rr.row_count() >= original_row_limit()) {
                     auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), _cmd->slice)));
-                    _result_promise.set_value(std::move(result));
+                    // wait for write to complete before returning result to prevent multiple concurrent read requests to
+                    // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
+                    // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
+                    _proxy->schedule_repair(data_resolver->get_diffs_for_repair()).then([this, result = std::move(result)] () mutable {
+                        _result_promise.set_value(std::move(result));
+                    }).handle_exception([this, exec] (std::exception_ptr eptr) {
+                        try {
+                            std::rethrow_exception(eptr);
+                        } catch (mutation_write_timeout_exception&) {
+                            // convert write error to read error
+                            _result_promise.set_exception(read_timeout_exception(_cl, _block_for - 1, _block_for, true));
+                        } catch (...) {
+                            _result_promise.set_exception(std::current_exception());
+                        }
+                    });
                 } else {
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= _cmd->row_limit) live columns and got l (=rr.row_count) ones.
@@ -1625,12 +1664,16 @@ public:
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
                 if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
-                    done.then_wrapped([exec, digest_resolver] (future<>&& f){
+                    done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
                         try {
                             f.get();
                             digest_resolver->resolve();
                         } catch(digest_mismatch_exception& ex) {
-                            // FIXME: do read repair here
+                            exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                            exec->reconcile(exec->_cl, timeout);
+                            exec->_result_promise.get_future().then_wrapped([] (auto f) {
+                                f.ignore_ready_future(); // ignore any failures during background repair
+                            });
                         } catch(...) {
                             // ignore all exception besides digest mismatch during background check
                         }
