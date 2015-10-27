@@ -1464,12 +1464,6 @@ bool gossiper::is_alive(inet_address ep) {
     }
 }
 
-future<std::set<inet_address>> get_unreachable_members() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_unreachable_members();
-    });
-}
-
 future<int64_t> get_endpoint_downtime(inet_address ep) {
     return smp::submit_to(0, [ep] {
         return get_local_gossiper().get_endpoint_downtime(ep);

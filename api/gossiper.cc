@@ -27,10 +27,9 @@ namespace api {
 using namespace json;
 
 void set_gossiper(http_context& ctx, routes& r) {
-    httpd::gossiper_json::get_down_endpoint.set(r, [](std::unique_ptr<request> req) {
-        return gms::get_unreachable_members().then([](std::set<gms::inet_address> res) {
-            return make_ready_future<json::json_return_type>(container_to_vec(res));
-        });
+    httpd::gossiper_json::get_down_endpoint.set(r, [] (const_req req) {
+        auto res = gms::get_local_gossiper().get_unreachable_members();
+        return container_to_vec(res));
     });
 
     httpd::gossiper_json::get_live_endpoint.set(r, [] (const_req req) {
