@@ -849,12 +849,16 @@ bool gossiper::is_known_endpoint(inet_address endpoint) {
     return endpoint_state_map.count(endpoint);
 }
 
-int gossiper::get_current_generation_number(inet_address endpoint) {
-    return endpoint_state_map.at(endpoint).get_heart_beat_state().get_generation();
+future<int> gossiper::get_current_generation_number(inet_address endpoint) {
+    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+        return gossiper.endpoint_state_map.at(endpoint).get_heart_beat_state().get_generation();
+    });
 }
 
-int gossiper::get_current_heart_beat_version(inet_address endpoint) {
-    return endpoint_state_map.at(endpoint).get_heart_beat_state().get_heart_beat_version();
+future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
+    return get_gossiper().invoke_on(0, [endpoint] (auto&& gossiper) {
+        return gossiper.endpoint_state_map.at(endpoint).get_heart_beat_state().get_heart_beat_version();
+    });
 }
 
 future<bool> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
@@ -1466,18 +1470,6 @@ bool gossiper::is_alive(inet_address ep) {
         logger.warn("unknown endpoint {}", ep);
         return false;
     }
-}
-
-future<int> get_current_generation_number(inet_address ep) {
-    return smp::submit_to(0, [ep] {
-        return get_local_gossiper().get_current_generation_number(ep);
-    });
-}
-
-future<int> get_current_heart_beat_version(inet_address ep) {
-    return smp::submit_to(0, [ep] {
-        return get_local_gossiper().get_current_heart_beat_version(ep);
-    });
 }
 
 } // namespace gms

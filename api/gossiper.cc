@@ -42,16 +42,16 @@ void set_gossiper(http_context& ctx, routes& r) {
         return gms::get_local_gossiper().get_endpoint_downtime(ep);
     });
 
-    httpd::gossiper_json::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
+    httpd::gossiper_json::get_current_generation_number.set(r, [] (std::unique_ptr<request> req) {
         gms::inet_address ep(req->param["addr"]);
-        return gms::get_current_generation_number(ep).then([](int res) {
+        return gms::get_local_gossiper().get_current_generation_number(ep).then([] (int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
 
-    httpd::gossiper_json::get_current_heart_beat_version.set(r, [](std::unique_ptr<request> req) {
+    httpd::gossiper_json::get_current_heart_beat_version.set(r, [] (std::unique_ptr<request> req) {
         gms::inet_address ep(req->param["addr"]);
-        return gms::get_current_heart_beat_version(ep).then([](int res) {
+        return gms::get_local_gossiper().get_current_heart_beat_version(ep).then([] (int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });

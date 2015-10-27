@@ -305,8 +305,8 @@ public:
 public:
     bool is_known_endpoint(inet_address endpoint);
 
-    int get_current_generation_number(inet_address endpoint);
-    int get_current_heart_beat_version(inet_address endpoint);
+    future<int> get_current_generation_number(inet_address endpoint);
+    future<int> get_current_heart_beat_version(inet_address endpoint);
 
     bool is_gossip_only_member(inet_address endpoint);
 private:
@@ -459,8 +459,5 @@ inline gossiper& get_local_gossiper() {
 inline distributed<gossiper>& get_gossiper() {
     return _the_gossiper;
 }
-
-future<int> get_current_generation_number(inet_address ep);
-future<int> get_current_heart_beat_version(inet_address ep);
 
 } // namespace gms

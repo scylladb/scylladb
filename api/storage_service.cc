@@ -152,7 +152,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
         gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
-        return gms::get_current_generation_number(ep).then([](int res) {
+        return gms::get_local_gossiper().get_current_generation_number(ep).then([](int res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
