@@ -177,6 +177,15 @@ public:
 
     stats totals;
 
+    void begin_op() {
+        _gate.enter();
+        ++totals.pending_operations;
+    }
+    void end_op() {
+        --totals.pending_operations;
+        _gate.leave();
+    }
+
     segment_manager(config c)
             : cfg(c), max_size(
                     std::min<size_t>(std::numeric_limits<position_type>::max(),
@@ -192,9 +201,13 @@ public:
         if (cfg.commit_log_location.empty()) {
             cfg.commit_log_location = "/var/lib/scylla/commitlog";
         }
-        logger.trace("Commitlog maximum disk size: {} MB / cpu ({} cpus)",
-                max_disk_size / (1024*1024), smp::count);
+        logger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
+                cfg.commit_log_location, max_disk_size / (1024 * 1024),
+                smp::count);
         _regs = create_counters();
+    }
+    ~segment_manager() {
+        logger.trace("Commitlog {} disposed", cfg.commit_log_location);
     }
 
     uint64_t next_id() {
@@ -218,7 +231,9 @@ public:
     void on_timer();
     void sync();
     void arm(uint32_t extra = 0) {
-        _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
+        if (!_shutdown) {
+            _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms + extra));
+        }
     }
 
     std::vector<sstring> get_active_names() const;
@@ -371,6 +386,7 @@ public:
     }
     future<sseg_ptr> flush(uint64_t pos = 0) {
         auto me = shared_from_this();
+        assert(!me.owned());
         if (pos == 0) {
             pos = _file_pos;
         }
@@ -378,21 +394,21 @@ public:
             logger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
             return make_ready_future<sseg_ptr>(std::move(me));
         }
-        logger.trace("Syncing {} -> {}", _flush_pos, pos);
+        logger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
         // Make sure all disk writes are done.
         // This is not 100% neccesary, we really only need the ones below our flush pos,
         // but since we pretty much assume that task ordering will make this the case anyway...
+
         return _dwrite.write_lock().then(
-                [this, me = std::move(me), pos]() mutable {
+                [this, me, pos]() mutable {
                     _dwrite.write_unlock(); // release it already.
                     pos = std::max(pos, _file_pos);
                     if (pos <= _flush_pos) {
                         logger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
                         return make_ready_future<sseg_ptr>(std::move(me));
                     }
-                    ++_segment_manager->totals.pending_operations;
-                    return _file.flush().then_wrapped([this, pos, me = std::move(me)](auto f) {
-                                --_segment_manager->totals.pending_operations;
+                    _segment_manager->begin_op();
+                    return _file.flush().then_wrapped([this, pos, me](auto f) {
                                 try {
                                     f.get();
                                     // TODO: retry/ignore/fail/stop - optional behaviour in origin.
@@ -405,6 +421,8 @@ public:
                                     logger.error("Failed to flush commits to disk: {}", std::current_exception());
                                     throw;
                                 }
+                            }).finally([this, me] {
+                                _segment_manager->end_op();
                             });
                 });
     }
@@ -450,6 +468,8 @@ public:
             _segment_manager->totals.total_size += k;
         }
         auto me = shared_from_this();
+        assert(!me.owned());
+
         if (size == 0) {
             return make_ready_future<sseg_ptr>(std::move(me));
         }
@@ -484,9 +504,9 @@ public:
 
         // acquire read lock
         return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me]() mutable {
-            ++_segment_manager->totals.pending_operations;
             auto written = make_lw_shared<size_t>(0);
             auto p = buf.get();
+            _segment_manager->begin_op();
             return repeat([this, size, off, written, p]() mutable {
                 return _file.dma_write(off + *written, p + *written, size - *written).then_wrapped([this, size, written](auto&& f) {
                     try {
@@ -512,11 +532,11 @@ public:
                 });
             }).finally([this, buf = std::move(buf)]() mutable {
                 _segment_manager->release_buffer(std::move(buf));
+                _segment_manager->end_op();
             });
         }).then([me] {
             return make_ready_future<sseg_ptr>(std::move(me));
         }).finally([me, this]() {
-            --_segment_manager->totals.pending_operations;
             _dwrite.read_unlock(); // release
         });
     }
@@ -898,7 +918,9 @@ std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
 }
 
 void db::commitlog::segment_manager::discard_unused_segments() {
-    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto& s) {
+    logger.trace("Checking for unused segments ({} active)", _segments.size());
+
+    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto s) {
         if (s->can_delete()) {
             logger.debug("Segment {} is unused", *s);
             return true;
@@ -928,12 +950,12 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
 
 future<> db::commitlog::segment_manager::shutdown() {
     if (!_shutdown) {
-        _shutdown = true;
-        _timer.cancel();
-        return _gate.close().then([this] {
-            return parallel_for_each(_segments, [this](sseg_ptr s) {
-                return s->shutdown();
-            });
+        _shutdown = true; // no re-arm, no create new segments.
+        _timer.cancel(); // no more timer calls
+        return parallel_for_each(_segments, [this](sseg_ptr s) {
+            return s->shutdown(); // close each segment (no more alloc)
+        }).then(std::bind(&segment_manager::sync_all_segments, this)).then([this] { // flush all
+            return _gate.close(); // wait for any pending ops
         });
     }
     return make_ready_future<>();
@@ -946,47 +968,43 @@ future<> db::commitlog::segment_manager::shutdown() {
  * Only use from tests.
  */
 future<> db::commitlog::segment_manager::clear() {
-    logger.debug("Clearing all segments");
-    _shutdown = true;
-    _timer.cancel();
-    flush_segments(true);
+    logger.debug("Clearing commitlog");
     return shutdown().then([this] {
-        return sync_all_segments().then([this] {
-            for (auto& s : _segments) {
-                s->mark_clean();
-            }
-           _segments.clear();
-        });
+        logger.debug("Clearing all segments");
+        for (auto& s : _segments) {
+            s->mark_clean();
+        }
+       _segments.clear();
     });
 }
 /**
  * Called by timer in periodic mode.
  */
 void db::commitlog::segment_manager::sync() {
-    for (auto& s : _segments) {
+    for (auto s : _segments) {
         s->sync(); // we do not care about waiting...
     }
 }
 
 void db::commitlog::segment_manager::on_timer() {
-    if (cfg.mode != sync_mode::BATCH) {
-        sync();
-    }
-    // IFF a new segment was put in use since last we checked, and we're
-    // above threshold, request flush.
-    if (_new_counter > 0) {
-        auto max = max_disk_size;
-        auto cur = totals.total_size_on_disk;
-        if (max != 0 && cur >= max) {
-            _new_counter = 0;
-            logger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
-            flush_segments();
-        }
-    }
     // Gate, because we are starting potentially blocking ops
     // without waiting for them, so segement_manager could be shut down
     // while they are running.
     seastar::with_gate(_gate, [this] {
+        if (cfg.mode != sync_mode::BATCH) {
+            sync();
+        }
+        // IFF a new segment was put in use since last we checked, and we're
+        // above threshold, request flush.
+        if (_new_counter > 0) {
+            auto max = max_disk_size;
+            auto cur = totals.total_size_on_disk;
+            if (max != 0 && cur >= max) {
+                _new_counter = 0;
+                logger.debug("Size on disk {} MB exceeds local maximum {} MB", cur / (1024 * 1024), max / (1024 * 1024));
+                flush_segments();
+            }
+        }
         // take outstanding allocations into regard. This is paranoid,
         // but if for some reason the file::open takes longer than timer period,
         // we could flood the reserve list with new segments
