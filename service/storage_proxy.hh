@@ -134,6 +134,7 @@ private:
     future<std::vector<storage_proxy::response_id_type>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
     future<> mutate_begin(const std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl, const sstring& local_dc);
     future<> mutate_end(future<> mutate_result, utils::latency_counter);
+    future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
 
 public:
     storage_proxy(distributed<database>& db);

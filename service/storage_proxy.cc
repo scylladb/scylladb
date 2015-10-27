@@ -59,6 +59,7 @@
 #include "exceptions/exceptions.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/algorithm/count_if.hpp>
@@ -1230,6 +1231,26 @@ bool storage_proxy::submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::ine
     }
 #endif
 
+future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs) {
+    return parallel_for_each(diffs, [this] (std::pair<const gms::inet_address, std::vector<mutation>>& i) {
+        auto type = i.second.size() == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
+        utils::latency_counter lc;
+        lc.start();
+
+        return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
+            auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
+            return create_write_response_handler(ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
+        }).then([this] (std::vector<response_id_type> ids) {
+            auto local_addr = utils::fb_utilities::get_broadcast_address();
+            auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+            sstring local_dc = snitch_ptr->get_datacenter(local_addr);
+            return mutate_begin(std::move(ids), db::consistency_level::ONE, local_dc);
+        }).then_wrapped([this, lc] (future<> f) {
+            return mutate_end(std::move(f), lc);
+        });
+    }).finally([p = shared_from_this()] {});
+}
+
 class digest_mismatch_exception : public std::runtime_error {
 public:
     digest_mismatch_exception() : std::runtime_error("Digest mismatch") {}
@@ -1375,6 +1396,7 @@ class data_read_resolver : public abstract_read_resolver {
 
     uint32_t _max_live_count = 0;
     std::vector<reply> _data_results;
+    std::unordered_map<gms::inet_address, std::vector<mutation>> _diffs;
 private:
     virtual void on_timeout() override {
         // we will not need them any more
@@ -1444,23 +1466,44 @@ public:
             }
         } while(true);
 
-        std::vector<partition> reconciliated_partitions;
-        reconciliated_partitions.reserve(versions.size());
-        uint32_t row_count = 0;
+        std::vector<mutation> reconciled_partitions;
+        reconciled_partitions.reserve(versions.size());
 
-        // traverse backwards since large keys are at the start
-        boost::range::transform(boost::make_iterator_range(versions.rbegin(), versions.rend()), std::back_inserter(reconciliated_partitions), [this, &row_count, schema] (std::vector<version>& v) {
-            mutation m = std::accumulate(std::begin(v), std::end(v), mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
+        // reconcile all versions
+        boost::range::transform(boost::make_iterator_range(versions.begin(), versions.end()), std::back_inserter(reconciled_partitions), [this, schema] (std::vector<version>& v) {
+            return boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
                 m.partition().apply(*schema, ver.par.mut().partition());
                 return std::move(m);
             });
-            auto count = m.live_row_count();
-            row_count += count;
-            return partition(count, freeze(m));
         });
 
-        return reconcilable_result(row_count, std::move(reconciliated_partitions));
+        // calculate differences
+        for (auto z : boost::combine(versions, reconciled_partitions)) {
+            const mutation& m = z.get<1>();
+            for (const version& v : z.get<0>()) {
+                auto diff = m.partition().difference(schema, v.par.mut().unfreeze(schema).partition());
+                if (!diff.empty()) {
+                    _diffs[v.from].emplace_back(mutation(schema, m.decorated_key(), std::move(diff)));
+                }
+            }
+        }
+
+        // build reconcilable_result from reconciled data
+        // traverse backwards since large keys are at the start
+        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::make_pair(uint32_t(0), std::vector<partition>()), [] (auto&& a, const mutation& m) {
+            auto count = m.live_row_count();
+            a.first += count;
+            a.second.emplace_back(partition(count, freeze(m)));
+            return std::move(a);
+        });
+
+        return reconcilable_result(r.first, std::move(r.second));
     }
+
+    auto get_diffs_for_repair() {
+        return std::move(_diffs);
+    }
+
 };
 
 class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
@@ -1555,7 +1598,7 @@ protected:
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
     }
-    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
+    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
@@ -1572,7 +1615,21 @@ protected:
                 // So in particular, if no host returned count live columns, we know it's not a short read.
                 if (data_resolver->max_live_count() < cmd->row_limit || rr.row_count() >= original_row_limit()) {
                     auto result = ::make_foreign(::make_lw_shared(to_data_query_result(std::move(rr), std::move(s), _cmd->slice)));
-                    _result_promise.set_value(std::move(result));
+                    // wait for write to complete before returning result to prevent multiple concurrent read requests to
+                    // trigger repair multiple times and to prevent quorum read to return an old value, even after a quorum
+                    // another read had returned a newer value (but the newer value had not yet been sent to the other replicas)
+                    _proxy->schedule_repair(data_resolver->get_diffs_for_repair()).then([this, result = std::move(result)] () mutable {
+                        _result_promise.set_value(std::move(result));
+                    }).handle_exception([this, exec] (std::exception_ptr eptr) {
+                        try {
+                            std::rethrow_exception(eptr);
+                        } catch (mutation_write_timeout_exception&) {
+                            // convert write error to read error
+                            _result_promise.set_exception(read_timeout_exception(_cl, _block_for - 1, _block_for, true));
+                        } catch (...) {
+                            _result_promise.set_exception(std::current_exception());
+                        }
+                    });
                 } else {
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= _cmd->row_limit) live columns and got l (=rr.row_count) ones.
@@ -1580,15 +1637,15 @@ protected:
                     // columns, only l/t end up live after reconciliation. So for next
                     // round we want to ask x column so that x * (l/t) == t, i.e. x = t^2/l.
                     _retry_cmd->row_limit = rr.row_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / rr.row_count()) + 1;
-                    reconciliate(cl, timeout, _retry_cmd);
+                    reconcile(cl, timeout, _retry_cmd);
                 }
             } catch(read_timeout_exception& ex) {
                 _result_promise.set_exception(ex);
             }
         });
     }
-    void reconciliate(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
-        reconciliate(cl, timeout, _cmd);
+    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
+        reconcile(cl, timeout, _cmd);
     }
 
 public:
@@ -1607,12 +1664,16 @@ public:
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
                 if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
-                    done.then_wrapped([exec, digest_resolver] (future<>&& f){
+                    done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
                         try {
                             f.get();
                             digest_resolver->resolve();
                         } catch(digest_mismatch_exception& ex) {
-                            // FIXME: do read repair here
+                            exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                            exec->reconcile(exec->_cl, timeout);
+                            exec->_result_promise.get_future().then_wrapped([] (auto f) {
+                                f.ignore_ready_future(); // ignore any failures during background repair
+                            });
                         } catch(...) {
                             // ignore all exception besides digest mismatch during background check
                         }
@@ -1621,7 +1682,7 @@ public:
                     done.discard_result(); // no need for background check, discard done future explicitly
                 }
             } catch (digest_mismatch_exception& ex) {
-                exec->reconciliate(_cl, timeout);
+                exec->reconcile(_cl, timeout);
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
@@ -1692,7 +1753,7 @@ public:
     range_slice_read_executor(shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
                                     abstract_read_executor(std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets)) {}
     virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) override {
-        reconciliate(_cl, timeout);
+        reconcile(_cl, timeout);
         return _result_promise.get_future();
     }
 };
