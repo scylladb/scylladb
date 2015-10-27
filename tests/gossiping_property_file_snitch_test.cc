@@ -42,6 +42,8 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     path fname(test_files_subdir);
     fname /= path(property_fname);
 
+    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+
     return i_endpoint_snitch::create_snitch<const sstring&>(
         "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
         sstring(fname.string()))

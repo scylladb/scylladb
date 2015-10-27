@@ -37,6 +37,8 @@ future<> one_test(const std::string& property_fname1,
     using namespace locator;
     using namespace boost::filesystem;
 
+    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+
     printf("Testing %s and %s property files. Expected result is %s\n",
            property_fname1.c_str(), property_fname2.c_str(),
            (exp_result ? "success" : "failure"));
