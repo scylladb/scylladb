@@ -1558,7 +1558,7 @@ future<> storage_service::decommission() {
 
         // FIXME: proper shutdown
         shutdown_client_servers().get();
-        gms::get_local_gossiper().stop();
+        gms::get_local_gossiper().stop().get();
         // MessagingService.instance().shutdown();
         // StageManager.shutdownNow();
         set_mode(mode::DECOMMISSIONED, true);
