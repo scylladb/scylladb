@@ -10,7 +10,7 @@ override_dh_auto_build:
 	ninja
 
 override_dh_auto_clean:
-	rm -rf build seastar/build
+	rm -rf build/release seastar/build
 	rm -rf Cql.tokens
 	rm -rf build.ninja seastar/build.ninja
 
