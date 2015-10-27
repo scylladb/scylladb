@@ -65,7 +65,16 @@ struct [[gnu::packed]] cql_binary_frame_v3 {
     }
 };
 
+enum class cql_load_balance {
+    none,
+    round_robin,
+};
+
+cql_load_balance parse_load_balance(sstring value);
+
 class cql_server {
+public:
+private:
     class event_notifier;
 
     static constexpr int current_version = 3;
@@ -81,15 +90,17 @@ private:
     uint64_t _connections = 0;
     uint64_t _requests_served = 0;
     uint64_t _requests_serving = 0;
+    cql_load_balance _lb;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp);
+    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
     future<> stop();
+public:
+    class response;
 private:
     class fmt_visitor;
     class connection;
-    class response;
     friend class type_codec;
 };
 
@@ -139,6 +150,8 @@ struct cql_query_state {
     { }
 };
 
+using response_type = std::pair<shared_ptr<cql_server::response>, service::client_state>;
+
 class cql_server::connection {
     cql_server& _server;
     connected_socket _fd;
@@ -150,63 +163,61 @@ class cql_server::connection {
     serialization_format _serialization_format = serialization_format::use_16_bit();
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
+    unsigned _request_cpu = 0;
 public:
     connection(cql_server& server, connected_socket&& fd, socket_address addr);
     ~connection();
     future<> process();
     future<> process_request();
 private:
-
-    future<> process_request_one(temporary_buffer<char> buf,
-                                 uint8_t op,
-                                 uint16_t stream);
+    future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state);
     unsigned frame_size() const;
+    unsigned pick_request_cpu();
     cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
     future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
-    future<> process_startup(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_auth_response(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_options(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_query(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_prepare(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_execute(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
-    future<> process_register(uint16_t stream, temporary_buffer<char> buf);
+    future<response_type> process_startup(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_options(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_query(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_prepare(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_execute(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_batch(uint16_t stream, bytes_view buf, service::client_state client_state);
+    future<response_type> process_register(uint16_t stream, bytes_view buf, service::client_state client_state);
 
-    future<> write_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
-    future<> write_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
-    future<> write_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type);
-    future<> write_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
-    future<> write_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
-    future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
-    future<> write_ready(int16_t stream);
-    future<> write_supported(int16_t stream);
-    future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
-    future<> write_topology_change_event(const transport::event::topology_change& event);
-    future<> write_status_change_event(const transport::event::status_change& event);
-    future<> write_schema_change_event(const transport::event::schema_change& event);
-    future<> write_response(shared_ptr<cql_server::response> response);
+    shared_ptr<cql_server::response> make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive);
+    shared_ptr<cql_server::response> make_read_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, bool data_present);
+    shared_ptr<cql_server::response> make_mutation_write_timeout_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t blockfor, db::write_type type);
+    shared_ptr<cql_server::response> make_already_exists_error(int16_t stream, exceptions::exception_code err, sstring msg, sstring ks_name, sstring cf_name);
+    shared_ptr<cql_server::response> make_unprepared_error(int16_t stream, exceptions::exception_code err, sstring msg, bytes id);
+    shared_ptr<cql_server::response> make_error(int16_t stream, exceptions::exception_code err, sstring msg);
+    shared_ptr<cql_server::response> make_ready(int16_t stream);
+    shared_ptr<cql_server::response> make_supported(int16_t stream);
+    shared_ptr<cql_server::response> make_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
+    shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
+    shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
+    shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
+    future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response);
 
-    void check_room(temporary_buffer<char>& buf, size_t n);
+    void check_room(bytes_view& buf, size_t n);
     void validate_utf8(sstring_view s);
-    int8_t read_byte(temporary_buffer<char>& buf);
-    int32_t read_int(temporary_buffer<char>& buf);
-    int64_t read_long(temporary_buffer<char>& buf);
-    int16_t read_short(temporary_buffer<char>& buf);
-    uint16_t read_unsigned_short(temporary_buffer<char>& buf);
-    sstring read_string(temporary_buffer<char>& buf);
-    sstring_view read_string_view(temporary_buffer<char>& buf);
-    sstring_view read_long_string_view(temporary_buffer<char>& buf);
-    bytes read_short_bytes(temporary_buffer<char>& buf);
-    bytes_opt read_value(temporary_buffer<char>& buf);
-    bytes_view_opt read_value_view(temporary_buffer<char>& buf);
-    void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values);
-    void read_string_list(temporary_buffer<char>& buf, std::vector<sstring>& strings);
-    void read_value_view_list(temporary_buffer<char>& buf, std::vector<bytes_view_opt>& values);
-    db::consistency_level read_consistency(temporary_buffer<char>& buf);
-    std::unordered_map<sstring, sstring> read_string_map(temporary_buffer<char>& buf);
-    std::unique_ptr<cql3::query_options> read_options(temporary_buffer<char>& buf);
+    int8_t read_byte(bytes_view& buf);
+    int32_t read_int(bytes_view& buf);
+    int64_t read_long(bytes_view& buf);
+    int16_t read_short(bytes_view& buf);
+    uint16_t read_unsigned_short(bytes_view& buf);
+    sstring read_string(bytes_view& buf);
+    sstring_view read_string_view(bytes_view& buf);
+    sstring_view read_long_string_view(bytes_view& buf);
+    bytes read_short_bytes(bytes_view& buf);
+    bytes_opt read_value(bytes_view& buf);
+    bytes_view_opt read_value_view(bytes_view& buf);
+    void read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values);
+    void read_string_list(bytes_view& buf, std::vector<sstring>& strings);
+    void read_value_view_list(bytes_view& buf, std::vector<bytes_view_opt>& values);
+    db::consistency_level read_consistency(bytes_view& buf);
+    std::unordered_map<sstring, sstring> read_string_map(bytes_view& buf);
+    std::unique_ptr<cql3::query_options> read_options(bytes_view& buf);
 
-    cql_query_state& get_query_state(uint16_t stream);
     void init_serialization_format();
 
     friend event_notifier;

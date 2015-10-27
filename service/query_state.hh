@@ -29,9 +29,11 @@ namespace service {
 
 class query_state final {
 private:
-    client_state& _client_state;
+    client_state _client_state;
 public:
-    query_state(client_state& client_state_) : _client_state(client_state_) {}
+    query_state(client_state client_state)
+        : _client_state(client_state)
+    { }
     client_state& get_client_state() {
         return _client_state;
     }

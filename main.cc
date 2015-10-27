@@ -199,6 +199,7 @@ int main(int ac, char** av) {
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = cfg->api_port();
+            transport::cql_load_balance lb = transport::parse_load_balance(cfg->load_balance());
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
             sstring cluster_name = cfg->cluster_name();
@@ -330,10 +331,10 @@ int main(int ac, char** av) {
                 engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
-            }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port, start_thrift] (dns::hostent e) {
+            }).then([&db, &proxy, &qp, rpc_address, cql_port, thrift_port, start_thrift, lb] (dns::hostent e) {
                 auto ip = e.addresses[0].in.s_addr;
                 auto cserver = new distributed<transport::cql_server>;
-                cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
+                cserver->start(std::ref(proxy), std::ref(qp), lb).then([server = std::move(cserver), cql_port, rpc_address, ip] () mutable {
                     // #293 - do not stop anything
                     //engine().at_exit([server] {
                     //    return server->stop();
