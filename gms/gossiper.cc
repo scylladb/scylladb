@@ -1461,12 +1461,6 @@ future<std::set<inet_address>> get_unreachable_members() {
     });
 }
 
-future<std::set<inet_address>> get_live_members() {
-    return smp::submit_to(0, [] {
-        return get_local_gossiper().get_live_members();
-    });
-}
-
 future<int64_t> get_endpoint_downtime(inet_address ep) {
     return smp::submit_to(0, [ep] {
         return get_local_gossiper().get_endpoint_downtime(ep);
