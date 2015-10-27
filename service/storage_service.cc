@@ -283,9 +283,7 @@ void storage_service::join_token_ring(int delay) {
             if (replace_addr && *replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
-                // FIXME: LoadBroadcaster.BROADCAST_INTERVAL
-                std::chrono::milliseconds broadcast_interval(60 * 1000);
-                sleep(broadcast_interval).get();
+                sleep(service::load_broadcaster::BROADCAST_INTERVAL).get();
 
                 // check for operator errors...
                 for (auto token : _bootstrap_tokens) {
