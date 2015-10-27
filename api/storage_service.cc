@@ -346,11 +346,8 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::remove_node.set(r, [](std::unique_ptr<request> req) {
-        // FIXME: This api is incorrect. remove_node takes a host id string parameter instead of token.
         auto host_id = req->get_query_param("host_id");
-        return service::get_storage_service().invoke_on(0, [host_id = std::move(host_id)] (auto& ss) {
-            return ss.remove_node(std::move(host_id));
-        }).then([] {
+        return service::get_local_storage_service().remove_node(host_id).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
