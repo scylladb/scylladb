@@ -65,6 +65,16 @@ class thrift_server;
 namespace service {
 
 class load_broadcaster;
+class storage_service;
+
+extern distributed<storage_service> _the_storage_service;
+inline distributed<storage_service>& get_storage_service() {
+    return _the_storage_service;
+}
+inline storage_service& get_local_storage_service() {
+    return _the_storage_service.local();
+}
+
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -2573,17 +2583,16 @@ public:
         logger.info(String.format("Updated hinted_handoff_throttle_in_kb to %d", throttleInKB));
     }
 #endif
+
+    template <typename Func>
+    inline auto run_with_write_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return with_lock(ss.api_lock().for_write(), [&ss, func = std::forward<Func>(func)] () mutable {
+                return func(ss);
+            });
+        });
+    }
 };
-
-extern distributed<storage_service> _the_storage_service;
-
-inline distributed<storage_service>& get_storage_service() {
-    return _the_storage_service;
-}
-
-inline storage_service& get_local_storage_service() {
-    return _the_storage_service.local();
-}
 
 inline future<> init_storage_service(distributed<database>& db) {
     return service::get_storage_service().start(std::ref(db)).then([] {
