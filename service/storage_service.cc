@@ -1571,85 +1571,89 @@ future<> storage_service::decommission() {
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
-    return seastar::async([this, host_id_string] {
-        logger.debug("remove_node: host_id = {}", host_id_string);
-        auto my_address = get_broadcast_address();
-        auto local_host_id = _token_metadata.get_host_id(my_address);
-        auto host_id = utils::UUID(host_id_string);
-        auto endpoint_opt = _token_metadata.get_endpoint_for_host_id(host_id);
-        auto& gossiper = gms::get_local_gossiper();
-        if (!endpoint_opt) {
-            throw std::runtime_error("Host ID not found.");
-        }
-        auto endpoint = *endpoint_opt;
+    return get_storage_service().invoke_on(0, [host_id_string] (storage_service& ss) {
+        return seastar::async([&ss, host_id_string] {
+            logger.debug("remove_node: host_id = {}", host_id_string);
+            auto my_address = ss.get_broadcast_address();
+            auto& tm = ss._token_metadata;
+            auto local_host_id = tm.get_host_id(my_address);
+            auto host_id = utils::UUID(host_id_string);
+            auto endpoint_opt = tm.get_endpoint_for_host_id(host_id);
+            auto& gossiper = gms::get_local_gossiper();
+            if (!endpoint_opt) {
+                throw std::runtime_error("Host ID not found.");
+            }
+            auto endpoint = *endpoint_opt;
 
-        auto tokens = _token_metadata.get_tokens(endpoint);
+            auto tokens = tm.get_tokens(endpoint);
 
-        logger.debug("remove_node: endpoint = {}", endpoint);
+            logger.debug("remove_node: endpoint = {}", endpoint);
 
-        if (endpoint == my_address) {
-            throw std::runtime_error("Cannot remove self");
-        }
-
-        if (gossiper.get_live_members().count(endpoint)) {
-            throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
-        }
-
-        // A leaving endpoint that is dead is already being removed.
-        if (_token_metadata.is_leaving(endpoint)) {
-            logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
-        }
-
-        if (!_replicating_nodes.empty()) {
-            throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
-        }
-
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-        // Find the endpoints that are going to become responsible for data
-        for (const auto& keyspace_name : non_system_keyspaces) {
-            auto& ks = _db.local().find_keyspace(keyspace_name);
-            // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
-            if (ks.get_replication_strategy().get_replication_factor() == 1) {
-                continue;
+            if (endpoint == my_address) {
+                throw std::runtime_error("Cannot remove self");
             }
 
-            // get all ranges that change ownership (that is, a node needs
-            // to take responsibility for new range)
-            std::unordered_multimap<range<token>, inet_address> changed_ranges = get_changed_ranges_for_leaving(keyspace_name, endpoint);
-            auto fd = gms::get_local_failure_detector();
-            for (auto& x: changed_ranges) {
-                auto ep = x.second;
-                if (fd.is_alive(ep)) {
-                    _replicating_nodes.emplace(ep);
-                } else {
-                    logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+            if (gossiper.get_live_members().count(endpoint)) {
+                throw std::runtime_error(sprint("Node %s is alive and owns this ID. Use decommission command to remove it from the ring", endpoint));
+            }
+
+            // A leaving endpoint that is dead is already being removed.
+            if (tm.is_leaving(endpoint)) {
+                logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
+            }
+
+            if (!ss._replicating_nodes.empty()) {
+                throw std::runtime_error("This node is already processing a removal. Wait for it to complete, or use 'removenode force' if this has failed.");
+            }
+
+            auto non_system_keyspaces = ss.db().local().get_non_system_keyspaces();
+            // Find the endpoints that are going to become responsible for data
+            for (const auto& keyspace_name : non_system_keyspaces) {
+                auto& ks = ss.db().local().find_keyspace(keyspace_name);
+                // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
+                if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                    continue;
+                }
+
+                // get all ranges that change ownership (that is, a node needs
+                // to take responsibility for new range)
+                std::unordered_multimap<range<token>, inet_address> changed_ranges =
+                    ss.get_changed_ranges_for_leaving(keyspace_name, endpoint);
+                auto fd = gms::get_local_failure_detector();
+                for (auto& x: changed_ranges) {
+                    auto ep = x.second;
+                    if (fd.is_alive(ep)) {
+                        ss._replicating_nodes.emplace(ep);
+                    } else {
+                        logger.warn("Endpoint {} is down and will not receive data for re-replication of {}", ep, endpoint);
+                    }
                 }
             }
-        }
-        _removing_node = endpoint;
-        _token_metadata.add_leaving_endpoint(endpoint);
-        get_local_pending_range_calculator_service().update().get();
+            ss._removing_node = endpoint;
+            tm.add_leaving_endpoint(endpoint);
+            get_local_pending_range_calculator_service().update().get();
 
-        // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
-        // we add our own token so other nodes to let us know when they're done
-        gossiper.advertise_removing(endpoint, host_id, local_host_id);
+            // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
+            // we add our own token so other nodes to let us know when they're done
+            gossiper.advertise_removing(endpoint, host_id, local_host_id);
 
-        // kick off streaming commands
-        restore_replica_count(endpoint, my_address).get();
+            // kick off streaming commands
+            ss.restore_replica_count(endpoint, my_address).get();
 
-        // wait for ReplicationFinishedVerbHandler to signal we're done
-        while (!_replicating_nodes.empty()) {
-            sleep(std::chrono::milliseconds(100)).get();
-        }
+            // wait for ReplicationFinishedVerbHandler to signal we're done
+            while (!ss._replicating_nodes.empty()) {
+                sleep(std::chrono::milliseconds(100)).get();
+            }
 
-        std::unordered_set<token> tmp(tokens.begin(), tokens.end());
-        excise(std::move(tmp), endpoint);
+            std::unordered_set<token> tmp(tokens.begin(), tokens.end());
+            ss.excise(std::move(tmp), endpoint);
 
-        // gossiper will indicate the token has left
-        gossiper.advertise_token_removed(endpoint, host_id);
+            // gossiper will indicate the token has left
+            gossiper.advertise_token_removed(endpoint, host_id);
 
-        _replicating_nodes.clear();
-        _removing_node = {};
+            ss._replicating_nodes.clear();
+            ss._removing_node = {};
+        });
     });
 }
 
