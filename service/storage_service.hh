@@ -53,8 +53,9 @@
 #include "core/semaphore.hh"
 #include "utils/fb_utilities.hh"
 #include "database.hh"
-#include <seastar/core/distributed.hh>
 #include "streaming/stream_state.hh"
+#include <seastar/core/distributed.hh>
+#include <seastar/core/rwlock.hh>
 
 namespace transport {
     class cql_server;
@@ -103,6 +104,7 @@ private:
     shared_ptr<load_broadcaster> _lb;
     shared_ptr<distributed<transport::cql_server>> _cql_server;
     shared_ptr<distributed<thrift_server>> _thrift_server;
+    rwlock _api_lock;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -128,6 +130,10 @@ public:
     distributed<database>& db() {
         return _db;
     }
+
+    rwlock& api_lock() {
+        return _api_lock;
+    };
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() {
