@@ -1126,17 +1126,18 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     });
 }
 
-std::map<gms::inet_address, float> storage_service::get_ownership() const {
-    auto token_map = dht::global_partitioner().describe_ownership(_token_metadata.sorted_tokens());
-
-    // describeOwnership returns tokens in an unspecified order, let's re-order them
-    std::map<gms::inet_address, float> node_map;
-    for (auto entry : token_map) {
-        gms::inet_address endpoint = _token_metadata.get_endpoint(entry.first).value();
-        auto token_ownership = entry.second;
-        node_map[endpoint] += token_ownership;
-    }
-    return node_map;
+future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto token_map = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        // describeOwnership returns tokens in an unspecified order, let's re-order them
+        std::map<gms::inet_address, float> ownership;
+        for (auto entry : token_map) {
+            gms::inet_address endpoint = ss._token_metadata.get_endpoint(entry.first).value();
+            auto token_ownership = entry.second;
+            ownership[endpoint] += token_ownership;
+        }
+        return ownership;
+    });
 }
 
 std::map<gms::inet_address, float> storage_service::effective_ownership(sstring name) const {

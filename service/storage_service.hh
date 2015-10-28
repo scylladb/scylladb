@@ -2205,7 +2205,7 @@ public:
     }
 #endif
 public:
-    std::map<gms::inet_address, float> get_ownership() const;
+    future<std::map<gms::inet_address, float>> get_ownership();
 
     std::map<gms::inet_address, float> effective_ownership(sstring keyspace) const;
 #if 0

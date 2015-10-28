@@ -727,10 +727,11 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_ownership.set(r, [](const_req req) {
-        auto tokens = service::get_local_storage_service().get_ownership();
-        std::vector<storage_service_json::mapper> res;
-        return map_to_key_value(tokens, res);
+    ss::get_ownership.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().get_ownership().then([] (auto&& ownership) {
+            std::vector<storage_service_json::mapper> res;
+            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
+        });
     });
 
     ss::get_effective_ownership.set(r, [&ctx](const_req req) {
