@@ -1217,15 +1217,15 @@ sstring storage_service::get_schema_version() {
 }
 
 future<sstring> storage_service::get_operation_mode() {
-    return smp::submit_to(0, [] {
-        auto mode = get_local_storage_service()._operation_mode;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto mode = ss._operation_mode;
         return make_ready_future<sstring>(sprint("%s", mode));
     });
 }
 
 future<bool> storage_service::is_starting() {
-    return smp::submit_to(0, [] {
-        auto mode = get_local_storage_service()._operation_mode;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto mode = ss._operation_mode;
         return mode == storage_service::mode::STARTING;
     });
 }
@@ -1479,7 +1479,7 @@ future<> storage_service::stop_rpc_server() {
 }
 
 future<bool> storage_service::is_rpc_server_running() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         return bool(ss._thrift_server);
     });
 }
@@ -1524,7 +1524,7 @@ future<> storage_service::stop_native_transport() {
 }
 
 future<bool> storage_service::is_native_transport_running() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         return bool(ss._cql_server);
     });
 }
@@ -1755,7 +1755,7 @@ sstring storage_service::get_load_string() {
 }
 
 future<std::map<sstring, sstring>> storage_service::get_load_map() {
-    return get_storage_service().invoke_on(0, [] (auto&& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         std::map<sstring, sstring> load_map;
         for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
             load_map.emplace(sprint("%s", x.first), sprint("%s", x.second));
@@ -1802,8 +1802,8 @@ int32_t storage_service::get_exception_count() {
 }
 
 future<bool> storage_service::is_initialized() {
-    return smp::submit_to(0, [] {
-        return get_local_storage_service()._initialized;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        return ss._initialized;
     });
 }
 
