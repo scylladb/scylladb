@@ -78,15 +78,6 @@ int main(int ac, char ** av) {
             int generation_number = duration_cast<seconds>(now).count();
             return gossiper.start(generation_number, app_states);
         }).then([vv] {
-            auto reporter = std::make_shared<timer<lowres_clock>>();
-            reporter->set_callback ([reporter] {
-                auto& gossiper = gms::get_local_gossiper();
-                gossiper.dump_endpoint_state_map();
-                auto& fd = gms::get_local_failure_detector();
-                print("%s", fd);
-            });
-            reporter->arm_periodic(std::chrono::milliseconds(1000));
-
             auto app_state_adder = std::make_shared<timer<lowres_clock>>();
             app_state_adder->set_callback ([vv, app_state_adder] {
                 static double load = 0.5;
