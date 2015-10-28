@@ -111,7 +111,7 @@ void ec2_multi_region_snitch::gossiper_starting() {
                                   ss.value_factory.internal_ip(_local_private_address));
 
     if (!_helper_added) {
-        gms::get_local_gossiper().register_(make_shared<reconnectable_snitch_helper>(_my_dc, true));
+        gms::get_local_gossiper().register_(make_shared<reconnectable_snitch_helper>(_my_dc));
         _helper_added = true;
     }
 }
