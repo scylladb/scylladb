@@ -734,11 +734,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_effective_ownership.set(r, [&ctx](const_req req) {
-        auto tokens = service::get_local_storage_service().effective_ownership(
-                (req.param["keyspace"] == "null")? "" : validate_keyspace(ctx, req.param));
-        std::vector<storage_service_json::mapper> res;
-        return map_to_key_value(tokens, res);
+    ss::get_effective_ownership.set(r, [&ctx] (std::unique_ptr<request> req) {
+        auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
+        return service::get_local_storage_service().effective_ownership(keyspace_name).then([] (auto&& ownership) {
+            std::vector<storage_service_json::mapper> res;
+            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
+        });
     });
 }
 

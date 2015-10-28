@@ -1140,46 +1140,48 @@ future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
     });
 }
 
-std::map<gms::inet_address, float> storage_service::effective_ownership(sstring name) const {
-    if (name != "") {
-        //find throws no such keyspace if it is missing
-        const keyspace& ks = _db.local().find_keyspace(name);
-        // This is ugly, but it follows origin
-        if (typeid(ks.get_replication_strategy()) == typeid(locator::local_strategy)) {
-            throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
-        }
-    } else {
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-
-        //system_traces is a non-system keyspace however it needs to be counted as one for this process
-        size_t special_table_count = 0;
-        if (std::find(non_system_keyspaces.begin(), non_system_keyspaces.end(), "system_traces") !=
-                non_system_keyspaces.end()) {
-            special_table_count += 1;
-        }
-        if (non_system_keyspaces.size() > special_table_count) {
-            throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
-        }
-        name = "system_traces";
-    }
-    auto token_ownership = dht::global_partitioner().describe_ownership(_token_metadata.sorted_tokens());
-
-    std::map<gms::inet_address, float> final_ownership;
-
-    // calculate ownership per dc
-    for (auto endpoints : _token_metadata.get_topology().get_datacenter_endpoints()) {
-        // calculate the ownership with replication and add the endpoint to the final ownership map
-        for (const gms::inet_address& endpoint : endpoints.second) {
-            float ownership = 0.0f;
-            for (range<token> r : get_ranges_for_endpoint(name, endpoint)) {
-                if (token_ownership.find(r.end().value().value()) != token_ownership.end()) {
-                    ownership += token_ownership[r.end().value().value()];
-                }
+future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
+    return run_with_read_api_lock([keyspace_name] (storage_service& ss) mutable {
+        if (keyspace_name != "") {
+            //find throws no such keyspace if it is missing
+            const keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
+            // This is ugly, but it follows origin
+            if (typeid(ks.get_replication_strategy()) == typeid(locator::local_strategy)) {
+                throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
-            final_ownership[endpoint] = ownership;
+        } else {
+            auto non_system_keyspaces = ss._db.local().get_non_system_keyspaces();
+
+            //system_traces is a non-system keyspace however it needs to be counted as one for this process
+            size_t special_table_count = 0;
+            if (std::find(non_system_keyspaces.begin(), non_system_keyspaces.end(), "system_traces") !=
+                    non_system_keyspaces.end()) {
+                special_table_count += 1;
+            }
+            if (non_system_keyspaces.size() > special_table_count) {
+                throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
+            }
+            keyspace_name = "system_traces";
         }
-    }
-    return final_ownership;
+        auto token_ownership = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+
+        std::map<gms::inet_address, float> final_ownership;
+
+        // calculate ownership per dc
+        for (auto endpoints : ss._token_metadata.get_topology().get_datacenter_endpoints()) {
+            // calculate the ownership with replication and add the endpoint to the final ownership map
+            for (const gms::inet_address& endpoint : endpoints.second) {
+                float ownership = 0.0f;
+                for (range<token> r : ss.get_ranges_for_endpoint(keyspace_name, endpoint)) {
+                    if (token_ownership.find(r.end().value().value()) != token_ownership.end()) {
+                        ownership += token_ownership[r.end().value().value()];
+                    }
+                }
+                final_ownership[endpoint] = ownership;
+            }
+        }
+        return final_ownership;
+    });
 }
 
 static const std::map<storage_service::mode, sstring> mode_names = {

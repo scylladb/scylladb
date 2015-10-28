@@ -2207,7 +2207,7 @@ public:
 public:
     future<std::map<gms::inet_address, float>> get_ownership();
 
-    std::map<gms::inet_address, float> effective_ownership(sstring keyspace) const;
+    future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 #if 0
     /**
      * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
