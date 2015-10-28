@@ -419,7 +419,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     if(_seeds.count(endpoint)) {
         build_seeds_list();
         _seeds.erase(endpoint);
-        // logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
+        logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
     _live_endpoints.erase(endpoint);
@@ -526,6 +526,7 @@ void gossiper::run() {
                gossipedToSeed check.
 
                See CASSANDRA-150 for more exposition. */
+            logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}", gossiped_to_seed, _live_endpoints.size(), _seeds.size());
             if (!gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
                 do_gossip_to_seed(message).get();
             }
