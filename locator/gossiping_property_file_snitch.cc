@@ -37,6 +37,7 @@
  */
 
 #include "locator/gossiping_property_file_snitch.hh"
+#include "gms/versioned_value.hh"
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
@@ -128,17 +129,23 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
 void gossiping_property_file_snitch::gossiper_starting() {
     using namespace gms;
     using namespace service;
+    //
+    // Note: currently gossiper "main" instance always runs on CPU0 therefore
+    // this function will be executed on CPU0 only.
+    //
+    auto& g = get_local_gossiper();
+    auto& ss = get_local_storage_service();
 
-    get_gossiper().invoke_on(0, [&] (gossiper& local_gossiper) {
-#if 0   // Uncomment when versioned_vlaue_factory class gets more code (e.g. constructor)
-        auto internal_addr = storage_service_instance.value_factory.internal_ip(fb_utilities::get_local_address());
+    auto local_internal_addr = net::get_local_messaging_service().listen_address();
+    std::ostringstream ostrm;
 
-            local_gossiper.add_local_application_state(application_state.INTERNAL_IP, internal_addr);
-#endif
-        }).then([&] {
-        reload_gossiper_state();
-        _gossip_started = true;
-    });
+    ostrm<<local_internal_addr<<std::flush;
+
+    g.add_local_application_state(application_state::INTERNAL_IP,
+                                  ss.value_factory.internal_ip(ostrm.str()));
+
+    _gossip_started = true;
+    reload_gossiper_state();
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
@@ -302,17 +309,22 @@ future<> gossiping_property_file_snitch::pause_io() {
     return stop_io();
 }
 
-void gossiping_property_file_snitch::reload_gossiper_state()
-{
-    #if 0 // TODO - needed to EC2 only
-    ReconnectableSnitchHelper pendingHelper = new ReconnectableSnitchHelper(this, myDC, preferLocal);
-    Gossiper.instance.register(pendingHelper);
+// should be invoked of CPU0 only
+void gossiping_property_file_snitch::reload_gossiper_state() {
+    if (!_gossip_started) {
+        return;
+    }
 
-    pendingHelper = snitchHelperReference.getAndSet(pendingHelper);
-    if (pendingHelper != null)
-        Gossiper.instance.unregister(pendingHelper);
-    #endif
-    // else this will eventually rerun at gossiperStarting()
+    if (_reconnectable_helper) {
+        gms::get_local_gossiper().unregister_(_reconnectable_helper);
+    }
+
+    if (!_prefer_local) {
+        return;
+    }
+
+    _reconnectable_helper = make_shared<reconnectable_snitch_helper>(_my_dc);
+    gms::get_local_gossiper().register_(_reconnectable_helper);
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch,
