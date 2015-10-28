@@ -269,7 +269,6 @@ void failure_detector::unregister_failure_detection_event_listener(i_failure_det
 }
 
 std::ostream& operator<<(std::ostream& os, const failure_detector& x) {
-    os << "----------- failure_detector:    -----------\n";
     for (auto& entry : x._arrival_samples) {
         const inet_address& ep = entry.first;
         const arrival_window& win = entry.second;
