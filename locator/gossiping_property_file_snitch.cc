@@ -209,15 +209,34 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 local_s->set_my_rack(_my_rack);
             }
         }).then([this] {
-            reload_gossiper_state();
+            return seastar::async([this] {
+                // reload Gossiper state (executed on CPU0 only)
+                smp::submit_to(0, [this] {
+                    this->reload_gossiper_state();
+                }).get();
 
-            return service::get_storage_service().invoke_on_all(
-                    [] (service::storage_service& l) {
-                l.get_token_metadata().invalidate_cached_rings();
-            }).then([this] {
-                if (_gossip_started) {
-                    service::get_local_storage_service().gossip_snitch_info();
-                }
+                // update Storage Service on each shard
+                auto cpus = boost::irange(0u, smp::count);
+                parallel_for_each(cpus.begin(), cpus.end(), [] (unsigned int c) {
+                    return smp::submit_to(c, [] {
+                        if (service::get_storage_service().local_is_initialized()) {
+                            auto& tmd = service::get_local_storage_service().get_token_metadata();
+
+                            // initiate the token metadata endpoints cache reset
+                            tmd.invalidate_cached_rings();
+                            // re-read local rack and DC info
+                            tmd.update_topology(utils::fb_utilities::get_broadcast_address());
+                        }
+                    });
+                }).get();
+
+
+                // spread the word...
+                smp::submit_to(0, [this] {
+                    if (this->_gossip_started && service::get_storage_service().local_is_initialized()) {
+                        service::get_local_storage_service().gossip_snitch_info();
+                    }
+                }).get();
             });
         });
     }
