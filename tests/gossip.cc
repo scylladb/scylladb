@@ -27,6 +27,8 @@
 #include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "service/storage_service.hh"
+#include "utils/fb_utilities.hh"
+#include "locator/snitch_base.hh"
 #include "log.hh"
 #include <chrono>
 
@@ -42,8 +44,11 @@ int main(int ac, char ** av) {
         auto config = app.configuration();
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
+        utils::fb_utilities::set_broadcast_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
-        service::init_storage_service(db).then([vv, listen, config] {
+        locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&db] {
+            return service::init_storage_service(db);
+        }).then([vv, listen, config] {
             return net::get_messaging_service().start(listen);
         }).then([config] {
             auto& server = net::get_local_messaging_service();
@@ -73,15 +78,6 @@ int main(int ac, char ** av) {
             int generation_number = duration_cast<seconds>(now).count();
             return gossiper.start(generation_number, app_states);
         }).then([vv] {
-            auto reporter = std::make_shared<timer<lowres_clock>>();
-            reporter->set_callback ([reporter] {
-                auto& gossiper = gms::get_local_gossiper();
-                gossiper.dump_endpoint_state_map();
-                auto& fd = gms::get_local_failure_detector();
-                print("%s", fd);
-            });
-            reporter->arm_periodic(std::chrono::milliseconds(1000));
-
             auto app_state_adder = std::make_shared<timer<lowres_clock>>();
             app_state_adder->set_callback ([vv, app_state_adder] {
                 static double load = 0.5;
