@@ -361,19 +361,21 @@ void storage_service::join_token_ring(int delay) {
 }
 
 future<> storage_service::join_ring() {
-    return seastar::async([this] {
-        if (!_joined) {
-            logger.info("Joining ring by operator request");
-            join_token_ring(0);
-        } else if (_is_survey_mode) {
-            auto tokens = db::system_keyspace::get_saved_tokens().get0();
-            set_tokens(std::move(tokens));
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-            _is_survey_mode = false;
-            logger.info("Leaving write survey mode and joining ring at operator request");
-            assert(_token_metadata.sorted_tokens().size() > 0);
-            //Auth.setup();
-        }
+    return run_with_write_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            if (!ss._joined) {
+                logger.info("Joining ring by operator request");
+                ss.join_token_ring(0);
+            } else if (ss._is_survey_mode) {
+                auto tokens = db::system_keyspace::get_saved_tokens().get0();
+                ss.set_tokens(std::move(tokens));
+                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+                ss._is_survey_mode = false;
+                logger.info("Leaving write survey mode and joining ring at operator request");
+                assert(ss._token_metadata.sorted_tokens().size() > 0);
+                //Auth.setup();
+            }
+        });
     });
 }
 
