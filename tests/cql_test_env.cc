@@ -140,7 +140,9 @@ public:
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
         auto qs = make_query_state();
-        return _qp->local().process(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
+        return _qp->local().process(text, *qs, cql3::query_options::DEFAULT).finally([qs, this] {
+            _core_local.local().client_state.merge(qs->get_client_state());
+        });
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(
@@ -149,7 +151,9 @@ public:
     {
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return _qp->local().process(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
+        return _qp->local().process(text, *qs, lqo).finally([qs, qo = std::move(qo), this] {
+            _core_local.local().client_state.merge(qs->get_client_state());
+        });
     }
 
     virtual future<bytes> prepare(sstring query) override {
@@ -175,7 +179,9 @@ public:
 
         auto qs = make_query_state();
         return _qp->local().process_statement(stmt, *qs, *options)
-            .finally([options, qs] {});
+            .finally([options, qs, this] {
+                _core_local.local().client_state.merge(qs->get_client_state());
+            });
     }
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
