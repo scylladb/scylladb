@@ -2592,6 +2592,15 @@ public:
             });
         });
     }
+
+    template <typename Func>
+    inline auto run_with_read_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return with_lock(ss.api_lock().for_read(), [&ss, func = std::forward<Func>(func)] () mutable {
+                return func(ss);
+            });
+        });
+    }
 };
 
 inline future<> init_storage_service(distributed<database>& db) {
