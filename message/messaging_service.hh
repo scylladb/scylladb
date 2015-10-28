@@ -430,7 +430,6 @@ public:
     bool knows_version(const gms::inet_address& endpoint) const;
 
 private:
-    static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
@@ -440,7 +439,7 @@ private:
     std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
-    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"));
+    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
     ~messaging_service();
 public:
     uint16_t port();

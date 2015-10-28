@@ -235,9 +235,9 @@ bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
     return true;
 }
 
-messaging_service::messaging_service(gms::inet_address ip)
+messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : _listen_address(ip)
-    , _port(_default_port)
+    , _port(port)
     , _rpc(new rpc_protocol_wrapper(serializer{}))
     , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
 }

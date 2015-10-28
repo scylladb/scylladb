@@ -56,10 +56,10 @@ static future<> tst_init_storage_service(distributed<database>& db) {
     });
 }
 
-static future<> tst_init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
+static future<> tst_init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
     const gms::inet_address listen(listen_address);
     // Init messaging_service
-    return net::get_messaging_service().start(listen).then([]{
+    return net::get_messaging_service().start(listen, std::ref(port)).then([]{
         engine().at_exit([] { return net::get_messaging_service().stop(); });
     }).then([] {
         // Init failure_detector
@@ -98,7 +98,7 @@ future<> init_once(shared_ptr<distributed<database>> db) {
         // FIXME: we leak db, since we're initializing the global storage_service with it.
         new shared_ptr<distributed<database>>(db);
         return tst_init_storage_service(*db).then([] {
-            return tst_init_ms_fd_gossiper("127.0.0.1", db::config::seed_provider_type());
+            return tst_init_ms_fd_gossiper("127.0.0.1", 7000, db::config::seed_provider_type());
         }).then([] {
             return db::system_keyspace::init_local_cache();
         });
