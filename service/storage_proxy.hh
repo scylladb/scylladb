@@ -104,7 +104,7 @@ private:
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
-    future<> send_to_live_endpoints(response_id_type response_id,  sstring local_data_center);
+    future<> send_to_live_endpoints(response_id_type response_id);
     template<typename Range>
     size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
@@ -132,7 +132,7 @@ private:
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<storage_proxy::response_id_type>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     future<std::vector<storage_proxy::response_id_type>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
-    future<> mutate_begin(const std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl, const sstring& local_dc);
+    future<> mutate_begin(const std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl);
     future<> mutate_end(future<> mutate_result, utils::latency_counter);
     future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
 
