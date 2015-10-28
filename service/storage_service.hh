@@ -361,9 +361,7 @@ private:
     void join_token_ring(int delay);
 public:
     future<> join_ring();
-    bool is_joined() {
-        return _joined;
-    }
+    future<bool> is_joined();
 
     future<> rebuild(sstring source_dc);
 
