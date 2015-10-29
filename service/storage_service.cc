@@ -1440,7 +1440,7 @@ future<int64_t> storage_service::true_snapshots_size() {
 }
 
 future<> storage_service::start_rpc_server() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         if (ss._thrift_server) {
             return make_ready_future<>();
         }
@@ -1467,7 +1467,7 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::stop_rpc_server() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         auto tserver = ss._thrift_server;
         ss._thrift_server = {};
         if (tserver) {
@@ -1485,7 +1485,7 @@ future<bool> storage_service::is_rpc_server_running() {
 }
 
 future<> storage_service::start_native_transport() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         if (ss._cql_server) {
             return make_ready_future<>();
         }
@@ -1512,7 +1512,7 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::stop_native_transport() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         auto cserver = ss._cql_server;
         ss._cql_server = {};
         if (cserver) {
@@ -1530,8 +1530,8 @@ future<bool> storage_service::is_native_transport_running() {
 }
 
 future<> storage_service::decommission() {
-    return run_with_write_api_lock([] (storage_service& ss) mutable {
-        return seastar::async([&ss] () mutable {
+    return run_with_write_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
             auto& tm = ss.get_token_metadata();
             auto& db = ss.db().local();
             if (!tm.is_member(ss.get_broadcast_address())) {
@@ -1572,7 +1572,7 @@ future<> storage_service::decommission() {
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
-    return get_storage_service().invoke_on(0, [host_id_string] (storage_service& ss) {
+    return run_with_write_api_lock([host_id_string] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id_string] {
             logger.debug("remove_node: host_id = {}", host_id_string);
             auto my_address = ss.get_broadcast_address();
