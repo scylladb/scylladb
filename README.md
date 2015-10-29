@@ -56,5 +56,5 @@ docker build -t <image-name> .
 Run the image with:
 
 ```
-docker run -i -t <image name>
+docker run -i -p 9042:9042 -p 7001:7001 -p 10000:10000 -p 9160:9160 -p 7000:7000  -t <image name>
 ```
