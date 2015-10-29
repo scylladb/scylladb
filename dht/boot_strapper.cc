@@ -71,33 +71,33 @@ future<> boot_strapper::bootstrap() {
 }
 
 std::unordered_set<token> boot_strapper::get_bootstrap_tokens(token_metadata metadata, database& db) {
-#if 0
-    Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
+    auto initial_tokens = db.get_initial_tokens();
     // if user specified tokens, use those
-    if (initialTokens.size() > 0)
-    {
-        logger.debug("tokens manually specified as {}",  initialTokens);
-        List<Token> tokens = new ArrayList<Token>(initialTokens.size());
-        for (String tokenString : initialTokens)
-        {
-            Token token = StorageService.getPartitioner().getTokenFactory().fromString(tokenString);
-            if (metadata.getEndpoint(token) != null)
-                throw new ConfigurationException("Bootstrapping to existing token " + tokenString + " is not allowed (decommission/removenode the old node first).");
-            tokens.add(token);
+    if (initial_tokens.size() > 0) {
+        logger.debug("tokens manually specified as {}", initial_tokens);
+        std::unordered_set<token> tokens;
+        for (auto& token_string : initial_tokens) {
+            auto token = dht::global_partitioner().from_sstring(token_string);
+            if (metadata.get_endpoint(token)) {
+                throw std::runtime_error(sprint("Bootstrapping to existing token %s is not allowed (decommission/removenode the old node first).", token_string));
+            }
+            tokens.insert(token);
         }
+        logger.debug("Get manually specified bootstrap_tokens={}", tokens);
         return tokens;
     }
-#endif
+
     size_t num_tokens = db.get_config().num_tokens();
     if (num_tokens < 1) {
         throw std::runtime_error("num_tokens must be >= 1");
     }
 
-    // if (numTokens == 1)
-    //     logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+    if (num_tokens == 1) {
+        logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
+    }
 
     auto tokens = get_random_tokens(metadata, num_tokens);
-    logger.debug("Get bootstrap_tokens={}", tokens);
+    logger.debug("Get random bootstrap_tokens={}", tokens);
     return tokens;
 }
 
