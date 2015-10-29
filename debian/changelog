@@ -1,4 +1,4 @@
-scylla-server (0.10-1) unstable; urgency=medium
+scylla-server (0.10-ubuntu1) trusty; urgency=medium
 
   * Initial release.
 
