@@ -856,7 +856,7 @@ dropIndexStatement returns [DropIndexStatement expr]
   * TRUNCATE <CF>;
   */
 truncateStatement returns [::shared_ptr<truncate_statement> stmt]
-    : K_TRUNCATE cf=columnFamilyName { $stmt = ::make_shared<truncate_statement>(cf); }
+    : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName { $stmt = ::make_shared<truncate_statement>(cf); }
     ;
 
 #if 0
