@@ -2599,6 +2599,13 @@ public:
             });
         });
     }
+
+    template <typename Func>
+    inline auto run_with_no_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return func(ss);
+        });
+    }
 };
 
 inline future<> init_storage_service(distributed<database>& db) {
