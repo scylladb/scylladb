@@ -1353,9 +1353,10 @@ future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keysp
         return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
             auto& cf = _db.local().find_column_family(pair.second);
             return cf.clear_snapshot(tag);
+         }).then_wrapped([] (future<> f) {
+            logger.debug("Cleared out snapshot directories");
          });
     });
-    logger.debug("Cleared out snapshot directories");
 }
 
 future<std::unordered_map<sstring, std::vector<service::storage_service::snapshot_details>>>
