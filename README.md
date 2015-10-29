@@ -56,5 +56,5 @@ docker build -t <image-name> .
 Run the image with:
 
 ```
-docker run -i -t <image name>
+docker run -p $(hostname -i):9042:9042 -i -t <image name>
 ```
