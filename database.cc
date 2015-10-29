@@ -1471,6 +1471,18 @@ database::query_mutations(const query::read_command& cmd, const query::partition
     }
 }
 
+std::unordered_set<sstring> database::get_initial_tokens() {
+    std::unordered_set<sstring> tokens;
+    sstring tokens_string = get_config().initial_token();
+    try {
+        boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
+    } catch (...) {
+        throw std::runtime_error(sprint("Unable to parse initial_token=%s", tokens_string));
+    }
+    tokens.erase("");
+    return tokens;
+}
+
 std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
     return out << to_hex(c._data);
 }
