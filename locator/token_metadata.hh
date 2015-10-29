@@ -82,6 +82,12 @@ public:
      */
     void remove_endpoint(inet_address ep);
 
+    /**
+     * Re-reads the DC/rack info for the given endpoint
+     * @param ep endpoint in question
+     */
+    void update_endpoint(inet_address ep);
+
     std::unordered_map<sstring,
                        std::unordered_set<inet_address>>&
     get_datacenter_endpoints() {
@@ -237,6 +243,10 @@ public:
     }
     const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const {
         return _bootstrap_tokens;
+    }
+
+    void update_topology(inet_address ep) {
+        _topology.update_endpoint(ep);
     }
 
     tokens_iterator tokens_end() const {
