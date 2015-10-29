@@ -50,6 +50,11 @@ functions::init() {
         if (type == cql3_type::varchar || type == cql3_type::blob) {
             continue;
         }
+        // counters are not supported yet
+        if (type->is_counter()) {
+            warn(unimplemented::cause::COUNTERS);
+            continue;
+        }
 
         declare(make_to_blob_function(type->get_type()));
         declare(make_from_blob_function(type->get_type()));
