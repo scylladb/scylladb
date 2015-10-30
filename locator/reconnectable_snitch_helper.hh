@@ -90,7 +90,7 @@ private:
     }
 
 public:
-    reconnectable_snitch_helper(sstring local_dc, bool prefer_local)
+    reconnectable_snitch_helper(sstring local_dc)
             : _local_dc(local_dc) {}
 
     void before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, gms::versioned_value new_value) override {

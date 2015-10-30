@@ -185,7 +185,7 @@ future<> storage_service::prepare_to_join() {
         logger.info("Starting up server gossip");
 
         auto& gossiper = gms::get_local_gossiper();
-        gossiper.register_(this);
+        gossiper.register_(this->shared_from_this());
         // FIXME: SystemKeyspace.incrementAndGetGeneration()
         print("Start gossiper service ...\n");
         return gossiper.start(get_generation_number(), *app_states).then([this] {
