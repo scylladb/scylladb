@@ -159,7 +159,7 @@ if __name__ == "__main__":
                     print_status('TIMED OUT\n')
                 else:
                     print_status('  with error code {code}\n'.format(code=proc.returncode))
-                if out is not None:
+                if out:
                     print('=== stdout START ===')
                     print(str(out, encoding='UTF-8'))
                     print('=== stdout END ===')
