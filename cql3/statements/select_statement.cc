@@ -160,7 +160,7 @@ int32_t select_statement::get_limit(const query_options& options) const {
 
     try {
         int32_type->validate(*val);
-        auto l = boost::any_cast<int32_t>(int32_type->deserialize(*val));
+        auto l = value_cast<int32_t>(int32_type->deserialize(*val));
         if (l <= 0) {
             throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
         }

@@ -152,7 +152,7 @@ public:
         return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
     }
 
-    static TopLevel from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
+    static TopLevel from_deeply_exploded(const schema& s, const std::vector<data_value>& v) {
         return TopLevel::from_bytes(get_compound_type(s)->serialize_value_deep(v));
     }
 

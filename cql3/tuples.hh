@@ -259,7 +259,7 @@ public:
             try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but the deserialization does the validation (so we're fine).
-                auto l = boost::any_cast<list_type_impl::native_type>(type->deserialize(value, options.get_serialization_format()));
+                auto l = value_cast<list_type_impl::native_type>(type->deserialize(value, options.get_serialization_format()));
                 auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
                 assert(ttype);
 

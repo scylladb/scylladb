@@ -919,7 +919,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
             mutation m(key, s);
 
             auto c_key = clustering_key::make_empty(*s);
-            m.set_clustered_cell(c_key, to_bytes("col2"), boost::any(i), api::max_timestamp);
+            m.set_clustered_cell(c_key, to_bytes("col2"), i, api::max_timestamp);
             mtp->apply(std::move(m));
         }
 
@@ -1340,7 +1340,7 @@ SEASTAR_TEST_CASE(datafile_generation_37) {
                         auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
                         auto row = mp.clustered_row(clustering);
-                        match_live_cell(row.cells(), *s, "cl2", boost::any(to_bytes("cl2")));
+                        match_live_cell(row.cells(), *s, "cl2", to_bytes("cl2"));
                         return make_ready_future<>();
                     });
                 });
@@ -1375,7 +1375,7 @@ SEASTAR_TEST_CASE(datafile_generation_38) {
                         auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
                         auto row = mp.clustered_row(clustering);
-                        match_live_cell(row.cells(), *s, "cl3", boost::any(to_bytes("cl3")));
+                        match_live_cell(row.cells(), *s, "cl3", to_bytes("cl3"));
                         return make_ready_future<>();
                     });
                 });
@@ -1408,8 +1408,8 @@ SEASTAR_TEST_CASE(datafile_generation_39) {
                     return sstp->read_row(s, key).then([sstp, s] (auto mutation) {
                         auto& mp = mutation->partition();
                         auto row = mp.clustered_row(clustering_key::make_empty(*s));
-                        match_live_cell(row.cells(), *s, "cl1", boost::any(to_bytes("cl1")));
-                        match_live_cell(row.cells(), *s, "cl2", boost::any(to_bytes("cl2")));
+                        match_live_cell(row.cells(), *s, "cl1", to_bytes("cl1"));
+                        match_live_cell(row.cells(), *s, "cl2", to_bytes("cl2"));
                         return make_ready_future<>();
                     });
                 });

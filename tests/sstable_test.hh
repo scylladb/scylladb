@@ -436,7 +436,7 @@ inline bool check_status_and_done(const atomic_cell &c, status expected) {
 }
 
 template <status Status>
-inline void match(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp = 0, int32_t expiration = 0) {
+inline void match(const row& row, const schema& s, bytes col, const data_value& value, int64_t timestamp = 0, int32_t expiration = 0) {
     auto cdef = s.get_column_definition(col);
 
     BOOST_CHECK_NO_THROW(row.cell_at(cdef->id));
@@ -455,16 +455,16 @@ inline void match(const row& row, const schema& s, bytes col, const boost::any& 
     }
 }
 
-inline void match_live_cell(const row& row, const schema& s, bytes col, const boost::any& value) {
+inline void match_live_cell(const row& row, const schema& s, bytes col, const data_value& value) {
     match<status::live>(row, s, col, value);
 }
 
-inline void match_expiring_cell(const row& row, const schema& s, bytes col, const boost::any& value, int64_t timestamp, int32_t expiration) {
+inline void match_expiring_cell(const row& row, const schema& s, bytes col, const data_value& value, int64_t timestamp, int32_t expiration) {
     match<status::ttl>(row, s, col, value);
 }
 
 inline void match_dead_cell(const row& row, const schema& s, bytes col) {
-    match<status::dead>(row, s, col, boost::any({}));
+    match<status::dead>(row, s, col, 0); // value will be ignored
 }
 
 inline void match_absent(const row& row, const schema& s, bytes col) {

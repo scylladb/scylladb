@@ -42,7 +42,7 @@ struct query_context {
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, sstring cf, Args&&... args) {
         // FIXME: Would be better not to use sprint here.
         sstring req = sprint(text, cf);
-        return this->_qp.local().execute_internal(req, { boost::any(std::forward<Args>(args))... });
+        return this->_qp.local().execute_internal(req, { data_value(std::forward<Args>(args))... });
     }
     database& db() {
         return _db.local();

@@ -31,6 +31,7 @@
 #include "core/fstream.hh"
 #include "core/do_with.hh"
 #include "log.hh"
+#include <boost/any.hpp>
 
 static logging::logger logger("config");
 

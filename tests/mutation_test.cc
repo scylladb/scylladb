@@ -106,10 +106,10 @@ SEASTAR_TEST_CASE(test_multi_level_row_tombstones) {
 
     mutation m(partition_key::from_exploded(*s, {to_bytes("key1")}), s);
 
-    auto make_prefix = [s] (const std::vector<boost::any>& v) {
+    auto make_prefix = [s] (const std::vector<data_value>& v) {
         return clustering_key_prefix::from_deeply_exploded(*s, v);
     };
-    auto make_key = [s] (const std::vector<boost::any>& v) {
+    auto make_key = [s] (const std::vector<data_value>& v) {
         return clustering_key::from_deeply_exploded(*s, v);
     };
 
@@ -423,12 +423,12 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
             return cf.for_all_partitions_slow([&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
-                auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
+                auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
-                    auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
+                    auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
                     auto cell = re.row().cells().find_cell(r1_col.id);
                     if (cell) {
-                        result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
+                        result[p1][c1] = value_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
                     }
                 }
                 return true;
@@ -601,7 +601,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
         assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
             .has_only(a_row()
                 .with_column("pk", bytes("key1"))
-                .with_column("v", {}));
+                .with_column("v", data_value::make_null(bytes_type)));
     });
 }
 
@@ -626,7 +626,7 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
                 .with_column("pk", bytes("key1"))
                 .with_column("ck", bytes("ck:A"))
                 .with_column("v1", bytes("v1:value"))
-                .with_column("v2", {}));
+                .with_column("v2", data_value::make_null(bytes_type)));
     });
 }
 

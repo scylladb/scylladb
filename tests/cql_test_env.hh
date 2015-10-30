@@ -62,10 +62,10 @@ public:
 
     virtual future<> require_column_has_value(
         const sstring& table_name,
-        std::vector<boost::any> pk,
-        std::vector<boost::any> ck,
+        std::vector<data_value> pk,
+        std::vector<data_value> ck,
         const sstring& column_name,
-        boost::any expected) = 0;
+        data_value expected) = 0;
 
     virtual future<> stop() = 0;
 

@@ -71,10 +71,10 @@ make_min_timeuuid_fct() {
             return {};
         }
         auto ts_obj = timestamp_type->deserialize(*bb);
-        if (ts_obj.empty()) {
+        if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
+        auto ts = value_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count());
         return {timeuuid_type->decompose(uuid)};
     });
@@ -91,10 +91,10 @@ make_max_timeuuid_fct() {
             return {};
         }
         auto ts_obj = timestamp_type->deserialize(*bb);
-        if (ts_obj.empty()) {
+        if (ts_obj.is_null()) {
             return {};
         }
-        auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
+        auto ts = value_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::max_time_UUID(ts.time_since_epoch().count());
         return {timeuuid_type->decompose(uuid)};
     });

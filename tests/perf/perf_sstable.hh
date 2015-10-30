@@ -103,7 +103,7 @@ public:
 
     void fill_memtable() {
         for (unsigned i = 0; i < _cfg.partitions; i++) {
-            auto key = partition_key::from_deeply_exploded(*s, { boost::any(random_key()) });
+            auto key = partition_key::from_deeply_exploded(*s, { random_key() });
             auto mut = mutation(key, s);
             for (auto& cdef: s->regular_columns()) {
                 mut.set_clustered_cell(clustering_key::make_empty(*s), cdef, atomic_cell::make_live(0, utf8_type->decompose(random_column())));

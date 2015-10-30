@@ -161,7 +161,7 @@ maps::value::from_serialized(bytes_view value, map_type type, serialization_form
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserialize_for_native_protocol?!
-        auto m = boost::any_cast<map_type_impl::native_type>(type->deserialize(value, sf));
+        auto m = value_cast<map_type_impl::native_type>(type->deserialize(value, sf));
         std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
         for (auto&& e : m) {
             map.emplace(type->get_keys_type()->decompose(e.first),

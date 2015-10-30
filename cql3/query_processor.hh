@@ -323,12 +323,12 @@ public:
 #endif
 private:
     ::shared_ptr<statements::parsed_statement::prepared> prepare_internal(const std::experimental::string_view& query);
-    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<boost::any>&);
+    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<data_value>&);
 
 public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
             const std::experimental::string_view& query_string,
-            const std::initializer_list<boost::any>& = { });
+            const std::initializer_list<data_value>& = { });
 
     /*
      * This function provides a timestamp that is guaranteed to be higher than any timestamp

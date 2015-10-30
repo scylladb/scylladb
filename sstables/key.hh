@@ -22,7 +22,6 @@
 #pragma once
 #include "bytes.hh"
 #include "schema.hh"
-#include <boost/any.hpp>
 #include "core/future.hh"
 
 class partition_key;
@@ -91,7 +90,7 @@ public:
     key(bytes&& b) : _kind(kind::regular), _bytes(std::move(b)) {}
     key(kind k) : _kind(k) {}
     static key from_bytes(bytes b) { return key(std::move(b)); }
-    static key from_deeply_exploded(const schema& s, const std::vector<boost::any>& v);
+    static key from_deeply_exploded(const schema& s, const std::vector<data_value>& v);
     static key from_exploded(const schema& s, const std::vector<bytes>& v);
     static key from_exploded(const schema& s, std::vector<bytes>&& v);
     // Unfortunately, the _bytes field for the partition_key are not public. We can't move.

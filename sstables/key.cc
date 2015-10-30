@@ -53,11 +53,11 @@ public:
         _it++;
     }
 
-    inline size_t serialized_size(const boost::any& value) {
+    inline size_t serialized_size(const data_value& value) {
         return (*_it)->serialized_size(value);
     }
 
-    inline void serialize(const boost::any& value, bytes::iterator& out) {
+    inline void serialize(const data_value& value, bytes::iterator& out) {
         (*_it)->serialize(value, out);
     }
 };
@@ -121,7 +121,7 @@ bytes from_components(Iterator begin, Iterator end, Serializer&& serializer, boo
     return b;
 }
 
-key key::from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
+key key::from_deeply_exploded(const schema& s, const std::vector<data_value>& v) {
     auto &pt = s.partition_key_type()->types();
     bool composite = pt.size() > 1;
     return from_components(v.begin(), v.end(), internal_serializer(pt), composite);

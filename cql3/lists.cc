@@ -113,12 +113,12 @@ lists::value::from_serialized(bytes_view v, list_type type, serialization_format
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
-        auto l = boost::any_cast<list_type_impl::native_type>(type->deserialize(v, sf));
+        auto l = value_cast<list_type_impl::native_type>(type->deserialize(v, sf));
         std::vector<bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
             // elements can be null in lists that represent a set of IN values
-            elements.push_back(element.empty() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
+            elements.push_back(element.is_null() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {

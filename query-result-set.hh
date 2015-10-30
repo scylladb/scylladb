@@ -30,8 +30,6 @@
 #include <experimental/optional>
 #include <stdexcept>
 
-#include <boost/any.hpp>
-
 namespace query {
 
 class no_such_column : public std::runtime_error {
@@ -70,11 +68,11 @@ public:
     template<typename T>
     std::experimental::optional<T>
     get(const sstring& column_name) const throw (no_such_column) {
-        auto&& value = get_data_value(column_name).value();
-        if (value.empty()) {
+        auto&& value = get_data_value(column_name);
+        if (value.is_null()) {
             return std::experimental::nullopt;
         }
-        return std::experimental::optional<T>{boost::any_cast<T>(value)};
+        return std::experimental::optional<T>{value_cast<T>(value)};
     }
     template<typename T>
     T get_nonnull(const sstring& column_name) const throw (no_such_column, null_column_value) {

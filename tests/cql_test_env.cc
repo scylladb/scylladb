@@ -212,27 +212,29 @@ public:
     }
 
     virtual future<> require_column_has_value(const sstring& table_name,
-                                      std::vector<boost::any> pk,
-                                      std::vector<boost::any> ck,
+                                      std::vector<data_value> pk,
+                                      std::vector<data_value> ck,
                                       const sstring& column_name,
-                                      boost::any expected) override {
+                                      data_value expected) override {
         auto& db = _db->local();
         auto& cf = db.find_column_family(ks_name, table_name);
         auto schema = cf.schema();
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
+        auto ckey = clustering_key::from_deeply_exploded(*schema, ck);
+        auto exp = expected.type()->decompose(expected);
         auto dk = dht::global_partitioner().decorate_key(*schema, pkey);
         auto shard = db.shard_of(dk._token);
         return _db->invoke_on(shard, [pkey = std::move(pkey),
-                                      ck = std::move(ck),
+                                      ckey = std::move(ckey),
                                       ks_name = std::move(ks_name),
                                       column_name = std::move(column_name),
-                                      expected = std::move(expected),
+                                      exp = std::move(exp),
                                       table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          return cf.find_partition_slow(pkey).then([schema, ck, column_name, expected] (column_family::const_mutation_partition_ptr p) {
+          return cf.find_partition_slow(pkey).then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
-            auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));
+            auto row = p->find_row(ckey);
             assert(row != nullptr);
             auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
             assert(col_def != nullptr);
@@ -251,7 +253,7 @@ public:
                 actual = type->to_value(type->deserialize_mutation_form(c),
                                         serialization_format::internal());
             }
-            assert(col_def->type->equal(actual, col_def->type->decompose(expected)));
+            assert(col_def->type->equal(actual, exp));
           });
         });
     }

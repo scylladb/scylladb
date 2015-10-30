@@ -35,9 +35,9 @@
 //
 
 class row_assertion {
-    std::map<bytes, boost::any> _expected_values;
+    std::map<bytes, data_value> _expected_values;
 public:
-    row_assertion& with_column(bytes name, boost::any value) {
+    row_assertion& with_column(bytes name, data_value value) {
         _expected_values.emplace(name, value);
         return *this;
     }

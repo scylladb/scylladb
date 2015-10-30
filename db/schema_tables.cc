@@ -329,7 +329,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
             std::vector<query::result> results;
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
-                auto partition_key = boost::any_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+                auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
                 if (partition_key == system_keyspace::NAME) {
                     continue;
                 }
@@ -368,7 +368,7 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
             std::vector<frozen_mutation> results;
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
-                auto partition_key = boost::any_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+                auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
                 if (partition_key == system_keyspace::NAME) {
                     continue;
                 }
@@ -468,7 +468,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
        std::set<sstring> keyspaces;
        std::set<utils::UUID> column_families;
        for (auto&& mutation : mutations) {
-           keyspaces.emplace(boost::any_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
+           keyspaces.emplace(value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
            column_families.emplace(mutation.column_family_id());
        }
 

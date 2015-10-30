@@ -49,7 +49,7 @@ void mutation::set_static_cell(const column_definition& def, atomic_cell_or_coll
     partition().static_row().apply(def, std::move(value));
 }
 
-void mutation::set_static_cell(const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl) {
+void mutation::set_static_cell(const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
         throw std::runtime_error(sprint("no column definition found for '%s'", name));
@@ -65,7 +65,7 @@ void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, cons
     row.apply(def, std::move(value));
 }
 
-void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const boost::any& value,
+void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const data_value& value,
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
@@ -79,7 +79,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const column_defini
     row.apply(def, std::move(value));
 }
 
-void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value,
+void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const data_value& value,
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {

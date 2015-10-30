@@ -540,10 +540,11 @@ future<> save_truncation_records(const column_family& cf, db_clock::time_point t
     out.write<db_clock::rep>(truncated_at.time_since_epoch().count());
 
     map_type_impl::native_type tmp;
-    tmp.emplace_back(boost::any{ cf.schema()->id() }, boost::any{ buf });
+    tmp.emplace_back(cf.schema()->id(), buf);
+    auto map_type = map_type_impl::get_instance(uuid_type, bytes_type, true);
 
     sstring req = sprint("UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'", LOCAL, LOCAL);
-    return qctx->qp().execute_internal(req, {tmp}).then([](auto rs) {
+    return qctx->qp().execute_internal(req, {make_map_value(map_type, tmp)}).then([](auto rs) {
         truncation_records = {};
         return force_blocking_flush(LOCAL);
     });
@@ -633,7 +634,7 @@ future<db_clock::time_point> get_truncated_at(utils::UUID cf_id) {
 set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens) {
     set_type_impl::native_type tset;
     for (auto& t: tokens) {
-        tset.push_back(boost::any(dht::global_partitioner().to_sstring(t)));
+        tset.push_back(dht::global_partitioner().to_sstring(t));
     }
     return tset;
 }
@@ -641,7 +642,7 @@ set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens
 std::unordered_set<dht::token> decode_tokens(set_type_impl::native_type& tokens) {
     std::unordered_set<dht::token> tset;
     for (auto& t: tokens) {
-        auto str = boost::any_cast<sstring>(t);
+        auto str = value_cast<sstring>(t);
         assert(str == dht::global_partitioner().to_sstring(dht::global_partitioner().from_sstring(str)));
         tset.insert(dht::global_partitioner().from_sstring(str));
     }
@@ -658,7 +659,8 @@ future<> update_tokens(gms::inet_address ep, std::unordered_set<dht::token> toke
     }
 
     sstring req = "INSERT INTO system.%s (peer, tokens) VALUES (?, ?)";
-    return execute_cql(req, PEERS, ep.addr(), prepare_tokens(tokens)).discard_result().then([] {
+    auto set_type = set_type_impl::get_instance(utf8_type, true);
+    return execute_cql(req, PEERS, ep.addr(), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
         return force_blocking_flush(PEERS);
     });
 }
@@ -689,7 +691,7 @@ future<std::unordered_map<gms::inet_address, std::unordered_set<dht::token>>> lo
                 auto blob = row.get_blob("tokens");
                 auto cdef = peers()->get_column_definition("tokens");
                 auto deserialized = cdef->type->deserialize(blob);
-                auto tokens = boost::any_cast<set_type_impl::native_type>(deserialized);
+                auto tokens = value_cast<set_type_impl::native_type>(deserialized);
 
                 ret->emplace(peer, decode_tokens(tokens));
             }
@@ -808,7 +810,8 @@ future<> update_tokens(std::unordered_set<dht::token> tokens) {
     }
 
     sstring req = "INSERT INTO system.%s (key, tokens) VALUES (?, ?)";
-    return execute_cql(req, LOCAL, sstring(LOCAL), prepare_tokens(tokens)).discard_result().then([] {
+    auto set_type = set_type_impl::get_instance(utf8_type, true);
+    return execute_cql(req, LOCAL, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens))).discard_result().then([] {
         return force_blocking_flush(LOCAL);
     });
 }
@@ -862,7 +865,7 @@ future<std::unordered_set<dht::token>> get_saved_tokens() {
         auto blob = msg->one().get_blob("tokens");
         auto cdef = local()->get_column_definition("tokens");
         auto deserialized = cdef->type->deserialize(blob);
-        auto tokens = boost::any_cast<set_type_impl::native_type>(deserialized);
+        auto tokens = value_cast<set_type_impl::native_type>(deserialized);
 
         return make_ready_future<std::unordered_set<dht::token>>(decode_tokens(tokens));
     });

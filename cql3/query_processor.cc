@@ -302,7 +302,7 @@ query_processor::parse_statement(const sstring_view& query)
 
 query_options query_processor::make_internal_options(
         ::shared_ptr<statements::parsed_statement::prepared> p,
-        const std::initializer_list<boost::any>& values) {
+        const std::initializer_list<data_value>& values) {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
     }
@@ -310,9 +310,9 @@ query_options query_processor::make_internal_options(
     std::vector<bytes_opt> bound_values;
     for (auto& v : values) {
         auto& n = *ni++;
-        if (v.type() == typeid(bytes)) {
-            bound_values.push_back({boost::any_cast<bytes>(v)});
-        } else if (v.empty()) {
+        if (v.type() == bytes_type) {
+            bound_values.push_back({value_cast<bytes>(v)});
+        } else if (v.is_null()) {
             bound_values.push_back({});
         } else {
             bound_values.push_back({n->type->decompose(v)});
@@ -335,7 +335,7 @@ query_options query_processor::make_internal_options(
 
 future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
         const std::experimental::string_view& query_string,
-        const std::initializer_list<boost::any>& values) {
+        const std::initializer_list<data_value>& values) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values);
     return do_with(std::move(opts),

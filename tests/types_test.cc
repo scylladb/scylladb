@@ -212,18 +212,18 @@ BOOST_AUTO_TEST_CASE(test_varint) {
     BOOST_REQUIRE(varint_type->equal(varint_type->from_string("1"), varint_type->decompose(boost::multiprecision::cpp_int(1))));
     BOOST_REQUIRE(varint_type->equal(varint_type->from_string("0"), varint_type->decompose(boost::multiprecision::cpp_int(0))));
 
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-1"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-1"))),
                       boost::multiprecision::cpp_int(-1));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("255"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("255"))),
                       boost::multiprecision::cpp_int(255));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("1"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("1"))),
                       boost::multiprecision::cpp_int(1));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("0"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("0"))),
                       boost::multiprecision::cpp_int(0));
 
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-123"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("-123"))),
                       boost::multiprecision::cpp_int(-123));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("123"))),
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(varint_type->from_string("123"))),
                       boost::multiprecision::cpp_int(123));
 
     BOOST_REQUIRE(varint_type->equal(from_hex("000000"), from_hex("00")));
@@ -235,8 +235,8 @@ BOOST_AUTO_TEST_CASE(test_varint) {
 
     BOOST_REQUIRE(varint_type->equal(from_hex("00ff"), varint_type->decompose(boost::multiprecision::cpp_int(255))));
 
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("ff"))), boost::multiprecision::cpp_int(-1));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ff"))), boost::multiprecision::cpp_int(255));
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("ff"))), boost::multiprecision::cpp_int(-1));
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ff"))), boost::multiprecision::cpp_int(255));
 
     BOOST_REQUIRE(!varint_type->equal(from_hex("00ff"), varint_type->decompose(boost::multiprecision::cpp_int(-1))));
     BOOST_REQUIRE(!varint_type->equal(from_hex("ff"), varint_type->decompose(boost::multiprecision::cpp_int(255))));
@@ -244,49 +244,49 @@ BOOST_AUTO_TEST_CASE(test_varint) {
     BOOST_REQUIRE(varint_type->equal(from_hex("00deadbeef"), varint_type->decompose(boost::multiprecision::cpp_int("0xdeadbeef"))));
     BOOST_REQUIRE(varint_type->equal(from_hex("00ffffffffffffffffffffffffffffffff"), varint_type->decompose(boost::multiprecision::cpp_int("340282366920938463463374607431768211455"))));
 
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00deadbeef"))), boost::multiprecision::cpp_int("0xdeadbeef"));
-    BOOST_CHECK_EQUAL(boost::any_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ffffffffffffffffffffffffffffffff"))), boost::multiprecision::cpp_int("340282366920938463463374607431768211455"));
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00deadbeef"))), boost::multiprecision::cpp_int("0xdeadbeef"));
+    BOOST_CHECK_EQUAL(value_cast<boost::multiprecision::cpp_int>(varint_type->deserialize(from_hex("00ffffffffffffffffffffffffffffffff"))), boost::multiprecision::cpp_int("340282366920938463463374607431768211455"));
 
     test_parsing_fails(varint_type, "1A");
 }
 
 BOOST_AUTO_TEST_CASE(test_decimal) {
-    auto bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1")));
+    auto bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1")));
     BOOST_CHECK_EQUAL(bd.scale(), 0);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), -1);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "-1");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1.00")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("-1.00")));
     BOOST_CHECK_EQUAL(bd.scale(), 2);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), -100);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "-1");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("123")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("123")));
     BOOST_CHECK_EQUAL(bd.scale(), 0);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "123");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e3")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e3")));
     BOOST_CHECK_EQUAL(bd.scale(), -1);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1230");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e+3")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23e+3")));
     BOOST_CHECK_EQUAL(bd.scale(), -1);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1230");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("1.23")));
     BOOST_CHECK_EQUAL(bd.scale(), 2);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "1.23");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.123")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.123")));
     BOOST_CHECK_EQUAL(bd.scale(), 3);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "0.123");
 
-    bd = boost::any_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.00123")));
+    bd = value_cast<big_decimal>(decimal_type->deserialize(decimal_type->from_string("0.00123")));
     BOOST_CHECK_EQUAL(bd.scale(), 5);
     BOOST_CHECK_EQUAL(bd.unscaled_value(), 123);
     BOOST_CHECK_EQUAL(decimal_type->to_string(decimal_type->decompose(bd)), "0.00123");
@@ -328,21 +328,11 @@ BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
 
 template <typename T>
 std::experimental::optional<T>
-extract(boost::any a) {
-    if (a.empty()) {
+extract(data_value a) {
+    if (a.is_null()) {
         return std::experimental::nullopt;
     } else {
-        return std::experimental::make_optional(boost::any_cast<T>(a));
-    }
-}
-
-template <typename T>
-boost::any
-unextract(std::experimental::optional<T> v) {
-    if (v) {
-        return boost::any(*v);
-    } else {
-        return boost::any();
+        return std::experimental::make_optional(value_cast<T>(a));
     }
 }
 
@@ -357,13 +347,13 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
         return std::make_tuple(extract<int32_t>(v[0]), extract<int64_t>(v[1]), extract<sstring>(v[2]));
     };
     auto c_to_native = [] (std::tuple<opt<int32_t>, opt<int64_t>, opt<sstring>> v) {
-        return native_type({unextract(std::get<0>(v)), unextract(std::get<1>(v)), unextract(std::get<2>(v))});
+        return native_type({std::get<0>(v), std::get<1>(v), std::get<2>(v)});
     };
     auto native_to_bytes = [t] (native_type v) {
-        return t->decompose(v);
+        return t->decompose(make_tuple_value(t, v));
     };
     auto bytes_to_native = [t] (bytes v) {
-        return boost::any_cast<native_type>(t->deserialize(v));
+        return value_cast<native_type>(t->deserialize(v));
     };
     auto c_to_bytes = [=] (c_type v) {
         return native_to_bytes(c_to_native(v));
@@ -531,19 +521,19 @@ BOOST_AUTO_TEST_CASE(test_create_reverse_collection_type) {
     BOOST_REQUIRE(ri->is_collection());
     BOOST_REQUIRE(ri->is_multi_cell());
 
-    std::vector<boost::any> first_set;
+    std::vector<data_value> first_set;
     bytes b1("1");
     bytes b2("2");
-    first_set.push_back(boost::any(b1));
-    first_set.push_back(boost::any(b2));
+    first_set.push_back(b1);
+    first_set.push_back(b2);
 
-    std::vector<boost::any> second_set;
+    std::vector<data_value> second_set;
     bytes b3("2");
-    second_set.push_back(boost::any(b1));
-    second_set.push_back(boost::any(b3));
+    second_set.push_back(b1);
+    second_set.push_back(b3);
 
-    auto bv1 = my_set_type->decompose(first_set);
-    auto bv2 = my_set_type->decompose(second_set);
+    auto bv1 = my_set_type->decompose(make_set_value(my_set_type, first_set));
+    auto bv2 = my_set_type->decompose(make_set_value(my_set_type, second_set));
 
     auto straight_comp = my_set_type->compare(bytes_view(bv1), bytes_view(bv2));
     auto reverse_comp = ri->compare(bytes_view(bv2), bytes_view(bv2));

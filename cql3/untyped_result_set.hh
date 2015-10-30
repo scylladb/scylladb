@@ -66,7 +66,7 @@ public:
         }
         template<typename T>
         T get_as(const sstring& name) const {
-            return boost::any_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
+            return value_cast<T>(data_type_for<T>()->deserialize(get_blob(name)));
         }
         // this could maybe be done as an overload of get_as (or something), but that just
         // muddles things for no real gain. Let user (us) attempt to know what he is doing instead.
@@ -75,12 +75,12 @@ public:
                 data_type_for<K>(), data_type valtype =
                 data_type_for<V>()) const {
             auto vec =
-                    boost::any_cast<const map_type_impl::native_type&>(
+                    value_cast<map_type_impl::native_type>(
                             map_type_impl::get_instance(keytype, valtype, false)->deserialize(
                                     get_blob(name)));
             std::transform(vec.begin(), vec.end(), out,
                     [](auto& p) {
-                        return std::pair<K, V>(boost::any_cast<const K&>(p.first), boost::any_cast<const V&>(p.second));
+                        return std::pair<K, V>(value_cast<K>(p.first), value_cast<V>(p.second));
                     });
         }
         template<typename K, typename V, typename ... Rest>

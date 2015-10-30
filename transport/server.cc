@@ -196,8 +196,8 @@ public:
     void write_string_list(std::vector<sstring> string_list);
     void write_bytes(bytes b);
     void write_short_bytes(bytes b);
-    void write_option(std::pair<int16_t, boost::any> opt);
-    void write_option_list(std::vector<std::pair<int16_t, boost::any>> opt_list);
+    void write_option(std::pair<int16_t, data_value> opt);
+    void write_option_list(std::vector<std::pair<int16_t, data_value>> opt_list);
     void write_inet(ipv4_addr inet);
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
@@ -1261,13 +1261,13 @@ void cql_server::response::write_short_bytes(bytes b)
     _body.insert(_body.end(), b.begin(), b.end());
 }
 
-void cql_server::response::write_option(std::pair<int16_t, boost::any> opt)
+void cql_server::response::write_option(std::pair<int16_t, data_value> opt)
 {
     // FIXME
     assert(0);
 }
 
-void cql_server::response::write_option_list(std::vector<std::pair<int16_t, boost::any>> opt_list)
+void cql_server::response::write_option_list(std::vector<std::pair<int16_t, data_value>> opt_list)
 {
     // FIXME
     assert(0);

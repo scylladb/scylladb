@@ -159,7 +159,7 @@ public:
         }
         return ::serialize_value(*this, values);
     }
-    bytes serialize_value_deep(const std::vector<boost::any>& values) {
+    bytes serialize_value_deep(const std::vector<data_value>& values) {
         // TODO: Optimize
         std::vector<bytes> partial;
         partial.reserve(values.size());

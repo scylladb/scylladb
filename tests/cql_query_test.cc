@@ -566,7 +566,7 @@ SEASTAR_TEST_CASE(test_partition_range_queries_with_bounds) {
                 BOOST_REQUIRE(row[0]);
                 BOOST_REQUIRE(row[1]);
                 keys.push_back(*row[0]);
-                tokens.push_back(boost::any_cast<int64_t>(long_type->deserialize(*row[1])));
+                tokens.push_back(value_cast<int64_t>(long_type->deserialize(*row[1])));
             }
             BOOST_REQUIRE(keys.size() == 5);
 
@@ -705,35 +705,39 @@ SEASTAR_TEST_CASE(test_deletion_scenarios) {
 
 SEASTAR_TEST_CASE(test_map_insert_update) {
     return do_with_cql_env([] (auto& e) {
-        return e.create_table([](auto ks_name) {
+        auto make_my_map_type = [] { return map_type_impl::get_instance(int32_type, int32_type, true); };
+        auto my_map_type = make_my_map_type();
+        return e.create_table([make_my_map_type] (auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, map1 map<int, int>);
-            auto my_map_type = map_type_impl::get_instance(int32_type, int32_type, true);
             return schema({}, ks_name, "cf",
-                          {{"p1", utf8_type}}, {}, {{"map1", my_map_type}}, {}, utf8_type);
+                          {{"p1", utf8_type}}, {}, {{"map1", make_my_map_type()}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{1001, 2001}}));
+                                              "map1", make_map_value(my_map_type, map_type_impl::native_type({{1001, 2001}})));
         }).then([&e] {
             return e.execute_cql("update cf set map1[1002] = 2002 where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{1001, 2001},
-                                                                                  {1002, 2002}}));
+                                              "map1", make_map_value(my_map_type,
+                                                       map_type_impl::native_type({{1001, 2001},
+                                                                                  {1002, 2002}})));
         }).then([&e] {
             // overwrite an element
             return e.execute_cql("update cf set map1[1001] = 3001 where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{1001, 3001},
-                                                                                  {1002, 2002}}));
+                                              "map1", make_map_value(my_map_type,
+                                                       map_type_impl::native_type({{1001, 3001},
+                                                                                  {1002, 2002}})));
         }).then([&e] {
             // overwrite whole map
             return e.execute_cql("update cf set map1 = {1003: 4003} where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{1003, 4003}}));
+                                              "map1", make_map_value(my_map_type,
+                                                          map_type_impl::native_type({{1003, 4003}})));
         }).then([&e] {
             // overwrite whole map, but bad syntax
             return e.execute_cql("update cf set map1 = {1003, 4003} where p1 = 'key1';");
@@ -744,25 +748,26 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             // overwrite whole map
             return e.execute_cql(
                 "update cf set map1 = {1001: 5001, 1002: 5002, 1003: 5003} where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{1001, 5001},
+                                              "map1", make_map_value(my_map_type,
+                                                       map_type_impl::native_type({{1001, 5001},
                                                                                   {1002, 5002},
-                                                                                  {1003, 5003}}));
+                                                                                  {1003, 5003}})));
         }).then([&e] {
             // discard some keys
             return e.execute_cql("update cf set map1 = map1 - {1001, 1003, 1005} where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{{1002, 5002}}}));
-        }).then([&e] {
-            return e.execute_cql("select * from cf where p1 = 'key1';").then([](auto msg) {
-                auto my_map_type = map_type_impl::get_instance(int32_type, int32_type, true);
+                                              "map1", make_map_value(my_map_type,
+                                                          map_type_impl::native_type({{{1002, 5002}}})));
+        }).then([&e, my_map_type] {
+            return e.execute_cql("select * from cf where p1 = 'key1';").then([my_map_type](auto msg) {
                 assert_that(msg).is_rows()
                     .with_size(1)
                     .with_row({
                                   {utf8_type->decompose(sstring("key1"))},
-                                  {my_map_type->decompose(map_type_impl::native_type{{{1002, 5002}}})},
+                                  {my_map_type->decompose(make_map_value(my_map_type, map_type_impl::native_type{{{1002, 5002}}}))},
                               });
             });
         }).then([&e] {
@@ -771,133 +776,134 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         }).then([&e] {
             // delete a key
             return e.execute_cql("delete map1[1002] from cf where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                              "map1", map_type_impl::native_type({{{1009, 5009}}}));
+                                              "map1", make_map_value(my_map_type,
+                                                      map_type_impl::native_type({{{1009, 5009}}})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, map1) values ('key1', null);").discard_result();
-        }).then([&e] {
+        }).then([&e, my_map_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "map1", map_type_impl::native_type({}));
+                    "map1", make_map_value(my_map_type, map_type_impl::native_type({})));
         });
     });
 }
 
 SEASTAR_TEST_CASE(test_set_insert_update) {
     return do_with_cql_env([] (auto&e) {
-        return e.create_table([](auto ks_name) {
+        auto make_my_set_type = [] { return set_type_impl::get_instance(int32_type, true); };
+        auto my_set_type = make_my_set_type();
+        return e.create_table([make_my_set_type](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, set1 set<int>);
-            auto my_set_type = set_type_impl::get_instance(int32_type, true);
             return schema({}, ks_name, "cf",
-                          {{"p1", utf8_type}}, {}, {{"set1", my_set_type}}, {}, utf8_type);
+                          {{"p1", utf8_type}}, {}, {{"set1", make_my_set_type()}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', { 1001 });").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1001}));
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1001})));
         }).then([&e] {
             return e.execute_cql("update cf set set1 = set1 + { 1002 } where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1001, 1002}));
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1001, 1002})));
         }).then([&e] {
             // overwrite an element
             return e.execute_cql("update cf set set1 = set1 + { 1001 } where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1001, 1002}));
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1001, 1002})));
         }).then([&e] {
             // overwrite entire set
             return e.execute_cql("update cf set set1 = { 1007, 1019 } where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1007, 1019}));
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1007, 1019})));
         }).then([&e] {
             // discard keys
             return e.execute_cql("update cf set set1 = set1 - { 1007, 1008 } where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1019}));
-        }).then([&e] {
-            return e.execute_cql("select * from cf where p1 = 'key1';").then([](auto msg) {
-                auto my_set_type = set_type_impl::get_instance(int32_type, true);
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1019})));
+        }).then([&e, my_set_type] {
+            return e.execute_cql("select * from cf where p1 = 'key1';").then([my_set_type](auto msg) {
                 assert_that(msg).is_rows()
                     .with_size(1)
                     .with_row({
                                   {utf8_type->decompose(sstring("key1"))},
-                                  {my_set_type->decompose(set_type_impl::native_type{{1019}})},
+                                  {my_set_type->decompose(make_set_value(my_set_type, set_type_impl::native_type{{1019}}))},
                               });
             });
         }).then([&e] {
             return e.execute_cql("update cf set set1 = set1 + { 1009 } where p1 = 'key1';").discard_result();
         }).then([&e] {
             return e.execute_cql("delete set1[1019] from cf where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                                            "set1", set_type_impl::native_type({1009}));
+                                            "set1", make_set_value(my_set_type, set_type_impl::native_type({1009})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', null);").discard_result();
-        }).then([&e] {
+        }).then([&e, my_set_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "set1", set_type_impl::native_type({}));
+                    "set1", make_set_value(my_set_type, set_type_impl::native_type({})));
         });
     });
 }
 
 SEASTAR_TEST_CASE(test_list_insert_update) {
     return do_with_cql_env([] (auto& e) {
+        auto my_list_type = list_type_impl::get_instance(int32_type, true);
         return e.execute_cql("create table cf (p1 varchar primary key, list1 list<int>);").discard_result().then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', [ 1001 ]);").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({boost::any(1001)}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({1001})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = [ 1002, 1003 ] where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({boost::any(1002), boost::any(1003)}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({1002, 1003})));
         }).then([&e] {
             return e.execute_cql("update cf set list1[1] = 2003 where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({boost::any(1002), boost::any(2003)}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({1002, 2003})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = list1 - [1002, 2004] where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({2003}));
-        }).then([&e] {
-            return e.execute_cql("select * from cf where p1 = 'key1';").then([] (auto msg) {
-                auto my_list_type = list_type_impl::get_instance(int32_type, true);
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({2003})));
+        }).then([&e, my_list_type] {
+            return e.execute_cql("select * from cf where p1 = 'key1';").then([my_list_type] (auto msg) {
                 assert_that(msg).is_rows()
                     .with_size(1)
                     .with_row({
                          {utf8_type->decompose(sstring("key1"))},
-                         {my_list_type->decompose(list_type_impl::native_type{{2003}})},
+                         {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{2003}}))},
                      });
             });
         }).then([&e] {
             return e.execute_cql("update cf set list1 = [2008, 2009, 2010] where p1 = 'key1';").discard_result();
         }).then([&e] {
             return e.execute_cql("delete list1[1] from cf where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({2008, 2010}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({2008, 2010})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = list1 + [2012, 2019] where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({2008, 2010, 2012, 2019}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({2008, 2010, 2012, 2019})));
         }).then([&e] {
             return e.execute_cql("update cf set list1 = [2001, 2002] + list1 where p1 = 'key1';").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({2001, 2002, 2008, 2010, 2012, 2019}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({2001, 2002, 2008, 2010, 2012, 2019})));
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', null);").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
-                    "list1", list_type_impl::native_type({}));
+                    "list1", make_list_value(my_list_type, list_type_impl::native_type({})));
         });
     });
 }
@@ -1028,7 +1034,7 @@ SEASTAR_TEST_CASE(test_tuples) {
         }).then([&e, tt] (shared_ptr<transport::messages::result_message> msg) {
             assert_that(msg).is_rows()
                 .with_rows({{
-                     {tt->decompose(tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")}))},
+                     {tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")})))},
                 }});
             return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 tuple<int, bigint, text>)").discard_result();
         }).then([&e] {
@@ -1037,7 +1043,7 @@ SEASTAR_TEST_CASE(test_tuples) {
             return e.execute_cql("select * from cf2 where p1 = 1;");
         }).then([&e, tt] (auto msg) {
             assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(int32_t(1)), tt->decompose(tuple_type_impl::native_type({int32_t(1), int64_t(2), sstring("abc")})) }
+                { int32_type->decompose(int32_t(1)), tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1), int64_t(2), sstring("abc")}))) }
             });
         });
     });
@@ -1090,9 +1096,10 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("select t from cf where id = 2;");
         }).then([&e, make_user_type] (shared_ptr<transport::messages::result_message> msg) {
             auto ut = make_user_type();
-            auto ut_val = user_type_impl::native_type({boost::any(int32_t(2001)),
-                                                       boost::any(int64_t(3001)),
-                                                       boost::any(sstring("abc4"))});
+            auto ut_val = make_user_value(ut,
+                          user_type_impl::native_type({int32_t(2001),
+                                                       int64_t(3001),
+                                                       sstring("abc4")}));
             assert_that(msg).is_rows()
                 .with_rows({
                      {ut->decompose(ut_val)},
@@ -1220,10 +1227,11 @@ SEASTAR_TEST_CASE(test_table_compression) {
 
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([] (auto ks_name) {
-            auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+        auto make_my_list_type = [] { return list_type_impl::get_instance(utf8_type, true); };
+        auto my_list_type = make_my_list_type();
+        return e.create_table([make_my_list_type] (auto ks_name) {
             return schema({}, ks_name, "cf",
-                {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", my_list_type}}, {}, utf8_type);
+                {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", make_my_list_type()}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql(
                 "update cf using ttl 1000 set r1 = 'value1_1', r3 = ['a', 'b', 'c'] where p1 = 'key1';").discard_result();
@@ -1236,18 +1244,18 @@ SEASTAR_TEST_CASE(test_ttl) {
             return e.execute_cql("update cf using ttl 1 set r1 = 'value1_2' where p1 = 'key2';").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, r2) values ('key2', 'value2_2');").discard_result();
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.execute_cql("select r1 from cf;").then([](auto msg) {
                 assert_that(msg).is_rows().with_size(3)
                     .with_row({utf8_type->decompose(sstring("value1_1"))})
                     .with_row({utf8_type->decompose(sstring("value1_2"))})
                     .with_row({utf8_type->decompose(sstring("value1_3"))});
             });
-        }).then([&e] {
-            return e.execute_cql("select r3 from cf where p1 = 'key1';").then([] (auto msg) {
+        }).then([&e, my_list_type] {
+            return e.execute_cql("select r3 from cf where p1 = 'key1';").then([my_list_type] (auto msg) {
                 auto my_list_type = list_type_impl::get_instance(utf8_type, true);
                 assert_that(msg).is_rows().with_rows({
-                    {my_list_type->decompose(list_type_impl::native_type{{sstring("a"), sstring("b"), sstring("c")}})}
+                    {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{sstring("a"), sstring("b"), sstring("c")}}))}
                 });
             });
         }).then([&e] {
@@ -1269,11 +1277,11 @@ SEASTAR_TEST_CASE(test_ttl) {
                     .with_row({ {} })
                     .with_row({ utf8_type->decompose(sstring("value1_1")) });
             });
-        }).then([&e] {
+        }).then([&e, my_list_type] {
             return e.execute_cql("select r3 from cf where p1 = 'key1';").then([] (auto msg) {
                 auto my_list_type = list_type_impl::get_instance(utf8_type, true);
                 assert_that(msg).is_rows().with_rows({
-                    {my_list_type->decompose(list_type_impl::native_type{{sstring("a"), sstring("c")}})}
+                    {my_list_type->decompose(make_list_value(my_list_type, list_type_impl::native_type{{sstring("a"), sstring("c")}}))}
                 });
             });
         }).then([&e] {

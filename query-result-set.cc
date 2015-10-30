@@ -51,7 +51,7 @@ private:
 std::ostream& operator<<(std::ostream& out, const result_set_row& row) {
     for (auto&& cell : row._cells) {
         auto&& type = cell.second.type();
-        auto&& value = cell.second.value();
+        auto&& value = cell.second;
         out << cell.first << "=\"" << type->to_string(type->decompose(value)) << "\" ";
     }
     return out;
