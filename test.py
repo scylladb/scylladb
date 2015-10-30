@@ -24,6 +24,7 @@ import sys
 import argparse
 import subprocess
 import signal
+import shlex
 
 boost_tests = [
     'bytes_ostream_test',
@@ -139,7 +140,7 @@ if __name__ == "__main__":
                       os.path.basename(test[0]) + ".boost.xml")
             path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
             print(path)
-        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE,
+        proc = subprocess.Popen(shlex.split(path), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 env=env, preexec_fn=os.setsid)
         signal.alarm(args.timeout)
