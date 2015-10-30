@@ -45,7 +45,7 @@
 #include "gms/gossiper.hh"
 
 namespace service {
-class load_broadcaster : public gms::i_endpoint_state_change_subscriber
+class load_broadcaster : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<load_broadcaster>
 {
 public:
     static constexpr std::chrono::milliseconds BROADCAST_INTERVAL{60 * 1000};
@@ -59,10 +59,10 @@ private:
 
 public:
     load_broadcaster(distributed<database>& db, gms::gossiper& g) : _db(db), _gossiper(g) {
-        _gossiper.register_(this);
+        _gossiper.register_(shared_from_this());
     }
     ~load_broadcaster() {
-        _gossiper.unregister_(this);
+        _gossiper.unregister_(shared_from_this());
     }
 
     void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) {

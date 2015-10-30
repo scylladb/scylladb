@@ -48,6 +48,7 @@
 #include "service/storage_service.hh"
 #include "core/file.hh"
 #include "log.hh"
+#include "locator/reconnectable_snitch_helper.hh"
 
 namespace locator {
 
@@ -127,5 +128,6 @@ private:
     bool _prefer_local = false;
     bool _file_reader_runs = false;
     unsigned _file_reader_cpu_id;
+    shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;
 };
 } // namespace locator

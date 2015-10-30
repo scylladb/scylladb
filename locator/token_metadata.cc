@@ -502,6 +502,14 @@ void topology::add_endpoint(const inet_address& ep)
     _current_locations[ep] = {dc, rack};
 }
 
+void topology::update_endpoint(inet_address ep) {
+    if (!_current_locations.count(ep) || !locator::i_endpoint_snitch::snitch_instance().local_is_initialized()) {
+        return;
+    }
+
+    add_endpoint(ep);
+}
+
 void topology::remove_endpoint(inet_address ep)
 {
     auto cur_dc_rack = _current_locations.find(ep);
