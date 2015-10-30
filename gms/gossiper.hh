@@ -463,9 +463,7 @@ public:
      */
     void add_saved_endpoint(inet_address ep);
 
-    void add_local_application_state(application_state state, versioned_value value);
-
-    void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
+    future<> add_local_application_state(application_state state, versioned_value value);
 
     future<> stop();
 

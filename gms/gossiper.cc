@@ -1353,8 +1353,8 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
 
-void gossiper::add_local_application_state(application_state state, versioned_value value) {
-    seastar::async([this, g = this->shared_from_this(), state, value = std::move(value)] () mutable {
+future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
+    return seastar::async([this, g = this->shared_from_this(), state, value = std::move(value)] () mutable {
         inet_address ep_addr = get_broadcast_address();
         assert(endpoint_state_map.count(ep_addr));
         endpoint_state& ep_state = endpoint_state_map.at(ep_addr);
@@ -1374,14 +1374,6 @@ void gossiper::add_local_application_state(application_state state, versioned_va
             logger.warn("Fail to apply application_state: {}", std::current_exception());
         }
     });
-}
-
-void gossiper::add_lccal_application_states(std::list<std::pair<application_state, versioned_value> > states) {
-    // Note: The taskLock in Origin code is removed, we can probaby use a
-    // simple data structure here
-    for (std::pair<application_state, versioned_value>& pair : states) {
-        add_local_application_state(pair.first, pair.second);
-    }
 }
 
 future<> gossiper::stop() {

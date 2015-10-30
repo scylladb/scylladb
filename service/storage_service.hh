@@ -132,7 +132,7 @@ public:
         return _token_metadata;
     }
 
-    void gossip_snitch_info();
+    future<> gossip_snitch_info();
 
     void set_load_broadcaster(shared_ptr<load_broadcaster> lb);
     shared_ptr<load_broadcaster>& get_load_broadcaster();
