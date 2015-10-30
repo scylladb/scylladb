@@ -161,12 +161,7 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
     } else if (t._kind == token::kind::before_all_keys) {
         out << "minimum token";
     } else {
-        auto flags = out.flags();
-        for (auto c : t._data) {
-            unsigned char x = c;
-            out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
-        }
-        out.flags(flags);
+        out << global_partitioner().to_sstring(t);
     }
     return out;
 }

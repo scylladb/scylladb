@@ -52,6 +52,7 @@
 #include "core/do_with.hh"
 #include "core/thread.hh"
 #include "json.hh"
+#include "log.hh"
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
@@ -66,6 +67,8 @@ using namespace db::system_keyspace;
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace schema_tables {
+
+logging::logger logger("schema_tables");
 
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
@@ -1329,7 +1332,13 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
 
     if (table_row.has("compaction_strategy_class")) {
         auto strategy = table_row.get_nonnull<sstring>("compaction_strategy_class");
-        builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+        try {
+            builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+        } catch (const exceptions::configuration_exception& e) {
+            // If compaction strategy class isn't supported, fallback to size tiered.
+            logger.warn("Falling back to size-tiered compaction strategy after the problem: {}", e.what());
+            builder.set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+        }
     }
 
     if (table_row.has("compaction_strategy_options")) {

@@ -1224,8 +1224,8 @@ properties[::shared_ptr<cql3::statements::property_definitions> props]
     ;
 
 property[::shared_ptr<cql3::statements::property_definitions> props]
-    : k=ident '=' (simple=propertyValue { try { $props->add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
-                  |   map=mapLiteral    { try { $props->add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } })
+    : k=ident '=' simple=propertyValue { try { $props->add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+    | k=ident '=' map=mapLiteral { try { $props->add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
     ;
 
 propertyValue returns [sstring str]

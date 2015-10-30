@@ -272,7 +272,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 
     auto existing_list_opt = params.get_prefetched_list(m.key(), row_key, column);
     if (!existing_list_opt) {
-        throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size 0", idx));
+        throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
     collection_mutation::view existing_list_ser = *existing_list_opt;
     auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
@@ -448,7 +448,7 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     auto&& existing_list = params.get_prefetched_list(m.key(), row_key, column);
     int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
     if (!existing_list) {
-        throw exceptions::invalid_request_exception("List does  not exist");
+        throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");
     }
     auto&& deserialized = ltype->deserialize_mutation_form(*existing_list);
     if (idx < 0 || size_t(idx) >= deserialized.cells.size()) {

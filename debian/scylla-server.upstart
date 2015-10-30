@@ -7,11 +7,7 @@ description	"ScyllaDB server"
 start on runlevel [2345]
 stop on runlevel [!2345]
 
-respawn
-respawn limit 10 5
 umask 022
-
-expect fork
 
 console log
 
@@ -26,7 +22,7 @@ script
     cd /var/lib/scylla
     . /etc/default/scylla-server
     export OPTS_FILE NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_ARGS
-    /usr/lib/scylla/scylla_run
+    exec /usr/lib/scylla/scylla_run
 end script
 
 post-stop script
