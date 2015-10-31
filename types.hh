@@ -236,6 +236,8 @@ public:
     bool is_null() const {   // may return false negatives for strings etc.
         return !_value;
     }
+    size_t serialized_size() const;
+    void serialize(bytes::iterator& out) const;
     friend inline bool operator==(const data_value& x, const data_value& y);
     friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
@@ -268,9 +270,6 @@ public:
         return serialize(get_value_ptr(value), out);
     }
     virtual size_t serialized_size(const void* value) const = 0;
-    size_t serialized_size(const data_value& value) const {
-        return serialized_size(get_value_ptr(value));
-    }
     virtual bool less(bytes_view v1, bytes_view v2) const = 0;
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
@@ -402,6 +401,19 @@ protected:
     template <typename T> friend const T& value_cast(const data_value& value);
     template <typename T> friend T&& value_cast(data_value&& value);
 };
+
+inline
+size_t
+data_value::serialized_size() const {
+    return _type->serialized_size(_value);
+}
+
+
+inline
+void
+data_value::serialize(bytes::iterator& out) const {
+    return _type->serialize(_value, out);
+}
 
 template <typename T>
 data_value
