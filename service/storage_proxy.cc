@@ -1701,9 +1701,9 @@ public:
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([this, exec, digest_resolver, timeout] (future<> f) {
+        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<> f) {
             try {
-                got_cl();
+                exec->got_cl();
                 f.get();
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
@@ -1726,7 +1726,7 @@ public:
                     done.discard_result(); // no need for background check, discard done future explicitly
                 }
             } catch (digest_mismatch_exception& ex) {
-                exec->reconcile(_cl, timeout);
+                exec->reconcile(exec->_cl, timeout);
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
