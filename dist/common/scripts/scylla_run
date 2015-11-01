@@ -14,4 +14,4 @@ if [ "$SET_NIC" == "yes" ]; then
     sudo sh /usr/lib/scylla/posix_net_conf.sh >/dev/null 2>&1 || true
 fi
 
-exec sudo -u $USER env HOME=/var/lib/scylla /usr/bin/scylla $args
+exec sudo -u $USER env HOME=/var/lib/scylla SCYLLA_HOME=/var/lib/scylla /usr/bin/scylla $args
