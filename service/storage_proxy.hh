@@ -77,6 +77,7 @@ public:
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_range;
+        uint64_t background_writes = 0; // client no longer waits for the write
     };
     using response_id_type = uint64_t;
 private:
@@ -203,11 +204,12 @@ public:
 
     future<> stop();
 
-    friend class abstract_read_executor;
-
     const stats& get_stats() const {
         return _stats;
     }
+
+    friend class abstract_read_executor;
+    friend class abstract_write_response_handler;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;

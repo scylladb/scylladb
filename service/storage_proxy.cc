@@ -136,12 +136,17 @@ public:
             : _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
-    virtual ~abstract_write_response_handler() {};
+    virtual ~abstract_write_response_handler() {
+        if (_cl_achieved) {
+            _proxy->_stats.background_writes--;
+        }
+    };
     void signal(size_t nr = 1) {
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= total_block_for()) {
              _ready.set_value();
              _cl_achieved = true;
+             _proxy->_stats.background_writes++;
          }
     }
     // return true on last ack
