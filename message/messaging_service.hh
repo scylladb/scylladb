@@ -544,7 +544,7 @@ public:
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     void unregister_replication_finished();
     future<> send_replication_finished(shard_id id, inet_address from);
-
+    void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
     shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
