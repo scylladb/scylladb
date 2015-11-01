@@ -201,22 +201,16 @@ void set_storage_proxy(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    sp::get_read_repair_attempted.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_repair_attempted.set(r, [&ctx](std::unique_ptr<request> req)  {
+        return sum_stats(ctx.sp, &proxy::stats::read_repair_attempts);
     });
 
-    sp::get_read_repair_repaired_blocking.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_repair_repaired_blocking.set(r, [&ctx](std::unique_ptr<request> req)  {
+        return sum_stats(ctx.sp, &proxy::stats::read_repair_repaired_blocking);
     });
 
-    sp::get_read_repair_repaired_background.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    sp::get_read_repair_repaired_background.set(r, [&ctx](std::unique_ptr<request> req)  {
+        return sum_stats(ctx.sp, &proxy::stats::read_repair_repaired_background);
     });
 
     sp::get_schema_versions.set(r, [](std::unique_ptr<request> req)  {
