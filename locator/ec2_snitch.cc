@@ -36,7 +36,7 @@ future<> ec2_snitch::load_config() {
 
             return read_property_file().then([this] (sstring datacenter_suffix) {
                 _my_dc += datacenter_suffix;
-                logger().info("EC2Snitch using region: {}, zone: {}.", _my_dc, _my_rack);
+                logger().info("Ec2Snitch using region: {}, zone: {}.", _my_dc, _my_rack);
 
                 return _my_distributed->invoke_on_all(
                     [this] (snitch_ptr& local_s) {
@@ -114,15 +114,15 @@ future<sstring> ec2_snitch::read_property_file() {
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch, ec2_snitch, const sstring&, unsigned>;
-static registry_2_params registrator2("org.apache.cassandra.locator.EC2Snitch");
-static registry_2_params registrator2_short_name("EC2Snitch");
+static registry_2_params registrator2("org.apache.cassandra.locator.Ec2Snitch");
+static registry_2_params registrator2_short_name("Ec2Snitch");
 
 
 using registry_1_param = class_registrator<i_endpoint_snitch, ec2_snitch, const sstring&>;
-static registry_1_param registrator1("org.apache.cassandra.locator.EC2Snitch");
-static registry_1_param registrator1_short_name("EC2Snitch");
+static registry_1_param registrator1("org.apache.cassandra.locator.Ec2Snitch");
+static registry_1_param registrator1_short_name("Ec2Snitch");
 
 using registry_default = class_registrator<i_endpoint_snitch, ec2_snitch>;
-static registry_default registrator_default("org.apache.cassandra.locator.EC2Snitch");
-static registry_default registrator_default_short_name("EC2Snitch");
+static registry_default registrator_default("org.apache.cassandra.locator.Ec2Snitch");
+static registry_default registrator_default_short_name("Ec2Snitch");
 } // namespace locator
