@@ -78,6 +78,8 @@ public:
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_range;
         uint64_t background_writes = 0; // client no longer waits for the write
+        uint64_t reads = 0;
+        uint64_t background_reads = 0; // client no longer waits for the read
     };
     using response_id_type = uint64_t;
 private:

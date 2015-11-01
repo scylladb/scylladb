@@ -301,6 +301,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
+                , "queue_length", "reads")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.reads)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "background reads")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_reads)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
         ),
@@ -1568,8 +1578,12 @@ protected:
 public:
     abstract_read_executor(shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets) :
-                           _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)) {}
-    virtual ~abstract_read_executor() {};
+                           _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)) {
+        _proxy->_stats.reads++;
+    }
+    virtual ~abstract_read_executor() {
+        _proxy->_stats.reads--;
+    };
 
 protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
@@ -1708,15 +1722,18 @@ public:
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
                 if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
+                    exec->_proxy->_stats.background_reads++;
                     done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
                         try {
                             f.get();
                             digest_resolver->resolve();
+                            exec->_proxy->_stats.background_reads--;
                         } catch(digest_mismatch_exception& ex) {
                             exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
                             exec->reconcile(exec->_cl, timeout);
-                            exec->_result_promise.get_future().then_wrapped([] (auto f) {
+                            exec->_result_promise.get_future().then_wrapped([exec] (auto f) {
                                 f.ignore_ready_future(); // ignore any failures during background repair
+                                exec->_proxy->_stats.background_reads--;
                             });
                         } catch(...) {
                             // ignore all exception besides digest mismatch during background check
