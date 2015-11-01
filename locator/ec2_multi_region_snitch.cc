@@ -52,7 +52,7 @@ future<> ec2_multi_region_snitch::start() {
         if (engine().cpu_id() == io_cpu_id()) {
             return aws_api_call(AWS_QUERY_SERVER_ADDR, PUBLIC_IP_QUERY_REQ).then([this](sstring pub_addr){
                 inet_address local_public_address = inet_address(pub_addr);
-                logger().info("EC2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
+                logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
 
                 //
                 // Use the Public IP to broadcast Address to other nodes.
@@ -117,16 +117,16 @@ void ec2_multi_region_snitch::gossiper_starting() {
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const sstring&, unsigned>;
-static registry_2_params registrator2("org.apache.cassandra.locator.EC2MultiRegionSnitch");
-static registry_2_params registrator2_short_name("EC2MultiRegionSnitch");
+static registry_2_params registrator2("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
+static registry_2_params registrator2_short_name("Ec2MultiRegionSnitch");
 
 
 using registry_1_param = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const sstring&>;
-static registry_1_param registrator1("org.apache.cassandra.locator.EC2MultiRegionSnitch");
-static registry_1_param registrator1_short_name("EC2MultiRegionSnitch");
+static registry_1_param registrator1("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
+static registry_1_param registrator1_short_name("Ec2MultiRegionSnitch");
 
 using registry_default = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch>;
-static registry_default registrator_default("org.apache.cassandra.locator.EC2MultiRegionSnitch");
-static registry_default registrator_default_short_name("EC2MultiRegionSnitch");
+static registry_default registrator_default("org.apache.cassandra.locator.Ec2MultiRegionSnitch");
+static registry_default registrator_default_short_name("Ec2MultiRegionSnitch");
 
 } // namespace locator
