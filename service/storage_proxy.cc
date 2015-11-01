@@ -288,6 +288,48 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     init_messaging_service();
+    _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size(); })
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "background writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "write timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "write unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_unavailables)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "read timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "read unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_unavailables)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "range slice timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "range slice unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables)
+        ),
+    }));
 }
 
 storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}

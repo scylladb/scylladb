@@ -92,6 +92,7 @@ private:
     // for read repair chance calculation
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
+    std::unique_ptr<scollectd::registrations> _collectd_registrations;
 private:
     void init_messaging_service();
     void uninit_messaging_service();
