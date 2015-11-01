@@ -71,6 +71,9 @@ public:
         uint64_t range_slice_unavailables = 0;
         uint64_t write_timeouts = 0;
         uint64_t write_unavailables = 0;
+        uint64_t read_repair_attempts = 0;
+        uint64_t read_repair_repaired_blocking = 0;
+        uint64_t read_repair_repaired_background = 0;
         utils::ihistogram read;
         utils::ihistogram write;
         utils::ihistogram range;

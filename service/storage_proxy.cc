@@ -1729,6 +1729,7 @@ public:
                             digest_resolver->resolve();
                             exec->_proxy->_stats.background_reads--;
                         } catch(digest_mismatch_exception& ex) {
+                            exec->_proxy->_stats.read_repair_repaired_background++;
                             exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
                             exec->reconcile(exec->_cl, timeout);
                             exec->_result_promise.get_future().then_wrapped([exec] (auto f) {
@@ -1744,6 +1745,7 @@ public:
                 }
             } catch (digest_mismatch_exception& ex) {
                 exec->reconcile(exec->_cl, timeout);
+                exec->_proxy->_stats.read_repair_repaired_blocking++;
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
@@ -1844,10 +1846,9 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     // Throw UAE early if we don't have enough replicas.
     db::assure_sufficient_live_nodes(cl, ks, target_replicas);
 
-#if 0
-    if (repair_decision != read_repair_decision::NONE)
-        ReadRepairMetrics.attempted.mark();
-#endif
+    if (repair_decision != db::read_repair_decision::NONE) {
+        _stats.read_repair_attempts++;
+    }
 
 #if 0
     ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
