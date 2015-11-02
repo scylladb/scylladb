@@ -1033,10 +1033,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
         ::shared_ptr<service::pager::paging_state> paging_state;
         int32_t page_size = flags.contains<options_flag::PAGE_SIZE>() ? read_int(buf) : -1;
         if (flags.contains<options_flag::PAGING_STATE>()) {
-            fail(unimplemented::cause::PAGING);
-#if 0
-            paging_state = PagingState.deserialize(CBUtil.readValue(body))
-#endif
+            paging_state = service::pager::paging_state::deserialize(read_value(buf));
         }
 
         db::consistency_level serial_consistency = db::consistency_level::SERIAL;
