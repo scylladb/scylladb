@@ -29,6 +29,7 @@
 namespace unimplemented {
 
 enum class cause {
+    API,
     INDEXES,
     LWT,
     PAGING,
