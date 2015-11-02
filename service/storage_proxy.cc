@@ -213,21 +213,18 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
     auto id = _next_response_id++;
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), shared_from_this(), [this, id] {
         auto& e = _response_handlers.find(id)->second;
-        auto block_for = e.handler->total_block_for();
-        auto left_for_cl = block_for - e.handler->_cl_acks;
-        if (left_for_cl <= 0 || e.handler->_cl == db::consistency_level::ANY) {
+        if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
             e.handler->signal(hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets()));
             logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            // check cl status after hints are written (can change for cl == any)
-            left_for_cl = block_for - e.handler->_cl_acks;
         }
 
-        if (left_for_cl > 0) {
+        // _cl_achieved can be modified after previous check by call to signal() above if cl == ANY
+        if (!e.handler->_cl_achieved) {
             // timeout happened before cl was achieved, throw exception
-            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, block_for, e.handler->_type));
+            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
         } else {
             remove_response_handler(id);
         }
