@@ -102,7 +102,10 @@ public:
      * called after Gossiper instance exists immediately before it starts
      * gossiping
      */
-    virtual future<> gossiper_starting() = 0;
+    virtual future<> gossiper_starting() {
+        _gossip_started = true;
+        return make_ready_future<>();
+    }
 
     /**
      * Returns whether for a range query doing a query against merged is likely
@@ -165,6 +168,10 @@ public:
         //noop by default
     }
 
+    bool local_gossiper_started() {
+        return _gossip_started;
+    }
+
 protected:
     static logging::logger& logger() {
         static logging::logger snitch_logger("snitch_logger");
@@ -185,6 +192,7 @@ protected:
         stopping,
         stopped
     } _state = snitch_state::initializing;
+    bool _gossip_started = false;
 };
 
 struct snitch_ptr {
@@ -405,9 +413,6 @@ public:
 
     virtual int compare_endpoints(
         inet_address& address, inet_address& a1, inet_address& a2) override;
-
-    // noop by default
-    virtual future<> gossiper_starting() override { return make_ready_future<>(); }
 
     virtual bool is_worth_merging_for_range_query(
         std::vector<inet_address>& merged,
