@@ -35,6 +35,25 @@
 
 namespace bpo = boost::program_options;
 
+// === How to run the test
+// node1:
+// ./gossip --seed 127.0.0.1  --listen-address 127.0.0.1 -c 2
+//
+// node2:
+// ./gossip --seed 127.0.0.1  --listen-address 127.0.0.2 -c 2
+//
+// node3:
+// ./gossip --seed 127.0.0.1  --listen-address 127.0.0.3 -c 2
+//
+// === What to expect
+//
+// Each node should see the LOAD status of other nodes. The load status is increased by 0.0001 every second.
+// And the version number in the HeartBeatState increases every second.
+// Example of the output:
+//
+// DEBUG [shard 0] gossip - ep=127.0.0.1, eps=HeartBeatState = { generation = 1446454365, version = 68 }, AppStateMap = { LOAD : Value(0.5019,67) }
+// DEBUG [shard 0] gossip - ep=127.0.0.2, eps=HeartBeatState = { generation = 1446454380, version = 27 }, AppStateMap = { LOAD : Value(0.5005,26) }
+
 int main(int ac, char ** av) {
     distributed<database> db;
     app_template app;
