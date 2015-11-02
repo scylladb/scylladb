@@ -54,11 +54,11 @@ public:
     }
 
     inline size_t serialized_size(const data_value& value) {
-        return value->serialized_size();
+        return value.serialized_size();
     }
 
     inline void serialize(const data_value& value, bytes::iterator& out) {
-        value->serialize(out);
+        value.serialize(out);
     }
 };
 
