@@ -30,6 +30,7 @@
 #include "utils/fb_utilities.hh"
 #include "locator/snitch_base.hh"
 #include "log.hh"
+#include <seastar/core/thread.hh>
 #include <chrono>
 
 namespace bpo = boost::program_options;
@@ -78,16 +79,15 @@ int main(int ac, char ** av) {
             int generation_number = duration_cast<seconds>(now).count();
             return gossiper.start(generation_number, app_states);
         }).then([vv] {
-            auto app_state_adder = std::make_shared<timer<lowres_clock>>();
-            app_state_adder->set_callback ([vv, app_state_adder] {
+            return seastar::async([vv] {
                 static double load = 0.5;
-                auto& gossiper = gms::get_local_gossiper();
-                auto state = gms::application_state::LOAD;
-                auto value = vv->load(load);
-                gossiper.add_local_application_state(state, value);
-                load += 0.0001;
+                for (;;) {
+                    auto value = vv->load(load);
+                    load += 0.0001;
+                    gms::get_local_gossiper().add_local_application_state(gms::application_state::LOAD, value).get();
+                    sleep(std::chrono::seconds(1)).get();
+                }
             });
-            app_state_adder->arm_periodic(std::chrono::seconds(1));
         });
     });
 }

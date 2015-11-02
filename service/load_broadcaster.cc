@@ -60,10 +60,13 @@ void load_broadcaster::start_broadcasting() {
                 res += i.second->get_stats().live_disk_space_used;
             }
             return res;
-        }, 0, std::plus<int64_t>()).then([this](int64_t size) {
+        }, 0, std::plus<int64_t>()).then([this] (int64_t size) {
             gms::versioned_value::factory value_factory;
-            _gossiper.add_local_application_state(gms::application_state::LOAD, value_factory.load(size));
-            _timer.arm(BROADCAST_INTERVAL);
+            return _gossiper.add_local_application_state(gms::application_state::LOAD,
+                value_factory.load(size)).then([this] {
+                _timer.arm(BROADCAST_INTERVAL);
+                return make_ready_future<>();
+            });
         });
     });
 

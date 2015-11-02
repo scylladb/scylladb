@@ -102,7 +102,7 @@ public:
      * called after Gossiper instance exists immediately before it starts
      * gossiping
      */
-    virtual void gossiper_starting() = 0;
+    virtual future<> gossiper_starting() = 0;
 
     /**
      * Returns whether for a range query doing a query against merged is likely
@@ -407,7 +407,7 @@ public:
         inet_address& address, inet_address& a1, inet_address& a2) override;
 
     // noop by default
-    virtual void gossiper_starting() override {}
+    virtual future<> gossiper_starting() override { return make_ready_future<>(); }
 
     virtual bool is_worth_merging_for_range_query(
         std::vector<inet_address>& merged,

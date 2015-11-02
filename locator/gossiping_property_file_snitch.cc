@@ -126,7 +126,7 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
     });
 }
 
-void gossiping_property_file_snitch::gossiper_starting() {
+future<> gossiping_property_file_snitch::gossiper_starting() {
     using namespace gms;
     using namespace service;
     //
@@ -141,11 +141,11 @@ void gossiping_property_file_snitch::gossiper_starting() {
 
     ostrm<<local_internal_addr<<std::flush;
 
-    g.add_local_application_state(application_state::INTERNAL_IP,
-                                  ss.value_factory.internal_ip(ostrm.str()));
-
-    _gossip_started = true;
-    reload_gossiper_state();
+    return g.add_local_application_state(application_state::INTERNAL_IP,
+        ss.value_factory.internal_ip(ostrm.str())).then([this] {
+        _gossip_started = true;
+        reload_gossiper_state();
+    });
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
