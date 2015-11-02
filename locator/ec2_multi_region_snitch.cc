@@ -109,9 +109,9 @@ future<> ec2_multi_region_snitch::gossiper_starting() {
 
     return g.add_local_application_state(application_state::INTERNAL_IP,
         ss.value_factory.internal_ip(_local_private_address)).then([this] {
-        if (!_helper_added) {
+        if (!_gossip_started) {
             gms::get_local_gossiper().register_(make_shared<reconnectable_snitch_helper>(_my_dc));
-            _helper_added = true;
+            _gossip_started = true;
         }
     });
 

@@ -214,12 +214,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             if (engine().cpu_id() != _file_reader_cpu_id) {
                 local_s->set_my_dc(_my_dc);
                 local_s->set_my_rack(_my_rack);
+                local_s->set_prefer_local(_prefer_local);
             }
         }).then([this] {
             return seastar::async([this] {
                 // reload Gossiper state (executed on CPU0 only)
-                smp::submit_to(0, [this] {
-                    this->reload_gossiper_state();
+                smp::submit_to(0, [] {
+                    auto& local_snitch_ptr = get_local_snitch_ptr();
+                    local_snitch_ptr->reload_gossiper_state();
                 }).get();
 
                 // update Storage Service on each shard
@@ -239,10 +241,13 @@ future<> gossiping_property_file_snitch::reload_configuration() {
 
 
                 // spread the word...
-                smp::submit_to(0, [this] {
-                    if (this->_gossip_started && service::get_storage_service().local_is_initialized()) {
-                        service::get_local_storage_service().gossip_snitch_info();
+                smp::submit_to(0, [] {
+                    auto& local_snitch_ptr = get_local_snitch_ptr();
+                    if (local_snitch_ptr->local_gossiper_started() && service::get_storage_service().local_is_initialized()) {
+                        return service::get_local_storage_service().gossip_snitch_info();
                     }
+
+                    return make_ready_future<>();
                 }).get();
             });
         });

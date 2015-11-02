@@ -79,6 +79,27 @@ public:
         const sstring& fname = "",
         unsigned io_cpuid = 0);
 
+    /**
+     * This function register a Gossiper subscriber to reconnect according to
+     * the new "prefer_local" value, namely use either an internal or extenal IP
+     * address.
+     *
+     * @note Currently in order to be backward compatible we are mimicking the C*
+     *       behavior, which is a bit strange: while allowing the change of
+     *       prefer_local value during the same run it won't actually trigger
+     *       disconnect from all remote nodes as would be logical (in order to
+     *       connect using a new configuration). On the contrary, if the new
+     *       prefer_local value is TRUE, it will trigger the reconnect only when
+     *       there is a corresponding gossip event (e.g. on_change()) from the
+     *       corresponding node has been accepted. If the new value is FALSE
+     *       then it won't trigger disconnect at all! And in any case a remote
+     *       node will be reconnected using the PREFERED_IP value stored in the
+     *       system_table.peer.
+     *
+     * This is currently relevant to EC2/GCE(?) only.
+     */
+    virtual void reload_gossiper_state() override;
+
 private:
     void periodic_reader_callback();
 
@@ -104,15 +125,6 @@ private:
     future<> read_property_file();
 
     /**
-     * TODO: this function is expected to trigger a Gossiper to reconnect
-     * according to the new "prefer_local" value, namely use either an internal
-     * or extenal IP address.
-     *
-     * This is currently relevant to EC2/GCE(?) only.
-     */
-    void reload_gossiper_state();
-
-    /**
      * Indicate that the snitch has stopped its I/O.
      */
     void set_stopped();
@@ -124,8 +136,6 @@ private:
     timer<> _file_reader;
     std::experimental::optional<timespec> _last_file_mod;
     std::istringstream _istrm;
-    bool _gossip_started = false;
-    bool _prefer_local = false;
     bool _file_reader_runs = false;
     unsigned _file_reader_cpu_id;
     shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;
