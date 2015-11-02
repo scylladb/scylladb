@@ -136,7 +136,6 @@ private:
     timer<> _file_reader;
     std::experimental::optional<timespec> _last_file_mod;
     std::istringstream _istrm;
-    bool _prefer_local = false;
     bool _file_reader_runs = false;
     unsigned _file_reader_cpu_id;
     shared_ptr<reconnectable_snitch_helper> _reconnectable_helper;

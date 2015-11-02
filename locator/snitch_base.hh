@@ -145,6 +145,7 @@ public:
     // noop by default
     virtual void set_my_dc(const sstring& new_dc) {};
     virtual void set_my_rack(const sstring& new_rack) {};
+    virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
 
     static distributed<snitch_ptr>& snitch_instance() {
@@ -429,6 +430,7 @@ private:
 protected:
     sstring _my_dc;
     sstring _my_rack;
+    bool _prefer_local = false;
 };
 
 } // namespace locator

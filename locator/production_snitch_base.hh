@@ -163,6 +163,10 @@ private:
         _my_rack = new_rack;
     }
 
+    virtual void set_prefer_local(bool prefer_local) override {
+        _prefer_local = prefer_local;
+    }
+
     void parse_property_file();
 
 protected:

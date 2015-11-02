@@ -214,6 +214,7 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             if (engine().cpu_id() != _file_reader_cpu_id) {
                 local_s->set_my_dc(_my_dc);
                 local_s->set_my_rack(_my_rack);
+                local_s->set_prefer_local(_prefer_local);
             }
         }).then([this] {
             return seastar::async([this] {
