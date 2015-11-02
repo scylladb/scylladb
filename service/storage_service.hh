@@ -361,9 +361,7 @@ private:
     void join_token_ring(int delay);
 public:
     future<> join_ring();
-    bool is_joined() {
-        return _joined;
-    }
+    future<bool> is_joined();
 
     future<> rebuild(sstring source_dc);
 
@@ -2207,9 +2205,9 @@ public:
     }
 #endif
 public:
-    std::map<gms::inet_address, float> get_ownership() const;
+    future<std::map<gms::inet_address, float>> get_ownership();
 
-    std::map<gms::inet_address, float> effective_ownership(sstring keyspace) const;
+    future<std::map<gms::inet_address, float>> effective_ownership(sstring keyspace_name);
 #if 0
     /**
      * Calculates ownership. If there are multiple DC's and the replication strategy is DC aware then ownership will be
@@ -2590,6 +2588,22 @@ public:
             return with_lock(ss.api_lock().for_write(), [&ss, func = std::forward<Func>(func)] () mutable {
                 return func(ss);
             });
+        });
+    }
+
+    template <typename Func>
+    inline auto run_with_read_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return with_lock(ss.api_lock().for_read(), [&ss, func = std::forward<Func>(func)] () mutable {
+                return func(ss);
+            });
+        });
+    }
+
+    template <typename Func>
+    inline auto run_with_no_api_lock(Func&& func) {
+        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            return func(ss);
         });
     }
 };

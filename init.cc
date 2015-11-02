@@ -43,10 +43,10 @@ future<> init_storage_service(distributed<database>& db) {
     });
 }
 
-future<> init_ms_fd_gossiper(sstring listen_address, db::seed_provider_type seed_provider, sstring cluster_name) {
+future<> init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_provider_type seed_provider, sstring cluster_name) {
     const gms::inet_address listen(listen_address);
     // Init messaging_service
-    return net::get_messaging_service().start(listen).then([]{
+    return net::get_messaging_service().start(listen, std::ref(port)).then([]{
         // #293 - do not stop anything
         //engine().at_exit([] { return net::get_messaging_service().stop(); });
     }).then([] {

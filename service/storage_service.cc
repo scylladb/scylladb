@@ -361,21 +361,30 @@ void storage_service::join_token_ring(int delay) {
 }
 
 future<> storage_service::join_ring() {
-    return seastar::async([this] {
-        if (!_joined) {
-            logger.info("Joining ring by operator request");
-            join_token_ring(0);
-        } else if (_is_survey_mode) {
-            auto tokens = db::system_keyspace::get_saved_tokens().get0();
-            set_tokens(std::move(tokens));
-            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
-            _is_survey_mode = false;
-            logger.info("Leaving write survey mode and joining ring at operator request");
-            assert(_token_metadata.sorted_tokens().size() > 0);
-            //Auth.setup();
-        }
+    return run_with_write_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            if (!ss._joined) {
+                logger.info("Joining ring by operator request");
+                ss.join_token_ring(0);
+            } else if (ss._is_survey_mode) {
+                auto tokens = db::system_keyspace::get_saved_tokens().get0();
+                ss.set_tokens(std::move(tokens));
+                db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+                ss._is_survey_mode = false;
+                logger.info("Leaving write survey mode and joining ring at operator request");
+                assert(ss._token_metadata.sorted_tokens().size() > 0);
+                //Auth.setup();
+            }
+        });
     });
 }
+
+future<bool> storage_service::is_joined() {
+    return run_with_read_api_lock([] (storage_service& ss) {
+        return ss._joined;
+    });
+}
+
 
 // Runs inside seastar::async context
 void storage_service::bootstrap(std::unordered_set<token> tokens) {
@@ -1118,59 +1127,62 @@ future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
     });
 }
 
-std::map<gms::inet_address, float> storage_service::get_ownership() const {
-    auto token_map = dht::global_partitioner().describe_ownership(_token_metadata.sorted_tokens());
-
-    // describeOwnership returns tokens in an unspecified order, let's re-order them
-    std::map<gms::inet_address, float> node_map;
-    for (auto entry : token_map) {
-        gms::inet_address endpoint = _token_metadata.get_endpoint(entry.first).value();
-        auto token_ownership = entry.second;
-        node_map[endpoint] += token_ownership;
-    }
-    return node_map;
+future<std::map<gms::inet_address, float>> storage_service::get_ownership() {
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto token_map = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+        // describeOwnership returns tokens in an unspecified order, let's re-order them
+        std::map<gms::inet_address, float> ownership;
+        for (auto entry : token_map) {
+            gms::inet_address endpoint = ss._token_metadata.get_endpoint(entry.first).value();
+            auto token_ownership = entry.second;
+            ownership[endpoint] += token_ownership;
+        }
+        return ownership;
+    });
 }
 
-std::map<gms::inet_address, float> storage_service::effective_ownership(sstring name) const {
-    if (name != "") {
-        //find throws no such keyspace if it is missing
-        const keyspace& ks = _db.local().find_keyspace(name);
-        // This is ugly, but it follows origin
-        if (typeid(ks.get_replication_strategy()) == typeid(locator::local_strategy)) {
-            throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
-        }
-    } else {
-        auto non_system_keyspaces = _db.local().get_non_system_keyspaces();
-
-        //system_traces is a non-system keyspace however it needs to be counted as one for this process
-        size_t special_table_count = 0;
-        if (std::find(non_system_keyspaces.begin(), non_system_keyspaces.end(), "system_traces") !=
-                non_system_keyspaces.end()) {
-            special_table_count += 1;
-        }
-        if (non_system_keyspaces.size() > special_table_count) {
-            throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
-        }
-        name = "system_traces";
-    }
-    auto token_ownership = dht::global_partitioner().describe_ownership(_token_metadata.sorted_tokens());
-
-    std::map<gms::inet_address, float> final_ownership;
-
-    // calculate ownership per dc
-    for (auto endpoints : _token_metadata.get_topology().get_datacenter_endpoints()) {
-        // calculate the ownership with replication and add the endpoint to the final ownership map
-        for (const gms::inet_address& endpoint : endpoints.second) {
-            float ownership = 0.0f;
-            for (range<token> r : get_ranges_for_endpoint(name, endpoint)) {
-                if (token_ownership.find(r.end().value().value()) != token_ownership.end()) {
-                    ownership += token_ownership[r.end().value().value()];
-                }
+future<std::map<gms::inet_address, float>> storage_service::effective_ownership(sstring keyspace_name) {
+    return run_with_read_api_lock([keyspace_name] (storage_service& ss) mutable {
+        if (keyspace_name != "") {
+            //find throws no such keyspace if it is missing
+            const keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
+            // This is ugly, but it follows origin
+            if (typeid(ks.get_replication_strategy()) == typeid(locator::local_strategy)) {
+                throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
-            final_ownership[endpoint] = ownership;
+        } else {
+            auto non_system_keyspaces = ss._db.local().get_non_system_keyspaces();
+
+            //system_traces is a non-system keyspace however it needs to be counted as one for this process
+            size_t special_table_count = 0;
+            if (std::find(non_system_keyspaces.begin(), non_system_keyspaces.end(), "system_traces") !=
+                    non_system_keyspaces.end()) {
+                special_table_count += 1;
+            }
+            if (non_system_keyspaces.size() > special_table_count) {
+                throw std::runtime_error("Non-system keyspaces don't have the same replication settings, effective ownership information is meaningless");
+            }
+            keyspace_name = "system_traces";
         }
-    }
-    return final_ownership;
+        auto token_ownership = dht::global_partitioner().describe_ownership(ss._token_metadata.sorted_tokens());
+
+        std::map<gms::inet_address, float> final_ownership;
+
+        // calculate ownership per dc
+        for (auto endpoints : ss._token_metadata.get_topology().get_datacenter_endpoints()) {
+            // calculate the ownership with replication and add the endpoint to the final ownership map
+            for (const gms::inet_address& endpoint : endpoints.second) {
+                float ownership = 0.0f;
+                for (range<token> r : ss.get_ranges_for_endpoint(keyspace_name, endpoint)) {
+                    if (token_ownership.find(r.end().value().value()) != token_ownership.end()) {
+                        ownership += token_ownership[r.end().value().value()];
+                    }
+                }
+                final_ownership[endpoint] = ownership;
+            }
+        }
+        return final_ownership;
+    });
 }
 
 static const std::map<storage_service::mode, sstring> mode_names = {
@@ -1218,32 +1230,31 @@ sstring storage_service::get_schema_version() {
 }
 
 future<sstring> storage_service::get_operation_mode() {
-    return smp::submit_to(0, [] {
-        auto mode = get_local_storage_service()._operation_mode;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto mode = ss._operation_mode;
         return make_ready_future<sstring>(sprint("%s", mode));
     });
 }
 
 future<bool> storage_service::is_starting() {
-    return smp::submit_to(0, [] {
-        auto mode = get_local_storage_service()._operation_mode;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        auto mode = ss._operation_mode;
         return mode == storage_service::mode::STARTING;
     });
 }
 
 future<bool> storage_service::is_gossip_running() {
-    return smp::submit_to(0, [] {
+    return run_with_read_api_lock([] (storage_service& ss) {
         return gms::get_local_gossiper().is_enabled();
     });
 }
 
 future<> storage_service::start_gossiping() {
-    return smp::submit_to(0, [] {
-        auto ss = get_local_storage_service().shared_from_this();
-        if (!ss->_initialized) {
+    return run_with_write_api_lock([] (storage_service& ss) {
+        if (!ss._initialized) {
             logger.warn("Starting gossip by operator request");
-            return gms::get_local_gossiper().start(get_generation_number()).then([ss] () mutable {
-                ss->_initialized = true;
+            return gms::get_local_gossiper().start(get_generation_number()).then([&ss] {
+                ss._initialized = true;
             });
         }
         return make_ready_future<>();
@@ -1251,12 +1262,11 @@ future<> storage_service::start_gossiping() {
 }
 
 future<> storage_service::stop_gossiping() {
-    return smp::submit_to(0, [this] {
-        auto ss = get_local_storage_service().shared_from_this();
-        if (ss->_initialized) {
+    return run_with_write_api_lock([] (storage_service& ss) {
+        if (ss._initialized) {
             logger.warn("Stopping gossip by operator request");
-            return gms::get_local_gossiper().stop().then([ss] {
-                ss->_initialized = false;
+            return gms::get_local_gossiper().stop().then([&ss] {
+                ss._initialized = false;
             });
         }
         return make_ready_future<>();
@@ -1442,7 +1452,7 @@ future<int64_t> storage_service::true_snapshots_size() {
 }
 
 future<> storage_service::start_rpc_server() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         if (ss._thrift_server) {
             return make_ready_future<>();
         }
@@ -1469,7 +1479,7 @@ future<> storage_service::start_rpc_server() {
 }
 
 future<> storage_service::stop_rpc_server() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         auto tserver = ss._thrift_server;
         ss._thrift_server = {};
         if (tserver) {
@@ -1481,13 +1491,13 @@ future<> storage_service::stop_rpc_server() {
 }
 
 future<bool> storage_service::is_rpc_server_running() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         return bool(ss._thrift_server);
     });
 }
 
 future<> storage_service::start_native_transport() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         if (ss._cql_server) {
             return make_ready_future<>();
         }
@@ -1514,7 +1524,7 @@ future<> storage_service::start_native_transport() {
 }
 
 future<> storage_service::stop_native_transport() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_write_api_lock([] (storage_service& ss) {
         auto cserver = ss._cql_server;
         ss._cql_server = {};
         if (cserver) {
@@ -1526,14 +1536,14 @@ future<> storage_service::stop_native_transport() {
 }
 
 future<bool> storage_service::is_native_transport_running() {
-    return get_storage_service().invoke_on(0, [] (storage_service& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         return bool(ss._cql_server);
     });
 }
 
 future<> storage_service::decommission() {
-    return run_with_write_api_lock([] (storage_service& ss) mutable {
-        return seastar::async([&ss] () mutable {
+    return run_with_write_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
             auto& tm = ss.get_token_metadata();
             auto& db = ss.db().local();
             if (!tm.is_member(ss.get_broadcast_address())) {
@@ -1574,7 +1584,7 @@ future<> storage_service::decommission() {
 }
 
 future<> storage_service::remove_node(sstring host_id_string) {
-    return get_storage_service().invoke_on(0, [host_id_string] (storage_service& ss) {
+    return run_with_write_api_lock([host_id_string] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id_string] {
             logger.debug("remove_node: host_id = {}", host_id_string);
             auto my_address = ss.get_broadcast_address();
@@ -1757,7 +1767,7 @@ sstring storage_service::get_load_string() {
 }
 
 future<std::map<sstring, sstring>> storage_service::get_load_map() {
-    return get_storage_service().invoke_on(0, [] (auto&& ss) {
+    return run_with_read_api_lock([] (storage_service& ss) {
         std::map<sstring, sstring> load_map;
         for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
             load_map.emplace(sprint("%s", x.first), sprint("%s", x.second));
@@ -1770,27 +1780,31 @@ future<std::map<sstring, sstring>> storage_service::get_load_map() {
 
 
 future<> storage_service::rebuild(sstring source_dc) {
-    logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-    auto streamer = make_lw_shared<dht::range_streamer>(_db, _token_metadata, get_broadcast_address(), "Rebuild");
-    streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
-
-    if (source_dc != "") {
-        streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
-    }
-
-    for (const auto& keyspace_name : _db.local().get_non_system_keyspaces()) {
-        streamer->add_ranges(keyspace_name, get_local_ranges(keyspace_name));
-    }
-
-    return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
-        try {
-            auto state = f.get0();
-        } catch (...) {
-            // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
-            logger.error("Error while rebuilding node: {}", std::current_exception());
-            throw std::runtime_error(sprint("Error while rebuilding node: %s", std::current_exception()));
-        }
-        return make_ready_future<>();
+    return run_with_no_api_lock([source_dc] (storage_service& ss) {
+        return with_lock(ss.api_lock().for_write(), [&ss, source_dc] {
+            logger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
+            auto streamer = make_lw_shared<dht::range_streamer>(ss._db, ss._token_metadata, ss.get_broadcast_address(), "Rebuild");
+            streamer->add_source_filter(std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector()));
+            if (source_dc != "") {
+                streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
+            }
+            for (const auto& keyspace_name : ss._db.local().get_non_system_keyspaces()) {
+                streamer->add_ranges(keyspace_name, ss.get_local_ranges(keyspace_name));
+            }
+            return streamer;
+        }).then([] (auto streamer) mutable {
+            // FIXME: reconcile other operations while we are in the middle of rebuild since rebuild might take a long time.
+            return streamer->fetch_async().then_wrapped([streamer] (auto&& f) {
+                try {
+                    auto state = f.get0();
+                } catch (...) {
+                    // This is used exclusively through JMX, so log the full trace but only throw a simple RTE
+                    logger.error("Error while rebuilding node: {}", std::current_exception());
+                    throw std::runtime_error(sprint("Error while rebuilding node: %s", std::current_exception()));
+                }
+                return make_ready_future<>();
+            });
+        });
     });
 }
 
@@ -1804,8 +1818,8 @@ int32_t storage_service::get_exception_count() {
 }
 
 future<bool> storage_service::is_initialized() {
-    return smp::submit_to(0, [] {
-        return get_local_storage_service()._initialized;
+    return run_with_read_api_lock([] (storage_service& ss) {
+        return ss._initialized;
     });
 }
 

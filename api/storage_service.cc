@@ -495,8 +495,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::is_joined.set(r, [](const_req req) {
-        return service::get_local_storage_service().is_joined();
+    ss::is_joined.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().is_joined().then([] (bool is_joined) {
+            return make_ready_future<json::json_return_type>(is_joined);
+        });
     });
 
     ss::set_stream_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
@@ -725,17 +727,19 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_ownership.set(r, [](const_req req) {
-        auto tokens = service::get_local_storage_service().get_ownership();
-        std::vector<storage_service_json::mapper> res;
-        return map_to_key_value(tokens, res);
+    ss::get_ownership.set(r, [] (std::unique_ptr<request> req) {
+        return service::get_local_storage_service().get_ownership().then([] (auto&& ownership) {
+            std::vector<storage_service_json::mapper> res;
+            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
+        });
     });
 
-    ss::get_effective_ownership.set(r, [&ctx](const_req req) {
-        auto tokens = service::get_local_storage_service().effective_ownership(
-                (req.param["keyspace"] == "null")? "" : validate_keyspace(ctx, req.param));
-        std::vector<storage_service_json::mapper> res;
-        return map_to_key_value(tokens, res);
+    ss::get_effective_ownership.set(r, [&ctx] (std::unique_ptr<request> req) {
+        auto keyspace_name = req->param["keyspace"] == "null" ? "" : validate_keyspace(ctx, req->param);
+        return service::get_local_storage_service().effective_ownership(keyspace_name).then([] (auto&& ownership) {
+            std::vector<storage_service_json::mapper> res;
+            return make_ready_future<json::json_return_type>(map_to_key_value(ownership, res));
+        });
     });
 }
 

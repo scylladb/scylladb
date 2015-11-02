@@ -197,6 +197,7 @@ int main(int ac, char** av) {
             dht::set_global_partitioner(cfg->partitioner());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
+            uint16_t storage_port = cfg->storage_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
             sstring cluster_name = cfg->cluster_name();
@@ -235,8 +236,8 @@ int main(int ac, char** av) {
                         });
                     });
                 });
-            }).then([listen_address, seed_provider, cluster_name] {
-                return init_ms_fd_gossiper(listen_address, seed_provider, cluster_name);
+            }).then([listen_address, storage_port, seed_provider, cluster_name] {
+                return init_ms_fd_gossiper(listen_address, storage_port, seed_provider, cluster_name);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {

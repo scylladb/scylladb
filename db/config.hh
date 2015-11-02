@@ -430,7 +430,7 @@ public:
             , "org.apache.cassandra.dht.ByteOrderedPartitioner" \
             , "org.apache.cassandra.dht.OrderPreservingPartitioner" \
     )                                                   \
-    val(storage_port, uint16_t, 7000, Unused,                \
+    val(storage_port, uint16_t, 7000, Used,                \
             "The port for inter-node communication."  \
     )                                                   \
     /* Advanced automatic backup setting */ \
