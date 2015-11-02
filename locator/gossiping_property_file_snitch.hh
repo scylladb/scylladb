@@ -66,7 +66,7 @@ public:
         return std::chrono::seconds(60);
     }
 
-    virtual void gossiper_starting() override;
+    virtual future<> gossiper_starting() override;
     virtual future<> stop() override;
     virtual future<> start() override;
     virtual future<> pause_io() override;

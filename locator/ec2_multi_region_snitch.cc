@@ -96,7 +96,7 @@ void ec2_multi_region_snitch::set_local_private_addr(const sstring& addr_str) {
     _local_private_address = addr_str;
 }
 
-void ec2_multi_region_snitch::gossiper_starting() {
+future<> ec2_multi_region_snitch::gossiper_starting() {
     //
     // Note: currently gossiper "main" instance always runs on CPU0 therefore
     // this function will be executed on CPU0 only.
@@ -107,13 +107,14 @@ void ec2_multi_region_snitch::gossiper_starting() {
     auto& g = get_local_gossiper();
     auto& ss = service::get_local_storage_service();
 
-    g.add_local_application_state(application_state::INTERNAL_IP,
-                                  ss.value_factory.internal_ip(_local_private_address));
+    return g.add_local_application_state(application_state::INTERNAL_IP,
+        ss.value_factory.internal_ip(_local_private_address)).then([this] {
+        if (!_helper_added) {
+            gms::get_local_gossiper().register_(make_shared<reconnectable_snitch_helper>(_my_dc));
+            _helper_added = true;
+        }
+    });
 
-    if (!_helper_added) {
-        gms::get_local_gossiper().register_(make_shared<reconnectable_snitch_helper>(_my_dc));
-        _helper_added = true;
-    }
 }
 
 using registry_2_params = class_registrator<i_endpoint_snitch, ec2_multi_region_snitch, const sstring&, unsigned>;
