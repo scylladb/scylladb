@@ -66,12 +66,12 @@ class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*imp
 
 public:
     struct stats {
-        uint64_t read_timeouts;
-        uint64_t read_unavailables;
-        uint64_t range_slice_timeouts;
-        uint64_t range_slice_unavailables;
-        uint64_t write_timeouts;
-        uint64_t write_unavailables;
+        uint64_t read_timeouts = 0;
+        uint64_t read_unavailables = 0;
+        uint64_t range_slice_timeouts = 0;
+        uint64_t range_slice_unavailables = 0;
+        uint64_t write_timeouts = 0;
+        uint64_t write_unavailables = 0;
         utils::ihistogram read;
         utils::ihistogram write;
         utils::ihistogram range;
