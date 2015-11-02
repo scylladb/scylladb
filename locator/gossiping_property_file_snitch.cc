@@ -244,8 +244,10 @@ future<> gossiping_property_file_snitch::reload_configuration() {
                 smp::submit_to(0, [] {
                     auto& local_snitch_ptr = get_local_snitch_ptr();
                     if (local_snitch_ptr->local_gossiper_started() && service::get_storage_service().local_is_initialized()) {
-                        service::get_local_storage_service().gossip_snitch_info();
+                        return service::get_local_storage_service().gossip_snitch_info();
                     }
+
+                    return make_ready_future<>();
                 }).get();
             });
         });
