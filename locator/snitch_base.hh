@@ -172,6 +172,10 @@ public:
         return _gossip_started;
     }
 
+    virtual void reload_gossiper_state() {
+        // noop by default
+    }
+
 protected:
     static logging::logger& logger() {
         static logging::logger snitch_logger("snitch_logger");
