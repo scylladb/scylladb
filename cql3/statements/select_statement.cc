@@ -46,6 +46,7 @@
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
+#include "service/pager/query_pagers.hh"
 
 namespace cql3 {
 
@@ -195,37 +196,39 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
         page_size = DEFAULT_COUNT_PAGE_SIZE;
     }
 
-    warn(unimplemented::cause::PAGING);
-    return execute(proxy, command, _restrictions->get_partition_key_ranges(options), state, options, now);
+    auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
-#if 0
-    if (page_size <= 0 || !command || !query_pagers::may_need_paging(command, page_size)) {
-        return execute(proxy, command, state, options, now);
+    if (page_size <= 0
+            || !service::pager::query_pagers::may_need_paging(page_size,
+                    *command, key_ranges)) {
+        return execute(proxy, command, std::move(key_ranges), state, options,
+                now);
     }
 
-    auto pager = query_pagers::pager(command, cl, state.get_client_state(), options.get_paging_state());
 
-    if (selection->isAggregate()) {
-        return page_aggregate_query(pager, options, page_size, now);
+    if (_selection->is_aggregate()) {
+        // TODO
     }
 
-    // We can't properly do post-query ordering if we page (see #6722)
     if (needs_post_query_ordering()) {
         throw exceptions::invalid_request_exception(
-              "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
-              " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
+                "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
+                        " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
-    return pager->fetch_page(page_size).then([this, pager, &options, limit, now] (auto page) {
-        auto msg = process_results(page, options, limit, now);
+    auto p = service::pager::query_pagers::pager(_schema, _selection,
+            state, options, command, std::move(key_ranges));
 
-        if (!pager->is_exhausted()) {
-            msg->result->metadata->set_has_more_pages(pager->state());
-        }
+    return p->fetch_page(page_size, now).then(
+            [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
-        return msg;
-    });
-#endif
+                if (!p->is_exhausted()) {
+                    rs->get_metadata().set_has_more_pages(p->state());
+                }
+
+                auto msg = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
+                return make_ready_future<shared_ptr<transport::messages::result_message>>(std::move(msg));
+            });
 }
 
 future<shared_ptr<transport::messages::result_message>>
