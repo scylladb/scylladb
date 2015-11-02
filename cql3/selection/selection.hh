@@ -161,7 +161,7 @@ public:
         return std::find(_columns.begin(), _columns.end(), &def) != _columns.end();
     }
 
-    ::shared_ptr<metadata> get_result_metadata() {
+    ::shared_ptr<metadata> get_result_metadata() const {
         return _metadata;
     }
 
@@ -186,16 +186,16 @@ private:
 public:
     static ::shared_ptr<selection> from_selectors(database& db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors);
 
-    virtual std::unique_ptr<selectors> new_selectors() = 0;
+    virtual std::unique_ptr<selectors> new_selectors() const = 0;
 
     /**
      * Returns a range of CQL3 columns this selection needs.
      */
-    auto const& get_columns() {
+    auto const& get_columns() const {
         return _columns;
     }
 
-    uint32_t get_column_count() {
+    uint32_t get_column_count() const {
         return _columns.size();
     }
 
@@ -238,7 +238,7 @@ private:
     const db_clock::time_point _now;
     serialization_format _serialization_format;
 public:
-    result_set_builder(selection& s, db_clock::time_point now, serialization_format sf);
+    result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf);
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);

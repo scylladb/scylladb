@@ -125,7 +125,7 @@ protected:
         }
     };
 
-    std::unique_ptr<selectors> new_selectors() {
+    std::unique_ptr<selectors> new_selectors() const override {
         return std::make_unique<simple_selectors>();
     }
 };
@@ -196,7 +196,7 @@ protected:
         }
     };
 
-    std::unique_ptr<selectors> new_selectors() {
+    std::unique_ptr<selectors> new_selectors() const override  {
         return std::make_unique<selectors_with_processing>(_factories);
     }
 };
@@ -252,7 +252,7 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(selection& s, db_clock::time_point now, serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
