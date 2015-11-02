@@ -342,6 +342,10 @@ public:
         std::sort(_rows.begin(), _rows.end(), std::forward<RowComparator>(cmp));
     }
 
+    metadata& get_metadata() {
+        return *_metadata;
+    }
+
     const metadata& get_metadata() const {
         return *_metadata;
     }
