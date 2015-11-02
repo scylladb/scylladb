@@ -247,10 +247,14 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::force_keyspace_cleanup.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        // the nodetool clean up is used in many tests
+        // this workaround willl let it work until
+        // a cleanup is implemented
+        warn(unimplemented::cause::API);
         auto keyspace = validate_keyspace(ctx, req->param);
         auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>(json_void());
+        return make_ready_future<json::json_return_type>(0);
     });
 
     ss::scrub.set(r, [&ctx](std::unique_ptr<request> req) {
