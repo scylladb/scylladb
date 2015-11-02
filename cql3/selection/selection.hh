@@ -247,6 +247,30 @@ public:
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);
     int32_t ttl_of(size_t idx);
+    
+    // Implements ResultVisitor concept from query.hh
+    class visitor {
+    protected:
+        result_set_builder& _builder;
+        const schema& _schema;
+        const selection& _selection;
+        uint32_t _row_count;
+        std::vector<bytes> _partition_key;
+        std::vector<bytes> _clustering_key;
+    public:
+        visitor(cql3::selection::result_set_builder& builder, const schema& s, const selection&);
+        visitor(visitor&&) = default;
+
+        void add_value(const column_definition& def, query::result_row_view::iterator_type& i);
+        void accept_new_partition(const partition_key& key, uint32_t row_count);
+        void accept_new_partition(uint32_t row_count);
+        void accept_new_row(const clustering_key& key,
+                const query::result_row_view& static_row,
+                const query::result_row_view& row);
+        void accept_new_row(const query::result_row_view& static_row,
+                const query::result_row_view& row);
+        void accept_partition_end(const query::result_row_view& static_row);
+    };
 private:
     bytes_opt get_value(data_type t, query::result_atomic_cell_view c);
 };

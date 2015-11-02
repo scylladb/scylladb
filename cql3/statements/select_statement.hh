@@ -63,7 +63,6 @@ namespace statements {
  *
  */
 class select_statement : public cql_statement {
-    friend class result_set_building_visitor;
 public:
     class parameters final {
     public:
