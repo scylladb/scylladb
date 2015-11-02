@@ -119,7 +119,7 @@ protected:
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
-    virtual size_t total_block_for() {
+    size_t total_block_for() {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
