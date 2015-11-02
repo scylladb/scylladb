@@ -291,6 +291,25 @@
          ]
       },
       {
+         "path":"/storage_service/describe_ring/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"The TokenRange for a any keyspace",
+               "type":"array",
+               "items":{
+                  "type":"token_range"
+               },
+               "nickname":"describe_any_ring",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/describe_ring/{keyspace}",
          "operations":[
             {
@@ -298,9 +317,9 @@
                "summary":"The TokenRange for a given keyspace",
                "type":"array",
                "items":{
-                  "type":"string"
+                  "type":"token_range"
                },
-               "nickname":"describe_ring_jmx",
+               "nickname":"describe_ring",
                "produces":[
                   "application/json"
                ],
@@ -311,7 +330,7 @@
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
-                     "paramType":"query"
+                     "paramType":"path"
                   }
                ]
             }
@@ -2001,6 +2020,59 @@
                   "type":"snapshot"
                },
                "description":"The column family"
+            }
+         }
+      },
+      "endpoint_detail":{
+         "id":"endpoint_detail",
+         "description":"Endpoint detail",
+         "properties":{
+            "host":{
+               "type":"string",
+               "description":"The endpoint host"
+            },
+            "datacenter":{
+               "type":"string",
+               "description":"The endpoint datacenter"
+            },
+            "rack":{
+               "type":"string",
+               "description":"The endpoint rack"
+            }
+         }
+      },
+      "token_range":{
+         "id":"token_range",
+         "description":"Endpoint range information",
+         "properties":{
+            "start_token":{
+               "type":"string",
+               "description":"The range start token"
+            },
+            "end_token":{
+               "type":"string",
+               "description":"The range start token"
+            },
+            "endpoints":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"The endpoints"
+            },
+            "rpc_endpoints":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"The rpc endpoints"
+            },
+            "endpoint_details":{
+               "type":"array",
+               "items":{
+                  "type":"endpoint_detail"
+               },
+               "description":"The endpoint details"
             }
          }
       }

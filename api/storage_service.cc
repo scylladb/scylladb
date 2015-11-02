@@ -43,6 +43,29 @@ static sstring validate_keyspace(http_context& ctx, const parameters& param) {
     throw bad_param_exception("Keyspace " + param["keyspace"] + " Does not exist");
 }
 
+
+static std::vector<ss::token_range> describe_ring(const sstring& keyspace) {
+    std::vector<ss::token_range> res;
+    for (auto d : service::get_local_storage_service().describe_ring(keyspace)) {
+        ss::token_range r;
+        r.start_token = d._start_token;
+        r.end_token = d._end_token;
+        r.endpoints = d._endpoints;
+        r.rpc_endpoints = d._rpc_endpoints;
+        for (auto det : d._endpoint_details) {
+            ss::endpoint_detail ed;
+            ed.host = det._host;
+            ed.datacenter = det._datacenter;
+            if (det._rack != "") {
+                ed.rack = det._rack;
+            }
+            r.endpoint_details.push(ed);
+        }
+        res.push_back(r);
+    }
+    return res;
+}
+
 void set_storage_service(http_context& ctx, routes& r) {
     ss::local_hostid.set(r, [](std::unique_ptr<request> req) {
         return db::system_keyspace::get_local_host_id().then([](const utils::UUID& id) {
@@ -125,12 +148,13 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::describe_ring_jmx.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::describe_any_ring.set(r, [&ctx](const_req req) {
+        return describe_ring("");
+    });
+
+    ss::describe_ring.set(r, [&ctx](const_req req) {
+        auto keyspace = validate_keyspace(ctx, req.param);
+        return describe_ring(keyspace);
     });
 
     ss::get_host_id_map.set(r, [](const_req req) {
