@@ -105,7 +105,8 @@ sstring get_local_dc() {
 
 class abstract_write_response_handler {
 protected:
-    semaphore _ready; // available when cl is achieved
+    promise<> _ready; // available when cl is achieved
+    shared_ptr<storage_proxy> _proxy;
     db::consistency_level _cl;
     keyspace& _ks;
     db::write_type _type;
@@ -117,7 +118,9 @@ protected:
     // it should not be a huge burden. (flw)
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
-    virtual size_t total_block_for() {
+    bool _cl_achieved = false;
+protected:
+    size_t total_block_for() {
         // original comment from cassandra:
         // during bootstrap, include pending endpoints in the count
         // or we may fail the consistency level guarantees (see #833, #8058)
@@ -127,19 +130,24 @@ protected:
         signal();
     }
 public:
-    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type,
-            lw_shared_ptr<const frozen_mutation> mutation,
-            std::unordered_set<gms::inet_address> targets,
-            size_t pending_endpoints = 0,
-            std::vector<gms::inet_address> dead_endpoints = {})
-            : _ready(0), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(
-                    std::move(targets)), _pending_endpoints(pending_endpoints), _dead_endpoints(
-                    std::move(dead_endpoints)) {
+    abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
+            size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
+            : _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
+              _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
-    virtual ~abstract_write_response_handler() {};
+    virtual ~abstract_write_response_handler() {
+        if (_cl_achieved) {
+            _proxy->_stats.background_writes--;
+        }
+    };
     void signal(size_t nr = 1) {
         _cl_acks += nr;
-        _ready.signal(nr);
+        if (!_cl_achieved && _cl_acks >= total_block_for()) {
+             _ready.set_value();
+             _cl_achieved = true;
+             _proxy->_stats.background_writes++;
+         }
     }
     // return true on last ack
     bool response(gms::inet_address from) {
@@ -150,7 +158,7 @@ public:
         return _targets.size() == 0;
     }
     future<> wait() {
-        return _ready.wait(total_block_for());
+        return _ready.get_future();
     }
     const std::unordered_set<gms::inet_address>& get_targets() const {
         return _targets;
@@ -192,8 +200,10 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         }
     }
 public:
-    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
-        abstract_write_response_handler(ks, cl, type, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
+    datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints,
+            std::vector<gms::inet_address> dead_endpoints) :
+        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
@@ -208,23 +218,20 @@ public:
 
 storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
     auto id = _next_response_id++;
-    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), shared_from_this(), [this, id] {
+    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
-        auto block_for = e.handler->total_block_for();
-        auto left_for_cl = block_for - e.handler->_cl_acks;
-        if (left_for_cl <= 0 || e.handler->_cl == db::consistency_level::ANY) {
+        if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
             e.handler->signal(hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets()));
             logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            // check cl status after hints are written (can change for cl == any)
-            left_for_cl = block_for - e.handler->_cl_acks;
         }
 
-        if (left_for_cl > 0) {
+        // _cl_achieved can be modified after previous check by call to signal() above if cl == ANY
+        if (!e.handler->_cl_achieved) {
             // timeout happened before cl was achieved, throw exception
-            e.handler->_ready.broken(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, block_for, e.handler->_type));
+            e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
         } else {
             remove_response_handler(id);
         }
@@ -269,11 +276,11 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else {
-        h = std::make_unique<write_response_handler>(ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
 }
@@ -281,9 +288,61 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     init_messaging_service();
+    _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size(); })
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "background writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "reads")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.reads)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "queue_length", "background reads")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_reads)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "write timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "write unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_unavailables)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "read timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "read unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_unavailables)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "range slice timeouts")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_timeouts)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "range slice unavailable")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables)
+        ),
+    }));
 }
 
-storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, shared_ptr<storage_proxy> p, std::function<void()>&& cb) : handler(std::move(h)), proxy(p), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 #if 0
     static
@@ -1519,8 +1578,12 @@ protected:
 public:
     abstract_read_executor(shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, size_t block_for,
             std::vector<gms::inet_address> targets) :
-                           _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)) {}
-    virtual ~abstract_read_executor() {};
+                           _proxy(std::move(proxy)), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _block_for(block_for), _targets(std::move(targets)) {
+        _proxy->_stats.reads++;
+    }
+    virtual ~abstract_read_executor() {
+        _proxy->_stats.reads--;
+    };
 
 protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
@@ -1652,22 +1715,25 @@ public:
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([this, exec, digest_resolver, timeout] (future<> f) {
+        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<> f) {
             try {
-                got_cl();
+                exec->got_cl();
                 f.get();
                 exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
                 auto done = digest_resolver->done();
                 if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
+                    exec->_proxy->_stats.background_reads++;
                     done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
                         try {
                             f.get();
                             digest_resolver->resolve();
+                            exec->_proxy->_stats.background_reads--;
                         } catch(digest_mismatch_exception& ex) {
                             exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
                             exec->reconcile(exec->_cl, timeout);
-                            exec->_result_promise.get_future().then_wrapped([] (auto f) {
+                            exec->_result_promise.get_future().then_wrapped([exec] (auto f) {
                                 f.ignore_ready_future(); // ignore any failures during background repair
+                                exec->_proxy->_stats.background_reads--;
                             });
                         } catch(...) {
                             // ignore all exception besides digest mismatch during background check
@@ -1677,7 +1743,7 @@ public:
                     done.discard_result(); // no need for background check, discard done future explicitly
                 }
             } catch (digest_mismatch_exception& ex) {
-                exec->reconcile(_cl, timeout);
+                exec->reconcile(exec->_cl, timeout);
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }

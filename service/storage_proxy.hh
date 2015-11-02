@@ -59,25 +59,27 @@ class abstract_read_executor;
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
     struct rh_entry {
         std::unique_ptr<abstract_write_response_handler> handler;
-        shared_ptr<storage_proxy> proxy;
         timer<> expire_timer;
-        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, shared_ptr<storage_proxy> p, std::function<void()>&& cb);
+        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
 
 public:
     struct stats {
-        uint64_t read_timeouts;
-        uint64_t read_unavailables;
-        uint64_t range_slice_timeouts;
-        uint64_t range_slice_unavailables;
-        uint64_t write_timeouts;
-        uint64_t write_unavailables;
+        uint64_t read_timeouts = 0;
+        uint64_t read_unavailables = 0;
+        uint64_t range_slice_timeouts = 0;
+        uint64_t range_slice_unavailables = 0;
+        uint64_t write_timeouts = 0;
+        uint64_t write_unavailables = 0;
         utils::ihistogram read;
         utils::ihistogram write;
         utils::ihistogram range;
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_range;
+        uint64_t background_writes = 0; // client no longer waits for the write
+        uint64_t reads = 0;
+        uint64_t background_reads = 0; // client no longer waits for the read
     };
     using response_id_type = uint64_t;
 private:
@@ -92,6 +94,7 @@ private:
     // for read repair chance calculation
     std::default_random_engine _urandom;
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
+    std::unique_ptr<scollectd::registrations> _collectd_registrations;
 private:
     void init_messaging_service();
     void uninit_messaging_service();
@@ -204,11 +207,12 @@ public:
 
     future<> stop();
 
-    friend class abstract_read_executor;
-
     const stats& get_stats() const {
         return _stats;
     }
+
+    friend class abstract_read_executor;
+    friend class abstract_write_response_handler;
 };
 
 extern distributed<storage_proxy> _the_storage_proxy;
