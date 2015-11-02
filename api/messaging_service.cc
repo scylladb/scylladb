@@ -41,8 +41,8 @@ std::vector<message_counter> map_to_message_counters(
     std::vector<message_counter> res;
     for (auto i : map) {
         res.push_back(message_counter());
-        res.back().ip = boost::lexical_cast<sstring>(i.first);
-        res.back().count = i.second;
+        res.back().key = boost::lexical_cast<sstring>(i.first);
+        res.back().value = i.second;
     }
     return res;
 }
@@ -70,6 +70,23 @@ future_json_function get_client_getter(std::function<uint64_t(const shard_info&)
     };
 }
 
+future_json_function get_server_getter(std::function<uint64_t(const rpc::stats&)> f) {
+    return [f](std::unique_ptr<request> req) {
+        using map_type = std::unordered_map<gms::inet_address, uint64_t>;
+        auto get_shard_map = [f](messaging_service& ms) {
+            std::unordered_map<gms::inet_address, unsigned long> map;
+            ms.foreach_server_connection_stats([&map, f] (const rpc::client_info& info, const rpc::stats& stats) mutable {
+                map[gms::inet_address(net::ipv4_address(info.addr))] = f(stats);
+            });
+            return map;
+        };
+        return  get_messaging_service().map_reduce0(get_shard_map, map_type(), map_sum<map_type>).
+                then([](map_type&& map) {
+            return make_ready_future<json::json_return_type>(map_to_message_counters(map));
+        });
+    };
+}
+
 void set_messaging_service(http_context& ctx, routes& r) {
 
     get_sent_messages.set(r, get_client_getter([](const shard_info& c) {
@@ -84,8 +101,12 @@ void set_messaging_service(http_context& ctx, routes& r) {
         return c.get_stats().pending;
     }));
 
-    get_respond_pending_messages.set(r, get_client_getter([](const shard_info& c) {
-        return c.get_stats().wait_reply;
+    get_respond_pending_messages.set(r, get_server_getter([](const rpc::stats& c) {
+        return c.pending;
+    }));
+
+    get_respond_completed_messages.set(r, get_server_getter([](const rpc::stats& c) {
+        return c.sent_messages;
     }));
 
     get_dropped_messages.set(r, [](std::unique_ptr<request> req) {

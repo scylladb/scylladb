@@ -143,6 +143,25 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/messaging_service/messages/respond_completed",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the number of completed respond messages",
+               "type":"array",
+               "items":{
+                  "type":"message_counter"
+               },
+               "nickname":"get_respond_completed_messages",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
       }
    ],
    "models":{
@@ -150,10 +169,10 @@
          "id":"message_counter",
          "description":"Holds command counters",
          "properties":{
-            "count":{
+            "value":{
                "type":"long"
             },
-            "ip":{
+            "key":{
                "type":"string"
             }
          }
