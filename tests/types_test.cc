@@ -116,7 +116,7 @@ BOOST_AUTO_TEST_CASE(test_inet_type_string_conversions) {
     test_parsing_fails(inet_addr_type, "127.127.127.127.127");
 }
 
-BOOST_AUTO_TEST_CASE(test_timestamp_type_string_conversions) {
+void test_timestamp_like_type_string_conversions(data_type timestamp_type) {
     timestamp_type->from_string("now");
     db_clock::time_point tp(db_clock::duration(1435881600000));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("1435881600000"), timestamp_type->decompose(tp)));
@@ -167,6 +167,14 @@ BOOST_AUTO_TEST_CASE(test_timestamp_type_string_conversions) {
     test_parsing_fails(timestamp_type, "2001-01-01 12:00:00.0a");
     test_parsing_fails(timestamp_type, "2001-01-01 12:00p0000");
     test_parsing_fails(timestamp_type, "2001-01-01 12:00+1200a");
+}
+
+BOOST_AUTO_TEST_CASE(test_timestamp_string_conversions) {
+    test_timestamp_like_string_conversions(timestamp_type);
+}
+
+BOOST_AUTO_TEST_CASE(test_date_string_conversions) {
+    test_timestamp_like_string_conversions(date_type);
 }
 
 BOOST_AUTO_TEST_CASE(test_boolean_type_string_conversions) {

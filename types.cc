@@ -397,9 +397,7 @@ struct date_type_impl : public concrete_type<db_clock::time_point> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
-    }
+    virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
@@ -543,7 +541,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
             throw marshal_exception();
         }
     }
-    boost::posix_time::ptime get_time(const std::string& s) const {
+    static boost::posix_time::ptime get_time(const std::string& s) {
         // Apparently, the code below doesn't leak the input facet.
         // std::locale::facet has some internal, custom reference counting
         // and deletes the object when it's no longer used.
@@ -557,7 +555,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         }
         return t;
     }
-    boost::posix_time::time_duration get_utc_offset(const std::string& s) const {
+    static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
         static constexpr const char* formats[] = {
             "%H:%M",
             "%H%M",
@@ -575,7 +573,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         }
         throw marshal_exception();
     }
-    int64_t timestamp_from_string(sstring_view s) const {
+    static int64_t timestamp_from_string(sstring_view s) {
         std::string str;
         str.resize(s.size());
         std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -2508,3 +2506,11 @@ make_user_value(data_type type, user_type_impl::native_type value) {
     return data_value::make_new(std::move(type), std::move(value));
 }
 
+bytes
+date_type_impl::from_string(sstring_view s) const {
+    native_type n = db_clock::time_point(db_clock::duration(timestamp_type_impl::timestamp_from_string(s)));
+    bytes ret(bytes::initialized_later(), serialized_size(&n));
+    auto iter = ret.begin();
+    serialize(&n, iter);
+    return ret;
+}
