@@ -116,7 +116,7 @@ BOOST_AUTO_TEST_CASE(test_inet_type_string_conversions) {
     test_parsing_fails(inet_addr_type, "127.127.127.127.127");
 }
 
-void test_timestamp_like_type_string_conversions(data_type timestamp_type) {
+void test_timestamp_like_string_conversions(data_type timestamp_type) {
     timestamp_type->from_string("now");
     db_clock::time_point tp(db_clock::duration(1435881600000));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("1435881600000"), timestamp_type->decompose(tp)));
