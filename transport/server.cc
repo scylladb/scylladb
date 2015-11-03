@@ -337,7 +337,9 @@ cql_server::connection::read_frame() {
             _version = buf[0];
             init_serialization_format();
             if (_version < 1 || _version > current_version) {
-                throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", _version));
+                auto client_version = _version;
+                _version = current_version;
+                throw exceptions::protocol_exception(sprint("Invalid or unsupported protocol version: %d", client_version));
             }
             return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
                 temporary_buffer<char> full(frame_size());
