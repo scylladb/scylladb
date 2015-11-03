@@ -762,36 +762,7 @@ private:
      * @param ranges the ranges to find sources for
      * @return multimap of addresses to ranges the address is responsible for
      */
-    std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges) {
-        return std::unordered_multimap<inet_address, range<token>>();
-#if 0
-        InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        Multimap<Range<Token>, InetAddress> rangeAddresses = Keyspace.open(keyspaceName).getReplicationStrategy().getRangeAddresses(_token_metadata.cloneOnlyTokenMap());
-        Multimap<InetAddress, Range<Token>> sourceRanges = HashMultimap.create();
-        IFailureDetector failureDetector = FailureDetector.instance;
-
-        // find alive sources for our new ranges
-        for (Range<Token> range : ranges)
-        {
-            Collection<InetAddress> possibleRanges = rangeAddresses.get(range);
-            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-            List<InetAddress> sources = snitch.getSortedListByProximity(myAddress, possibleRanges);
-
-            assert (!sources.contains(myAddress));
-
-            for (InetAddress source : sources)
-            {
-                if (failureDetector.isAlive(source))
-                {
-                    sourceRanges.put(source, range);
-                    break;
-                }
-            }
-        }
-        return sourceRanges;
-#endif
-    }
-
+    std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges);
 public:
     void confirm_replication(inet_address node);
 

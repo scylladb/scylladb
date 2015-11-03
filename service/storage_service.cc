@@ -2239,5 +2239,37 @@ future<> storage_service::shutdown_client_servers() {
     return stop_rpc_server().then([this] { return stop_native_transport(); });
 }
 
+std::unordered_multimap<inet_address, range<token>>
+storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::vector<range<token>>& ranges) {
+    auto my_address = get_broadcast_address();
+    auto& fd = gms::get_local_failure_detector();
+    auto& ks = _db.local().find_keyspace(keyspace_name);
+    auto& strat = ks.get_replication_strategy();
+    auto tm = _token_metadata.clone_only_token_map();
+    std::unordered_multimap<range<token>, inet_address> range_addresses = strat.get_range_addresses(tm);
+    std::unordered_multimap<inet_address, range<token>> source_ranges;
+
+    // find alive sources for our new ranges
+    for (auto r : ranges) {
+        std::unordered_set<inet_address> possible_ranges;
+        auto rg = range_addresses.equal_range(r);
+        for (auto it = rg.first; it != rg.second; it++) {
+            possible_ranges.emplace(it->second);
+        }
+        auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_ranges);
+
+        assert (std::find(sources.begin(), sources.end(), my_address) == sources.end());
+
+        for (auto& source : sources) {
+            if (fd.is_alive(source)) {
+                source_ranges.emplace(source, r);
+                break;
+            }
+        }
+    }
+    return source_ranges;
+}
+
 } // namespace service
 
