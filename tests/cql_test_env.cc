@@ -59,7 +59,7 @@ static future<> tst_init_storage_service(distributed<database>& db) {
 static future<> tst_init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
     const gms::inet_address listen(listen_address);
     // Init messaging_service
-    return net::get_messaging_service().start(listen, std::ref(port)).then([]{
+    return net::get_messaging_service().start(listen, std::move(port)).then([]{
         engine().at_exit([] { return net::get_messaging_service().stop(); });
     }).then([] {
         // Init failure_detector
