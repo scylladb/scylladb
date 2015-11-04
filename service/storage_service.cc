@@ -115,11 +115,6 @@ std::experimental::optional<inet_address> get_replace_address() {
     return {};
 }
 
-std::unordered_set<sstring> get_initial_tokens() {
-    // FIXME: DatabaseDescriptor.getInitialTokens();
-    return std::unordered_set<sstring>();
-}
-
 bool get_property_join_ring() {
     // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
     return true;
@@ -313,7 +308,7 @@ void storage_service::join_token_ring(int delay) {
         size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
         if (_bootstrap_tokens.empty()) {
-            auto initial_tokens = get_initial_tokens();
+            auto initial_tokens = _db.local().get_initial_tokens();
             if (initial_tokens.size() < 1) {
                 _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
                 if (num_tokens == 1) {

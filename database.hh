@@ -633,6 +633,8 @@ public:
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;
     }
+
+    std::unordered_set<sstring> get_initial_tokens();
 };
 
 // FIXME: stub

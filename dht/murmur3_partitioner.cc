@@ -75,6 +75,9 @@ token murmur3_partitioner::get_random_token() {
 }
 
 inline int64_t long_token(const token& t) {
+    if (t.is_minimum()) {
+        return std::numeric_limits<long>::min();
+    }
 
     if (t._data.size() != sizeof(int64_t)) {
         throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(int64_t), t._data.size()));
