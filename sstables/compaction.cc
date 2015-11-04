@@ -247,7 +247,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             });
         });
     }).then([start_time, stats, output_reader, done] {
-        assert(*done);
+        if (!*done) {
+            throw std::runtime_error("read fiber unfinished");
+        }
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::high_resolution_clock::now();
         // time taken by compaction in seconds.
