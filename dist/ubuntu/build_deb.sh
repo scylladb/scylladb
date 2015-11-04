@@ -12,4 +12,14 @@ sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 sudo apt-get -y update
 sudo apt-get -y install g++-4.9
 
+VERSION=$(./SCYLLA-VERSION-GEN)
+SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
+if [ "$SCYLLA_VERSION" = "development" ]; then
+	SCYLLA_VERSION=0development
+fi
+cp dist/ubuntu/changelog.in debian/changelog
+sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
+sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
+
 debuild -r fakeroot --no-tgz-check -us -uc
