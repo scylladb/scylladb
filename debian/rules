@@ -44,5 +44,7 @@ override_dh_auto_install:
 	cp $(CURDIR)/conf/cassandra-rackdc.properties \
 		$(CURDIR)/debian/scylla-server/var/lib/scylla/conf
 
+override_dh_strip:
+	dh_strip --dbg-package=scylla-server-dbg
 %:
 	dh $@
