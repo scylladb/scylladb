@@ -1505,7 +1505,7 @@ entry_descriptor entry_descriptor::make_descriptor(sstring fname) {
         generation = match[3].str();
         component = sstring(match[4].str());
     } else {
-        throw malformed_sstable_exception("invalid version");
+        throw malformed_sstable_exception(sprint("invalid version for file %s. Name doesn't match any known version.", fname));
     }
     return entry_descriptor(ks, cf, version, boost::lexical_cast<unsigned long>(generation), sstable::format_from_sstring(format), sstable::component_from_sstring(component));
 }
