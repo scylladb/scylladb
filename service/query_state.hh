@@ -37,6 +37,9 @@ public:
     client_state& get_client_state() {
         return _client_state;
     }
+    const client_state& get_client_state() const {
+        return _client_state;
+    }
     api::timestamp_type get_timestamp() {
         return _client_state.get_timestamp();
     }

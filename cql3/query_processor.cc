@@ -61,11 +61,10 @@ distributed<query_processor> _the_query_processor;
 const sstring query_processor::CQL_VERSION = "3.2.0";
 
 class query_processor::internal_state {
-    service::client_state _cs;
     service::query_state _qs;
 public:
     internal_state()
-            : _cs(service::client_state::internal_tag()), _qs(_cs) {
+            : _qs(service::client_state{service::client_state::internal_tag()}) {
     }
     operator service::query_state&() {
         return _qs;
@@ -74,14 +73,13 @@ public:
         return _qs;
     }
     operator service::client_state&() {
-        return _cs;
+        return _qs.get_client_state();
     }
     operator const service::client_state&() const {
-        return _cs;
+        return _qs.get_client_state();
     }
-
     api::timestamp_type next_timestamp() {
-        return _cs.get_timestamp();
+        return _qs.get_client_state().get_timestamp();
     }
 };
 
