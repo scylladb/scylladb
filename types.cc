@@ -1160,7 +1160,7 @@ public:
     virtual void native_value_copy(const void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual void native_value_move(const void* from, void* to) const override {
+    virtual void native_value_move(void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual void native_value_destroy(void* object) const override {
@@ -1218,7 +1218,7 @@ struct empty_type_impl : abstract_type {
         // Can't happen
         abort();
     }
-    virtual void native_value_move(const void* from, void* to) const override {
+    virtual void native_value_move(void* from, void* to) const override {
         // Can't happen
         abort();
     }
@@ -2359,7 +2359,7 @@ reversed_type_impl::native_value_copy(const void* from, void* to) const {
 }
 
 void
-reversed_type_impl::native_value_move(const void* from, void* to) const {
+reversed_type_impl::native_value_move(void* from, void* to) const {
     return _underlying_type->native_value_move(from, to);
 }
 
