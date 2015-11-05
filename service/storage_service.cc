@@ -2319,129 +2319,160 @@ storage_service::calculate_stream_and_fetch_ranges(const std::vector<range<token
 }
 
 void storage_service::range_relocator::calculate_to_from_streams(std::unordered_set<token> new_tokens, std::vector<sstring> keyspace_names) {
-#if 0
-    InetAddress localAddress = FBUtilities.getBroadcastAddress();
-    IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-    TokenMetadata tokenMetaCloneAllSettled = _token_metadata.cloneAfterAllSettled();
+    auto& ss = get_local_storage_service();
+
+    auto local_address = ss.get_broadcast_address();
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+
+    auto token_meta_clone_all_settled = ss._token_metadata.clone_after_all_settled();
     // clone to avoid concurrent modification in calculateNaturalEndpoints
-    TokenMetadata tokenMetaClone = _token_metadata.cloneOnlyTokenMap();
+    auto token_meta_clone = ss._token_metadata.clone_only_token_map();
 
-    for (String keyspace : keyspaceNames)
-    {
+    for (auto keyspace : keyspace_names) {
         logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
-        for (Token newToken : newTokens)
-        {
+        for (auto new_token : new_tokens) {
             // replication strategy of the current keyspace (aka table)
-            AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
-
+            auto& ks = ss._db.local().find_keyspace(keyspace);
+            auto& strategy = ks.get_replication_strategy();
             // getting collection of the currently used ranges by this keyspace
-            Collection<Range<Token>> currentRanges = get_ranges_for_endpoint(keyspace, localAddress);
+            std::vector<range<token>> current_ranges = ss.get_ranges_for_endpoint(keyspace, local_address);
             // collection of ranges which this node will serve after move to the new token
-            Collection<Range<Token>> updatedRanges = strategy.get_pending_address_ranges(tokenMetaClone, newToken, localAddress);
+            std::vector<range<token>> updated_ranges = strategy.get_pending_address_ranges(token_meta_clone, new_token, local_address);
 
             // ring ranges and endpoints associated with them
             // this used to determine what nodes should we ping about range data
-            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.get_range_addresses(tokenMetaClone);
+            std::unordered_multimap<range<token>, inet_address> range_addresses = strategy.get_range_addresses(token_meta_clone);
+            std::unordered_map<range<token>, std::vector<inet_address>> range_addresses_map;
+            for (auto& x : range_addresses) {
+                range_addresses_map[x.first].emplace_back(x.second);
+            }
 
             // calculated parts of the ranges to request/stream from/to nodes in the ring
-            Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
-
+            // std::pair(to_stream, to_fetch)
+            std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>> ranges_per_keyspace =
+                ss.calculate_stream_and_fetch_ranges(current_ranges, updated_ranges);
             /**
              * In this loop we are going through all ranges "to fetch" and determining
              * nodes in the ring responsible for data we are interested in
              */
-            Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
-            for (Range<Token> toFetch : rangesPerKeyspace.right)
-            {
-                for (Range<Token> range : rangeAddresses.keySet())
-                {
-                    if (range.contains(toFetch))
-                    {
-                        List<InetAddress> endpoints = null;
-
-                        if (RangeStreamer.useStrictConsistency)
-                        {
-                            Set<InetAddress> oldEndpoints = Sets.newHashSet(rangeAddresses.get(range));
-                            Set<InetAddress> newEndpoints = Sets.newHashSet(strategy.calculateNaturalEndpoints(toFetch.right, tokenMetaCloneAllSettled));
+            std::unordered_multimap<range<token>, inet_address> ranges_to_fetch_with_preferred_endpoints;
+            for (range<token> to_fetch : ranges_per_keyspace.second) {
+                for (auto& x : range_addresses_map) {
+                    const range<token>& r = x.first;
+                    std::vector<inet_address>& eps = x.second;
+                    if (r.contains(to_fetch, dht::token_comparator())) {
+                        std::vector<inet_address> endpoints;
+                        if (dht::range_streamer::use_strict_consistency()) {
+                            std::vector<inet_address> old_endpoints = eps;
+                            std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_fetch.end()->value(), token_meta_clone_all_settled);
 
                             //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                             //So we need to be careful to only be strict when endpoints == RF
-                            if (oldEndpoints.size() == strategy.getReplicationFactor())
-                            {
-                                oldEndpoints.removeAll(newEndpoints);
-
+                            if (old_endpoints.size() == strategy.get_replication_factor()) {
+                                for (auto n : new_endpoints) {
+                                    auto beg = old_endpoints.begin();
+                                    auto end = old_endpoints.end();
+                                    old_endpoints.erase(std::remove(beg, end, n), end);
+                                }
                                 //No relocation required
-                                if (oldEndpoints.isEmpty())
+                                if (old_endpoints.empty()) {
                                     continue;
+                                }
 
-                                assert oldEndpoints.size() == 1 : "Expected 1 endpoint but found " + oldEndpoints.size();
+                                if (old_endpoints.size() != 1) {
+                                    throw std::runtime_error(sprint("Expected 1 endpoint but found %d", old_endpoints.size()));
+                                }
                             }
-
-                            endpoints = Lists.newArrayList(oldEndpoints.iterator().next());
-                        }
-                        else
-                        {
-                            endpoints = snitch.get_sorted_list_by_proximity(localAddress, rangeAddresses.get(range));
+                            endpoints.emplace_back(old_endpoints.front());
+                        } else {
+                            std::unordered_set<inet_address> eps_set(eps.begin(), eps.end());
+                            endpoints = snitch->get_sorted_list_by_proximity(local_address, eps_set);
                         }
 
                         // storing range and preferred endpoint set
-                        rangesToFetchWithPreferredEndpoints.putAll(toFetch, endpoints);
+                        for (auto ep : endpoints) {
+                            ranges_to_fetch_with_preferred_endpoints.emplace(to_fetch, ep);
+                        }
                     }
                 }
 
-                Collection<InetAddress> addressList = rangesToFetchWithPreferredEndpoints.get(toFetch);
-                if (addressList == null || addressList.isEmpty())
+                std::vector<inet_address> address_list;
+                auto rg = ranges_to_fetch_with_preferred_endpoints.equal_range(to_fetch);
+                for (auto it = rg.first; it != rg.second; it++) {
+                    address_list.push_back(it->second);
+                }
+
+                if (address_list.empty()) {
                     continue;
+                }
 
-                if (RangeStreamer.useStrictConsistency)
-                {
-                    if (addressList.size() > 1)
-                        throw new IllegalStateException("Multiple strict sources found for " + toFetch);
+                if (dht::range_streamer::use_strict_consistency()) {
+                    if (address_list.size() > 1) {
+                        throw std::runtime_error(sprint("Multiple strict sources found for %s", to_fetch));
+                    }
 
-                    InetAddress sourceIp = addressList.iterator().next();
-                    if (Gossiper.instance.isEnabled() && !Gossiper.instance.getEndpointStateForEndpoint(sourceIp).isAlive())
-                        throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
+                    auto source_ip = address_list.front();
+                    auto& gossiper = gms::get_local_gossiper();
+                    auto state = gossiper.get_endpoint_state_for_endpoint(source_ip);
+                    if (gossiper.is_enabled() && state && !state->is_alive())
+                        throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false", source_ip));
                 }
             }
-
             // calculating endpoints to stream current ranges to if needed
             // in some situations node will handle current ranges as part of the new ranges
-            Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
-            for (Range<Token> toStream : rangesPerKeyspace.left)
-            {
-                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculate_natural_endpoints(toStream.right, tokenMetaClone));
-                Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculate_natural_endpoints(toStream.right, tokenMetaCloneAllSettled));
-                logger.debug("Range: {} Current endpoints: {} New endpoints: {}", toStream, currentEndpoints, newEndpoints);
-                for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
-                {
-                    logger.debug("Range {} has new owner {}", toStream, address);
-                    endpointRanges.put(address, toStream);
+            std::unordered_multimap<inet_address, range<token>> endpoint_ranges;
+            std::unordered_map<inet_address, std::vector<range<token>>> endpoint_ranges_map;
+            for (range<token> to_stream : ranges_per_keyspace.first) {
+                std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone);
+                std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone_all_settled);
+                logger.debug("Range: {} Current endpoints: {} New endpoints: {}", to_stream, current_endpoints, new_endpoints);
+                std::sort(current_endpoints.begin(), current_endpoints.end());
+                std::sort(new_endpoints.begin(), new_endpoints.end());
+
+                std::vector<inet_address> diff;
+                std::set_difference(new_endpoints.begin(), new_endpoints.end(),
+                        current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
+                for (auto address : diff) {
+                    logger.debug("Range {} has new owner {}", to_stream, address);
+                    endpoint_ranges.emplace(address, to_stream);
                 }
+            }
+            for (auto& x : endpoint_ranges) {
+                endpoint_ranges_map[x.first].emplace_back(x.second);
             }
 
             // stream ranges
-            for (InetAddress address : endpointRanges.keySet())
-            {
-                logger.debug("Will stream range {} of keyspace {} to endpoint {}", endpointRanges.get(address), keyspace, address);
-                InetAddress preferred = SystemKeyspace.getPreferredIP(address);
-                _stream_plan.transferRanges(address, preferred, keyspace, endpointRanges.get(address));
+            for (auto& x : endpoint_ranges_map) {
+                auto& address = x.first;
+                auto& ranges = x.second;
+                logger.debug("Will stream range {} of keyspace {} to endpoint {}", ranges , keyspace, address);
+                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
+                _stream_plan.transfer_ranges(address, preferred, keyspace, ranges);
             }
 
             // stream requests
-            Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints, keyspace);
-            for (InetAddress address : workMap.keySet())
-            {
-                logger.debug("Will request range {} of keyspace {} from endpoint {}", workMap.get(address), keyspace, address);
-                InetAddress preferred = SystemKeyspace.getPreferredIP(address);
-                _stream_plan.requestRanges(address, preferred, keyspace, workMap.get(address));
+            std::unordered_multimap<inet_address, range<token>> work =
+                dht::range_streamer::get_work_map(ranges_to_fetch_with_preferred_endpoints, keyspace);
+            std::unordered_map<inet_address, std::vector<range<token>>> work_map;
+            for (auto& x : work) {
+                work_map[x.first].emplace_back(x.second);
             }
 
-            logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
+            for (auto& x : work_map) {
+                auto& address = x.first;
+                auto& ranges = x.second;
+                logger.debug("Will request range {} of keyspace {} from endpoint {}", ranges, keyspace, address);
+                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
+                _stream_plan.request_ranges(address, preferred, keyspace, ranges);
+            }
+            if (logger.is_enabled(logging::log_level::debug)) {
+                for (auto& x : work) {
+                    logger.debug("Keyspace {}: work map ep = {} --> range = {}", keyspace, x.first, x.second);
+                }
+            }
         }
     }
-#endif
 }
-
 
 } // namespace service
 
