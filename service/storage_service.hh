@@ -2268,7 +2268,7 @@ private:
      */
     future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
-#if 0
+public:
     /**
      * Calculate pair of ranges to stream/fetch for given two range collections
      * (current ranges for keyspace and ranges after move to new token)
@@ -2277,51 +2277,9 @@ private:
      * @param updated collection of the ranges after token is changed
      * @return pair of ranges to stream/fetch for given current and updated range collections
      */
-    public Pair<Set<Range<Token>>, Set<Range<Token>>> calculateStreamAndFetchRanges(Collection<Range<Token>> current, Collection<Range<Token>> updated)
-    {
-        Set<Range<Token>> toStream = new HashSet<>();
-        Set<Range<Token>> toFetch  = new HashSet<>();
-
-
-        for (Range r1 : current)
-        {
-            boolean intersect = false;
-            for (Range r2 : updated)
-            {
-                if (r1.intersects(r2))
-                {
-                    // adding difference ranges to fetch from a ring
-                    toStream.addAll(r1.subtract(r2));
-                    intersect = true;
-                }
-            }
-            if (!intersect)
-            {
-                toStream.add(r1); // should seed whole old range
-            }
-        }
-
-        for (Range r2 : updated)
-        {
-            boolean intersect = false;
-            for (Range r1 : current)
-            {
-                if (r2.intersects(r1))
-                {
-                    // adding difference ranges to fetch from a ring
-                    toFetch.addAll(r2.subtract(r1));
-                    intersect = true;
-                }
-            }
-            if (!intersect)
-            {
-                toFetch.add(r2); // should fetch whole old range
-            }
-        }
-
-        return Pair.create(toStream, toFetch);
-    }
-
+    std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>
+    calculate_stream_and_fetch_ranges(const std::vector<range<token>>& current, const std::vector<range<token>>& updated);
+#if 0
     public void bulkLoad(String directory)
     {
         try

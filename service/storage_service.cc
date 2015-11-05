@@ -2271,5 +2271,53 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::
     return source_ranges;
 }
 
+std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>
+storage_service::calculate_stream_and_fetch_ranges(const std::vector<range<token>>& current, const std::vector<range<token>>& updated) {
+    std::unordered_set<range<token>> to_stream;
+    std::unordered_set<range<token>> to_fetch;
+
+    for (auto r1 : current) {
+        bool intersect = false;
+        for (auto r2 : updated) {
+            if (r1.overlaps(r2, dht::token_comparator())) {
+                // adding difference ranges to fetch from a ring
+                for (auto r : r1.subtract(r2, dht::token_comparator())) {
+                    to_stream.emplace(r);
+                }
+                intersect = true;
+            }
+        }
+        if (!intersect) {
+            to_stream.emplace(r1); // should seed whole old range
+        }
+    }
+
+    for (auto r2 : updated) {
+        bool intersect = false;
+        for (auto r1 : current) {
+            if (r2.overlaps(r1, dht::token_comparator())) {
+                // adding difference ranges to fetch from a ring
+                for (auto r : r2.subtract(r1, dht::token_comparator())) {
+                    to_fetch.emplace(r);
+                }
+                intersect = true;
+            }
+        }
+        if (!intersect) {
+            to_fetch.emplace(r2); // should fetch whole old range
+        }
+    }
+
+    if (logger.is_enabled(logging::log_level::debug)) {
+        logger.debug("current   = {}", current);
+        logger.debug("updated   = {}", updated);
+        logger.debug("to_stream = {}", to_stream);
+        logger.debug("to_fetch  = {}", to_fetch);
+    }
+
+    return std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>(to_stream, to_fetch);
+}
+
+
 } // namespace service
 
