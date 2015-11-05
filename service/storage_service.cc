@@ -847,8 +847,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     logger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-    // Collection<Token> localTokens = getLocalTokens();
-    auto local_tokens = _bootstrap_tokens;
+    auto local_tokens = get_local_tokens();
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
