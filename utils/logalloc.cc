@@ -255,7 +255,7 @@ void segment_pool::refill_emergency_reserve() {
 size_t segment_pool::trim_emergency_reserve_to_max() {
     size_t n_released = 0;
     while (_emergency_reserve.size() > _emergency_reserve_max) {
-        _emergency_reserve.pop();
+        delete _emergency_reserve.pop();
         ++n_released;
     }
     return n_released;
