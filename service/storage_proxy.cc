@@ -232,9 +232,8 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
         if (!e.handler->_cl_achieved) {
             // timeout happened before cl was achieved, throw exception
             e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
-        } else {
-            remove_response_handler(id);
         }
+        remove_response_handler(id);
     }));
     assert(e.second);
     return id;
@@ -835,10 +834,7 @@ future<> storage_proxy::mutate_begin(std::vector<storage_proxy::response_id_type
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id);
         send_to_live_endpoints(response_id);
-        return f.handle_exception([this, response_id] (std::exception_ptr exp) {
-            remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
-            return make_exception_future<>(exp);
-        });
+        return std::move(f);
     });
 }
 
