@@ -200,6 +200,7 @@ struct segment_descriptor {
     segment::size_type _offset;
     segment::size_type _free_space;
     segment_heap::handle_type _heap_handle;
+    region::impl* _region;
     union heap_node {
         heap_node() { }
         ~heap_node() { }
@@ -208,7 +209,7 @@ struct segment_descriptor {
     } _heap_node;
 
     segment_descriptor()
-        : _lsa_managed(false)
+        : _lsa_managed(false), _region(nullptr)
     { }
 
     bool is_empty() const {
@@ -278,7 +279,7 @@ private:
     void free_or_restore_to_reserve(segment* seg) noexcept;
 public:
     segment_pool();
-    segment* new_segment();
+    segment* new_segment(region::impl* r);
     segment_descriptor& descriptor(const segment*);
     // Returns segment containing given object or nullptr.
     segment* containing_segment(void* obj) const;
@@ -303,6 +304,9 @@ public:
         return _non_lsa_memory_in_use + _segments_in_use * segment::size;
     }
     struct reservation_goal;
+    void set_region(const segment* seg, region::impl* r) {
+        descriptor(seg)._region = r;
+    }
 };
 
 void segment_pool::refill_emergency_reserve() {
@@ -372,13 +376,14 @@ segment_pool::free_or_restore_to_reserve(segment* seg) noexcept {
 }
 
 segment*
-segment_pool::new_segment() {
+segment_pool::new_segment(region::impl* r) {
     auto seg = allocate_or_fallback_to_reserve();
     ++_segments_in_use;
     segment_descriptor& desc = descriptor(seg);
     desc._lsa_managed = true;
     desc._offset = reinterpret_cast<uintptr_t>(seg) & (segment::size - 1);
     desc._free_space = segment::size;
+    desc._region = r;
     return seg;
 }
 
@@ -389,6 +394,7 @@ void segment_pool::free_segment(segment* seg) noexcept {
 void segment_pool::free_segment(segment* seg, segment_descriptor& desc) noexcept {
     logger.trace("Releasing segment {}", seg);
     desc._lsa_managed = false;
+    desc._region = nullptr;
     free_or_restore_to_reserve(seg);
     --_segments_in_use;
 }
@@ -412,13 +418,14 @@ class segment_pool {
     size_t _segments_in_use{};
     size_t _non_lsa_memory_in_use = 0;
 public:
-    segment* new_segment() {
+    segment* new_segment(region::impl* r) {
         ++_segments_in_use;
         auto seg = new (with_alignment(segment::size)) segment;
         assert((reinterpret_cast<uintptr_t>(seg) & (sizeof(segment) - 1)) == 0);
         segment_descriptor& desc = _segments[seg];
         desc._lsa_managed = true;
         desc._free_space = segment::size;
+        desc._region = r;
         return seg;
     }
     segment_descriptor& descriptor(const segment* seg) {
@@ -467,6 +474,9 @@ public:
     }
     size_t total_memory_in_use() const {
         return _non_lsa_memory_in_use + _segments_in_use * segment::size;
+    }
+    void set_region(const segment* seg, region::impl* r) {
+        descriptor(seg)._region = r;
     }
 public:
     class reservation_goal;
@@ -753,7 +763,7 @@ private:
     }
 
     segment* new_segment() {
-        segment* seg = shard_segment_pool.new_segment();
+        segment* seg = shard_segment_pool.new_segment(this);
         if (_group) {
             _group->update(segment::size);
         }
@@ -933,10 +943,16 @@ public:
             _active = other._active;
             other._active = nullptr;
             _active_offset = other._active_offset;
+            if (_active) {
+                shard_segment_pool.set_region(_active, this);
+            }
         } else {
             other.close_active();
         }
 
+        for (auto& seg : other._segments) {
+            shard_segment_pool.set_region(seg, this);
+        }
         _segments.merge(other._segments);
 
         _closed_occupancy += other._closed_occupancy;
