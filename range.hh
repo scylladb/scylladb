@@ -61,6 +61,36 @@ public:
         , _singular(true)
     { }
     range() : range({}, {}) {}
+private:
+    // Bound wrappers for compile-time dispatch and safety.
+    struct start_bound_ref { const optional<bound>& b; };
+    struct end_bound_ref { const optional<bound>& b; };
+
+    start_bound_ref start_bound() const { return { start() }; }
+    end_bound_ref end_bound() const { return { end() }; }
+
+    template<typename Comparator>
+    static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+        return !end.b || !start.b || cmp(end.b->value(), start.b->value())
+                                     >= (!end.b->is_inclusive() || !start.b->is_inclusive());
+    }
+
+    template<typename Comparator>
+    static bool less_than(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+        return !greater_than_or_equal(end, start, cmp);
+    }
+
+    template<typename Comparator>
+    static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
+        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
+                                        <= -(!first.b->is_inclusive() && second.b->is_inclusive()));
+    }
+
+    template<typename Comparator>
+    static bool greater_than_or_equal(end_bound_ref first, end_bound_ref second, Comparator&& cmp) {
+        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
+                                        >= (!first.b->is_inclusive() && second.b->is_inclusive()));
+    }
 public:
     // the point is before the range (works only for non wrapped ranges)
     // Comparator must define a total ordering on T.
@@ -122,17 +152,8 @@ public:
             return true;
         }
 
-        // check if end is greater than or equal to start, taking into account if either is inclusive.
-        auto greater_than_or_equal = [cmp] (const optional<bound>& end, const optional<bound>& start) {
-            // !start means -inf, whereas !end means +inf
-            if (!end || !start) {
-                return true;
-            }
-            return cmp(end->value(), start->value())
-                >= (!end->is_inclusive() || !start->is_inclusive());
-        };
-
-        return greater_than_or_equal(end(), other.start()) && greater_than_or_equal(other.end(), start());
+        return greater_than_or_equal(end_bound(), other.start_bound(), cmp)
+            && greater_than_or_equal(other.end_bound(), start_bound(), cmp);
     }
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
@@ -215,12 +236,8 @@ public:
         }
 
         if (!this_wraps && !other_wraps) {
-            return (!start() || (other.start()
-                                 && cmp(start()->value(), other.start()->value())
-                                    <= -(!start()->is_inclusive() && other.start()->is_inclusive())))
-                && (!end() || (other.end()
-                               && cmp(end()->value(), other.end()->value())
-                                  >= (!end()->is_inclusive() && other.end()->is_inclusive())));
+            return less_than_or_equal(start_bound(), other.start_bound(), cmp)
+                    && greater_than_or_equal(end_bound(), other.end_bound(), cmp);
         }
 
         if (other_wraps) { // && !this_wraps
