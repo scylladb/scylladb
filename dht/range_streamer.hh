@@ -148,11 +148,11 @@ private:
                         const std::unordered_set<std::unique_ptr<i_source_filter>>& source_filters,
                         const sstring& keyspace);
 
+public:
+    static std::unordered_multimap<inet_address, range<token>>
+    get_work_map(const std::unordered_multimap<range<token>, inet_address>& ranges_with_source_target,
+                 const sstring& keyspace);
 #if 0
-    public static Multimap<InetAddress, Range<Token>> getWorkMap(Multimap<Range<Token>, InetAddress> rangesWithSourceTarget, String keyspace)
-    {
-        return getRangeFetchMap(rangesWithSourceTarget, Collections.<ISourceFilter>singleton(new FailureDetectorSourceFilter(FailureDetector.instance)), keyspace);
-    }
 
     // For testing purposes
     Multimap<String, Map.Entry<InetAddress, Collection<Range<Token>>>> toFetch()

@@ -41,6 +41,7 @@
 #include "locator/snitch_base.hh"
 #include "database.hh"
 #include "gms/gossiper.hh"
+#include "gms/failure_detector.hh"
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
@@ -266,6 +267,15 @@ future<streaming::stream_state> range_streamer::fetch_async() {
     }
 
     return _stream_plan.execute();
+}
+
+std::unordered_multimap<inet_address, range<token>>
+range_streamer::get_work_map(const std::unordered_multimap<range<token>, inet_address>& ranges_with_source_target,
+             const sstring& keyspace) {
+    auto filter = std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector());
+    std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;
+    source_filters.emplace(std::move(filter));
+    return get_range_fetch_map(ranges_with_source_target, source_filters, keyspace);
 }
 
 } // dht
