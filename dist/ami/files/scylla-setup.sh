@@ -27,7 +27,7 @@ if [ $NR -ge 1 ]; then
     mdadm --detail --scan >> /etc/mdadm.conf
     UUID=`blkid /dev/md0 | awk '{print $2}'`
     mkdir /data
-    echo "$UUID /data xfs noatime 0 0" >> /etc/fstab
+    echo "$UUID /data xfs noatime,discard 0 0" >> /etc/fstab
     mount /data
 else
    echo "WARN: Scylla is not using XFS to store data. Perforamnce will suffer." > /home/fedora/WARN_PLEASE_READ.TXT
