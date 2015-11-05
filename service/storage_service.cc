@@ -1626,7 +1626,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                 // to take responsibility for new range)
                 std::unordered_multimap<range<token>, inet_address> changed_ranges =
                     ss.get_changed_ranges_for_leaving(keyspace_name, endpoint);
-                auto fd = gms::get_local_failure_detector();
+                auto& fd = gms::get_local_failure_detector();
                 for (auto& x: changed_ranges) {
                     auto ep = x.second;
                     if (fd.is_alive(ep)) {
