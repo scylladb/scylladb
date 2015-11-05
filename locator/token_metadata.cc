@@ -468,6 +468,21 @@ void token_metadata::add_leaving_endpoint(inet_address endpoint) {
      _leaving_endpoints.emplace(endpoint);
 }
 
+token_metadata token_metadata::clone_after_all_settled() {
+    token_metadata metadata = clone_only_token_map();
+
+    for (auto endpoint : _leaving_endpoints) {
+        metadata.remove_endpoint(endpoint);
+    }
+
+
+    for (auto x : _moving_endpoints) {
+        metadata.update_normal_token(x.first, x.second);
+    }
+
+    return metadata;
+}
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();

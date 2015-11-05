@@ -597,36 +597,15 @@ public:
         return all_left_metadata;
     }
 
-#if 0
+public:
     /**
      * Create a copy of TokenMetadata with tokenToEndpointMap reflecting situation after all
      * current leave, and move operations have finished.
      *
      * @return new token metadata
      */
-    public TokenMetadata cloneAfterAllSettled()
-    {
-        lock.readLock().lock();
-
-        try
-        {
-            TokenMetadata metadata = cloneOnlyTokenMap();
-
-            for (InetAddress endpoint : _leaving_endpoints)
-                metadata.removeEndpoint(endpoint);
-
-
-            for (Pair<Token, InetAddress> pair : _moving_endpoints)
-                metadata.updateNormalToken(pair.left, pair.right);
-
-            return metadata;
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
-
+    token_metadata clone_after_all_settled();
+#if 0
     public InetAddress getEndpoint(Token token)
     {
         lock.readLock().lock();
