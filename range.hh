@@ -180,11 +180,12 @@ public:
         }
     }
     // Converts a wrap-around range to two non-wrap-around ranges.
+    // The returned ranges are not overlapping and ordered.
     // Call only when is_wrap_around().
     std::pair<range, range> unwrap() const {
         return {
-            { start(), {} },
-            { {}, end() }
+            { {}, end() },
+            { start(), {} }
         };
     }
     // the point is inside the range

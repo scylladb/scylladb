@@ -2837,8 +2837,8 @@ storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range
         auto unwrapped = range.unwrap();
         std::vector<mutation_reader> both;
         both.reserve(2);
-        both.push_back(make_local_reader(cf_id, unwrapped.second));
         both.push_back(make_local_reader(cf_id, unwrapped.first));
+        both.push_back(make_local_reader(cf_id, unwrapped.second));
         return make_joining_reader(std::move(both));
     }
 
