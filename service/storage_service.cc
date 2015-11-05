@@ -2318,6 +2318,130 @@ storage_service::calculate_stream_and_fetch_ranges(const std::vector<range<token
     return std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>(to_stream, to_fetch);
 }
 
+void storage_service::range_relocator::calculate_to_from_streams(std::unordered_set<token> new_tokens, std::vector<sstring> keyspace_names) {
+#if 0
+    InetAddress localAddress = FBUtilities.getBroadcastAddress();
+    IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+    TokenMetadata tokenMetaCloneAllSettled = _token_metadata.cloneAfterAllSettled();
+    // clone to avoid concurrent modification in calculateNaturalEndpoints
+    TokenMetadata tokenMetaClone = _token_metadata.cloneOnlyTokenMap();
+
+    for (String keyspace : keyspaceNames)
+    {
+        logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
+        for (Token newToken : newTokens)
+        {
+            // replication strategy of the current keyspace (aka table)
+            AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
+
+            // getting collection of the currently used ranges by this keyspace
+            Collection<Range<Token>> currentRanges = get_ranges_for_endpoint(keyspace, localAddress);
+            // collection of ranges which this node will serve after move to the new token
+            Collection<Range<Token>> updatedRanges = strategy.get_pending_address_ranges(tokenMetaClone, newToken, localAddress);
+
+            // ring ranges and endpoints associated with them
+            // this used to determine what nodes should we ping about range data
+            Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.get_range_addresses(tokenMetaClone);
+
+            // calculated parts of the ranges to request/stream from/to nodes in the ring
+            Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
+
+            /**
+             * In this loop we are going through all ranges "to fetch" and determining
+             * nodes in the ring responsible for data we are interested in
+             */
+            Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
+            for (Range<Token> toFetch : rangesPerKeyspace.right)
+            {
+                for (Range<Token> range : rangeAddresses.keySet())
+                {
+                    if (range.contains(toFetch))
+                    {
+                        List<InetAddress> endpoints = null;
+
+                        if (RangeStreamer.useStrictConsistency)
+                        {
+                            Set<InetAddress> oldEndpoints = Sets.newHashSet(rangeAddresses.get(range));
+                            Set<InetAddress> newEndpoints = Sets.newHashSet(strategy.calculateNaturalEndpoints(toFetch.right, tokenMetaCloneAllSettled));
+
+                            //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                            //So we need to be careful to only be strict when endpoints == RF
+                            if (oldEndpoints.size() == strategy.getReplicationFactor())
+                            {
+                                oldEndpoints.removeAll(newEndpoints);
+
+                                //No relocation required
+                                if (oldEndpoints.isEmpty())
+                                    continue;
+
+                                assert oldEndpoints.size() == 1 : "Expected 1 endpoint but found " + oldEndpoints.size();
+                            }
+
+                            endpoints = Lists.newArrayList(oldEndpoints.iterator().next());
+                        }
+                        else
+                        {
+                            endpoints = snitch.get_sorted_list_by_proximity(localAddress, rangeAddresses.get(range));
+                        }
+
+                        // storing range and preferred endpoint set
+                        rangesToFetchWithPreferredEndpoints.putAll(toFetch, endpoints);
+                    }
+                }
+
+                Collection<InetAddress> addressList = rangesToFetchWithPreferredEndpoints.get(toFetch);
+                if (addressList == null || addressList.isEmpty())
+                    continue;
+
+                if (RangeStreamer.useStrictConsistency)
+                {
+                    if (addressList.size() > 1)
+                        throw new IllegalStateException("Multiple strict sources found for " + toFetch);
+
+                    InetAddress sourceIp = addressList.iterator().next();
+                    if (Gossiper.instance.isEnabled() && !Gossiper.instance.getEndpointStateForEndpoint(sourceIp).isAlive())
+                        throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
+                }
+            }
+
+            // calculating endpoints to stream current ranges to if needed
+            // in some situations node will handle current ranges as part of the new ranges
+            Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
+            for (Range<Token> toStream : rangesPerKeyspace.left)
+            {
+                Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculate_natural_endpoints(toStream.right, tokenMetaClone));
+                Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculate_natural_endpoints(toStream.right, tokenMetaCloneAllSettled));
+                logger.debug("Range: {} Current endpoints: {} New endpoints: {}", toStream, currentEndpoints, newEndpoints);
+                for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
+                {
+                    logger.debug("Range {} has new owner {}", toStream, address);
+                    endpointRanges.put(address, toStream);
+                }
+            }
+
+            // stream ranges
+            for (InetAddress address : endpointRanges.keySet())
+            {
+                logger.debug("Will stream range {} of keyspace {} to endpoint {}", endpointRanges.get(address), keyspace, address);
+                InetAddress preferred = SystemKeyspace.getPreferredIP(address);
+                _stream_plan.transferRanges(address, preferred, keyspace, endpointRanges.get(address));
+            }
+
+            // stream requests
+            Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints, keyspace);
+            for (InetAddress address : workMap.keySet())
+            {
+                logger.debug("Will request range {} of keyspace {} from endpoint {}", workMap.get(address), keyspace, address);
+                InetAddress preferred = SystemKeyspace.getPreferredIP(address);
+                _stream_plan.requestRanges(address, preferred, keyspace, workMap.get(address));
+            }
+
+            logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
+        }
+    }
+#endif
+}
+
 
 } // namespace service
 
