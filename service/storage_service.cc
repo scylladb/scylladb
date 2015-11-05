@@ -611,9 +611,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     assert(pieces.size() >= 2);
     auto token = dht::global_partitioner().from_sstring(pieces[1]);
     logger.debug("Node {} state moving, new token {}", endpoint, token);
-#if 0
-    _token_metadata.addMovingEndpoint(token, endpoint);
-#endif
+    _token_metadata.add_moving_endpoint(token, endpoint);
     get_local_pending_range_calculator_service().update().get();
 }
 
