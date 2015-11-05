@@ -752,11 +752,10 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("on_restart endpoint={}", endpoint);
-#if 0
     // If we have restarted before the node was even marked down, we need to reset the connection pool
-    if (state.isAlive())
-        onDead(endpoint, state);
-#endif
+    if (state.is_alive()) {
+        on_dead(endpoint, state);
+    }
 }
 
 // Runs inside seastar::async context
