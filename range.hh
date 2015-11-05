@@ -23,6 +23,7 @@
 
 #include <experimental/optional>
 #include <iostream>
+#include <boost/range/algorithm/copy.hpp>
 
 // A range which can have inclusive, exclusive or open-ended bounds on each end.
 template<typename T>
@@ -249,6 +250,49 @@ public:
                                  <= -(!start()->is_inclusive() && other.start()->is_inclusive()))
                 || (other.end() && cmp(end()->value(), other.end()->value())
                                    >= (!end()->is_inclusive() && other.end()->is_inclusive()));
+    }
+    // Returns ranges which cover all values covered by this range but not covered by the other range.
+    // Ranges are not overlapping and ordered.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    std::vector<range> subtract(const range& other, Comparator&& cmp) const {
+        std::vector<range> result;
+
+        auto this_wraps = is_wrap_around(cmp);
+        auto other_wraps = other.is_wrap_around(cmp);
+
+        if (this_wraps && other_wraps) {
+            auto this_unwrapped = unwrap();
+            auto other_unwrapped = other.unwrap();
+            boost::copy(this_unwrapped.first.subtract(other_unwrapped.first, cmp), std::back_inserter(result));
+            boost::copy(this_unwrapped.second.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
+        } else if (this_wraps) {
+            auto this_unwrapped = unwrap();
+            boost::copy(this_unwrapped.first.subtract(other, cmp), std::back_inserter(result));
+            boost::copy(this_unwrapped.second.subtract(other, cmp), std::back_inserter(result));
+        } else if (other_wraps) {
+            auto other_unwrapped = other.unwrap();
+            for (auto &&r : subtract(other_unwrapped.first, cmp)) {
+                boost::copy(r.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
+            }
+        } else {
+            if (less_than(end_bound(), other.start_bound(), cmp)
+                || less_than(other.end_bound(), start_bound(), cmp)) {
+                // Not overlapping
+                result.push_back(*this);
+            } else {
+                // Overlapping
+                if (!less_than_or_equal(other.start_bound(), start_bound(), cmp)) {
+                    result.push_back({start(), bound(other.start()->value(), !other.start()->is_inclusive())});
+                }
+                if (!greater_than_or_equal(other.end_bound(), end_bound(), cmp)) {
+                    result.push_back({bound(other.end()->value(), !other.end()->is_inclusive()), end()});
+                }
+            }
+        }
+
+        // TODO: Merge adjacent ranges (optimization)
+        return result;
     }
     // split range in two around a split_point. split_point has to be inside the range
     // split_point will belong to first range
