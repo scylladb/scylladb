@@ -22,6 +22,7 @@
 #include <boost/range/algorithm/heap_algorithm.hpp>
 #include <boost/range/algorithm/remove.hpp>
 #include <boost/heap/binomial_heap.hpp>
+#include <boost/intrusive/list.hpp>
 #include <stack>
 
 #include <seastar/core/memory.hh>
@@ -238,28 +239,24 @@ struct segment_descriptor {
 
 #ifndef DEFAULT_ALLOCATOR
 
-struct free_segment {
-    free_segment* next;
+struct free_segment : public boost::intrusive::list_base_hook<> {
 } __attribute__((packed));
 
 class segment_stack {
-    free_segment* _head = nullptr;
-    size_t _size = 0;
+    boost::intrusive::list<free_segment> _stack;
 public:
     segment* pop() noexcept {
-        segment* seg = reinterpret_cast<segment*>(_head);
-        _head = _head->next;
-        --_size;
-        return seg;
+        auto& seg = _stack.front();
+        _stack.pop_front();
+        seg.~free_segment();
+        return reinterpret_cast<segment*>(&seg);
     }
     void push(segment* seg) noexcept {
-        free_segment* fs = reinterpret_cast<free_segment*>(seg);
-        fs->next = _head;
-        _head = fs;
-        ++_size;
+        free_segment* fs = new (seg) free_segment;
+        _stack.push_front(*fs);
     }
     size_t size() const {
-        return _size;
+        return _stack.size();
     }
 };
 

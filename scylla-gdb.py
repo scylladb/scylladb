@@ -155,7 +155,7 @@ class scylla_lsa(gdb.Command):
 
         er_goal = int(lsa['_current_emergency_reserve_goal'])
         er_max = int(lsa['_emergency_reserve_max'])
-        er_current = int(lsa['_emergency_reserve']['_size'])
+        er_current = int(lsa['_emergency_reserve']['_stack']['data_']['root_plus_size_']['size_'])
         gdb.write('Emergency reserve goal: {er_goal:>11}\nEmergency reserve max: {er_max:>12}\n'
             'Emergency reserve current: {er_current:>8}\n\n'
             .format(er_goal=er_goal, er_max=er_max, er_current=er_current))
