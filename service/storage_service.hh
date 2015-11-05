@@ -1803,21 +1803,14 @@ private:
     void leave_ring();
     void unbootstrap();
     future<> stream_hints();
-#if 0
 
-    public void move(String newToken) throws IOException
-    {
-        try
-        {
-            getPartitioner().getTokenFactory().validate(newToken);
-        }
-        catch (ConfigurationException e)
-        {
-            throw new IOException(e.getMessage());
-        }
-        move(getPartitioner().getTokenFactory().fromString(newToken));
+public:
+    future<> move(sstring new_token) {
+        // FIXME: getPartitioner().getTokenFactory().validate(newToken);
+        return move(dht::global_partitioner().from_sstring(new_token));
     }
 
+private:
     /**
      * move the node to new token or find a new token to boot to according to load
      *
@@ -1825,67 +1818,8 @@ private:
      *
      * @throws IOException on any I/O operation error
      */
-    private void move(Token newToken) throws IOException
-    {
-        if (newToken == null)
-            throw new IOException("Can't move to the undefined (null) token.");
-
-        if (_token_metadata.sortedTokens().contains(newToken))
-            throw new IOException("target token " + newToken + " is already owned by another node.");
-
-        // address of the current node
-        InetAddress localAddress = FBUtilities.getBroadcastAddress();
-
-        // This doesn't make any sense in a vnodes environment.
-        if (getTokenMetadata().getTokens(localAddress).size() > 1)
-        {
-            logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
-            throw new UnsupportedOperationException("This node has more than one token and cannot be moved thusly.");
-        }
-
-        List<String> keyspacesToProcess = Schema.instance.getNonSystemKeyspaces();
-
-        PendingRangeCalculatorService.instance.blockUntilFinished();
-        // checking if data is moving to this node
-        for (String keyspaceName : keyspacesToProcess)
-        {
-            if (_token_metadata.getPendingRanges(keyspaceName, localAddress).size() > 0)
-                throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
-        }
-
-        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.moving(newToken));
-        setMode(Mode.MOVING, String.format("Moving %s from %s to %s.", localAddress, getLocalTokens().iterator().next(), newToken), true);
-
-        setMode(Mode.MOVING, String.format("Sleeping %s ms before start streaming/fetching ranges", RING_DELAY), true);
-        Uninterruptibles.sleepUninterruptibly(RING_DELAY, TimeUnit.MILLISECONDS);
-
-        RangeRelocator relocator = new RangeRelocator(Collections.singleton(newToken), keyspacesToProcess);
-
-        if (relocator.streamsNeeded())
-        {
-            setMode(Mode.MOVING, "fetching new ranges and streaming old ranges", true);
-            try
-            {
-                relocator.stream().get();
-            }
-            catch (ExecutionException | InterruptedException e)
-            {
-                throw new RuntimeException("Interrupted while waiting for stream/fetch ranges to finish: " + e.getMessage());
-            }
-        }
-        else
-        {
-            setMode(Mode.MOVING, "No ranges to fetch/stream", true);
-        }
-
-        set_tokens(Collections.singleton(newToken)); // setting new token as we have everything settled
-
-        if (logger.isDebugEnabled())
-            logger.debug("Successfully moved to new token {}", getLocalTokens().iterator().next());
-    }
-#endif
-
-private:
+    future<> move(token new_token);
+public:
 
     class range_relocator {
     private:
