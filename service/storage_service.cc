@@ -739,7 +739,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("on_restart endpoint={}", endpoint);
+    logger.debug("on_dead endpoint={}", endpoint);
 #if 0
     MessagingService.instance().convict(endpoint);
 #endif
