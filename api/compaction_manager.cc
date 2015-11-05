@@ -30,7 +30,7 @@ namespace cm = httpd::compaction_manager_json;
 
 static future<json::json_return_type> get_cm_stats(http_context& ctx,
         int64_t compaction_manager::stats::*f) {
-    return ctx.db.map_reduce0([&](database& db) {
+    return ctx.db.map_reduce0([f](database& db) {
         return db.get_compaction_manager().get_stats().*f;
     }, int64_t(0), std::plus<int64_t>()).then([](const int64_t& res) {
         return make_ready_future<json::json_return_type>(res);
