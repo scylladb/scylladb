@@ -473,29 +473,14 @@ public:
     void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 
     void add_leaving_endpoint(inet_address endpoint);
+public:
 
-#if 0
     /**
      * Add a new moving endpoint
      * @param token token which is node moving to
      * @param endpoint address of the moving node
      */
-    public void addMovingEndpoint(Token token, InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-
-        try
-        {
-            _moving_endpoints.add(Pair.create(token, endpoint));
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
-#endif
+    void add_moving_endpoint(token t, inet_address endpoint);
 public:
     void remove_endpoint(inet_address endpoint);
 

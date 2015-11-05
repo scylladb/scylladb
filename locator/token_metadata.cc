@@ -483,6 +483,10 @@ token_metadata token_metadata::clone_after_all_settled() {
     return metadata;
 }
 
+void token_metadata::add_moving_endpoint(token t, inet_address endpoint) {
+    _moving_endpoints[t] = endpoint;
+}
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();
