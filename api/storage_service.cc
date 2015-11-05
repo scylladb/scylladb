@@ -366,11 +366,11 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::move.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
+    ss::move.set(r, [] (std::unique_ptr<request> req) {
         auto new_token = req->get_query_param("new_token");
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().move(new_token).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::remove_node.set(r, [](std::unique_ptr<request> req) {
