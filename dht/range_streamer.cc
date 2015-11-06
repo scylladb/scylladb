@@ -56,14 +56,7 @@ static std::unordered_map<range<token>, std::unordered_set<inet_address>>
 unordered_multimap_to_unordered_map(const std::unordered_multimap<range<token>, inet_address>& multimap) {
     std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
     for (auto x : multimap) {
-        auto& range_token = x.first;
-        auto& ep = x.second;
-        auto it = ret.find(range_token);
-        if (it != ret.end()) {
-            it->second.emplace(ep);
-        } else {
-            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
-        }
+        ret[x.first].emplace(x.second);
     }
     return ret;
 }
