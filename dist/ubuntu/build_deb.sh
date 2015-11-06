@@ -5,6 +5,8 @@ if [ ! -e dist/ubuntu/build_deb.sh ]; then
     exit 1
 fi
 
+sudo apt-get -y update
+
 ./dist/ubuntu/dep/build_dependency.sh
 
 sudo apt-get -y install libyaml-cpp-dev liblz4-dev libsnappy-dev libcrypto++-dev libboost1.55-dev libjsoncpp-dev libaio-dev ragel ninja-build git libyaml-cpp0.5 liblz4-1 libsnappy1 libcrypto++9 libboost-program-options1.55.0 libboost-program-options1.55-dev libboost-system1.55.0 libboost-system1.55-dev libboost-thread1.55.0 libboost-thread1.55-dev libboost-test1.55.0 libboost-test1.55-dev libjsoncpp0 libaio1 hugepages software-properties-common libboost-filesystem1.55-dev libboost-filesystem1.55.0
