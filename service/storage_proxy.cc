@@ -854,7 +854,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
         return make_exception_future<>(std::current_exception());
     } catch(mutation_write_timeout_exception& ex) {
         // timeout
-        logger.trace("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
+        logger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
         _stats.write_timeouts++;
         return make_exception_future<>(std::current_exception());
     } catch (exceptions::unavailable_exception& ex) {
