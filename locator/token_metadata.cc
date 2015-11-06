@@ -399,6 +399,8 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
         auto new_endpoints = strategy.calculate_natural_endpoints(t, all_left_metadata);
         std::vector<inet_address> diff;
+        std::sort(current_endpoints.begin(), current_endpoints.end());
+        std::sort(new_endpoints.begin(), new_endpoints.end());
         std::set_difference(new_endpoints.begin(), new_endpoints.end(),
             current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
         for (auto& ep : diff) {
