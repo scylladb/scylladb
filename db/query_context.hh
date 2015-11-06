@@ -67,9 +67,8 @@ extern std::unique_ptr<query_context> qctx;
 // we executed the query, and return an empty result
 template <typename... Args>
 static future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, Args&&... args) {
-    if (qctx) {
-        return qctx->execute_cql(text, std::forward<Args>(args)...);
-    }
-    return make_ready_future<shared_ptr<cql3::untyped_result_set>>(::make_shared<cql3::untyped_result_set>(cql3::untyped_result_set::make_empty()));
+    assert(qctx);
+    return qctx->execute_cql(text, std::forward<Args>(args)...);
 }
+
 }

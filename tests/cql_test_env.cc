@@ -110,6 +110,7 @@ future<> init_once(shared_ptr<distributed<database>> db) {
 class single_node_cql_env : public cql_test_env {
 public:
     static auto constexpr ks_name = "ks";
+    static std::atomic<bool> active;
 private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<distributed<cql3::query_processor>> _qp;
@@ -275,6 +276,11 @@ public:
     }
 
     future<> start() {
+        bool old_active = false;
+        if (!active.compare_exchange_strong(old_active, true)) {
+            throw std::runtime_error("Starting more than one cql_test_env at a time not supported "
+                                     "due to singletons.");
+        }
         return seastar::async([this] {
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
@@ -305,6 +311,8 @@ public:
             mm.start().get();
             qp->start(std::ref(proxy), std::ref(*db)).get();
 
+            db::system_keyspace::minimal_setup(*db, *qp);
+
             auto& ss = service::get_local_storage_service();
             static bool storage_service_started = false;
             if (!storage_service_started) {
@@ -332,9 +340,13 @@ public:
             service::get_storage_proxy().stop().get();
             _db->stop().get();
             locator::i_endpoint_snitch::stop_snitch().get();
+            bool old_active = true;
+            assert(active.compare_exchange_strong(old_active, false));
         });
     }
 };
+
+std::atomic<bool> single_node_cql_env::active = { false };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return seastar::async([] {
