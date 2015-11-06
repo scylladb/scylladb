@@ -324,18 +324,14 @@ public:
     }
 
     virtual future<> stop() override {
-        return _core_local.stop().then([this] {
-            return db::get_batchlog_manager().stop().then([this] {
-                return _qp->stop().then([this] {
-                    return service::get_migration_manager().stop().then([this] {
-                        return service::get_storage_proxy().stop().then([this] {
-                            return _db->stop().then([this] {
-                                return locator::i_endpoint_snitch::stop_snitch();
-                            });
-                        });
-                    });
-                });
-            });
+        return seastar::async([this] {
+            _core_local.stop().get();
+            db::get_batchlog_manager().stop().get();
+            _qp->stop().get();
+            service::get_migration_manager().stop().get();
+            service::get_storage_proxy().stop().get();
+            _db->stop().get();
+            locator::i_endpoint_snitch::stop_snitch().get();
         });
     }
 };
