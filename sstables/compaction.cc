@@ -194,18 +194,18 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto output_reader = make_lw_shared<seastar::pipe_reader<mutation>>(std::move(output.reader));
     auto output_writer = make_lw_shared<seastar::pipe_writer<mutation>>(std::move(output.writer));
 
-    auto done = make_lw_shared<bool>(false);
-    future<> read_done = do_until([done] { return *done; }, [done, output_writer, reader = std::move(reader), stats] () mutable {
-        return reader().then([done, output_writer, stats] (auto mopt) {
+    future<> read_done = repeat([output_writer, reader = std::move(reader), stats] () mutable {
+        return reader().then([output_writer, stats] (auto mopt) {
             if (mopt) {
                 stats->total_keys_written++;
-                return output_writer->write(std::move(*mopt));
+                return output_writer->write(std::move(*mopt)).then([] {
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                });
             } else {
-                *done = true;
-                return make_ready_future<>();
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
         });
-    }).then([output_writer, done] {});
+    }).then([output_writer] {});
 
     struct queue_reader final : public ::mutation_reader::impl {
         lw_shared_ptr<seastar::pipe_reader<mutation>> pr;
@@ -246,10 +246,27 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
                 });
             });
         });
-    }).then([start_time, stats, output_reader, done] {
-        if (!*done) {
-            throw std::runtime_error("read fiber unfinished");
+    }).then([output_reader] {});
+
+    // Wait for both read_done and write_done fibers to finish.
+    return when_all(std::move(read_done), std::move(write_done)).then([] (std::tuple<future<>, future<>> t) {
+        sstring ex;
+        try {
+            std::get<0>(t).get();
+        } catch(...) {
+            ex += sprint("read exception: %s", std::current_exception());
         }
+
+        try {
+            std::get<1>(t).get();
+        } catch(...) {
+            ex += sprint("%swrite_exception: %s", (ex.size() ? ", " : ""), std::current_exception());
+        }
+
+        if (ex.size()) {
+            throw std::runtime_error(ex);
+        }
+    }).then([start_time, stats] {
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::high_resolution_clock::now();
         // time taken by compaction in seconds.
@@ -272,26 +289,6 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
             stats->total_partitions, stats->total_keys_written);
         return make_ready_future<>();
-    });
-
-    // Wait for both read_done and write_done fibers to finish.
-    return when_all(std::move(read_done), std::move(write_done)).then([] (std::tuple<future<>, future<>> t) {
-        sstring ex;
-        try {
-            std::get<0>(t).get();
-        } catch(...) {
-            ex += sprint("read exception: %s", std::current_exception());
-        }
-
-        try {
-            std::get<1>(t).get();
-        } catch(...) {
-            ex += sprint("%swrite_exception: %s", (ex.size() ? ", " : ""), std::current_exception());
-        }
-
-        if (ex.size()) {
-            throw std::runtime_error(ex);
-        }
     });
 }
 
