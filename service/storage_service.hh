@@ -282,6 +282,9 @@ public:
 
     future<bool> is_native_transport_running();
 
+private:
+    future<> do_stop_rpc_server();
+    future<> do_stop_native_transport();
 #if 0
     public void stopTransports()
     {

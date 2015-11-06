@@ -1469,15 +1469,19 @@ future<> storage_service::start_rpc_server() {
     });
 }
 
+future<> storage_service::do_stop_rpc_server() {
+    auto tserver = _thrift_server;
+    _thrift_server = {};
+    if (tserver) {
+        // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
+        return tserver->stop();
+    }
+    return make_ready_future<>();
+}
+
 future<> storage_service::stop_rpc_server() {
     return run_with_write_api_lock([] (storage_service& ss) {
-        auto tserver = ss._thrift_server;
-        ss._thrift_server = {};
-        if (tserver) {
-            // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
-            return tserver->stop();
-        }
-        return make_ready_future<>();
+        return ss.do_stop_rpc_server();
     });
 }
 
@@ -1514,15 +1518,19 @@ future<> storage_service::start_native_transport() {
     });
 }
 
+future<> storage_service::do_stop_native_transport() {
+    auto cserver = _cql_server;
+    _cql_server = {};
+    if (cserver) {
+        // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
+        return cserver->stop();
+    }
+    return make_ready_future<>();
+}
+
 future<> storage_service::stop_native_transport() {
     return run_with_write_api_lock([] (storage_service& ss) {
-        auto cserver = ss._cql_server;
-        ss._cql_server = {};
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return cserver->stop();
-        }
-        return make_ready_future<>();
+        return ss.do_stop_native_transport();
     });
 }
 
@@ -2232,7 +2240,7 @@ shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
 }
 
 future<> storage_service::shutdown_client_servers() {
-    return stop_rpc_server().then([this] { return stop_native_transport(); });
+    return do_stop_rpc_server().then([this] { return do_stop_native_transport(); });
 }
 
 std::unordered_multimap<inet_address, range<token>>
