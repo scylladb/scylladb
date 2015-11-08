@@ -274,7 +274,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
-    collection_mutation::view existing_list_ser = *existing_list_opt;
+    collection_mutation_view existing_list_ser = *existing_list_opt;
     auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser);
     // we verified that index is an int32_type
@@ -339,7 +339,7 @@ lists::do_append(shared_ptr<term> t,
         } else {
             auto&& to_add = list_value->_elements;
             auto deref = [] (const bytes_opt& v) { return *v; };
-            auto&& newv = collection_mutation::one{list_type_impl::pack(
+            auto&& newv = collection_mutation{list_type_impl::pack(
                     boost::make_transform_iterator(to_add.begin(), deref),
                     boost::make_transform_iterator(to_add.end(), deref),
                     to_add.size(), serialization_format::internal())};

@@ -608,17 +608,17 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
-    mutation_view deserialize_mutation_form(collection_mutation::view in) const;
-    bool is_empty(collection_mutation::view in) const;
-    bool is_any_live(collection_mutation::view in, tombstone tomb, gc_clock::time_point now) const;
+    mutation_view deserialize_mutation_form(collection_mutation_view in) const;
+    bool is_empty(collection_mutation_view in) const;
+    bool is_any_live(collection_mutation_view in, tombstone tomb, gc_clock::time_point now) const;
     virtual bytes to_value(mutation_view mut, serialization_format sf) const = 0;
-    bytes to_value(collection_mutation::view mut, serialization_format sf) const;
+    bytes to_value(collection_mutation_view mut, serialization_format sf) const;
     // FIXME: use iterators?
-    collection_mutation::one serialize_mutation_form(const mutation& mut) const;
-    collection_mutation::one serialize_mutation_form(mutation_view mut) const;
-    collection_mutation::one serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
-    collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) const;
-    collection_mutation::one difference(collection_mutation::view a, collection_mutation::view b) const;
+    collection_mutation serialize_mutation_form(const mutation& mut) const;
+    collection_mutation serialize_mutation_form(mutation_view mut) const;
+    collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
+    collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
+    collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, serialization_format sf) const {

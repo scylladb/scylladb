@@ -86,7 +86,7 @@ public:
                 return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
             }
         };
-        using row = std::unordered_map<column_id, collection_mutation::one>;
+        using row = std::unordered_map<column_id, collection_mutation>;
     public:
         std::unordered_map<key, row, key_hashing, key_equality> rows;
         schema_ptr schema;
@@ -183,7 +183,7 @@ public:
         return _timestamp;
     }
 
-    std::experimental::optional<collection_mutation::view> get_prefetched_list(
+    std::experimental::optional<collection_mutation_view> get_prefetched_list(
         const partition_key& pkey, const clustering_key& row_key, const column_definition& column) const;
 };
 

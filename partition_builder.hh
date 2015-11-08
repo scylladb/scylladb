@@ -47,7 +47,7 @@ public:
         r.append_cell(id, atomic_cell_or_collection(cell));
     }
 
-    virtual void accept_static_cell(column_id id, collection_mutation::view collection) override {
+    virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
         row& r = _partition.static_row();
         r.append_cell(id, atomic_cell_or_collection(collection));
     }
@@ -68,7 +68,7 @@ public:
         r.append_cell(id, atomic_cell_or_collection(cell));
     }
 
-    virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
+    virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
         row& r = _current_row->cells();
         r.append_cell(id, atomic_cell_or_collection(collection));
     }

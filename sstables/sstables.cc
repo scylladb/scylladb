@@ -1049,7 +1049,7 @@ void sstable::write_range_tombstone(file_writer& out, const composite& clusterin
     write(out, deletion_time, timestamp);
 }
 
-void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation::view collection) {
+void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation_view collection) {
 
     auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
     auto mview = t->deserialize_mutation_form(collection);
