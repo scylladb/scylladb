@@ -284,16 +284,11 @@ sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key,
     auto kill = [&] (bytes idx) {
         mut.cells.push_back({std::move(idx), params.make_dead_cell()});
     };
-    // This can be either a set or a single element
-    auto cvalue = dynamic_pointer_cast<constants::value>(value);
-    if (cvalue) {
-        kill(cvalue->_bytes ? *cvalue->_bytes : bytes());
-    } else {
-        auto svalue = static_pointer_cast<sets::value>(value);
-        mut.cells.reserve(svalue->_elements.size());
-        for (auto&& e : svalue->_elements) {
-            kill(e);
-        }
+    auto svalue = dynamic_pointer_cast<sets::value>(value);
+    assert(svalue);
+    mut.cells.reserve(svalue->_elements.size());
+    for (auto&& e : svalue->_elements) {
+        kill(e);
     }
     auto ctype = static_pointer_cast<const collection_type_impl>(column.type);
     m.set_cell(row_key, column,
