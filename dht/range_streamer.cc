@@ -41,6 +41,7 @@
 #include "locator/snitch_base.hh"
 #include "database.hh"
 #include "gms/gossiper.hh"
+#include "gms/failure_detector.hh"
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
@@ -55,14 +56,7 @@ static std::unordered_map<range<token>, std::unordered_set<inet_address>>
 unordered_multimap_to_unordered_map(const std::unordered_multimap<range<token>, inet_address>& multimap) {
     std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
     for (auto x : multimap) {
-        auto& range_token = x.first;
-        auto& ep = x.second;
-        auto it = ret.find(range_token);
-        if (it != ret.end()) {
-            it->second.emplace(ep);
-        } else {
-            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
-        }
+        ret[x.first].emplace(x.second);
     }
     return ret;
 }
@@ -166,23 +160,24 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
         for (auto& x : range_addresses) {
             const range<token>& src_range = x.first;
             if (src_range.contains(desired_range, dht::tri_compare)) {
-                auto old_endpoints = x.second;
+                std::vector<inet_address> old_endpoints(x.second.begin(), x.second.end());
                 auto it = pending_range_addresses.find(desired_range);
-                assert (it != pending_range_addresses.end());
-                auto new_endpoints = it->second;
+                if (it == pending_range_addresses.end()) {
+                    throw std::runtime_error(sprint("Can not find desired_range = {} in pending_range_addresses", desired_range));
+                }
+                std::unordered_set<inet_address> new_endpoints = it->second;
 
                 //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                 //So we need to be careful to only be strict when endpoints == RF
                 if (old_endpoints.size() == strat.get_replication_factor()) {
-                    std::unordered_set<inet_address> diff;
-                    std::set_difference(old_endpoints.begin(), old_endpoints.end(),
-                            new_endpoints.begin(), new_endpoints.end(), std::inserter(diff, diff.begin()));
-                    old_endpoints = std::move(diff);
+                    auto it = std::remove_if(old_endpoints.begin(), old_endpoints.end(),
+                        [&new_endpoints] (inet_address ep) { return new_endpoints.count(ep); });
+                    old_endpoints.erase(it, old_endpoints.end());
                     if (old_endpoints.size() != 1) {
-                        throw std::runtime_error(sprint("Expected 1 endpoint but found ", old_endpoints.size()));
+                        throw std::runtime_error(sprint("Expected 1 endpoint but found %d", old_endpoints.size()));
                     }
                 }
-                range_sources.emplace(desired_range, *(old_endpoints.begin()));
+                range_sources.emplace(desired_range, old_endpoints.front());
             }
         }
 
@@ -266,6 +261,15 @@ future<streaming::stream_state> range_streamer::fetch_async() {
     }
 
     return _stream_plan.execute();
+}
+
+std::unordered_multimap<inet_address, range<token>>
+range_streamer::get_work_map(const std::unordered_multimap<range<token>, inet_address>& ranges_with_source_target,
+             const sstring& keyspace) {
+    auto filter = std::make_unique<dht::range_streamer::failure_detector_source_filter>(gms::get_local_failure_detector());
+    std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;
+    source_filters.emplace(std::move(filter));
+    return get_range_fetch_map(ranges_with_source_target, source_filters, keyspace);
 }
 
 } // dht

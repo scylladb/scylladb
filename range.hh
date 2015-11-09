@@ -23,6 +23,7 @@
 
 #include <experimental/optional>
 #include <iostream>
+#include <boost/range/algorithm/copy.hpp>
 
 // A range which can have inclusive, exclusive or open-ended bounds on each end.
 template<typename T>
@@ -61,6 +62,36 @@ public:
         , _singular(true)
     { }
     range() : range({}, {}) {}
+private:
+    // Bound wrappers for compile-time dispatch and safety.
+    struct start_bound_ref { const optional<bound>& b; };
+    struct end_bound_ref { const optional<bound>& b; };
+
+    start_bound_ref start_bound() const { return { start() }; }
+    end_bound_ref end_bound() const { return { end() }; }
+
+    template<typename Comparator>
+    static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+        return !end.b || !start.b || cmp(end.b->value(), start.b->value())
+                                     >= (!end.b->is_inclusive() || !start.b->is_inclusive());
+    }
+
+    template<typename Comparator>
+    static bool less_than(end_bound_ref end, start_bound_ref start, Comparator&& cmp) {
+        return !greater_than_or_equal(end, start, cmp);
+    }
+
+    template<typename Comparator>
+    static bool less_than_or_equal(start_bound_ref first, start_bound_ref second, Comparator&& cmp) {
+        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
+                                        <= -(!first.b->is_inclusive() && second.b->is_inclusive()));
+    }
+
+    template<typename Comparator>
+    static bool greater_than_or_equal(end_bound_ref first, end_bound_ref second, Comparator&& cmp) {
+        return !first.b || (second.b && cmp(first.b->value(), second.b->value())
+                                        >= (!first.b->is_inclusive() && second.b->is_inclusive()));
+    }
 public:
     // the point is before the range (works only for non wrapped ranges)
     // Comparator must define a total ordering on T.
@@ -122,17 +153,8 @@ public:
             return true;
         }
 
-        // check if end is greater than or equal to start, taking into account if either is inclusive.
-        auto greater_than_or_equal = [cmp] (const optional<bound>& end, const optional<bound>& start) {
-            // !start means -inf, whereas !end means +inf
-            if (!end || !start) {
-                return true;
-            }
-            return cmp(end->value(), start->value())
-                >= (!end->is_inclusive() || !start->is_inclusive());
-        };
-
-        return greater_than_or_equal(end(), other.start()) && greater_than_or_equal(other.end(), start());
+        return greater_than_or_equal(end_bound(), other.start_bound(), cmp)
+            && greater_than_or_equal(other.end_bound(), start_bound(), cmp);
     }
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
@@ -180,11 +202,12 @@ public:
         }
     }
     // Converts a wrap-around range to two non-wrap-around ranges.
+    // The returned ranges are not overlapping and ordered.
     // Call only when is_wrap_around().
     std::pair<range, range> unwrap() const {
         return {
-            { start(), {} },
-            { {}, end() }
+            { {}, end() },
+            { start(), {} }
         };
     }
     // the point is inside the range
@@ -214,12 +237,8 @@ public:
         }
 
         if (!this_wraps && !other_wraps) {
-            return (!start() || (other.start()
-                                 && cmp(start()->value(), other.start()->value())
-                                    <= -(!start()->is_inclusive() && other.start()->is_inclusive())))
-                && (!end() || (other.end()
-                               && cmp(end()->value(), other.end()->value())
-                                  >= (!end()->is_inclusive() && other.end()->is_inclusive())));
+            return less_than_or_equal(start_bound(), other.start_bound(), cmp)
+                    && greater_than_or_equal(end_bound(), other.end_bound(), cmp);
         }
 
         if (other_wraps) { // && !this_wraps
@@ -231,6 +250,49 @@ public:
                                  <= -(!start()->is_inclusive() && other.start()->is_inclusive()))
                 || (other.end() && cmp(end()->value(), other.end()->value())
                                    >= (!end()->is_inclusive() && other.end()->is_inclusive()));
+    }
+    // Returns ranges which cover all values covered by this range but not covered by the other range.
+    // Ranges are not overlapping and ordered.
+    // Comparator must define a total ordering on T.
+    template<typename Comparator>
+    std::vector<range> subtract(const range& other, Comparator&& cmp) const {
+        std::vector<range> result;
+
+        auto this_wraps = is_wrap_around(cmp);
+        auto other_wraps = other.is_wrap_around(cmp);
+
+        if (this_wraps && other_wraps) {
+            auto this_unwrapped = unwrap();
+            auto other_unwrapped = other.unwrap();
+            boost::copy(this_unwrapped.first.subtract(other_unwrapped.first, cmp), std::back_inserter(result));
+            boost::copy(this_unwrapped.second.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
+        } else if (this_wraps) {
+            auto this_unwrapped = unwrap();
+            boost::copy(this_unwrapped.first.subtract(other, cmp), std::back_inserter(result));
+            boost::copy(this_unwrapped.second.subtract(other, cmp), std::back_inserter(result));
+        } else if (other_wraps) {
+            auto other_unwrapped = other.unwrap();
+            for (auto &&r : subtract(other_unwrapped.first, cmp)) {
+                boost::copy(r.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
+            }
+        } else {
+            if (less_than(end_bound(), other.start_bound(), cmp)
+                || less_than(other.end_bound(), start_bound(), cmp)) {
+                // Not overlapping
+                result.push_back(*this);
+            } else {
+                // Overlapping
+                if (!less_than_or_equal(other.start_bound(), start_bound(), cmp)) {
+                    result.push_back({start(), bound(other.start()->value(), !other.start()->is_inclusive())});
+                }
+                if (!greater_than_or_equal(other.end_bound(), end_bound(), cmp)) {
+                    result.push_back({bound(other.end()->value(), !other.end()->is_inclusive()), end()});
+                }
+            }
+        }
+
+        // TODO: Merge adjacent ranges (optimization)
+        return result;
     }
     // split range in two around a split_point. split_point has to be inside the range
     // split_point will belong to first range

@@ -399,6 +399,8 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
         auto current_endpoints = strategy.calculate_natural_endpoints(t, metadata);
         auto new_endpoints = strategy.calculate_natural_endpoints(t, all_left_metadata);
         std::vector<inet_address> diff;
+        std::sort(current_endpoints.begin(), current_endpoints.end());
+        std::sort(new_endpoints.begin(), new_endpoints.end());
         std::set_difference(new_endpoints.begin(), new_endpoints.end(),
             current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
         for (auto& ep : diff) {
@@ -466,6 +468,25 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
 
 void token_metadata::add_leaving_endpoint(inet_address endpoint) {
      _leaving_endpoints.emplace(endpoint);
+}
+
+token_metadata token_metadata::clone_after_all_settled() {
+    token_metadata metadata = clone_only_token_map();
+
+    for (auto endpoint : _leaving_endpoints) {
+        metadata.remove_endpoint(endpoint);
+    }
+
+
+    for (auto x : _moving_endpoints) {
+        metadata.update_normal_token(x.first, x.second);
+    }
+
+    return metadata;
+}
+
+void token_metadata::add_moving_endpoint(token t, inet_address endpoint) {
+    _moving_endpoints[t] = endpoint;
 }
 
 /////////////////// class topology /////////////////////////////////////////////

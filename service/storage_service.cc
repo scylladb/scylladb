@@ -611,9 +611,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     assert(pieces.size() >= 2);
     auto token = dht::global_partitioner().from_sstring(pieces[1]);
     logger.debug("Node {} state moving, new token {}", endpoint, token);
-#if 0
-    _token_metadata.addMovingEndpoint(token, endpoint);
-#endif
+    _token_metadata.add_moving_endpoint(token, endpoint);
     get_local_pending_range_calculator_service().update().get();
 }
 
@@ -741,7 +739,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
-    logger.debug("on_restart endpoint={}", endpoint);
+    logger.debug("on_dead endpoint={}", endpoint);
 #if 0
     MessagingService.instance().convict(endpoint);
 #endif
@@ -754,11 +752,10 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
 
 void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("on_restart endpoint={}", endpoint);
-#if 0
     // If we have restarted before the node was even marked down, we need to reset the connection pool
-    if (state.isAlive())
-        onDead(endpoint, state);
-#endif
+    if (state.is_alive()) {
+        on_dead(endpoint, state);
+    }
 }
 
 // Runs inside seastar::async context
@@ -847,8 +844,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     logger.debug("Setting tokens to {}", tokens);
     db::system_keyspace::update_tokens(tokens).get();
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-    // Collection<Token> localTokens = getLocalTokens();
-    auto local_tokens = _bootstrap_tokens;
+    auto local_tokens = get_local_tokens();
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
@@ -1473,15 +1469,19 @@ future<> storage_service::start_rpc_server() {
     });
 }
 
+future<> storage_service::do_stop_rpc_server() {
+    auto tserver = _thrift_server;
+    _thrift_server = {};
+    if (tserver) {
+        // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
+        return tserver->stop();
+    }
+    return make_ready_future<>();
+}
+
 future<> storage_service::stop_rpc_server() {
     return run_with_write_api_lock([] (storage_service& ss) {
-        auto tserver = ss._thrift_server;
-        ss._thrift_server = {};
-        if (tserver) {
-            // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
-            return tserver->stop();
-        }
-        return make_ready_future<>();
+        return ss.do_stop_rpc_server();
     });
 }
 
@@ -1518,15 +1518,19 @@ future<> storage_service::start_native_transport() {
     });
 }
 
+future<> storage_service::do_stop_native_transport() {
+    auto cserver = _cql_server;
+    _cql_server = {};
+    if (cserver) {
+        // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
+        return cserver->stop();
+    }
+    return make_ready_future<>();
+}
+
 future<> storage_service::stop_native_transport() {
     return run_with_write_api_lock([] (storage_service& ss) {
-        auto cserver = ss._cql_server;
-        ss._cql_server = {};
-        if (cserver) {
-            // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-            return cserver->stop();
-        }
-        return make_ready_future<>();
+        return ss.do_stop_native_transport();
     });
 }
 
@@ -1627,7 +1631,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                 // to take responsibility for new range)
                 std::unordered_multimap<range<token>, inet_address> changed_ranges =
                     ss.get_changed_ranges_for_leaving(keyspace_name, endpoint);
-                auto fd = gms::get_local_failure_detector();
+                auto& fd = gms::get_local_failure_detector();
                 for (auto& x: changed_ranges) {
                     auto ep = x.second;
                     if (fd.is_alive(ep)) {
@@ -2236,7 +2240,7 @@ shared_ptr<load_broadcaster>& storage_service::get_load_broadcaster() {
 }
 
 future<> storage_service::shutdown_client_servers() {
-    return stop_rpc_server().then([this] { return stop_native_transport(); });
+    return do_stop_rpc_server().then([this] { return do_stop_native_transport(); });
 }
 
 std::unordered_multimap<inet_address, range<token>>
@@ -2269,6 +2273,263 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::
         }
     }
     return source_ranges;
+}
+
+std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>
+storage_service::calculate_stream_and_fetch_ranges(const std::vector<range<token>>& current, const std::vector<range<token>>& updated) {
+    std::unordered_set<range<token>> to_stream;
+    std::unordered_set<range<token>> to_fetch;
+
+    for (auto r1 : current) {
+        bool intersect = false;
+        for (auto r2 : updated) {
+            if (r1.overlaps(r2, dht::token_comparator())) {
+                // adding difference ranges to fetch from a ring
+                for (auto r : r1.subtract(r2, dht::token_comparator())) {
+                    to_stream.emplace(r);
+                }
+                intersect = true;
+            }
+        }
+        if (!intersect) {
+            to_stream.emplace(r1); // should seed whole old range
+        }
+    }
+
+    for (auto r2 : updated) {
+        bool intersect = false;
+        for (auto r1 : current) {
+            if (r2.overlaps(r1, dht::token_comparator())) {
+                // adding difference ranges to fetch from a ring
+                for (auto r : r2.subtract(r1, dht::token_comparator())) {
+                    to_fetch.emplace(r);
+                }
+                intersect = true;
+            }
+        }
+        if (!intersect) {
+            to_fetch.emplace(r2); // should fetch whole old range
+        }
+    }
+
+    if (logger.is_enabled(logging::log_level::debug)) {
+        logger.debug("current   = {}", current);
+        logger.debug("updated   = {}", updated);
+        logger.debug("to_stream = {}", to_stream);
+        logger.debug("to_fetch  = {}", to_fetch);
+    }
+
+    return std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>(to_stream, to_fetch);
+}
+
+void storage_service::range_relocator::calculate_to_from_streams(std::unordered_set<token> new_tokens, std::vector<sstring> keyspace_names) {
+    auto& ss = get_local_storage_service();
+
+    auto local_address = ss.get_broadcast_address();
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
+
+    auto token_meta_clone_all_settled = ss._token_metadata.clone_after_all_settled();
+    // clone to avoid concurrent modification in calculateNaturalEndpoints
+    auto token_meta_clone = ss._token_metadata.clone_only_token_map();
+
+    for (auto keyspace : keyspace_names) {
+        logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
+        for (auto new_token : new_tokens) {
+            // replication strategy of the current keyspace (aka table)
+            auto& ks = ss._db.local().find_keyspace(keyspace);
+            auto& strategy = ks.get_replication_strategy();
+            // getting collection of the currently used ranges by this keyspace
+            std::vector<range<token>> current_ranges = ss.get_ranges_for_endpoint(keyspace, local_address);
+            // collection of ranges which this node will serve after move to the new token
+            std::vector<range<token>> updated_ranges = strategy.get_pending_address_ranges(token_meta_clone, new_token, local_address);
+
+            // ring ranges and endpoints associated with them
+            // this used to determine what nodes should we ping about range data
+            std::unordered_multimap<range<token>, inet_address> range_addresses = strategy.get_range_addresses(token_meta_clone);
+            std::unordered_map<range<token>, std::vector<inet_address>> range_addresses_map;
+            for (auto& x : range_addresses) {
+                range_addresses_map[x.first].emplace_back(x.second);
+            }
+
+            // calculated parts of the ranges to request/stream from/to nodes in the ring
+            // std::pair(to_stream, to_fetch)
+            std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>> ranges_per_keyspace =
+                ss.calculate_stream_and_fetch_ranges(current_ranges, updated_ranges);
+            /**
+             * In this loop we are going through all ranges "to fetch" and determining
+             * nodes in the ring responsible for data we are interested in
+             */
+            std::unordered_multimap<range<token>, inet_address> ranges_to_fetch_with_preferred_endpoints;
+            for (range<token> to_fetch : ranges_per_keyspace.second) {
+                for (auto& x : range_addresses_map) {
+                    const range<token>& r = x.first;
+                    std::vector<inet_address>& eps = x.second;
+                    if (r.contains(to_fetch, dht::token_comparator())) {
+                        std::vector<inet_address> endpoints;
+                        if (dht::range_streamer::use_strict_consistency()) {
+                            std::vector<inet_address> old_endpoints = eps;
+                            std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_fetch.end()->value(), token_meta_clone_all_settled);
+
+                            //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
+                            //So we need to be careful to only be strict when endpoints == RF
+                            if (old_endpoints.size() == strategy.get_replication_factor()) {
+                                for (auto n : new_endpoints) {
+                                    auto beg = old_endpoints.begin();
+                                    auto end = old_endpoints.end();
+                                    old_endpoints.erase(std::remove(beg, end, n), end);
+                                }
+                                //No relocation required
+                                if (old_endpoints.empty()) {
+                                    continue;
+                                }
+
+                                if (old_endpoints.size() != 1) {
+                                    throw std::runtime_error(sprint("Expected 1 endpoint but found %d", old_endpoints.size()));
+                                }
+                            }
+                            endpoints.emplace_back(old_endpoints.front());
+                        } else {
+                            std::unordered_set<inet_address> eps_set(eps.begin(), eps.end());
+                            endpoints = snitch->get_sorted_list_by_proximity(local_address, eps_set);
+                        }
+
+                        // storing range and preferred endpoint set
+                        for (auto ep : endpoints) {
+                            ranges_to_fetch_with_preferred_endpoints.emplace(to_fetch, ep);
+                        }
+                    }
+                }
+
+                std::vector<inet_address> address_list;
+                auto rg = ranges_to_fetch_with_preferred_endpoints.equal_range(to_fetch);
+                for (auto it = rg.first; it != rg.second; it++) {
+                    address_list.push_back(it->second);
+                }
+
+                if (address_list.empty()) {
+                    continue;
+                }
+
+                if (dht::range_streamer::use_strict_consistency()) {
+                    if (address_list.size() > 1) {
+                        throw std::runtime_error(sprint("Multiple strict sources found for %s", to_fetch));
+                    }
+
+                    auto source_ip = address_list.front();
+                    auto& gossiper = gms::get_local_gossiper();
+                    auto state = gossiper.get_endpoint_state_for_endpoint(source_ip);
+                    if (gossiper.is_enabled() && state && !state->is_alive())
+                        throw std::runtime_error(sprint("A node required to move the data consistently is down (%s).  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false", source_ip));
+                }
+            }
+            // calculating endpoints to stream current ranges to if needed
+            // in some situations node will handle current ranges as part of the new ranges
+            std::unordered_multimap<inet_address, range<token>> endpoint_ranges;
+            std::unordered_map<inet_address, std::vector<range<token>>> endpoint_ranges_map;
+            for (range<token> to_stream : ranges_per_keyspace.first) {
+                std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone);
+                std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone_all_settled);
+                logger.debug("Range: {} Current endpoints: {} New endpoints: {}", to_stream, current_endpoints, new_endpoints);
+                std::sort(current_endpoints.begin(), current_endpoints.end());
+                std::sort(new_endpoints.begin(), new_endpoints.end());
+
+                std::vector<inet_address> diff;
+                std::set_difference(new_endpoints.begin(), new_endpoints.end(),
+                        current_endpoints.begin(), current_endpoints.end(), std::back_inserter(diff));
+                for (auto address : diff) {
+                    logger.debug("Range {} has new owner {}", to_stream, address);
+                    endpoint_ranges.emplace(address, to_stream);
+                }
+            }
+            for (auto& x : endpoint_ranges) {
+                endpoint_ranges_map[x.first].emplace_back(x.second);
+            }
+
+            // stream ranges
+            for (auto& x : endpoint_ranges_map) {
+                auto& address = x.first;
+                auto& ranges = x.second;
+                logger.debug("Will stream range {} of keyspace {} to endpoint {}", ranges , keyspace, address);
+                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
+                _stream_plan.transfer_ranges(address, preferred, keyspace, ranges);
+            }
+
+            // stream requests
+            std::unordered_multimap<inet_address, range<token>> work =
+                dht::range_streamer::get_work_map(ranges_to_fetch_with_preferred_endpoints, keyspace);
+            std::unordered_map<inet_address, std::vector<range<token>>> work_map;
+            for (auto& x : work) {
+                work_map[x.first].emplace_back(x.second);
+            }
+
+            for (auto& x : work_map) {
+                auto& address = x.first;
+                auto& ranges = x.second;
+                logger.debug("Will request range {} of keyspace {} from endpoint {}", ranges, keyspace, address);
+                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
+                _stream_plan.request_ranges(address, preferred, keyspace, ranges);
+            }
+            if (logger.is_enabled(logging::log_level::debug)) {
+                for (auto& x : work) {
+                    logger.debug("Keyspace {}: work map ep = {} --> range = {}", keyspace, x.first, x.second);
+                }
+            }
+        }
+    }
+}
+
+future<> storage_service::move(token new_token) {
+    return run_with_write_api_lock([new_token] (storage_service& ss) mutable {
+        return seastar::async([new_token, &ss] {
+            auto tokens = ss._token_metadata.sorted_tokens();
+            if (std::find(tokens.begin(), tokens.end(), new_token) != tokens.end()) {
+                throw std::runtime_error(sprint("target token %s is already owned by another node.", new_token));
+            }
+
+            // address of the current node
+            auto local_address = ss.get_broadcast_address();
+
+            // This doesn't make any sense in a vnodes environment.
+            if (ss.get_token_metadata().get_tokens(local_address).size() > 1) {
+                logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
+                throw std::runtime_error("This node has more than one token and cannot be moved thusly.");
+            }
+
+            auto keyspaces_to_process = ss._db.local().get_non_system_keyspaces();
+
+            get_local_pending_range_calculator_service().block_until_finished().get();
+
+            // checking if data is moving to this node
+            for (auto keyspace_name : keyspaces_to_process) {
+                if (ss._token_metadata.get_pending_ranges(keyspace_name, local_address).size() > 0) {
+                    throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
+                }
+            }
+
+            gms::get_local_gossiper().add_local_application_state(application_state::STATUS, ss.value_factory.moving(new_token)).get();
+            ss.set_mode(mode::MOVING, sprint("Moving %s from %s to %s.", local_address, *(ss.get_local_tokens().begin()), new_token), true);
+
+            ss.set_mode(mode::MOVING, sprint("Sleeping %d ms before start streaming/fetching ranges", RING_DELAY), true);
+            sleep(std::chrono::milliseconds(RING_DELAY)).get();
+
+            storage_service::range_relocator relocator(std::unordered_set<token>{new_token}, keyspaces_to_process);
+
+            if (relocator.streams_needed()) {
+                ss.set_mode(mode::MOVING, "fetching new ranges and streaming old ranges", true);
+                try {
+                    relocator.stream().get();
+                } catch (...) {
+                    throw std::runtime_error(sprint("Interrupted while waiting for stream/fetch ranges to finish: %s", std::current_exception()));
+                }
+            } else {
+                ss.set_mode(mode::MOVING, "No ranges to fetch/stream", true);
+            }
+
+            ss.set_tokens(std::unordered_set<token>{new_token}); // setting new token as we have everything settled
+
+            logger.debug("Successfully moved to new token {}", *(ss.get_local_tokens().begin()));
+        });
+    });
 }
 
 } // namespace service

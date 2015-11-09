@@ -43,7 +43,6 @@ static atomic_cell make_atomic_cell(bytes value) {
 
 SEASTAR_TEST_CASE(test_execute_batch) {
     return do_with_cql_env([] (auto& e) {
-        db::system_keyspace::minimal_setup(e.db(), e.qp());
         auto& qp = e.local_qp();
         auto bp = make_lw_shared<db::batchlog_manager>(qp);
 

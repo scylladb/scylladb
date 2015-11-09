@@ -55,6 +55,7 @@
 #include "utils/fb_utilities.hh"
 #include "database.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/core/rwlock.hh>
 
@@ -281,6 +282,9 @@ public:
 
     future<bool> is_native_transport_running();
 
+private:
+    future<> do_stop_rpc_server();
+    future<> do_stop_native_transport();
 #if 0
     public void stopTransports()
     {
@@ -1802,21 +1806,14 @@ private:
     void leave_ring();
     void unbootstrap();
     future<> stream_hints();
-#if 0
 
-    public void move(String newToken) throws IOException
-    {
-        try
-        {
-            getPartitioner().getTokenFactory().validate(newToken);
-        }
-        catch (ConfigurationException e)
-        {
-            throw new IOException(e.getMessage());
-        }
-        move(getPartitioner().getTokenFactory().fromString(newToken));
+public:
+    future<> move(sstring new_token) {
+        // FIXME: getPartitioner().getTokenFactory().validate(newToken);
+        return move(dht::global_partitioner().from_sstring(new_token));
     }
 
+private:
     /**
      * move the node to new token or find a new token to boot to according to load
      *
@@ -1824,207 +1821,33 @@ private:
      *
      * @throws IOException on any I/O operation error
      */
-    private void move(Token newToken) throws IOException
-    {
-        if (newToken == null)
-            throw new IOException("Can't move to the undefined (null) token.");
+    future<> move(token new_token);
+public:
 
-        if (_token_metadata.sortedTokens().contains(newToken))
-            throw new IOException("target token " + newToken + " is already owned by another node.");
+    class range_relocator {
+    private:
+        streaming::stream_plan _stream_plan;
 
-        // address of the current node
-        InetAddress localAddress = FBUtilities.getBroadcastAddress();
-
-        // This doesn't make any sense in a vnodes environment.
-        if (getTokenMetadata().getTokens(localAddress).size() > 1)
-        {
-            logger.error("Invalid request to move(Token); This node has more than one token and cannot be moved thusly.");
-            throw new UnsupportedOperationException("This node has more than one token and cannot be moved thusly.");
+    public:
+        range_relocator(std::unordered_set<token> tokens, std::vector<sstring> keyspace_names)
+            : _stream_plan("Relocation") {
+            calculate_to_from_streams(std::move(tokens), std::move(keyspace_names));
         }
 
-        List<String> keyspacesToProcess = Schema.instance.getNonSystemKeyspaces();
+    private:
+        void calculate_to_from_streams(std::unordered_set<token> new_tokens, std::vector<sstring> keyspace_names);
 
-        PendingRangeCalculatorService.instance.blockUntilFinished();
-        // checking if data is moving to this node
-        for (String keyspaceName : keyspacesToProcess)
-        {
-            if (_token_metadata.getPendingRanges(keyspaceName, localAddress).size() > 0)
-                throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
+    public:
+        future<> stream() {
+            return _stream_plan.execute().discard_result();
         }
 
-        Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.moving(newToken));
-        setMode(Mode.MOVING, String.format("Moving %s from %s to %s.", localAddress, getLocalTokens().iterator().next(), newToken), true);
-
-        setMode(Mode.MOVING, String.format("Sleeping %s ms before start streaming/fetching ranges", RING_DELAY), true);
-        Uninterruptibles.sleepUninterruptibly(RING_DELAY, TimeUnit.MILLISECONDS);
-
-        RangeRelocator relocator = new RangeRelocator(Collections.singleton(newToken), keyspacesToProcess);
-
-        if (relocator.streamsNeeded())
-        {
-            setMode(Mode.MOVING, "fetching new ranges and streaming old ranges", true);
-            try
-            {
-                relocator.stream().get();
-            }
-            catch (ExecutionException | InterruptedException e)
-            {
-                throw new RuntimeException("Interrupted while waiting for stream/fetch ranges to finish: " + e.getMessage());
-            }
+        bool streams_needed() {
+            return !_stream_plan.is_empty();
         }
-        else
-        {
-            setMode(Mode.MOVING, "No ranges to fetch/stream", true);
-        }
+    };
 
-        set_tokens(Collections.singleton(newToken)); // setting new token as we have everything settled
-
-        if (logger.isDebugEnabled())
-            logger.debug("Successfully moved to new token {}", getLocalTokens().iterator().next());
-    }
-
-    private class RangeRelocator
-    {
-        private final StreamPlan streamPlan = new StreamPlan("Relocation");
-
-        private RangeRelocator(Collection<Token> tokens, List<String> keyspaceNames)
-        {
-            calculateToFromStreams(tokens, keyspaceNames);
-        }
-
-        private void calculateToFromStreams(Collection<Token> newTokens, List<String> keyspaceNames)
-        {
-            InetAddress localAddress = FBUtilities.getBroadcastAddress();
-            IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-            TokenMetadata tokenMetaCloneAllSettled = _token_metadata.cloneAfterAllSettled();
-            // clone to avoid concurrent modification in calculateNaturalEndpoints
-            TokenMetadata tokenMetaClone = _token_metadata.cloneOnlyTokenMap();
-
-            for (String keyspace : keyspaceNames)
-            {
-                logger.debug("Calculating ranges to stream and request for keyspace {}", keyspace);
-                for (Token newToken : newTokens)
-                {
-                    // replication strategy of the current keyspace (aka table)
-                    AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
-
-                    // getting collection of the currently used ranges by this keyspace
-                    Collection<Range<Token>> currentRanges = getRangesForEndpoint(keyspace, localAddress);
-                    // collection of ranges which this node will serve after move to the new token
-                    Collection<Range<Token>> updatedRanges = strategy.getPendingAddressRanges(tokenMetaClone, newToken, localAddress);
-
-                    // ring ranges and endpoints associated with them
-                    // this used to determine what nodes should we ping about range data
-                    Multimap<Range<Token>, InetAddress> rangeAddresses = strategy.getRangeAddresses(tokenMetaClone);
-
-                    // calculated parts of the ranges to request/stream from/to nodes in the ring
-                    Pair<Set<Range<Token>>, Set<Range<Token>>> rangesPerKeyspace = calculateStreamAndFetchRanges(currentRanges, updatedRanges);
-
-                    /**
-                     * In this loop we are going through all ranges "to fetch" and determining
-                     * nodes in the ring responsible for data we are interested in
-                     */
-                    Multimap<Range<Token>, InetAddress> rangesToFetchWithPreferredEndpoints = ArrayListMultimap.create();
-                    for (Range<Token> toFetch : rangesPerKeyspace.right)
-                    {
-                        for (Range<Token> range : rangeAddresses.keySet())
-                        {
-                            if (range.contains(toFetch))
-                            {
-                                List<InetAddress> endpoints = null;
-
-                                if (RangeStreamer.useStrictConsistency)
-                                {
-                                    Set<InetAddress> oldEndpoints = Sets.newHashSet(rangeAddresses.get(range));
-                                    Set<InetAddress> newEndpoints = Sets.newHashSet(strategy.calculateNaturalEndpoints(toFetch.right, tokenMetaCloneAllSettled));
-
-                                    //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
-                                    //So we need to be careful to only be strict when endpoints == RF
-                                    if (oldEndpoints.size() == strategy.getReplicationFactor())
-                                    {
-                                        oldEndpoints.removeAll(newEndpoints);
-
-                                        //No relocation required
-                                        if (oldEndpoints.isEmpty())
-                                            continue;
-
-                                        assert oldEndpoints.size() == 1 : "Expected 1 endpoint but found " + oldEndpoints.size();
-                                    }
-
-                                    endpoints = Lists.newArrayList(oldEndpoints.iterator().next());
-                                }
-                                else
-                                {
-                                    endpoints = snitch.getSortedListByProximity(localAddress, rangeAddresses.get(range));
-                                }
-
-                                // storing range and preferred endpoint set
-                                rangesToFetchWithPreferredEndpoints.putAll(toFetch, endpoints);
-                            }
-                        }
-
-                        Collection<InetAddress> addressList = rangesToFetchWithPreferredEndpoints.get(toFetch);
-                        if (addressList == null || addressList.isEmpty())
-                            continue;
-
-                        if (RangeStreamer.useStrictConsistency)
-                        {
-                            if (addressList.size() > 1)
-                                throw new IllegalStateException("Multiple strict sources found for " + toFetch);
-
-                            InetAddress sourceIp = addressList.iterator().next();
-                            if (Gossiper.instance.isEnabled() && !Gossiper.instance.getEndpointStateForEndpoint(sourceIp).isAlive())
-                                throw new RuntimeException("A node required to move the data consistently is down ("+sourceIp+").  If you wish to move the data from a potentially inconsistent replica, restart the node with -Dcassandra.consistent.rangemovement=false");
-                        }
-                    }
-
-                    // calculating endpoints to stream current ranges to if needed
-                    // in some situations node will handle current ranges as part of the new ranges
-                    Multimap<InetAddress, Range<Token>> endpointRanges = HashMultimap.create();
-                    for (Range<Token> toStream : rangesPerKeyspace.left)
-                    {
-                        Set<InetAddress> currentEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaClone));
-                        Set<InetAddress> newEndpoints = ImmutableSet.copyOf(strategy.calculateNaturalEndpoints(toStream.right, tokenMetaCloneAllSettled));
-                        logger.debug("Range: {} Current endpoints: {} New endpoints: {}", toStream, currentEndpoints, newEndpoints);
-                        for (InetAddress address : Sets.difference(newEndpoints, currentEndpoints))
-                        {
-                            logger.debug("Range {} has new owner {}", toStream, address);
-                            endpointRanges.put(address, toStream);
-                        }
-                    }
-
-                    // stream ranges
-                    for (InetAddress address : endpointRanges.keySet())
-                    {
-                        logger.debug("Will stream range {} of keyspace {} to endpoint {}", endpointRanges.get(address), keyspace, address);
-                        InetAddress preferred = SystemKeyspace.getPreferredIP(address);
-                        streamPlan.transferRanges(address, preferred, keyspace, endpointRanges.get(address));
-                    }
-
-                    // stream requests
-                    Multimap<InetAddress, Range<Token>> workMap = RangeStreamer.getWorkMap(rangesToFetchWithPreferredEndpoints, keyspace);
-                    for (InetAddress address : workMap.keySet())
-                    {
-                        logger.debug("Will request range {} of keyspace {} from endpoint {}", workMap.get(address), keyspace, address);
-                        InetAddress preferred = SystemKeyspace.getPreferredIP(address);
-                        streamPlan.requestRanges(address, preferred, keyspace, workMap.get(address));
-                    }
-
-                    logger.debug("Keyspace {}: work map {}.", keyspace, workMap);
-                }
-            }
-        }
-
-        public Future<StreamState> stream()
-        {
-            return streamPlan.execute();
-        }
-
-        public boolean streamsNeeded()
-        {
-            return !streamPlan.isEmpty();
-        }
-    }
+#if 0
 
     /**
      * Get the status of a token removal.
@@ -2268,7 +2091,7 @@ private:
      */
     future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> ranges_to_stream_by_keyspace);
 
-#if 0
+public:
     /**
      * Calculate pair of ranges to stream/fetch for given two range collections
      * (current ranges for keyspace and ranges after move to new token)
@@ -2277,51 +2100,9 @@ private:
      * @param updated collection of the ranges after token is changed
      * @return pair of ranges to stream/fetch for given current and updated range collections
      */
-    public Pair<Set<Range<Token>>, Set<Range<Token>>> calculateStreamAndFetchRanges(Collection<Range<Token>> current, Collection<Range<Token>> updated)
-    {
-        Set<Range<Token>> toStream = new HashSet<>();
-        Set<Range<Token>> toFetch  = new HashSet<>();
-
-
-        for (Range r1 : current)
-        {
-            boolean intersect = false;
-            for (Range r2 : updated)
-            {
-                if (r1.intersects(r2))
-                {
-                    // adding difference ranges to fetch from a ring
-                    toStream.addAll(r1.subtract(r2));
-                    intersect = true;
-                }
-            }
-            if (!intersect)
-            {
-                toStream.add(r1); // should seed whole old range
-            }
-        }
-
-        for (Range r2 : updated)
-        {
-            boolean intersect = false;
-            for (Range r1 : current)
-            {
-                if (r2.intersects(r1))
-                {
-                    // adding difference ranges to fetch from a ring
-                    toFetch.addAll(r2.subtract(r1));
-                    intersect = true;
-                }
-            }
-            if (!intersect)
-            {
-                toFetch.add(r2); // should fetch whole old range
-            }
-        }
-
-        return Pair.create(toStream, toFetch);
-    }
-
+    std::pair<std::unordered_set<range<token>>, std::unordered_set<range<token>>>
+    calculate_stream_and_fetch_ranges(const std::vector<range<token>>& current, const std::vector<range<token>>& updated);
+#if 0
     public void bulkLoad(String directory)
     {
         try

@@ -486,9 +486,7 @@ future<> init_local_cache() {
 }
 
 void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
-    auto new_ctx = std::make_unique<query_context>(db, qp);
-    qctx.swap(new_ctx);
-    assert(!new_ctx);
+    qctx = std::make_unique<query_context>(db, qp);
 }
 
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
@@ -817,10 +815,7 @@ future<> update_tokens(std::unordered_set<dht::token> tokens) {
 }
 
 future<> force_blocking_flush(sstring cfname) {
-    if (!qctx) {
-        return make_ready_future<>();
-    }
-
+    assert(qctx);
     return qctx->_db.invoke_on_all([cfname = std::move(cfname)](database& db) {
         // if (!Boolean.getBoolean("cassandra.unsafesystem"))
         column_family& cf = db.find_column_family(NAME, cfname);
