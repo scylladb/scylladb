@@ -347,6 +347,7 @@ BOOST_AUTO_TEST_CASE(test_range_subtract) {
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({{2, false}}, {4}), cmp), vec({r({2}, {2})}));
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({3}, {5}), cmp), vec({r({2}, {{3, false}})}));
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({3}, {1}), cmp), vec({r({2}, {{3, false}})}));
+    BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r({5}, {1}), cmp), vec({r({2}, {4})}));
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r::make_singular(3), cmp), vec({r({2}, {{3, false}}), r({{3, false}}, {4})}));
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r::make_singular(4), cmp), vec({r({2}, {{4, false}})}));
     BOOST_REQUIRE_EQUAL(r({2}, {4}).subtract(r::make_singular(5), cmp), vec({r({2}, {4})}));
@@ -369,6 +370,9 @@ BOOST_AUTO_TEST_CASE(test_range_subtract) {
 
     // FIXME: Also accept adjacent ranges merged
     BOOST_REQUIRE_EQUAL(r({5}, {1}).subtract(r({6}, {7}), cmp), vec({r({}, {1}), r({5}, {{6, false}}), r({{7, false}}, {})}));
+
+    BOOST_REQUIRE_EQUAL(r({8}, {3}).subtract(r({2}, {1}), cmp), vec({r({{1, false}}, {{2, false}})}));
+    BOOST_REQUIRE_EQUAL(r({8}, {3}).subtract(r({10}, {9}), cmp), vec({r({{9, false}}, {{10, false}})}));
 
     BOOST_REQUIRE_EQUAL(r({5}, {1}).subtract(r({6}, {0}), cmp), vec({r({{0, false}}, {1}), r({5}, {{6, false}})}));
     BOOST_REQUIRE_EQUAL(r({5}, {1}).subtract(r({}, {0}), cmp), vec({r({{0, false}}, {1}), r({5}, {})}));

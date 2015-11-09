@@ -257,39 +257,48 @@ public:
     template<typename Comparator>
     std::vector<range> subtract(const range& other, Comparator&& cmp) const {
         std::vector<range> result;
+        std::list<range> left;
+        std::list<range> right;
 
-        auto this_wraps = is_wrap_around(cmp);
-        auto other_wraps = other.is_wrap_around(cmp);
-
-        if (this_wraps && other_wraps) {
-            auto this_unwrapped = unwrap();
-            auto other_unwrapped = other.unwrap();
-            boost::copy(this_unwrapped.first.subtract(other_unwrapped.first, cmp), std::back_inserter(result));
-            boost::copy(this_unwrapped.second.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
-        } else if (this_wraps) {
-            auto this_unwrapped = unwrap();
-            boost::copy(this_unwrapped.first.subtract(other, cmp), std::back_inserter(result));
-            boost::copy(this_unwrapped.second.subtract(other, cmp), std::back_inserter(result));
-        } else if (other_wraps) {
-            auto other_unwrapped = other.unwrap();
-            for (auto &&r : subtract(other_unwrapped.first, cmp)) {
-                boost::copy(r.subtract(other_unwrapped.second, cmp), std::back_inserter(result));
-            }
+        if (is_wrap_around(cmp)) {
+            auto u = unwrap();
+            left.emplace_back(std::move(u.first));
+            left.emplace_back(std::move(u.second));
         } else {
-            if (less_than(end_bound(), other.start_bound(), cmp)
-                || less_than(other.end_bound(), start_bound(), cmp)) {
-                // Not overlapping
-                result.push_back(*this);
-            } else {
-                // Overlapping
-                if (!less_than_or_equal(other.start_bound(), start_bound(), cmp)) {
-                    result.push_back({start(), bound(other.start()->value(), !other.start()->is_inclusive())});
+            left.push_back(*this);
+        }
+
+        if (other.is_wrap_around(cmp)) {
+            auto u = other.unwrap();
+            right.emplace_back(std::move(u.first));
+            right.emplace_back(std::move(u.second));
+        } else {
+            right.push_back(other);
+        }
+
+        // left and right contain now non-overlapping, ordered ranges
+
+        while (!left.empty() && !right.empty()) {
+            auto& r1 = left.front();
+            auto& r2 = right.front();
+            if (less_than(r2.end_bound(), r1.start_bound(), cmp)) {
+                right.pop_front();
+            } else if (less_than(r1.end_bound(), r2.start_bound(), cmp)) {
+                result.emplace_back(std::move(r1));
+                left.pop_front();
+            } else { // Overlap
+                auto tmp = std::move(r1);
+                left.pop_front();
+                if (!greater_than_or_equal(r2.end_bound(), tmp.end_bound(), cmp)) {
+                    left.push_front({bound(r2.end()->value(), !r2.end()->is_inclusive()), tmp.end()});
                 }
-                if (!greater_than_or_equal(other.end_bound(), end_bound(), cmp)) {
-                    result.push_back({bound(other.end()->value(), !other.end()->is_inclusive()), end()});
+                if (!less_than_or_equal(r2.start_bound(), tmp.start_bound(), cmp)) {
+                    left.push_front({tmp.start(), bound(r2.start()->value(), !r2.start()->is_inclusive())});
                 }
             }
         }
+
+        boost::copy(left, std::back_inserter(result));
 
         // TODO: Merge adjacent ranges (optimization)
         return result;
