@@ -85,6 +85,10 @@ public:
         return _heart_beat_state;
     }
 
+    const heart_beat_state& get_heart_beat_state() const {
+        return _heart_beat_state;
+    }
+
     void set_heart_beat_state(heart_beat_state hbs) {
         update_timestamp();
         _heart_beat_state = hbs;
@@ -97,6 +101,10 @@ public:
      */
     // @Deprecated
     std::map<application_state, versioned_value>& get_application_state_map() {
+        return _application_state;
+    }
+
+    const std::map<application_state, versioned_value>& get_application_state_map() const {
         return _application_state;
     }
 

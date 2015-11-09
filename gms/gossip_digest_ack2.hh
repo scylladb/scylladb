@@ -65,6 +65,10 @@ public:
         return _map;
     }
 
+    const std::map<inet_address, endpoint_state>& get_endpoint_state_map() const {
+        return _map;
+    }
+
     // The following replaces GossipDigestAck2Serializer from the Java code
     void serialize(bytes::iterator& out) const;
 
