@@ -13,6 +13,8 @@ Description: Scylla database server binaries
  Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
 
 Package: scylla-server-dbg
+Section: debug
+Priority: extra
 Architecture: amd64
 Depends: scylla-server (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Description: debugging symbols for scylla-server
