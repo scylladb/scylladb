@@ -11,11 +11,35 @@ git submodule init
 git submodule update --recursive
 ```
 
-### Building scylla on Fedora
-Installing required packages:
+### Building and Running Scylla on Fedora
+* Installing required packages:
 
 ```
 sudo yum install yaml-cpp-devel lz4-devel zlib-devel snappy-devel jsoncpp-devel thrift-devel antlr3-tool antlr3-C++-devel libasan libubsan
+```
+
+* Build Scylla
+```
+./configure.py --mode=release --with=scylla --disable-xen
+ninja build/release/scylla -j2 # you can use more cpus if you have tons of RAM
+
+```
+
+* Run Scylla
+```
+./build/release/scylla
+
+```
+
+* run Scylla with one CPU and ./tmp as data directory
+
+```
+./build/release/scylla --datadir tmp --commitlog-directory tmp --smp 1
+```
+
+* For more run options:
+```
+./build/release/scylla --help
 ```
 
 ## Building Fedora RPM
