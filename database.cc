@@ -569,23 +569,29 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                 return newtab->create_links(dir);
             });
         });
-    }).then([this, old, newtab] {
+    }).then_wrapped([this, old, newtab] (future<> ret) {
         dblog.debug("Flushing done");
-        // We must add sstable before we call update_cache(), because
-        // memtable's data after moving to cache can be evicted at any time.
-        auto old_sstables = _sstables;
-        add_sstable(newtab);
-        old->mark_flushed(newtab);
-        return update_cache(*old, std::move(old_sstables));
-    }).then_wrapped([this, old] (future<> ret) {
         try {
             ret.get();
+
+            // We must add sstable before we call update_cache(), because
+            // memtable's data after moving to cache can be evicted at any time.
+            auto old_sstables = _sstables;
+            add_sstable(newtab);
+            old->mark_flushed(newtab);
 
             _memtables->erase(boost::range::find(*_memtables, old));
             dblog.debug("Memtable replaced");
             trigger_compaction();
 
-            return make_ready_future<stop_iteration>(stop_iteration::yes);
+            return update_cache(*old, std::move(old_sstables)).then_wrapped([] (future<> f) {
+                try {
+                    f.get();
+                } catch(...) {
+                    dblog.error("failed to move memtable to cache: {}", std::current_exception());
+                }
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            });
         } catch (...) {
             dblog.error("failed to write sstable: {}", std::current_exception());
         }
