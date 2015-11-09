@@ -66,7 +66,7 @@ public:
         , _version(ver) {
     }
 
-    int32_t get_generation() {
+    int32_t get_generation() const {
         return _generation;
     }
 

@@ -353,10 +353,10 @@ void gossiper::notify_failure_detector(inet_address endpoint, endpoint_state rem
     }
 }
 
-future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) {
-    return seastar::async([this, g = this->shared_from_this(), map = std::move(map)] () mutable {
+future<> gossiper::apply_state_locally(const std::map<inet_address, endpoint_state>& map) {
+    return seastar::async([this, g = this->shared_from_this(), map] () mutable {
         for (auto& entry : map) {
-            auto& ep = entry.first;
+            const auto& ep = entry.first;
             if (ep == get_broadcast_address() && !is_in_shadow_round()) {
                 continue;
             }
@@ -368,7 +368,7 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& m
                If state does not exist just add it. If it does then add it if the remote generation is greater.
                If there is a generation tie, attempt to break it by heartbeat version.
                */
-            endpoint_state& remote_state = entry.second;
+            const endpoint_state& remote_state = entry.second;
             auto it = endpoint_state_map.find(ep);
             if (it != endpoint_state_map.end()) {
                 endpoint_state& local_ep_state_ptr = it->second;
@@ -1064,7 +1064,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     logger.debug("removing expire time for endpoint : {}", addr);
     logger.info("inet_address {} is now UP", addr);
 
-    _subscribers.for_each([addr, &local_state] (auto& subscriber) {
+    _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_alive(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
     });
@@ -1077,14 +1077,14 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     _live_endpoints.erase(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("inet_address {} is now DOWN", addr);
-    _subscribers.for_each([addr, &local_state] (auto& subscriber) {
+    _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_dead(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
     });
 }
 
 // Runs inside seastar::async context
-void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
+void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
     if (!is_dead_state(eps)) {
         if (endpoint_state_map.count(ep))  {
             logger.info("Node {} has restarted, now UP", ep);
@@ -1098,7 +1098,7 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
     auto& local_state = endpoint_state_map.at(ep);
 
     // the node restarted: it is up to the subscriber to take whatever action is necessary
-    _subscribers.for_each([ep, &local_state] (auto& subscriber) {
+    _subscribers.for_each([ep, local_state] (auto& subscriber) {
         subscriber->on_restart(ep, local_state);
     });
 
@@ -1108,7 +1108,7 @@ void gossiper::handle_major_state_change(inet_address ep, endpoint_state eps) {
         logger.debug("Not marking {} alive due to dead state", ep);
         mark_dead(ep, local_state);
     }
-    _subscribers.for_each([ep, &local_state] (auto& subscriber) {
+    _subscribers.for_each([ep, local_state] (auto& subscriber) {
         subscriber->on_join(ep, local_state);
     });
 }
@@ -1131,7 +1131,7 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
 }
 
 // Runs inside seastar::async context
-void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state) {
+void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
@@ -1143,27 +1143,27 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
 
     // we need to make two loops here, one to apply, then another to notify,
     // this way all states in an update are present and current when the notifications are received
-    for (auto& remote_entry : remote_state.get_application_state_map()) {
-        auto& remote_key = remote_entry.first;
-        auto& remote_value = remote_entry.second;
+    for (const auto& remote_entry : remote_state.get_application_state_map()) {
+        const auto& remote_key = remote_entry.first;
+        const auto& remote_value = remote_entry.second;
         assert(remote_state.get_heart_beat_state().get_generation() == local_state.get_heart_beat_state().get_generation());
         local_state.add_application_state(remote_key, remote_value);
     }
-    for (auto& entry : remote_state.get_application_state_map()) {
+    for (const auto& entry : remote_state.get_application_state_map()) {
         do_on_change_notifications(addr, entry.first, entry.second);
     }
 }
 
 // Runs inside seastar::async context
-void gossiper::do_before_change_notifications(inet_address addr, endpoint_state& ep_state, application_state& ap_state, versioned_value& new_value) {
-    _subscribers.for_each([addr, &ep_state, &ap_state, &new_value] (auto& subscriber) {
+void gossiper::do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value) {
+    _subscribers.for_each([addr, ep_state, ap_state, new_value] (auto& subscriber) {
         subscriber->before_change(addr, ep_state, ap_state, new_value);
     });
 }
 
 // Runs inside seastar::async context
-void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, versioned_value& value) {
-    _subscribers.for_each([addr, &state, &value] (auto& subscriber) {
+void gossiper::do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value) {
+    _subscribers.for_each([addr, state, value] (auto& subscriber) {
         subscriber->on_change(addr, state, value);
     });
 }

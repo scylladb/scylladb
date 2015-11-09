@@ -404,22 +404,22 @@ private:
      * @param ep      endpoint
      * @param ep_state EndpointState for the endpoint
      */
-    void handle_major_state_change(inet_address ep, endpoint_state eps);
+    void handle_major_state_change(inet_address ep, const endpoint_state& eps);
 
 public:
     bool is_alive(inet_address ep);
     bool is_dead_state(const endpoint_state& eps) const;
 
-    future<> apply_state_locally(std::map<inet_address, endpoint_state>& map);
+    future<> apply_state_locally(const std::map<inet_address, endpoint_state>& map);
 
 private:
-    void apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state);
+    void apply_new_states(inet_address addr, endpoint_state& local_state, const endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
-    void do_before_change_notifications(inet_address addr, endpoint_state& ep_state, application_state& ap_state, versioned_value& new_value);
+    void do_before_change_notifications(inet_address addr, const endpoint_state& ep_state, const application_state& ap_state, const versioned_value& new_value);
 
     // notify that an application state has changed
-    void do_on_change_notifications(inet_address addr, const application_state& state, versioned_value& value);
+    void do_on_change_notifications(inet_address addr, const application_state& state, const versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
     void request_all(gossip_digest& g_digest, std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
