@@ -69,11 +69,11 @@ SEASTAR_TEST_CASE(test_make_local_reader) {
                 auto reader = service::get_storage_proxy().local().make_local_reader(s->id(), query::full_partition_range);
                 assert_that(to_result_set(s, reader))
                     .has_size(5)
-                    .has(a_row().with_column(bytes("k"), bytes("\01")))
-                    .has(a_row().with_column(bytes("k"), bytes("\02")))
-                    .has(a_row().with_column(bytes("k"), bytes("\03")))
-                    .has(a_row().with_column(bytes("k"), bytes("\04")))
-                    .has(a_row().with_column(bytes("k"), bytes("\05")));
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\01"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\02"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\03"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\04"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\05"))));
             }
 
             {
@@ -83,11 +83,11 @@ SEASTAR_TEST_CASE(test_make_local_reader) {
                         {dht::ring_position(dht::maximum_token(), dht::ring_position::token_bound::end)}));
                 assert_that(to_result_set(s, reader))
                     .has_size(5)
-                    .has(a_row().with_column(bytes("k"), bytes("\01")))
-                    .has(a_row().with_column(bytes("k"), bytes("\02")))
-                    .has(a_row().with_column(bytes("k"), bytes("\03")))
-                    .has(a_row().with_column(bytes("k"), bytes("\04")))
-                    .has(a_row().with_column(bytes("k"), bytes("\05")));
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\01"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\02"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\03"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\04"))))
+                    .has(a_row().with_column(bytes("k"), data_value(bytes("\05"))));
             }
 
             {

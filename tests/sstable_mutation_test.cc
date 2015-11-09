@@ -138,10 +138,10 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         auto s = complex_schema();
 
         auto sr = mutation.partition().static_row();
-        match_live_cell(sr, *s, "static_obj", to_bytes("static_value"));
+        match_live_cell(sr, *s, "static_obj", data_value(to_bytes("static_value")));
 
         auto row1 = clustered_row(mutation, *s, {"cl1.1", "cl2.1"});
-        match_live_cell(row1.cells(), *s, "reg", to_bytes("v1"));
+        match_live_cell(row1.cells(), *s, "reg", data_value(to_bytes("v1")));
         match_absent(row1.cells(), *s, "reg_list");
         match_absent(row1.cells(), *s, "reg_map");
         match_absent(row1.cells(), *s, "reg_fset");
@@ -150,7 +150,7 @@ SEASTAR_TEST_CASE(complex_sst1_k1) {
         match_collection_element<status::live>(reg_set.cells[1], to_bytes("2"), bytes_opt{});
 
         auto row2 = clustered_row(mutation, *s, {"cl1.2", "cl2.2"});
-        match_live_cell(row2.cells(), *s, "reg", to_bytes("v2"));
+        match_live_cell(row2.cells(), *s, "reg", data_value(to_bytes("v2")));
         match_absent(row2.cells(), *s, "reg_set");
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_fset");
@@ -167,7 +167,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         auto s = complex_schema();
 
         auto sr = mutation.partition().static_row();
-        match_live_cell(sr, *s, "static_obj", to_bytes("static_value"));
+        match_live_cell(sr, *s, "static_obj", data_value(to_bytes("static_value")));
         auto static_set = match_collection(sr, *s, "static_collection", tombstone(deletion_time{1431451390, 1431451390225257l}));
         match_collection_element<status::live>(static_set.cells[0], to_bytes("1"), bytes_opt{});
         match_collection_element<status::live>(static_set.cells[1], to_bytes("2"), bytes_opt{});
@@ -175,7 +175,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_collection_element<status::live>(static_set.cells[3], to_bytes("4"), bytes_opt{});
 
         auto row1 = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});
-        match_live_cell(row1.cells(), *s, "reg", to_bytes("v3"));
+        match_live_cell(row1.cells(), *s, "reg", data_value(to_bytes("v3")));
         match_absent(row1.cells(), *s, "reg_list");
         match_absent(row1.cells(), *s, "reg_set");
         match_absent(row1.cells(), *s, "reg_fset");
@@ -184,7 +184,7 @@ SEASTAR_TEST_CASE(complex_sst1_k2) {
         match_collection_element<status::live>(reg_map.cells[1], to_bytes("4"), to_bytes("2"));
 
         auto row2 = clustered_row(mutation, *s, {"kcl1.2", "kcl2.2"});
-        match_live_cell(row2.cells(), *s, "reg", to_bytes("v4"));
+        match_live_cell(row2.cells(), *s, "reg", data_value(to_bytes("v4")));
         match_absent(row2.cells(), *s, "reg_set");
         match_absent(row2.cells(), *s, "reg_map");
         match_absent(row2.cells(), *s, "reg_list");
@@ -245,11 +245,11 @@ SEASTAR_TEST_CASE(complex_sst2_k3) {
         auto s = complex_schema();
 
         auto sr = mutation.partition().static_row();
-        match_expiring_cell(sr, *s, "static_obj", to_bytes("static_value_3"), 1431451394597062l, 1431537794);
+        match_expiring_cell(sr, *s, "static_obj", data_value(to_bytes("static_value_3")), 1431451394597062l, 1431537794);
 
         auto row1 = clustered_row(mutation, *s, {"tcl1.1", "tcl2.1"});
         BOOST_REQUIRE(row1.created_at() == 1431451394597062l);
-        match_expiring_cell(row1.cells(), *s, "reg", to_bytes("v5"), 1431451394597062l, 1431537794);
+        match_expiring_cell(row1.cells(), *s, "reg", data_value(to_bytes("v5")), 1431451394597062l, 1431537794);
         match_absent(row1.cells(), *s, "reg_list");
         match_absent(row1.cells(), *s, "reg_set");
         match_absent(row1.cells(), *s, "reg_map");
@@ -283,7 +283,7 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
         auto s = complex_schema();
 
         auto sr = mutation.partition().static_row();
-        match_live_cell(sr, *s, "static_obj", to_bytes("final_static"));
+        match_live_cell(sr, *s, "static_obj", data_value(to_bytes("final_static")));
 
         auto row = clustered_row(mutation, *s, {"kcl1.1", "kcl2.1"});
         auto reg_map = match_collection(row.cells(), *s, "reg_map", tombstone(deletion_time{0, api::missing_timestamp}));
@@ -385,8 +385,8 @@ SEASTAR_TEST_CASE(compact_storage_sparse_read) {
             return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 auto& mp = mutation->partition();
                 auto row = mp.clustered_row(clustering_key::make_empty(*s));
-                match_live_cell(row.cells(), *s, "cl1", to_bytes("cl1"));
-                match_live_cell(row.cells(), *s, "cl2", to_bytes("cl2"));
+                match_live_cell(row.cells(), *s, "cl1", data_value(to_bytes("cl1")));
+                match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
             });
         });
@@ -404,7 +404,7 @@ SEASTAR_TEST_CASE(compact_storage_simple_dense_read) {
                 auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
                 auto row = mp.clustered_row(clustering);
-                match_live_cell(row.cells(), *s, "cl2", to_bytes("cl2"));
+                match_live_cell(row.cells(), *s, "cl2", data_value(to_bytes("cl2")));
                 return make_ready_future<>();
             });
         });
@@ -422,7 +422,7 @@ SEASTAR_TEST_CASE(compact_storage_dense_read) {
                 auto clustering = clustering_key::from_clustering_prefix(*s, exploded);
 
                 auto row = mp.clustered_row(clustering);
-                match_live_cell(row.cells(), *s, "cl3", to_bytes("cl3"));
+                match_live_cell(row.cells(), *s, "cl3", data_value(to_bytes("cl3")));
                 return make_ready_future<>();
             });
         });

@@ -79,10 +79,10 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
         auto now = gc_clock::now();
 
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", bytes("A:v"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", bytes("B:v"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", bytes("C:v"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("D")), "v1", bytes("D:v"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", data_value(bytes("C:v")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("D")), "v1", data_value(bytes("D:v")), 1);
 
         auto src = make_source({m1});
 
@@ -97,13 +97,13 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("A"))
-                    .with_column("v1", bytes("A:v")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("A")))
+                    .with_column("v1", data_value(bytes("A:v"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("B"))
-                    .with_column("v1", bytes("B:v")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B:v"))));
         }
 
         // Test slicing in the middle
@@ -117,9 +117,9 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("B"))
-                    .with_column("v1", bytes("B:v")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B:v"))));
         }
     });
 }
@@ -150,9 +150,9 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("A"))
-                    .with_column("v1", bytes("A:v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("A")))
+                    .with_column("v1", data_value(bytes("A:v1"))));
         }
 
         // Expired
@@ -164,9 +164,9 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("B"))
-                    .with_column("v1", bytes("B:v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B:v1"))));
         }
     });
 }
@@ -178,11 +178,11 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
 
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", bytes("A_v1"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", bytes("B_v1"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", bytes("C_v1"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("D")), "v1", bytes("D_v1"), 1);
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("E")), "v1", bytes("E_v1"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("C")), "v1", data_value(bytes("C_v1")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("D")), "v1", data_value(bytes("D_v1")), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("E")), "v1", data_value(bytes("E_v1")), 1);
 
         auto src = make_source({m1});
 
@@ -197,17 +197,17 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(3)
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("E"))
-                    .with_column("v1", bytes("E_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("E")))
+                    .with_column("v1", data_value(bytes("E_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("D"))
-                    .with_column("v1", bytes("D_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("D")))
+                    .with_column("v1", data_value(bytes("D_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("C"))
-                    .with_column("v1", bytes("C_v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("C")))
+                    .with_column("v1", data_value(bytes("C_v1"))));
         }
 
         {
@@ -227,17 +227,17 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(3)
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("E"))
-                    .with_column("v1", bytes("E_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("E")))
+                    .with_column("v1", data_value(bytes("E_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("D"))
-                    .with_column("v1", bytes("D_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("D")))
+                    .with_column("v1", data_value(bytes("D_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("C"))
-                    .with_column("v1", bytes("C_v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("C")))
+                    .with_column("v1", data_value(bytes("C_v1"))));
         }
 
         {
@@ -255,17 +255,17 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 assert_that(to_result_set(result, s, slice))
                     .has_size(3)
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("E"))
-                        .with_column("v1", bytes("E_v1")))
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("E")))
+                        .with_column("v1", data_value(bytes("E_v1"))))
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("D"))
-                        .with_column("v1", bytes("D_v1")))
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("D")))
+                        .with_column("v1", data_value(bytes("D_v1"))))
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("C"))
-                        .with_column("v1", bytes("C_v1")));
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("C")))
+                        .with_column("v1", data_value(bytes("C_v1"))));
             }
 
             {
@@ -275,9 +275,9 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 assert_that(to_result_set(result, s, slice))
                     .has_size(1)
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("E"))
-                        .with_column("v1", bytes("E_v1")));
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("E")))
+                        .with_column("v1", data_value(bytes("E_v1"))));
             }
 
             {
@@ -287,13 +287,13 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
                 assert_that(to_result_set(result, s, slice))
                     .has_size(2)
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("E"))
-                        .with_column("v1", bytes("E_v1")))
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("E")))
+                        .with_column("v1", data_value(bytes("E_v1"))))
                     .has(a_row()
-                        .with_column("pk", bytes("key1"))
-                        .with_column("ck", bytes("D"))
-                        .with_column("v1", bytes("D_v1")));
+                        .with_column("pk", data_value(bytes("key1")))
+                        .with_column("ck", data_value(bytes("D")))
+                        .with_column("v1", data_value(bytes("D_v1"))));
             }
         }
 
@@ -314,13 +314,13 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("E"))
-                    .with_column("v1", bytes("E_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("E")))
+                    .with_column("v1", data_value(bytes("E_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("D"))
-                    .with_column("v1", bytes("D_v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("D")))
+                    .with_column("v1", data_value(bytes("D_v1"))));
         }
 
         {
@@ -338,13 +338,13 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
             assert_that(to_result_set(result, s, slice))
                 .has_size(2)
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("E"))
-                    .with_column("v1", bytes("E_v1")))
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("E")))
+                    .with_column("v1", data_value(bytes("E_v1"))))
                 .has(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("C"))
-                    .with_column("v1", bytes("C_v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("C")))
+                    .with_column("v1", data_value(bytes("C_v1"))));
         }
 
         {
@@ -359,9 +359,9 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
             assert_that(to_result_set(result, s, slice))
                 .has_only(a_row()
-                    .with_column("pk", bytes("key1"))
-                    .with_column("ck", bytes("B"))
-                    .with_column("v1", bytes("B_v1")));
+                    .with_column("pk", data_value(bytes("key1")))
+                    .with_column("ck", data_value(bytes("B")))
+                    .with_column("v1", data_value(bytes("B_v1"))));
         }
     });
 }
@@ -374,7 +374,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
 
         m1.partition().apply(tombstone(api::timestamp_type(1), now));
-        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", bytes("A:v"), 1);
+        m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A:v")), 1);
 
         auto src = make_source({m1});
         auto slice = make_full_slice(*s);

@@ -45,7 +45,7 @@ static void test_range_queries(populate_fn populate) {
 
     auto make_partition_mutation = [s] (bytes key) -> mutation {
         mutation m(partition_key::from_single_value(*s, key), s);
-        m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
         return m;
     };
 

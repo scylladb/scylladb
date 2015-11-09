@@ -49,10 +49,10 @@ BOOST_AUTO_TEST_CASE(test_range_with_positions_within_the_same_token) {
     dht::token tok = dht::global_partitioner().get_random_token();
 
     auto key1 = dht::decorated_key{tok,
-                                   partition_key::from_single_value(*s, bytes_type->decompose(bytes("key1")))};
+                                   partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key1"))))};
 
     auto key2 = dht::decorated_key{tok,
-                                   partition_key::from_single_value(*s, bytes_type->decompose(bytes("key2")))};
+                                   partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key2"))))};
 
     {
         auto r = query::partition_range::make(
@@ -174,10 +174,10 @@ BOOST_AUTO_TEST_CASE(test_range_with_equal_value_but_opposite_inclusiveness_is_a
     dht::token tok = dht::global_partitioner().get_random_token();
 
     auto key1 = dht::decorated_key{
-        tok, partition_key::from_single_value(*s, bytes_type->decompose(bytes("key1")))};
+        tok, partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key1"))))};
 
     auto key2 = dht::decorated_key{
-        tok, partition_key::from_single_value(*s, bytes_type->decompose(bytes("key2")))};
+        tok, partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("key2"))))};
 
     {
         auto r = query::partition_range::make(

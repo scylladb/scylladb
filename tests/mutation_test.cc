@@ -332,7 +332,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             };
             auto make_mutation = [&] {
                 mutation m(new_key(), s);
-                m.set_clustered_cell(clustering_key::make_empty(*s), "v", to_bytes("value"), 1);
+                m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(to_bytes("value")), 1);
                 return m;
             };
 
@@ -544,12 +544,12 @@ SEASTAR_TEST_CASE(test_querying_of_mutation) {
         };
 
         mutation m(partition_key::from_single_value(*s, "key1"), s);
-        m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         assert_that(resultify(m))
             .has_only(a_row()
-                .with_column("pk", bytes("key1"))
-                .with_column("v", bytes("v1")));
+                .with_column("pk", data_value(bytes("key1")))
+                .with_column("v", data_value(bytes("v1"))));
 
         m.partition().apply(tombstone(2, gc_clock::now()));
 
@@ -570,7 +570,7 @@ SEASTAR_TEST_CASE(test_partition_with_no_live_data_is_absent_in_data_query_resul
         m.partition().apply(tombstone(1, gc_clock::now()));
         m.partition().static_row().apply(*s->get_column_definition("sc1"),
             atomic_cell::make_dead(2, gc_clock::now()));
-        m.set_clustered_cell(clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A"))),
+        m.set_clustered_cell(clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("A")))),
             *s->get_column_definition("v"), atomic_cell::make_dead(2, gc_clock::now()));
 
         auto slice = make_full_slice(*s);
@@ -591,7 +591,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
 
         mutation m(partition_key::from_single_value(*s, "key1"), s);
         m.partition().static_row().apply(*s->get_column_definition("sc1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("sc1:value"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("sc1:value")))));
 
         auto slice = partition_slice_builder(*s)
             .with_no_static_columns()
@@ -600,7 +600,7 @@ SEASTAR_TEST_CASE(test_partition_with_live_data_in_static_row_is_present_in_the_
 
         assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
             .has_only(a_row()
-                .with_column("pk", bytes("key1"))
+                .with_column("pk", data_value(bytes("key1")))
                 .with_column("v", data_value::make_null(bytes_type)));
     });
 }
@@ -617,15 +617,15 @@ SEASTAR_TEST_CASE(test_query_result_with_one_regular_column_missing) {
         mutation m(partition_key::from_single_value(*s, "key1"), s);
         m.set_clustered_cell(clustering_key::from_single_value(*s, bytes("ck:A")),
             *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value")))));
 
         auto slice = partition_slice_builder(*s).build();
 
         assert_that(query::result_set::from_raw_result(s, slice, m.query(slice)))
             .has_only(a_row()
-                .with_column("pk", bytes("key1"))
-                .with_column("ck", bytes("ck:A"))
-                .with_column("v1", bytes("v1:value"))
+                .with_column("pk", data_value(bytes("key1")))
+                .with_column("ck", data_value(bytes("ck:A")))
+                .with_column("v1", data_value(bytes("v1:value")))
                 .with_column("v2", data_value::make_null(bytes_type)));
     });
 }
@@ -645,15 +645,15 @@ SEASTAR_TEST_CASE(test_row_counting) {
 
         BOOST_REQUIRE_EQUAL(0, m.live_row_count());
 
-        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A")));
-        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("B")));
+        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("A"))));
+        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("B"))));
 
-        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(2, bytes_type->decompose(bytes("v:value"))));
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v:value")))));
 
         BOOST_REQUIRE_EQUAL(1, m.live_row_count());
 
         m.partition().static_row().apply(*s->get_column_definition("sc1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("sc1:value"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("sc1:value")))));
 
         BOOST_REQUIRE_EQUAL(1, m.live_row_count());
 
@@ -674,8 +674,8 @@ SEASTAR_TEST_CASE(test_row_counting) {
 
         BOOST_REQUIRE_EQUAL(0, m.live_row_count());
 
-        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(4, bytes_type->decompose(bytes("v:value"))));
-        m.set_clustered_cell(ckey2, col_v, atomic_cell::make_live(4, bytes_type->decompose(bytes("v:value"))));
+        m.set_clustered_cell(ckey1, col_v, atomic_cell::make_live(4, bytes_type->decompose(data_value(bytes("v:value")))));
+        m.set_clustered_cell(ckey2, col_v, atomic_cell::make_live(4, bytes_type->decompose(data_value(bytes("v:value")))));
 
         BOOST_REQUIRE_EQUAL(2, m.live_row_count());
     });
@@ -693,8 +693,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
             .with_column("v3", my_set_type, column_kind::regular_column)
             .build();
 
-        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("A")));
-        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(bytes("B")));
+        auto ckey1 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("A"))));
+        auto ckey2 = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("B"))));
 
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
         m1.set_static_cell(*s->get_column_definition("sc1"),
@@ -702,39 +702,39 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
 
         m1.partition().apply(tombstone { 1, gc_clock::now() });
         m1.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value1"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value1")))));
         m1.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value2"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value2")))));
 
         m1.partition().clustered_row(ckey2).apply(row_marker(3));
         m1.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value4"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value4")))));
         map_type_impl::mutation mset1 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(2), make_atomic_cell({})}}};
         m1.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset1));
 
         mutation m2(partition_key::from_single_value(*s, "key1"), s);
         m2.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(1, bytes_type->decompose(bytes("v1:value1a"))));
+            atomic_cell::make_live(1, bytes_type->decompose(data_value(bytes("v1:value1a")))));
         m2.set_clustered_cell(ckey1, *s->get_column_definition("v2"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v2:value2"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v2:value2")))));
 
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value3"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value3")))));
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(3, bytes_type->decompose(bytes("v2:value4a"))));
+            atomic_cell::make_live(3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
         map_type_impl::mutation mset2 {{}, {{int32_type->decompose(1), make_atomic_cell({})}, {int32_type->decompose(3), make_atomic_cell({})}}};
         m2.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset2));
 
         mutation m3(partition_key::from_single_value(*s, "key1"), s);
         m3.set_clustered_cell(ckey1, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value1"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value1")))));
 
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v1"),
-            atomic_cell::make_live(2, bytes_type->decompose(bytes("v1:value3"))));
+            atomic_cell::make_live(2, bytes_type->decompose(data_value(bytes("v1:value3")))));
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v2"),
-            atomic_cell::make_live(3, bytes_type->decompose(bytes("v2:value4a"))));
+            atomic_cell::make_live(3, bytes_type->decompose(data_value(bytes("v2:value4a")))));
         map_type_impl::mutation mset3 {{}, {{int32_type->decompose(1), make_atomic_cell({})}}};
         m3.set_clustered_cell(ckey2, *s->get_column_definition("v3"),
             my_set_type->serialize_mutation_form(mset3));

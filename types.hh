@@ -214,7 +214,7 @@ public:
     }
     // common conversions from C++ types to database types
     // note: somewhat dangerous, consider a factory function instead
-    data_value(bytes);
+    explicit data_value(bytes);
     data_value(sstring);
     data_value(int32_t);
     data_value(int64_t);
@@ -225,6 +225,7 @@ public:
     data_value(db_clock::time_point);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
+    explicit data_value(std::experimental::optional<bytes>);
     template <typename NativeType>
     data_value(std::experimental::optional<NativeType>);
 
@@ -1315,6 +1316,11 @@ data_value make_user_value(data_type tuple_type, user_type_impl::native_type val
 
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
+
+inline
+data_value::data_value(std::experimental::optional<bytes> v)
+        : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<bytes>())) {
+}
 
 template <typename NativeType>
 data_value::data_value(std::experimental::optional<NativeType> v)

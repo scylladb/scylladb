@@ -77,14 +77,14 @@ int main(int argc, char** argv) {
 
             auto make_small_mutation = [&] {
                 mutation m(new_key(s), s);
-                m.set_clustered_cell(new_ckey(s), "v", bytes(bytes::initialized_later(), cell_size), 1);
+                m.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 1);
                 return m;
             };
 
             auto make_large_mutation = [&] {
                 mutation m(new_key(s), s);
                 for (size_t j = 0; j < row_count; j++) {
-                    m.set_clustered_cell(new_ckey(s), "v", bytes(bytes::initialized_later(), cell_size), 2);
+                    m.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 2);
                 }
                 return m;
             };
@@ -93,13 +93,13 @@ int main(int argc, char** argv) {
                 auto key = dht::global_partitioner().decorate_key(*s, new_key(s));
 
                 mutation m1(key, s);
-                m1.set_clustered_cell(new_ckey(s), "v", bytes(bytes::initialized_later(), cell_size), 1);
+                m1.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 1);
                 cache.populate(m1);
 
                 // Putting large mutations into the memtable. Should take about row_count*cell_size each.
                 mutation m2(key, s);
                 for (size_t j = 0; j < row_count; j++) {
-                    m2.set_clustered_cell(new_ckey(s), "v", bytes(bytes::initialized_later(), cell_size), 2);
+                    m2.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 2);
                 }
 
                 mt->apply(m2);
