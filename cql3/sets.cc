@@ -301,4 +301,17 @@ sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key,
                     ctype->serialize_mutation_form(mut)));
 }
 
+void sets::element_discarder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params)
+{
+    assert(column.type->is_multi_cell() && "Attempted to remove items from a frozen set");
+    auto elt = _t->bind(params._options);
+    if (!elt) {
+        throw exceptions::invalid_request_exception("Invalid null set element");
+    }
+    collection_type_impl::mutation mut;
+    mut.cells.emplace_back(*elt->get(params._options), params.make_dead_cell());
+    auto ctype = static_pointer_cast<const collection_type_impl>(column.type);
+    m.set_cell(row_key, column, ctype->serialize_mutation_form(mut));
+}
+
 }

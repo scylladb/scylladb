@@ -133,6 +133,13 @@ public:
         }
         virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
     };
+
+    class element_discarder : public operation {
+    public:
+        element_discarder(const column_definition& column, shared_ptr<term> t)
+            : operation(column, std::move(t)) { }
+        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+    };
 };
 
 }
