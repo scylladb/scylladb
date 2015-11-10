@@ -58,6 +58,7 @@
 #include "core/thread.hh"
 #include "cql3/query_processor.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"
 #include "service/storage_proxy.hh"
 
@@ -458,7 +459,7 @@ void stream_session::complete() {
         sslog.debug("[Stream #{}] complete: WAIT_COMPLETE -> COMPLETE", plan_id());
         close_session(stream_session_state::COMPLETE);
     } else {
-        sslog.debug("[Stream #{}] complete: {} -> WAIT_COMPLETE", plan_id(), int(_state));
+        sslog.debug("[Stream #{}] complete: {} -> WAIT_COMPLETE", plan_id(), _state);
         set_state(stream_session_state::WAIT_COMPLETE);
     }
 }
@@ -526,7 +527,7 @@ bool stream_session::maybe_completed() {
             send_complete_message().then([this] {
                 _complete_sent = true;
                 set_state(stream_session_state::WAIT_COMPLETE);
-                sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE", plan_id(), int(_state));
+                sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE", plan_id(), _state);
             });
         }
     }
