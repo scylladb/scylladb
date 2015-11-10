@@ -45,6 +45,7 @@
 #include "exceptions/exceptions.hh"
 #include "database_fwd.hh"
 #include "term.hh"
+#include "update_parameters.hh"
 
 #include <experimental/optional>
 
@@ -85,6 +86,14 @@ public:
     { }
 
     virtual ~operation() {}
+
+    atomic_cell make_dead_cell(const update_parameters& params) const {
+        return params.make_dead_cell();
+    }
+
+    atomic_cell make_cell(bytes_view value, const update_parameters& params) const {
+        return params.make_cell(value);
+    }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return _t && _t->uses_function(ks_name, function_name);
