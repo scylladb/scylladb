@@ -395,10 +395,8 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
 }
 
 void stream_session::follower_start_sent() {
-    // if there are files to stream
-    if (!maybe_completed()) {
-        this->start_streaming_files();
-    }
+    sslog.debug("Follower start to sent");
+    this->start_streaming_files();
 }
 
 void stream_session::file_sent(const messages::file_message_header& header) {
