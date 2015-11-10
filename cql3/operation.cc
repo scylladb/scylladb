@@ -216,7 +216,7 @@ operation::element_deletion::prepare(database& db, const sstring& keyspace, cons
         return make_shared<lists::discarder_by_index>(receiver, std::move(idx));
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
         auto&& elt = _element->prepare(db, keyspace, sets::value_spec_of(receiver.column_specification));
-        return make_shared<sets::discarder>(receiver, std::move(elt));
+        return make_shared<sets::element_discarder>(receiver, std::move(elt));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
         auto&& key = _element->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         return make_shared<maps::discarder_by_key>(receiver, std::move(key));

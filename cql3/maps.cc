@@ -350,10 +350,8 @@ maps::discarder_by_key::execute(mutation& m, const exploded_clustering_prefix& p
     if (!key) {
         throw exceptions::invalid_request_exception("Invalid null map key");
     }
-    auto ckey = dynamic_pointer_cast<constants::value>(std::move(key));
-    assert(ckey);
     collection_type_impl::mutation mut;
-    mut.cells.emplace_back(*ckey->_bytes, params.make_dead_cell());
+    mut.cells.emplace_back(*key->get(params._options), params.make_dead_cell());
     auto mtype = static_cast<const map_type_impl*>(column.type.get());
     m.set_cell(prefix, column, mtype->serialize_mutation_form(mut));
 }
