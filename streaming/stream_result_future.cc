@@ -77,13 +77,11 @@ void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
     auto si = session->get_session_info();
-    sslog.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({} bytes), sending {} files({} bytes)",
+    sslog.info("[Stream #{} ID#{}] Prepare completed. Receiving {}, sending {}",
                session->plan_id(),
                session->session_index(),
                si.get_total_files_to_receive(),
-               si.get_total_size_to_receive(),
-               si.get_total_files_to_send(),
-               si.get_total_size_to_send());
+               si.get_total_files_to_send());
     auto event = session_prepared_event(plan_id, si);
     _coordinator->add_session_info(std::move(si));
     fire_stream_event(std::move(event));
