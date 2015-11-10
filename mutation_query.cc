@@ -58,7 +58,7 @@ query::result
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
     auto builder = query::result::builder(slice);
     for (const partition& p : r.partitions()) {
-        auto pb = builder.add_partition(p._m.key(*s));
+        auto pb = builder.add_partition(*s, p._m.key(*s));
         p.mut().unfreeze(s).partition().query(pb, *s, gc_clock::time_point::min(), query::max_rows);
     }
     return builder.build();
@@ -148,7 +148,7 @@ mutation_query(const mutation_source& source,
             auto is_distinct = state.slice.options.contains(query::partition_slice::option::distinct);
             auto is_reversed = state.slice.options.contains(query::partition_slice::option::reversed);
             auto limit = !is_distinct ? state.limit : 1;
-            auto rows_left = m.partition().compact_for_query(*m.schema(), state.query_time, state.slice.row_ranges,
+            auto rows_left = m.partition().compact_for_query(*m.schema(), state.query_time, state.slice.row_ranges(*m.schema(), m.key()),
                 is_reversed, limit);
             state.limit -= rows_left;
 

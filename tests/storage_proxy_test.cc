@@ -38,7 +38,7 @@ static query::result to_data_query_result(mutation_reader& reader, const query::
         if (!mo) {
             break;
         }
-        auto pb = builder.add_partition(mo->key());
+        auto pb = builder.add_partition(*mo->schema(), mo->key());
         mo->partition().query(pb, *mo->schema(), now);
     }
     return builder.build();

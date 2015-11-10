@@ -83,6 +83,10 @@ public:
 class result::partition_writer {
     bytes_ostream& _w;
     const partition_slice& _slice;
+    // We are tasked with keeping track of the range
+    // as well, since we are the primary "context"
+    // when iterating "inside" a partition
+    const clustering_row_ranges& _ranges;
     bytes_ostream::place_holder<uint32_t> _count_ph;
     bytes_ostream::position _pos;
     uint32_t _row_count = 0;
@@ -90,11 +94,13 @@ class result::partition_writer {
 public:
     partition_writer(
         const partition_slice& slice,
+        const clustering_row_ranges& ranges,
         bytes_ostream::place_holder<uint32_t> count_ph,
         bytes_ostream::position pos,
         bytes_ostream& w)
         : _w(w)
         , _slice(slice)
+        , _ranges(ranges)
         , _count_ph(count_ph)
         , _pos(pos)
     { }
@@ -135,6 +141,9 @@ public:
         _w.retract(_pos);
     }
 
+    const clustering_row_ranges& ranges() const {
+        return _ranges;
+    }
     const partition_slice& slice() const {
         return _slice;
     }
@@ -148,21 +157,19 @@ public:
 
     // Starts new partition and returns a builder for its contents.
     // Invalidates all previously obtained builders
-    partition_writer add_partition(const partition_key& key) {
+    partition_writer add_partition(const schema& s, const partition_key& key) {
         auto pos = _w.pos();
         auto count_place_holder = _w.write_place_holder<uint32_t>();
+        // fetch the row range for this partition already.
+        auto& ranges = _slice.row_ranges(s, key);
         if (_slice.options.contains<partition_slice::option::send_partition_key>()) {
             _w.write_blob(key);
         }
-        return partition_writer(_slice, count_place_holder, pos, _w);
+        return partition_writer(_slice, ranges, count_place_holder, pos, _w);
     }
 
     result build() {
         return result(std::move(_w));
-    };
-
-    const partition_slice& slice() const {
-        return _slice;
     }
 };
 
