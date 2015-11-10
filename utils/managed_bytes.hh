@@ -95,6 +95,8 @@ public:
         memcpy(data(), v.data(), v.size());
     }
 
+    managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
+
     ~managed_bytes() {
         if (external()) {
             current_allocator().destroy(_u.ptr);
