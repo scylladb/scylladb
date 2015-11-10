@@ -4,3 +4,10 @@
 build
 build.ninja
 cscope.*
+debian/changelog
+debian/scylla-server-dbg
+debian/scylla-server
+debian/scylla-server*.debhelper.log
+debian/scylla-server*.*.debhelper
+debian/scylla-server*.substvars
+debian/files
