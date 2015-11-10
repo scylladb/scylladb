@@ -1391,7 +1391,7 @@ future<> gossiper::stop() {
         for (inet_address addr : _live_endpoints) {
             shard_id id = get_shard_id(addr);
             logger.trace("Sending a GossipShutdown to {}", id);
-            ms().send_gossip_shutdown(id, addr).then_wrapped([id] (auto&&f) {
+            ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
                 try {
                     f.get();
                     logger.trace("Got GossipShutdown Reply");
