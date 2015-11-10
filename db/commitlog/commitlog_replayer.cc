@@ -255,7 +255,14 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
     return parallel_for_each(files, [this](auto f) {
         return this->recover(f).handle_exception([f](auto ep) {
             logger.error("Error recovering {}: {}", f, ep);
-            std::rethrow_exception(ep);
+            try {
+                std::rethrow_exception(ep);
+            } catch (std::invalid_argument&) {
+                logger.error("Scylla cannot process {}. Make sure to fully flush all Cassandra commit log files to sstable before migrating.");
+                throw;
+            } catch (...) {
+                throw;
+            }
         });
     });
 }
