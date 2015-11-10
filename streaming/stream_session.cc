@@ -453,8 +453,10 @@ void stream_session::complete() {
                 _complete_sent = true;
             });
         }
+        sslog.debug("[Stream #{}] complete: WAIT_COMPLETE -> COMPLETE", plan_id());
         close_session(stream_session_state::COMPLETE);
     } else {
+        sslog.debug("[Stream #{}] complete: {} -> WAIT_COMPLETE", plan_id(), int(_state));
         set_state(stream_session_state::WAIT_COMPLETE);
     }
 }
@@ -513,13 +515,13 @@ bool stream_session::maybe_completed() {
                 });
             }
             close_session(stream_session_state::COMPLETE);
-            sslog.debug("[Stream #{}] WAIT_COMPLETE -> COMPLETE", plan_id());
+            sslog.debug("[Stream #{}] maybe_completed: WAIT_COMPLETE -> COMPLETE", plan_id());
         } else {
             // notify peer that this session is completed
             send_complete_message().then([this] {
                 _complete_sent = true;
                 set_state(stream_session_state::WAIT_COMPLETE);
-                sslog.debug("[Stream #{}] {} -> WAIT_COMPLETE", plan_id(), int(_state));
+                sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE", plan_id(), int(_state));
             });
         }
     }
