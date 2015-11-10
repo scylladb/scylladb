@@ -548,8 +548,10 @@ void stream_session::start_streaming_files() {
             taskCompleted(task); // there is no file to send
     }
 #endif
-    set_state(stream_session_state::STREAMING);
     sslog.debug("{}: {} transfers to send", __func__, _transfers.size());
+    if (!_transfers.empty()) {
+        set_state(stream_session_state::STREAMING);
+    }
     for (auto it = _transfers.begin(); it != _transfers.end();) {
         stream_transfer_task& task = it->second;
         it++;
