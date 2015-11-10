@@ -42,11 +42,14 @@
 
 namespace streaming {
 
+extern logging::logger sslog;
+
 stream_plan& stream_plan::request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges) {
     return request_ranges(from, connecting, keyspace, ranges, {});
 }
 
 stream_plan& stream_plan::request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+    _range_added = true;
     auto session = _coordinator->get_or_create_next_session(from, connecting);
     session->add_stream_request(keyspace, ranges, std::move(column_families), _repaired_at);
     return *this;
@@ -61,17 +64,24 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
 }
 
 stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+    _range_added = true;
     auto session = _coordinator->get_or_create_next_session(to, connecting);
     session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer, _repaired_at);
     return *this;
 }
 
 stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
+    _range_added = true;
     _coordinator->transfer_files(to, std::move(sstable_details));
     return *this;
 }
 
 future<stream_state> stream_plan::execute() {
+    sslog.debug("[Stream #{}] Executing stream_plan description={} range_added={}", _plan_id, _description, _range_added);
+    if (!_range_added) {
+        stream_state state(_plan_id, _description, std::vector<session_info>());
+        return make_ready_future<stream_state>(std::move(state));
+    }
     return stream_result_future::init(_plan_id, _description, _handlers, _coordinator);
 }
 
