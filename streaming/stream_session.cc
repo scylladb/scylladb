@@ -77,8 +77,8 @@ static auto get_stream_result_future(utils::UUID plan_id) {
 void stream_session::init_messaging_service_handler() {
     ms().register_stream_init_message([] (messages::stream_init_message msg, unsigned src_cpu_id) {
         auto dst_cpu_id = engine().cpu_id();
-        sslog.debug("GOT STREAM_INIT_MESSAGE");
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), src_cpu_id, dst_cpu_id] () mutable {
+            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE", msg.plan_id);
             stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
                 msg.description, msg.from, msg.keep_ss_table_level);
             return make_ready_future<unsigned>(dst_cpu_id);
@@ -87,7 +87,7 @@ void stream_session::init_messaging_service_handler() {
     ms().register_prepare_message([] (messages::prepare_message msg, UUID plan_id, inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, connecting, src_cpu_id] () mutable {
             auto f = get_stream_result_future(plan_id);
-            sslog.debug("GOT PREPARE_MESSAGE: plan_id={}, from={}, connecting={}", plan_id, from, connecting);
+            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE: from={}, connecting={}", plan_id, from, connecting);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
@@ -95,11 +95,11 @@ void stream_session::init_messaging_service_handler() {
                 assert(session);
                 session->init(f);
                 session->dst_cpu_id = src_cpu_id;
-                sslog.debug("PREPARE_MESSAGE: get session peer={} connecting={} plan_id={} src_cpu_id={}, dst_cpu_id={}",
-                    session->peer, session->connecting, session->plan_id(), session->src_cpu_id, session->dst_cpu_id);
+                sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE: get session peer={} connecting={} src_cpu_id={}, dst_cpu_id={}",
+                    session->plan_id(), session->peer, session->connecting, session->src_cpu_id, session->dst_cpu_id);
                 return session->prepare(std::move(msg.requests), std::move(msg.summaries));
             } else {
-                auto err = sprint("PREPARE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                auto err = sprint("[Stream #%s] GOT PREPARE_MESSAGE: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
@@ -107,7 +107,7 @@ void stream_session::init_messaging_service_handler() {
     });
     ms().register_prepare_done_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [plan_id, from, connecting] () mutable {
-            sslog.debug("GOT PREPARE_DONE_MESSAGE: plan_id={}, from={}, connecting={}", plan_id, from, connecting);
+            sslog.debug("[Stream #{}] GOT PREPARE_DONE_MESSAGE: from={}, connecting={}", plan_id, from, connecting);
             auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
@@ -117,7 +117,7 @@ void stream_session::init_messaging_service_handler() {
                 session->follower_start_sent();
                 return make_ready_future<>();
             } else {
-                auto err = sprint("PREPARE_DONE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                auto err = sprint("[Stream #%s] GOT PREPARE_DONE_MESSAGE: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
@@ -127,14 +127,14 @@ void stream_session::init_messaging_service_handler() {
         return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
             if (sslog.is_enabled(logging::log_level::debug)) {
                 auto cf_id = fm.column_family_id();
-                sslog.debug("GOT STREAM_MUTATION: plan_id={}, cf_id={}", plan_id, cf_id);
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION: cf_id={}", plan_id, cf_id);
             }
             return service::get_storage_proxy().local().mutate_locally(fm);
         });
     });
     ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
         return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
-            sslog.debug("GOT STREAM_MUTATION_DONE: plan_id={}, cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
+            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE: cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
             auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
@@ -144,7 +144,7 @@ void stream_session::init_messaging_service_handler() {
                 session->receive_task_completed(cf_id);
                 return make_ready_future<>();
             } else {
-                auto err = sprint("STREAM_MUTATION_DONE: Can not find stream_manager for plan_id=%s", plan_id);
+                auto err = sprint("[Stream #%s] GOT STREAM_MUTATION_DONE: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
@@ -160,7 +160,7 @@ void stream_session::init_messaging_service_handler() {
 #endif
     ms().register_complete_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
         smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
-            sslog.debug("GOT COMPLETE_MESSAGE, plan_id={}, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
+            sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
             auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
@@ -169,7 +169,7 @@ void stream_session::init_messaging_service_handler() {
                 assert(session);
                 session->complete();
             } else {
-                auto err = sprint("COMPLETE_MESSAGE: Can not find stream_manager for plan_id=%s", plan_id);
+                auto err = sprint("[Stream #%s] COMPLETE_MESSAGE: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());
                 throw std::runtime_error(err);
             }
@@ -286,14 +286,14 @@ future<> stream_session::initiate() {
             is_for_outgoing, keep_ss_table_level());
     auto id = shard_id{this->peer, 0};
     this->src_cpu_id = engine().cpu_id();
-    sslog.debug("SEND SENDSTREAM_INIT_MESSAGE to {}", id);
+    sslog.debug("[Stream #{}] SEND SENDSTREAM_INIT_MESSAGE to {}", plan_id(), id);
     return ms().send_stream_init_message(std::move(id), std::move(msg), this->src_cpu_id).then_wrapped([this, id] (auto&& f) {
         try {
             unsigned dst_cpu_id = f.get0();
-            sslog.debug("GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", dst_cpu_id);
+            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE Reply: dst_cpu_id={}", this->plan_id(), dst_cpu_id);
             this->dst_cpu_id = dst_cpu_id;
         } catch (...) {
-            sslog.error("Fail to send STREAM_INIT_MESSAGE to {}: {}", id, std::current_exception());
+            sslog.error("[Stream #{}] Fail to send STREAM_INIT_MESSAGE to {}: {}", this->plan_id(), id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
@@ -311,25 +311,26 @@ future<> stream_session::on_initialization_complete() {
     }
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto from = utils::fb_utilities::get_broadcast_address();
-    sslog.debug("SEND PREPARE_MESSAGE to {}", id);
+    sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
     return ms().send_prepare_message(id, std::move(prepare), plan_id(), from,
         this->connecting, this->src_cpu_id, this->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
-            sslog.debug("GOT PREPARE_MESSAGE Reply");
+            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply", this->plan_id());
             for (auto& summary : msg.summaries) {
                 this->prepare_receiving(summary);
             }
             this->start_streaming_files();
         } catch (...) {
-            sslog.error("Fail to send PREPARE_MESSAGE to {}, {}", id, std::current_exception());
+            sslog.error("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
     }).then([this, id, from] {
-        sslog.debug("SEND PREPARE_DONE_MESSAGE to {}", id);
-        return ms().send_prepare_done_message(id, plan_id(), from, this->connecting, this->dst_cpu_id).handle_exception([id] (auto ep) {
-            sslog.error("Fail to send PREPARE_DONE_MESSAGE to {}, {}", id, ep);
+        auto plan_id = this->plan_id();
+        sslog.debug("[Stream #{}] SEND PREPARE_DONE_MESSAGE to {}", plan_id, id);
+        return ms().send_prepare_done_message(id, plan_id, from, this->connecting, this->dst_cpu_id).handle_exception([id, plan_id] (auto ep) {
+            sslog.error("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
         });
     });
 }
@@ -348,20 +349,21 @@ void stream_session::on_error() {
 
 // Only follower calls this function upon receiving of prepare_message from initiator
 future<messages::prepare_message> stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
-    sslog.debug("stream_session::prepare requests nr={}, summaries nr={}", requests.size(), summaries.size());
+    auto plan_id = this->plan_id();
+    sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, requests.size(), summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     auto& db = get_local_db();
     for (auto& request : requests) {
         // always flush on stream request
-        sslog.debug("stream_session::prepare stream_request={}", request);
+        sslog.debug("[Stream #{}] prepare stream_request={}", plan_id, request);
         auto ks = request.keyspace;
         // Make sure cf requested by peer node exists
         for (auto& cf : request.column_families) {
             try {
                 db.find_column_family(ks, cf);
             } catch (no_such_column_family) {
-                auto err = sprint("prepare: requested ks={} cf={} does not exist", ks, cf);
+                auto err = sprint("[Stream #{}] prepare requested ks={} cf={} does not exist", ks, cf);
                 sslog.error(err.c_str());
                 throw std::runtime_error(err);
             }
@@ -369,13 +371,13 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
         add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
     }
     for (auto& summary : summaries) {
-        sslog.debug("stream_session::prepare stream_summary={}", summary);
+        sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
         auto cf_id = summary.cf_id;
         // Make sure cf the peer node will sent to us exists
         try {
             db.find_column_family(cf_id);
         } catch (no_such_column_family) {
-            auto err = sprint("prepare: cf_id=%s does not exist", cf_id);
+            auto err = sprint("[Stream #{}] prepare cf_id=%s does not exist", plan_id, cf_id);
             sslog.error(err.c_str());
             throw std::runtime_error(err);
         }
@@ -395,7 +397,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
 }
 
 void stream_session::follower_start_sent() {
-    sslog.debug("Follower start to sent");
+    sslog.debug("[Stream #{}] Follower start to sent", this->plan_id());
     this->start_streaming_files();
 }
 
@@ -479,27 +481,30 @@ session_info stream_session::get_session_info() {
 
 void stream_session::receive_task_completed(UUID cf_id) {
     _receivers.erase(cf_id);
-    sslog.debug("receive  task_completed: cf_id={} done, receivers.size={} transfers.size={}", cf_id, _receivers.size(), _transfers.size());
+    sslog.debug("[Stream #{}] receive  task_completed: cf_id={} done, receivers.size={} transfers.size={}",
+        plan_id(), cf_id, _receivers.size(), _transfers.size());
     maybe_completed();
 }
 
 void stream_session::transfer_task_completed(UUID cf_id) {
     _transfers.erase(cf_id);
-    sslog.debug("transfer task_completed: cf_id={} done, receivers.size={} transfers.size={}", cf_id, _receivers.size(), _transfers.size());
+    sslog.debug("[Stream #{}] transfer task_completed: cf_id={} done, receivers.size={} transfers.size={}",
+        plan_id(), cf_id, _receivers.size(), _transfers.size());
     maybe_completed();
 }
 
 future<> stream_session::send_complete_message() {
     auto from = utils::fb_utilities::get_broadcast_address();
     auto id = shard_id{this->peer, this->dst_cpu_id};
-    sslog.debug("SEND COMPLETE_MESSAGE to {}, plan_id={}", id, this->plan_id());
-    return this->ms().send_complete_message(id, this->plan_id(), from, this->connecting, this->dst_cpu_id).then_wrapped([] (auto&& f) {
+    auto plan_id = this->plan_id();
+    sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
+    return this->ms().send_complete_message(id, plan_id, from, this->connecting, this->dst_cpu_id).then_wrapped([plan_id] (auto&& f) {
         try {
             f.get();
-            sslog.debug("GOT COMPLETE_MESSAGE Reply");
+            sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply", plan_id);
             return make_ready_future<>();
         } catch (...) {
-            sslog.warn("ERROR COMPLETE_MESSAGE Reply: {}", std::current_exception());
+            sslog.warn("[Stream #{}] ERROR COMPLETE_MESSAGE Reply: {}", plan_id, std::current_exception());
             return make_ready_future<>();
         }
     });
@@ -548,7 +553,7 @@ void stream_session::start_streaming_files() {
             taskCompleted(task); // there is no file to send
     }
 #endif
-    sslog.debug("{}: {} transfers to send", __func__, _transfers.size());
+    sslog.debug("[Stream #{}] {}: {} transfers to send", plan_id(), __func__, _transfers.size());
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
     }
