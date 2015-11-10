@@ -81,7 +81,7 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root)
 
-%{_sysconfdir}/sysconfig/scylla-server
+%config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
 %{_docdir}/scylla/README.md
 %{_docdir}/scylla/README-DPDK.md
@@ -101,8 +101,8 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
 %attr(0755,root,root) %dir %{_sharedstatedir}/scylla/conf/
-%{_sharedstatedir}/scylla/conf/scylla.yaml
-%{_sharedstatedir}/scylla/conf/cassandra-rackdc.properties
+%config(noreplace) %{_sharedstatedir}/scylla/conf/scylla.yaml
+%config(noreplace) %{_sharedstatedir}/scylla/conf/cassandra-rackdc.properties
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
