@@ -63,16 +63,18 @@ public:
     }
 
     static compaction_strategy_type type(const sstring& name) {
-        if (name == "NullCompactionStrategy") {
+        auto pos = name.find("org.apache.cassandra.db.compaction.");
+        sstring short_name = (pos == sstring::npos) ? name : name.substr(pos + 35);
+        if (short_name == "NullCompactionStrategy") {
             return compaction_strategy_type::null;
-        } else if (name == "MajorCompactionStrategy") {
+        } else if (short_name == "MajorCompactionStrategy") {
             return compaction_strategy_type::major;
-        } else if (name == "SizeTieredCompactionStrategy") {
+        } else if (short_name == "SizeTieredCompactionStrategy") {
             return compaction_strategy_type::size_tiered;
-        } else if (name == "LeveledCompactionStrategy") {
+        } else if (short_name == "LeveledCompactionStrategy") {
             return compaction_strategy_type::leveled;
         } else {
-            throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class 'org.apache.cassandra.db.compaction.%s", name));
+            throw exceptions::configuration_exception(sprint("Unable to find compaction strategy class '%s'", name));
         }
     }
 
