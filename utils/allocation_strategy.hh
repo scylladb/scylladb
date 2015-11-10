@@ -76,7 +76,7 @@ standard_migrator<T> standard_migrator<T>::object;
 //
 class allocation_strategy {
 public:
-    using migrate_fn = migrate_fn_type*;
+    using migrate_fn = const migrate_fn_type*;
 
     virtual ~allocation_strategy() {}
 
