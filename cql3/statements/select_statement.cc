@@ -205,9 +205,24 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
                 now);
     }
 
+    auto p = service::pager::query_pagers::pager(_schema, _selection,
+            state, options, command, std::move(key_ranges));
 
     if (_selection->is_aggregate()) {
-        // TODO
+        return do_with(
+                cql3::selection::result_set_builder(*_selection, now,
+                        options.get_serialization_format()),
+                [p, page_size, now](auto& builder) {
+                    return do_until([p] {return p->is_exhausted();},
+                            [p, &builder, page_size, now] {
+                                return p->fetch_page(builder, page_size, now);
+                            }
+                    ).then([&builder] {
+                                auto rs = builder.build();
+                                auto msg = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
+                                return make_ready_future<shared_ptr<transport::messages::result_message>>(std::move(msg));
+                            });
+                });
     }
 
     if (needs_post_query_ordering()) {
@@ -215,9 +230,6 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
                 "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
                         " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
-
-    auto p = service::pager::query_pagers::pager(_schema, _selection,
-            state, options, command, std::move(key_ranges));
 
     return p->fetch_page(page_size, now).then(
             [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {

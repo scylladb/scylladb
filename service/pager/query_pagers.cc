@@ -57,8 +57,8 @@ public:
                     std::move(cmd)), _ranges(std::move(ranges)) {
     }
 
-private:
-    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, db_clock::time_point now) override {
+private:   
+    future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, db_clock::time_point now) override {
         auto state = _options.get_paging_state();
         uint32_t extra = 0;
         if (state) {
@@ -154,11 +154,23 @@ private:
         auto ranges = _ranges;
         return get_local_storage_proxy().query(_schema, _cmd, std::move(ranges),
                 _options.get_consistency()).then(
-                [this, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
-                    return handle_result(std::move(results), page_size, now);
+                [this, &builder, page_size, now](foreign_ptr<lw_shared_ptr<query::result>> results) {
+                    handle_result(builder, std::move(results), page_size, now);
                 });
     }
 
+    future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size,
+            db_clock::time_point now) override {
+        return do_with(
+                cql3::selection::result_set_builder(*_selection, now,
+                        _options.get_serialization_format()),
+                [this, page_size, now](auto& builder) {
+                    return this->fetch_page(builder, page_size, now).then([&builder] {
+                       return builder.build();
+                    });
+                });
+    }
+    
     bool ignore_if_in_last_pk(const clustering_key& key) const {
         auto reversed = _cmd->slice.options.contains<query::partition_slice::option::reversed>();
 
@@ -171,7 +183,8 @@ private:
         return false;
     }
 
-    future<std::unique_ptr<cql3::result_set>> handle_result(
+    void handle_result(
+            cql3::selection::result_set_builder& builder,
             foreign_ptr<lw_shared_ptr<query::result>> results,
             uint32_t page_size, db_clock::time_point now) {
 
@@ -263,12 +276,8 @@ private:
             }
         };
 
-        cql3::selection::result_set_builder builder(*_selection, now,
-                _options.get_serialization_format());
         myvisitor v(*this, page_size, builder, *_schema, *_selection);
         query::result_view::consume(results->buf(), _cmd->slice, v);
-
-        auto rs = builder.build();
 
         _max = _max - v.included_rows;
         _exhausted = v.included_rows < page_size || _max == 0;
@@ -284,8 +293,6 @@ private:
         if (_last_ckey) {
             logger.debug("Last clustering key: {}", *_last_ckey);
         }
-
-        return make_ready_future<std::unique_ptr<cql3::result_set>>(std::move(rs));
     }
 
     bool is_exhausted() const override {

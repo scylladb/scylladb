@@ -43,6 +43,7 @@
 
 #include "paging_state.hh"
 #include "cql3/result_set.hh"
+#include "cql3/selection/selection.hh"
 
 namespace service {
 
@@ -78,6 +79,11 @@ public:
      * @return the page of result.
      */
     virtual future<std::unique_ptr<cql3::result_set>> fetch_page(uint32_t page_size, db_clock::time_point) = 0;
+
+    /**
+     * For more than one page.
+     */
+    virtual future<> fetch_page(cql3::selection::result_set_builder&, uint32_t page_size, db_clock::time_point) = 0;
 
     /**
      * Whether or not this pager is exhausted, i.e. whether or not a call to
