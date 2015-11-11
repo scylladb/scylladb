@@ -448,7 +448,7 @@ mutation_partition::query(query::result::partition_writer& pw,
     }
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
-    for (auto&& row_range : slice.row_ranges) {
+    for (auto&& row_range : pw.ranges()) {
         if (limit == 0) {
             break;
         }

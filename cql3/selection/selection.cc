@@ -125,7 +125,7 @@ protected:
         }
     };
 
-    std::unique_ptr<selectors> new_selectors() {
+    std::unique_ptr<selectors> new_selectors() const override {
         return std::make_unique<simple_selectors>();
     }
 };
@@ -196,7 +196,7 @@ protected:
         }
     };
 
-    std::unique_ptr<selectors> new_selectors() {
+    std::unique_ptr<selectors> new_selectors() const override  {
         return std::make_unique<selectors_with_processing>(_factories);
     }
 };
@@ -252,7 +252,7 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(selection& s, db_clock::time_point now, serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
@@ -328,6 +328,94 @@ std::unique_ptr<result_set> result_set_builder::build() {
         _result_set->add_row(_selectors->get_output_row(_serialization_format));
     }
     return std::move(_result_set);
+}
+
+result_set_builder::visitor::visitor(
+        cql3::selection::result_set_builder& builder, const schema& s,
+        const selection& selection)
+        : _builder(builder), _schema(s), _selection(selection), _row_count(0) {
+}
+
+void result_set_builder::visitor::add_value(const column_definition& def,
+        query::result_row_view::iterator_type& i) {
+    if (def.type->is_multi_cell()) {
+        auto cell = i.next_collection_cell();
+        if (!cell) {
+            _builder.add_empty();
+            return;
+        }
+        _builder.add(def, *cell);
+    } else {
+        auto cell = i.next_atomic_cell();
+        if (!cell) {
+            _builder.add_empty();
+            return;
+        }
+        _builder.add(def, *cell);
+    }
+}
+
+void result_set_builder::visitor::accept_new_partition(const partition_key& key,
+        uint32_t row_count) {
+    _partition_key = key.explode(_schema);
+    _row_count = row_count;
+}
+
+void result_set_builder::visitor::accept_new_partition(uint32_t row_count) {
+    _row_count = row_count;
+}
+
+void result_set_builder::visitor::accept_new_row(const clustering_key& key,
+        const query::result_row_view& static_row,
+        const query::result_row_view& row) {
+    _clustering_key = key.explode(_schema);
+    accept_new_row(static_row, row);
+}
+
+void result_set_builder::visitor::accept_new_row(
+        const query::result_row_view& static_row,
+        const query::result_row_view& row) {
+    auto static_row_iterator = static_row.iterator();
+    auto row_iterator = row.iterator();
+    _builder.new_row();
+    for (auto&& def : _selection.get_columns()) {
+        switch (def->kind) {
+        case column_kind::partition_key:
+            _builder.add(_partition_key[def->component_index()]);
+            break;
+        case column_kind::clustering_key:
+            _builder.add(_clustering_key[def->component_index()]);
+            break;
+        case column_kind::regular_column:
+            add_value(*def, row_iterator);
+            break;
+        case column_kind::compact_column:
+            add_value(*def, row_iterator);
+            break;
+        case column_kind::static_column:
+            add_value(*def, static_row_iterator);
+            break;
+        default:
+            assert(0);
+        }
+    }
+}
+
+void result_set_builder::visitor::accept_partition_end(
+        const query::result_row_view& static_row) {
+    if (_row_count == 0) {
+        _builder.new_row();
+        auto static_row_iterator = static_row.iterator();
+        for (auto&& def : _selection.get_columns()) {
+            if (def->is_partition_key()) {
+                _builder.add(_partition_key[def->component_index()]);
+            } else if (def->is_static()) {
+                add_value(*def, static_row_iterator);
+            } else {
+                _builder.add_empty();
+            }
+        }
+    }
 }
 
 api::timestamp_type result_set_builder::timestamp_of(size_t idx) {

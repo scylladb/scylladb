@@ -41,45 +41,35 @@
 
 #pragma once
 
-#include "bytes.hh"
-#include "keys.hh"
+#include <vector>
+#include <seastar/core/shared_ptr.hh>
+
+#include "schema.hh"
+#include "query-result.hh"
+#include "query-request.hh"
+#include "service/query_state.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/query_options.hh"
+#include "query_pager.hh"
 
 namespace service {
 
 namespace pager {
 
-class paging_state final {
-    partition_key _partition_key;
-    clustering_key _clustering_key;
-    uint32_t _remaining;
-
+class query_pagers {
 public:
-    paging_state(partition_key pk, clustering_key ck, uint32_t rem);
-
-    /**
-     * Last processed key, i.e. where to start from in next paging round
-     */
-    const partition_key& get_partition_key() const {
-        return _partition_key;
-    }
-    /**
-     * Clustering key in last partition. I.e. first, next, row
-     */
-    const clustering_key& get_clustering_key() const {
-        return _clustering_key;
-    }
-    /**
-     * Max remaining rows to fetch in total.
-     * I.e. initial row_limit - #rows returned so far.
-     */
-    uint32_t get_remaining() const {
-        return _remaining;
-    }
-
-    static ::shared_ptr<paging_state> deserialize(bytes_opt bytes);
-    bytes_opt serialize() const;
+    static bool may_need_paging(uint32_t page_size, const query::read_command&,
+            const std::vector<query::partition_range>&);
+    static ::shared_ptr<query_pager> pager(schema_ptr,
+            ::shared_ptr<cql3::selection::selection>,
+            service::query_state&,
+            const cql3::query_options&,
+            lw_shared_ptr<query::read_command>,
+            std::vector<query::partition_range>);
+private:
+    class impl;
 };
 
 }
-
 }
+

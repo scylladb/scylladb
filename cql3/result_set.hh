@@ -80,7 +80,7 @@ public:
 
 private:
     const uint32_t _column_count;
-    ::shared_ptr<service::pager::paging_state> _paging_state;
+    ::shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:
     metadata(std::vector<::shared_ptr<column_specification>> names_)
@@ -88,7 +88,7 @@ public:
     { }
 
     metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
-            ::shared_ptr<service::pager::paging_state> paging_state)
+            ::shared_ptr<const service::pager::paging_state> paging_state)
         : _flags(flags)
         , names(std::move(names_))
         , _column_count(column_count)
@@ -121,7 +121,7 @@ private:
     }
 
 public:
-    void set_has_more_pages(::shared_ptr<service::pager::paging_state> paging_state) {
+    void set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
         if (!paging_state) {
             return;
         }
@@ -340,6 +340,10 @@ public:
     template<typename RowComparator>
     void sort(RowComparator&& cmp) {
         std::sort(_rows.begin(), _rows.end(), std::forward<RowComparator>(cmp));
+    }
+
+    metadata& get_metadata() {
+        return *_metadata;
     }
 
     const metadata& get_metadata() const {

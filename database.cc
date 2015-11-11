@@ -1424,7 +1424,7 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
             return do_until([&qs] { return !qs.limit || qs.range_empty; }, [this, &qs] {
                 return qs.reader().then([this, &qs](mutation_opt mo) {
                     if (mo) {
-                        auto p_builder = qs.builder.add_partition(mo->key());
+                        auto p_builder = qs.builder.add_partition(*mo->schema(), mo->key());
                         auto is_distinct = qs.cmd.slice.options.contains(query::partition_slice::option::distinct);
                         auto limit = !is_distinct ? qs.limit : 1;
                         mo->partition().query(p_builder, *_schema, qs.cmd.timestamp, limit);

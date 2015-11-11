@@ -23,6 +23,7 @@
 #pragma once
 
 #include <experimental/optional>
+
 #include "keys.hh"
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
@@ -52,6 +53,8 @@ bool is_single_partition(const query::partition_range& range) {
     return range.is_singular() && range.start()->value().has_key();
 }
 
+typedef std::vector<clustering_range> clustering_row_ranges;
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 class partition_slice {
@@ -63,20 +66,34 @@ public:
         option::send_timestamp_and_expiry,
         option::reversed,
         option::distinct>>;
+    clustering_row_ranges _row_ranges;
 public:
-    std::vector<clustering_range> row_ranges;
     std::vector<column_id> static_columns; // TODO: consider using bitmap
     std::vector<column_id> regular_columns;  // TODO: consider using bitmap
     option_set options;
+private:
+    class specific_ranges;
+    std::unique_ptr<specific_ranges> _specific_ranges;
 public:
-    partition_slice(std::vector<clustering_range> row_ranges, std::vector<column_id> static_columns,
-        std::vector<column_id> regular_columns, option_set options)
-        : row_ranges(std::move(row_ranges))
-        , static_columns(std::move(static_columns))
-        , regular_columns(std::move(regular_columns))
-        , options(options)
-    { }
+    partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
+        std::vector<column_id> regular_columns, option_set options);
+    partition_slice(const partition_slice&);
+    partition_slice(partition_slice&&);
+    ~partition_slice();
+
+    const clustering_row_ranges& row_ranges(const schema&, const partition_key&) const;
+    void set_range(const partition_key&, clustering_row_ranges);
+
+    const clustering_row_ranges& default_row_ranges() const {
+        return _row_ranges;
+    }
+
+    size_t serialized_size() const;
+    void serialize(bytes::iterator& out) const;
+    static partition_slice deserialize(bytes_view& v);
+
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
+    friend std::ostream& operator<<(std::ostream& out, const partition_slice::specific_ranges& ps);
 };
 
 constexpr auto max_rows = std::numeric_limits<uint32_t>::max();

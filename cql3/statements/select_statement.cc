@@ -46,6 +46,7 @@
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
+#include "service/pager/query_pagers.hh"
 
 namespace cql3 {
 
@@ -195,37 +196,39 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
         page_size = DEFAULT_COUNT_PAGE_SIZE;
     }
 
-    warn(unimplemented::cause::PAGING);
-    return execute(proxy, command, _restrictions->get_partition_key_ranges(options), state, options, now);
+    auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
-#if 0
-    if (page_size <= 0 || !command || !query_pagers::may_need_paging(command, page_size)) {
-        return execute(proxy, command, state, options, now);
+    if (page_size <= 0
+            || !service::pager::query_pagers::may_need_paging(page_size,
+                    *command, key_ranges)) {
+        return execute(proxy, command, std::move(key_ranges), state, options,
+                now);
     }
 
-    auto pager = query_pagers::pager(command, cl, state.get_client_state(), options.get_paging_state());
 
-    if (selection->isAggregate()) {
-        return page_aggregate_query(pager, options, page_size, now);
+    if (_selection->is_aggregate()) {
+        // TODO
     }
 
-    // We can't properly do post-query ordering if we page (see #6722)
     if (needs_post_query_ordering()) {
         throw exceptions::invalid_request_exception(
-              "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
-              " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
+                "Cannot page queries with both ORDER BY and a IN restriction on the partition key;"
+                        " you must either remove the ORDER BY or the IN and sort client side, or disable paging for this query");
     }
 
-    return pager->fetch_page(page_size).then([this, pager, &options, limit, now] (auto page) {
-        auto msg = process_results(page, options, limit, now);
+    auto p = service::pager::query_pagers::pager(_schema, _selection,
+            state, options, command, std::move(key_ranges));
 
-        if (!pager->is_exhausted()) {
-            msg->result->metadata->set_has_more_pages(pager->state());
-        }
+    return p->fetch_page(page_size, now).then(
+            [this, p, &options, limit, now](std::unique_ptr<cql3::result_set> rs) {
 
-        return msg;
-    });
-#endif
+                if (!p->is_exhausted()) {
+                    rs->get_metadata().set_has_more_pages(p->state());
+                }
+
+                auto msg = ::make_shared<transport::messages::result_message::rows>(std::move(rs));
+                return make_ready_future<shared_ptr<transport::messages::result_message>>(std::move(msg));
+            });
 }
 
 future<shared_ptr<transport::messages::result_message>>
@@ -281,114 +284,18 @@ select_statement::execute_internal(distributed<service::storage_proxy>& proxy, s
     }
 }
 
-// Implements ResultVisitor concept from query.hh
-class result_set_building_visitor {
-    cql3::selection::result_set_builder& builder;
-    select_statement& stmt;
-    uint32_t _row_count;
-    std::vector<bytes> _partition_key;
-    std::vector<bytes> _clustering_key;
-public:
-    result_set_building_visitor(cql3::selection::result_set_builder& builder, select_statement& stmt)
-        : builder(builder)
-        , stmt(stmt)
-        , _row_count(0)
-    { }
+shared_ptr<transport::messages::result_message> select_statement::process_results(
+        foreign_ptr<lw_shared_ptr<query::result>> results,
+        lw_shared_ptr<query::read_command> cmd, const query_options& options,
+        db_clock::time_point now) {
 
-    void add_value(const column_definition& def, query::result_row_view::iterator_type& i) {
-        if (def.type->is_multi_cell()) {
-            auto cell = i.next_collection_cell();
-            if (!cell) {
-                builder.add_empty();
-                return;
-            }
-            builder.add(def, *cell);
-        } else {
-            auto cell = i.next_atomic_cell();
-            if (!cell) {
-                builder.add_empty();
-                return;
-            }
-            builder.add(def, *cell);
-        }
-    };
-
-    void accept_new_partition(const partition_key& key, uint32_t row_count) {
-        _partition_key = key.explode(*stmt._schema);
-        _row_count = row_count;
-    }
-
-    void accept_new_partition(uint32_t row_count) {
-        _row_count = row_count;
-    }
-
-    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
-            const query::result_row_view& row) {
-        _clustering_key = key.explode(*stmt._schema);
-        accept_new_row(static_row, row);
-    }
-
-    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
-        auto static_row_iterator = static_row.iterator();
-        auto row_iterator = row.iterator();
-        builder.new_row();
-        for (auto&& def : stmt._selection->get_columns()) {
-            switch (def->kind) {
-                case column_kind::partition_key:
-                    builder.add(_partition_key[def->component_index()]);
-                    break;
-                case column_kind::clustering_key:
-                    builder.add(_clustering_key[def->component_index()]);
-                    break;
-                case column_kind::regular_column:
-                    add_value(*def, row_iterator);
-                    break;
-                case column_kind::compact_column:
-                    add_value(*def, row_iterator);
-                    break;
-                case column_kind::static_column:
-                    add_value(*def, static_row_iterator);
-                    break;
-                default:
-                    assert(0);
-            }
-        }
-    }
-
-    void accept_partition_end(const query::result_row_view& static_row) {
-        if (_row_count == 0) {
-            builder.new_row();
-            auto static_row_iterator = static_row.iterator();
-            for (auto&& def : stmt._selection->get_columns()) {
-                if (def->is_partition_key()) {
-                    builder.add(_partition_key[def->component_index()]);
-                } else if (def->is_static()) {
-                    add_value(*def, static_row_iterator);
-                } else {
-                    builder.add_empty();
-                }
-            }
-        }
-    }
-};
-
-shared_ptr<transport::messages::result_message>
-select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd,
-        const query_options& options, db_clock::time_point now) {
-    cql3::selection::result_set_builder builder(*_selection, now, options.get_serialization_format());
-
-    // FIXME: This special casing saves us the cost of copying an already
-    // linearized response. When we switch views to scattered_reader this will go away.
-    if (results->buf().is_linearized()) {
-        query::result_view view(results->buf().view());
-        view.consume(cmd->slice, result_set_building_visitor(builder, *this));
-    } else {
-        bytes_ostream w(results->buf());
-        query::result_view view(w.linearize());
-        view.consume(cmd->slice, result_set_building_visitor(builder, *this));
-    }
-
+    cql3::selection::result_set_builder builder(*_selection, now,
+            options.get_serialization_format());
+    query::result_view::consume(results->buf(), cmd->slice,
+            cql3::selection::result_set_builder::visitor(builder, *_schema,
+                    *_selection));
     auto rs = builder.build();
+
     if (needs_post_query_ordering()) {
         rs->sort(_ordering_comparator);
         if (_is_reversed) {

@@ -145,6 +145,20 @@ public:
     result_view(bytes_view v) : _v(v) {}
 
     template <typename ResultVisitor>
+    static void consume(const bytes_ostream& buf, const partition_slice& slice, ResultVisitor&& visitor) {
+        // FIXME: This special casing saves us the cost of copying an already
+        // linearized response. When we switch views to scattered_reader this will go away.
+        if (buf.is_linearized()) {
+            result_view view(buf.view());
+            view.consume(slice, std::forward<ResultVisitor>(visitor));
+        } else {
+            bytes_ostream w(buf);
+            result_view view(w.linearize());
+            view.consume(slice, std::forward<ResultVisitor>(visitor));
+        }
+    }
+
+    template <typename ResultVisitor>
     void consume(const partition_slice& slice, ResultVisitor&& visitor) {
         data_input in(_v);
         while (in.has_next()) {

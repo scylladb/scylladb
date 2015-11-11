@@ -39,47 +39,54 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
-
 #include "bytes.hh"
 #include "keys.hh"
+#include "utils/data_input.hh"
+#include "utils/data_output.hh"
+#include "db/serializer.hh"
+#include "paging_state.hh"
 
-namespace service {
-
-namespace pager {
-
-class paging_state final {
-    partition_key _partition_key;
-    clustering_key _clustering_key;
-    uint32_t _remaining;
-
-public:
-    paging_state(partition_key pk, clustering_key ck, uint32_t rem);
-
-    /**
-     * Last processed key, i.e. where to start from in next paging round
-     */
-    const partition_key& get_partition_key() const {
-        return _partition_key;
-    }
-    /**
-     * Clustering key in last partition. I.e. first, next, row
-     */
-    const clustering_key& get_clustering_key() const {
-        return _clustering_key;
-    }
-    /**
-     * Max remaining rows to fetch in total.
-     * I.e. initial row_limit - #rows returned so far.
-     */
-    uint32_t get_remaining() const {
-        return _remaining;
-    }
-
-    static ::shared_ptr<paging_state> deserialize(bytes_opt bytes);
-    bytes_opt serialize() const;
-};
-
+service::pager::paging_state::paging_state(partition_key pk, clustering_key ck,
+        uint32_t rem)
+        : _partition_key(std::move(pk)), _clustering_key(ck), _remaining(rem) {
 }
 
+::shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
+        bytes_opt data) {
+    if (!data) {
+        return nullptr;
+    }
+
+    data_input in(*data);
+
+    try {
+        auto pk = db::serializer<partition_key_view>::read(in);
+        auto ck = db::serializer<clustering_key_view>::read(in);
+        auto rem(in.read<uint32_t>());
+
+        return ::make_shared<paging_state>(std::move(pk), std::move(ck), rem);
+    } catch (...) {
+        std::throw_with_nested(
+                exceptions::protocol_exception(
+                        "Invalid value for the paging state"));
+    }
+}
+
+bytes_opt service::pager::paging_state::serialize() const {
+    auto pkv = _partition_key.view();
+    auto ckv = _clustering_key.view();
+
+    db::serializer<partition_key_view> pks(pkv);
+    db::serializer<clustering_key_view> cks(ckv);
+
+    auto size = pks.size() + cks.size() + sizeof(uint32_t);
+
+    bytes res{bytes::initialized_later(), size};
+    data_output out(res);
+
+    pks.write(out);
+    cks.write(out);
+    out.write(_remaining);
+
+    return {res};
 }
