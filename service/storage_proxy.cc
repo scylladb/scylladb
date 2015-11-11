@@ -760,10 +760,12 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
  */
 storage_proxy::response_id_type
 storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type) {
-    keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
+    auto keyspace_name = m.schema()->ks_name();
+    keyspace& ks = _db.local().find_keyspace(keyspace_name);
     auto& rs = ks.get_replication_strategy();
     std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
-    std::vector<gms::inet_address> pending_endpoints = get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), ks);
+    std::vector<gms::inet_address> pending_endpoints =
+        get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
     auto all = boost::range::join(natural_endpoints, pending_endpoints);
 

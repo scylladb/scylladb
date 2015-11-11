@@ -489,6 +489,19 @@ void token_metadata::add_moving_endpoint(token t, inet_address endpoint) {
     _moving_endpoints[t] = endpoint;
 }
 
+std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
+    std::vector<gms::inet_address> endpoints;
+    auto ranges = get_pending_ranges(keyspace_name);
+    for (auto& x : ranges) {
+        if (x.first.contains(token, dht::token_comparator())) {
+            for (auto& addr : x.second) {
+                endpoints.push_back(addr);
+            }
+        }
+    }
+    return endpoints;
+}
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();

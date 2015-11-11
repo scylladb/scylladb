@@ -882,25 +882,7 @@ public:
         return sb.toString();
     }
 #endif
-    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const keyspace& ks)
-    {
-        // FIXME: implement it
-        return std::vector<gms::inet_address>();
-#if 0
-        Map<Range<Token>, Collection<InetAddress>> ranges = getPendingRanges(keyspaceName);
-        if (ranges.isEmpty())
-            return Collections.emptyList();
-
-        Set<InetAddress> endpoints = new HashSet<InetAddress>();
-        for (Map.Entry<Range<Token>, Collection<InetAddress>> entry : ranges.entrySet())
-        {
-            if (entry.getKey().contains(token))
-                endpoints.addAll(entry.getValue());
-        }
-
-        return endpoints;
-#endif
-    }
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
 #if 0
     /**
      * @deprecated retained for benefit of old tests
