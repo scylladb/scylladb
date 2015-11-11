@@ -26,7 +26,7 @@ namespace api {
 
 using namespace scollectd;
 namespace cm = httpd::compaction_manager_json;
-
+using namespace json;
 
 static future<json::json_return_type> get_cm_stats(http_context& ctx,
         int64_t compaction_manager::stats::*f) {
@@ -40,27 +40,31 @@ static future<json::json_return_type> get_cm_stats(http_context& ctx,
 void set_compaction_manager(http_context& ctx, routes& r) {
     cm::get_compactions.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         std::vector<cm::jsonmap> map;
         return make_ready_future<json::json_return_type>(map);
     });
 
     cm::get_compaction_summary.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         std::vector<sstring> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>("");
+        // FIXME
+        warn(unimplemented::cause::API);
+        return make_ready_future<json::json_return_type>(json_void());
     });
 
     cm::stop_compaction.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         return make_ready_future<json::json_return_type>("");
     });
 
@@ -81,20 +85,23 @@ void set_compaction_manager(http_context& ctx, routes& r) {
 
     cm::get_bytes_compacted.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         return make_ready_future<json::json_return_type>(0);
     });
 
     cm::get_compaction_history.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         std::vector<cm::history> res;
         return make_ready_future<json::json_return_type>(res);
     });
 
     cm::get_compaction_info.set(r, [] (std::unique_ptr<request> req) {
         //TBD
-        unimplemented();
+        // FIXME
+        warn(unimplemented::cause::API);
         std::vector<cm::compaction_info> res;
         return make_ready_future<json::json_return_type>(res);
     });
