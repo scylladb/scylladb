@@ -72,6 +72,7 @@ private:
     bool _flush_before_transfer = true;
     // FIXME: ActiveRepairService.UNREPAIRED_SSTABLE
     long UNREPAIRED_SSTABLE = 0;
+    bool _range_added = false;
 public:
 
     /**

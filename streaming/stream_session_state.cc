@@ -14,9 +14,11 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * Modified by Cloudius Systems.
- * Copyright 2015 Cloudius Systems.
+ */
+
+/*
+ * Modified by ScyllaDB.
+ * Copyright 2015 ScyllaDB.
  */
 
 /*
@@ -36,21 +38,25 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
-
+#include "streaming/stream_session_state.hh"
 #include <ostream>
+#include <map>
+#include <seastar/core/sstring.hh>
 
 namespace streaming {
 
-enum class stream_session_state {
-    INITIALIZED,
-    PREPARING,
-    STREAMING,
-    WAIT_COMPLETE,
-    COMPLETE,
-    FAILED,
+static const std::map<stream_session_state, sstring> stream_session_state_names = {
+    {stream_session_state::INITIALIZED,     "INITIALIZED"},
+    {stream_session_state::PREPARING,       "PREPARING"},
+    {stream_session_state::STREAMING,       "STREAMING"},
+    {stream_session_state::WAIT_COMPLETE,   "WAIT_COMPLETE"},
+    {stream_session_state::COMPLETE,        "COMPLETE"},
+    {stream_session_state::FAILED,          "FAILED"},
 };
 
-std::ostream& operator<<(std::ostream& os, const stream_session_state& s);
+std::ostream& operator<<(std::ostream& os, const stream_session_state& s) {
+    os << stream_session_state_names.at(s);
+    return os;
+}
 
-} // namespace
+}

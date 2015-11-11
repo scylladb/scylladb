@@ -69,25 +69,26 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
 void stream_transfer_task::start() {
     using shard_id = net::messaging_service::shard_id;
     using net::messaging_verb;
-    sslog.debug("stream_transfer_task: {} outgoing_file_message to send", files.size());
+    auto plan_id = session->plan_id();
+    sslog.debug("[Stream #{}] stream_transfer_task: {} outgoing_file_message to send", plan_id, files.size());
     for (auto it = files.begin(); it != files.end();) {
         auto seq = it->first;
         auto& msg = it->second;
         auto id = shard_id{session->peer, session->dst_cpu_id};
-        sslog.debug("stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", seq, msg.detail.cf_id);
+        sslog.debug("[Stream #{}] stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", plan_id, seq, msg.detail.cf_id);
         it++;
-        consume(*msg.detail.mr, [&msg, this, seq, id] (mutation&& m) {
+        consume(*msg.detail.mr, [&msg, this, seq, id, plan_id] (mutation&& m) {
             msg.mutations_nr++;
             auto fm = make_lw_shared<const frozen_mutation>(m);
-            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, id] {
-                sslog.debug("SEND STREAM_MUTATION to {}, cf_id={}", id, fm->column_family_id());
-                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, id, fm] (auto&& f) {
+            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, plan_id, id] {
+                sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, fm->column_family_id());
+                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, plan_id, id, fm] (auto&& f) {
                     try {
                         f.get();
-                        sslog.debug("GOT STREAM_MUTATION Reply");
+                        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply", plan_id);
                         msg.mutations_done.signal();
                     } catch (...) {
-                        sslog.error("stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", id, std::current_exception());
+                        sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", plan_id, id, std::current_exception());
                         msg.mutations_done.broken();
                     }
                 }).finally([] {
@@ -97,13 +98,13 @@ void stream_transfer_task::start() {
             });
         }).then([&msg] {
             return msg.mutations_done.wait(msg.mutations_nr);
-        }).then_wrapped([this, seq, id] (auto&& f){
+        }).then_wrapped([this, seq, plan_id, id] (auto&& f){
             // TODO: Add retry and timeout logic
             try {
                 f.get();
                 this->complete(seq);
             } catch (...) {
-                sslog.error("stream_transfer_task: Fail to send outgoing_file_message to {}: {}", id, std::current_exception());
+                sslog.error("[Stream #{}] stream_transfer_task: Fail to send outgoing_file_message to {}: {}", plan_id, id, std::current_exception());
                 this->session->on_error();
             }
         });
@@ -117,7 +118,9 @@ void stream_transfer_task::complete(int sequence_number) {
 
     files.erase(sequence_number);
 
-    sslog.debug("stream_transfer_task: complete cf_id = {}, seq = {}", this->cf_id, sequence_number);
+    auto plan_id = session->plan_id();
+
+    sslog.debug("[Stream #{}] stream_transfer_task: complete cf_id = {}, seq = {}", plan_id, this->cf_id, sequence_number);
 
     auto signal_complete = files.empty();
     // all file sent, notify session this task is complete.
@@ -125,14 +128,14 @@ void stream_transfer_task::complete(int sequence_number) {
         using shard_id = net::messaging_service::shard_id;
         auto from = utils::fb_utilities::get_broadcast_address();
         auto id = shard_id{session->peer, session->dst_cpu_id};
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", session->plan_id(), id, sequence_number);
-        session->ms().send_stream_mutation_done(id, session->plan_id(), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
+        sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", plan_id, id, sequence_number);
+        session->ms().send_stream_mutation_done(id, plan_id, this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
             try {
                 f.get();
-                sslog.debug("GOT STREAM_MUTATION_DONE Reply");
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply", plan_id);
                 session->transfer_task_completed(this->cf_id);
             } catch (...) {
-                sslog.error("stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", id, std::current_exception());
+                sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, std::current_exception());
                 session->on_error();
             }
         });
