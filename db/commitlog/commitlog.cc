@@ -315,7 +315,8 @@ public:
     // The commit log entry overhead in bytes (int: length + int: head checksum + int: tail checksum)
     static constexpr size_t entry_overhead_size = 3 * sizeof(uint32_t);
     static constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
-    static constexpr size_t descriptor_header_size = 4 * sizeof(uint32_t);
+    static constexpr size_t descriptor_header_size = 5 * sizeof(uint32_t);
+    static constexpr uint32_t segment_magic = ('S'<<24) |('C'<< 16) | ('L' << 8) | 'C';
 
     // The commit log (chained) sync marker/header size in bytes (int: length + int: checksum [segmentId, position])
     static constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
@@ -483,6 +484,7 @@ public:
 
         if (off == 0) {
             // first block. write file header.
+            out.write(segment_magic);
             out.write(_desc.ver);
             out.write(_desc.id);
             crc32_nbo crc;
@@ -1232,16 +1234,20 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 }
                 // Will throw if we got eof
                 data_input in(buf);
+                auto magic = in.read<uint32_t>();
                 auto ver = in.read<uint32_t>();
                 auto id = in.read<uint64_t>();
                 auto checksum = in.read<uint32_t>();
 
-                if (ver == 0 && id == 0 && checksum == 0) {
+                if (magic == 0 && ver == 0 && id == 0 && checksum == 0) {
                     // let's assume this was an empty (pre-allocated)
                     // file. just skip it.
                     return stop();
                 }
 
+                if (magic != segment::segment_magic) {
+                    throw std::invalid_argument("Not a scylla format commitlog file");
+                }
                 crc32_nbo crc;
                 crc.process(ver);
                 crc.process<int32_t>(id & 0xffffffff);
