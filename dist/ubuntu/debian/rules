@@ -16,7 +16,7 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	mkdir -p $(CURDIR)/debian/scylla-server/etc/default/ && \
-	cp $(CURDIR)/dist/redhat/sysconfig/scylla-server  \
+	cp $(CURDIR)/dist/common/sysconfig/scylla-server  \
 		$(CURDIR)/debian/scylla-server/etc/default/
 
 	mkdir -p $(LIMITS) && \

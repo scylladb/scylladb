@@ -36,7 +36,7 @@ mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 
-install -m644 dist/redhat/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
+install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 install -m644 dist/redhat/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -m644 dist/redhat/systemd/scylla-server.service $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
