@@ -88,9 +88,19 @@ future_json_function get_server_getter(std::function<uint64_t(const rpc::stats&)
 }
 
 void set_messaging_service(http_context& ctx, routes& r) {
+    get_timeout_messages.set(r, get_client_getter([](const shard_info& c) {
+        return c.get_stats().timeout;
+    }));
 
     get_sent_messages.set(r, get_client_getter([](const shard_info& c) {
         return c.get_stats().sent_messages;
+    }));
+
+    get_dropped_messages.set(r, get_client_getter([](const shard_info& c) {
+        // We don't have the same drop message mechanism
+        // as origin has.
+        // hence we can always return 0
+        return 0;
     }));
 
     get_exception_messages.set(r, get_client_getter([](const shard_info& c) {
@@ -109,7 +119,7 @@ void set_messaging_service(http_context& ctx, routes& r) {
         return c.sent_messages;
     }));
 
-    get_dropped_messages.set(r, [](std::unique_ptr<request> req) {
+    get_dropped_messages_by_ver.set(r, [](std::unique_ptr<request> req) {
         shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb, 0);
 
         return net::get_messaging_service().map_reduce([map](const uint64_t* local_map) mutable {

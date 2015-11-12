@@ -8,13 +8,16 @@
    ],
    "apis":[
       {
-         "path":"/messaging_service/totaltimeouts",
+         "path":"/messaging_service/messages/timeout",
          "operations":[
             {
                "method":"GET",
-               "summary":"Total number of timeouts happened on this node",
-               "type":"long",
-               "nickname":"get_totaltimeouts",
+               "summary":"Get the number of timeout messages",
+               "type":"array",
+               "items":{
+                  "type":"message_counter"
+               },
+               "nickname":"get_timeout_messages",
                "produces":[
                   "application/json"
                ],
@@ -25,7 +28,7 @@
          ]
       },
       {
-         "path":"/messaging_service/messages/dropped",
+         "path":"/messaging_service/messages/dropped_by_ver",
          "operations":[
             {
                "method":"GET",
@@ -33,6 +36,25 @@
                "type":"array",
                "items":{
                   "type":"verb_counter"
+               },
+               "nickname":"get_dropped_messages_by_ver",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/messaging_service/messages/dropped",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the number of messages that were dropped before sending",
+               "type":"array",
+               "items":{
+                  "type":"message_counter"
                },
                "nickname":"get_dropped_messages",
                "produces":[
