@@ -1631,7 +1631,7 @@ public:
 
         return ranges;
     }
-#if 0
+
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1641,17 +1641,18 @@ public:
      * @param key key for which we need to find the endpoint
      * @return the endpoint responsible for this key
      */
-    public List<InetAddress> getNaturalEndpoints(String keyspaceName, String cf, String key)
-    {
-        CFMetaData cfMetaData = Schema.instance.getKSMetaData(keyspaceName).cfMetaData().get(cf);
-        return getNaturalEndpoints(keyspaceName, getPartitioner().getToken(cfMetaData.getKeyValidator().fromString(key)));
+    std::vector<gms::inet_address> get_natural_endpoints(const sstring& keyspace,
+            const sstring& cf, const sstring& key) const {
+        sstables::key_view key_view = sstables::key_view(bytes_view(reinterpret_cast<const signed char*>(key.c_str()), key.size()));
+        dht::token token = dht::global_partitioner().get_token(key_view);
+        return get_natural_endpoints(keyspace, token);
     }
-
+#if 0
     public List<InetAddress> getNaturalEndpoints(String keyspaceName, ByteBuffer key)
     {
         return getNaturalEndpoints(keyspaceName, getPartitioner().getToken(key));
     }
-
+#endif
     /**
      * This method returns the N endpoints that are responsible for storing the
      * specified key i.e for replication.
@@ -1660,11 +1661,10 @@ public:
      * @param pos position for which we need to find the endpoint
      * @return the endpoint responsible for this token
      */
-    public List<InetAddress> getNaturalEndpoints(String keyspaceName, RingPosition pos)
-    {
-        return Keyspace.open(keyspaceName).getReplicationStrategy().getNaturalEndpoints(pos);
+    std::vector<gms::inet_address>  get_natural_endpoints(const sstring& keyspace, const token& pos) const {
+        return _db.local().find_keyspace(keyspace).get_replication_strategy().get_natural_endpoints(pos);
     }
-
+#if 0
     /**
      * This method attempts to return N endpoints that are responsible for storing the
      * specified key i.e for replication.
