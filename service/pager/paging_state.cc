@@ -48,7 +48,7 @@
 
 service::pager::paging_state::paging_state(partition_key pk, clustering_key ck,
         uint32_t rem)
-        : _partition_key(std::move(pk)), _clustering_key(ck), _remaining(rem) {
+        : _partition_key(std::move(pk)), _clustering_key(std::move(ck)), _remaining(rem) {
 }
 
 ::shared_ptr<service::pager::paging_state> service::pager::paging_state::deserialize(
@@ -88,5 +88,5 @@ bytes_opt service::pager::paging_state::serialize() const {
     cks.write(out);
     out.write(_remaining);
 
-    return {res};
+    return {std::move(res)};
 }
