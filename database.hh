@@ -102,6 +102,16 @@ class replay_position_reordered_exception : public std::exception {};
 using memtable_list = std::vector<lw_shared_ptr<memtable>>;
 using sstable_list = sstables::sstable_list;
 
+// The CF has a "stats" structure. But we don't want all fields here,
+// since some of them are fairly complex for exporting to collectd. Also,
+// that structure matches what we export via the API, so better leave it
+// untouched. And we need more fields. We will summarize it in here what
+// we need.
+struct cf_stats {
+    int64_t pending_memtables_flushes_count = 0;
+    int64_t pending_memtables_flushes_bytes = 0;
+};
+
 class column_family {
 public:
     struct config {
@@ -113,6 +123,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        ::cf_stats* cf_stats = nullptr;
     };
     struct no_commitlog {};
     struct stats {
@@ -445,6 +456,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        ::cf_stats* cf_stats = nullptr;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
@@ -503,6 +515,7 @@ public:
 //   use shard_of() for data
 
 class database {
+    ::cf_stats _cf_stats;
     logalloc::region_group _dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
