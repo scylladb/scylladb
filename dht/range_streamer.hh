@@ -73,6 +73,7 @@ public:
     class i_source_filter {
     public:
         virtual bool should_include(inet_address endpoint) = 0;
+        virtual ~i_source_filter() {}
     };
 
     /**
