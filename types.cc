@@ -2454,6 +2454,9 @@ data_value::data_value(bytes v) : data_value(make_new(bytes_type, v)) {
 data_value::data_value(sstring v) : data_value(make_new(utf8_type, v)) {
 }
 
+data_value::data_value(bool v) : data_value(make_new(boolean_type, v)) {
+}
+
 data_value::data_value(int32_t v) : data_value(make_new(int32_type, v)) {
 }
 
