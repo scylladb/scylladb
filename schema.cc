@@ -549,3 +549,136 @@ bool check_compound(sstring comparator) {
     return comparator.compare(0, compound.size(), compound) == 0;
 }
 }
+
+schema::const_iterator
+schema::regular_begin() const {
+    return regular_columns().begin();
+}
+
+schema::const_iterator
+schema::regular_end() const {
+    return regular_columns().end();
+}
+
+schema::const_iterator
+schema::regular_lower_bound(const bytes& name) const {
+    // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
+    auto i = _regular_columns_by_name.lower_bound(name);
+    if (i == _regular_columns_by_name.end()) {
+        return regular_end();
+    } else {
+        return regular_begin() + i->second->id;
+    }
+}
+
+schema::const_iterator
+schema::regular_upper_bound(const bytes& name) const {
+    // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
+    auto i = _regular_columns_by_name.upper_bound(name);
+    if (i == _regular_columns_by_name.end()) {
+        return regular_end();
+    } else {
+        return regular_begin() + i->second->id;
+    }
+}
+
+data_type
+schema::column_name_type(const column_definition& def) const {
+    return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
+}
+
+const column_definition&
+schema::regular_column_at(column_id id) const {
+    if (id > regular_columns_count()) {
+        throw std::out_of_range("column_id");
+    }
+    return _raw._columns.at(column_offset(column_kind::regular_column) + id);
+}
+
+const column_definition&
+schema::static_column_at(column_id id) const {
+    if (id > static_columns_count()) {
+        throw std::out_of_range("column_id");
+    }
+    return _raw._columns.at(column_offset(column_kind::static_column) + id);
+}
+
+bool
+schema::is_last_partition_key(const column_definition& def) const {
+    return &_raw._columns.at(partition_key_size() - 1) == &def;
+}
+
+bool
+schema::has_static_columns() const {
+    return !static_columns().empty();
+}
+
+size_t
+schema::partition_key_size() const {
+    return column_offset(column_kind::clustering_key);
+}
+
+size_t
+schema::clustering_key_size() const {
+    return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
+}
+
+size_t
+schema::static_columns_count() const {
+    return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
+}
+
+size_t
+schema::compact_columns_count() const {
+    return _raw._columns.size() - column_offset(column_kind::compact_column);
+}
+
+size_t
+schema::regular_columns_count() const {
+    return _raw._columns.size() - column_offset(column_kind::regular_column);
+}
+
+schema::const_iterator_range_type
+schema::partition_key_columns() const {
+    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::partition_key)
+            , _raw._columns.begin() + column_offset(column_kind::clustering_key));
+}
+
+schema::const_iterator_range_type
+schema::clustering_key_columns() const {
+    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::clustering_key)
+            , _raw._columns.begin() + column_offset(column_kind::static_column));
+}
+
+schema::const_iterator_range_type
+schema::static_columns() const {
+    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::static_column)
+            , _raw._columns.begin() + column_offset(column_kind::regular_column));
+}
+
+schema::const_iterator_range_type
+schema::regular_columns() const {
+    return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::regular_column)
+            , _raw._columns.end());
+}
+
+const column_definition&
+schema::compact_column() const {
+    if (compact_columns_count() > 1) {
+        throw std::runtime_error("unexpected number of compact columns");
+    }
+    return *(_raw._columns.begin() + column_offset(column_kind::compact_column));
+}
+
+const schema::columns_type&
+schema::all_columns_in_select_order() const {
+    return _raw._columns;
+}
+
+uint32_t
+schema::position(const column_definition& column) const {
+    if (column.is_primary_key()) {
+        return column.id;
+    }
+    return clustering_key_size();
+}

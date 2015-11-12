@@ -421,116 +421,43 @@ public:
 
     const column_definition* get_column_definition(const bytes& name) const;
     const column_definition& column_at(column_kind, column_id) const;
-    const_iterator regular_begin() const {
-        return regular_columns().begin();
-    }
-    const_iterator regular_end() const {
-        return regular_columns().end();
-    }
-    const_iterator regular_lower_bound(const bytes& name) const {
-        // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
-        auto i = _regular_columns_by_name.lower_bound(name);
-        if (i == _regular_columns_by_name.end()) {
-            return regular_end();
-        } else {
-            return regular_begin() + i->second->id;
-        }
-    }
-    const_iterator regular_upper_bound(const bytes& name) const {
-        // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
-        auto i = _regular_columns_by_name.upper_bound(name);
-        if (i == _regular_columns_by_name.end()) {
-            return regular_end();
-        } else {
-            return regular_begin() + i->second->id;
-        }
-    }
-    data_type column_name_type(const column_definition& def) const {
-        return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
-    }
-    const column_definition& regular_column_at(column_id id) const {
-        if (id > regular_columns_count()) {
-            throw std::out_of_range("column_id");
-        }
-        return _raw._columns.at(column_offset(column_kind::regular_column) + id);
-    }
-    const column_definition& static_column_at(column_id id) const {
-        if (id > static_columns_count()) {
-            throw std::out_of_range("column_id");
-        }
-        return _raw._columns.at(column_offset(column_kind::static_column) + id);
-    }
-    bool is_last_partition_key(const column_definition& def) const {
-        return &_raw._columns.at(partition_key_size() - 1) == &def;
-    }
-    bool has_collections() const ;
-    bool has_static_columns() const {
-        return !static_columns().empty();
-    }
-    size_t partition_key_size() const {
-        return column_offset(column_kind::clustering_key);
-    }
-    size_t clustering_key_size() const {
-        return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
-    }
-    size_t static_columns_count() const {
-        return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
-    }
-    size_t compact_columns_count() const {
-        return _raw._columns.size() - column_offset(column_kind::compact_column);
-    }
-    size_t regular_columns_count() const {
-        return _raw._columns.size() - column_offset(column_kind::regular_column);
-    }
+    const_iterator regular_begin() const;
+    const_iterator regular_end() const;
+    const_iterator regular_lower_bound(const bytes& name) const;
+    const_iterator regular_upper_bound(const bytes& name) const;
+    data_type column_name_type(const column_definition& def) const;
+    const column_definition& regular_column_at(column_id id) const;
+    const column_definition& static_column_at(column_id id) const;
+    bool is_last_partition_key(const column_definition& def) const;
+    bool has_collections() const;
+    bool has_static_columns() const;
+    size_t partition_key_size() const;
+    size_t clustering_key_size() const;
+    size_t static_columns_count() const;
+    size_t compact_columns_count() const;
+    size_t regular_columns_count() const;
     // Returns a range of column definitions
-    const_iterator_range_type partition_key_columns() const {
-        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::partition_key)
-                , _raw._columns.begin() + column_offset(column_kind::clustering_key));
-    }
+    const_iterator_range_type partition_key_columns() const;
     // Returns a range of column definitions
-    const_iterator_range_type clustering_key_columns() const {
-        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::clustering_key)
-                , _raw._columns.begin() + column_offset(column_kind::static_column));
-    }
+    const_iterator_range_type clustering_key_columns() const;
     // Returns a range of column definitions
-    const_iterator_range_type static_columns() const {
-        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::static_column)
-                , _raw._columns.begin() + column_offset(column_kind::regular_column));
-    }
+    const_iterator_range_type static_columns() const;
     // Returns a range of column definitions
-    const_iterator_range_type regular_columns() const {
-        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::regular_column)
-                , _raw._columns.end());
-    }
-
+    const_iterator_range_type regular_columns() const;
     // Note that since compact columns are also regular columns, ranging over
     // regular columns and testing if the table is supposed to have a compact
     // column should yield the same result as using this.
-    const column_definition& compact_column() const {
-        if (compact_columns_count() > 1) {
-            throw std::runtime_error("unexpected number of compact columns");
-        }
-        return *(_raw._columns.begin() + column_offset(column_kind::compact_column));
-    }
-
+    const column_definition& compact_column() const;
     // Returns a range of column definitions
-    const columns_type& all_columns_in_select_order() const {
-        return _raw._columns;
-    }
-    uint32_t position(const column_definition& column) const {
-        if (column.is_primary_key()) {
-            return column.id;
-        }
-        return clustering_key_size();
-    }
+    const columns_type& all_columns_in_select_order() const;
+    uint32_t position(const column_definition& column) const;
+
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
-
     const data_type& default_validator() const {
         return _raw._default_validator;
     }
-
     const sstring& ks_name() const {
         return _raw._ks_name;
     }
