@@ -119,6 +119,8 @@ enum class messaging_verb : int32_t {
     RETRY_MESSAGE,
     COMPLETE_MESSAGE,
     SESSION_FAILED_MESSAGE,
+    // end of streaming verbs
+    CLIENT_ID,
     LAST,
 };
 

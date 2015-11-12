@@ -241,11 +241,21 @@ bool messaging_service::knows_version(const gms::inet_address& endpoint) const {
     return true;
 }
 
+// Register a handler (a callback lambda) for verb
+template <typename Func>
+void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
+    ms->rpc()->register_handler(verb, std::move(func));
+}
+
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : _listen_address(ip)
     , _port(port)
     , _rpc(new rpc_protocol_wrapper(serializer{}))
     , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
+    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address) {
+        ci.attach_auxiliary("baddr", broadcast_address);
+        return rpc::no_wait;
+    });
 }
 
 messaging_service::~messaging_service() = default;
@@ -345,8 +355,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     }
 
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), _port);
-    auto client = make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+    auto client = ::make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
+    _rpc->make_client<rpc::no_wait_type(gms::inet_address)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address());
     return it->second.rpc_client;
 }
 
@@ -377,12 +388,6 @@ void messaging_service::remove_rpc_client(shard_id id) {
 
 std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc() {
     return _rpc;
-}
-
-// Register a handler (a callback lambda) for verb
-template <typename Func>
-void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
-    ms->rpc()->register_handler(verb, std::move(func));
 }
 
 // Send a message for verb

@@ -2612,8 +2612,8 @@ void storage_proxy::init_messaging_service() {
 
         return net::messaging_service::no_wait();
     });
-    ms.register_mutation_done([] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
-        gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
+    ms.register_mutation_done([] (const rpc::client_info& cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         get_storage_proxy().invoke_on(shard, [from, response_id] (storage_proxy& sp) {
             sp.got_response(response_id, from);
         });
