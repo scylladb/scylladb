@@ -169,12 +169,6 @@ struct index_info {
 
 class column_definition final {
 public:
-    template<typename ColumnRange>
-    static std::vector<const column_definition*> vectorize(ColumnRange&& columns) {
-        std::vector<const column_definition*> r;
-        boost::transform(std::forward<ColumnRange>(columns), std::back_inserter(r), [] (auto& def) { return &def; });
-        return r;
-    }
 private:
     bytes _name;
 
