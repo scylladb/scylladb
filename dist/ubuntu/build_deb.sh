@@ -5,6 +5,25 @@ if [ ! -e dist/ubuntu/build_deb.sh ]; then
     exit 1
 fi
 
+if [ -e debian ] || [ -e build/release ]; then
+    rm -rf debian build
+    mkdir build
+fi
+
+VERSION=$(./SCYLLA-VERSION-GEN)
+SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
+if [ "$SCYLLA_VERSION" = "development" ]; then
+	SCYLLA_VERSION=0development
+fi
+echo $VERSION > version
+./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
+
+cp -a dist/ubuntu/debian debian
+cp dist/ubuntu/changelog.in debian/changelog
+sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
+sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
+
 sudo apt-get -y update
 
 ./dist/ubuntu/dep/build_dependency.sh
@@ -14,14 +33,4 @@ sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 sudo apt-get -y update
 sudo apt-get -y install g++-5
 
-VERSION=$(./SCYLLA-VERSION-GEN)
-SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
-SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
-if [ "$SCYLLA_VERSION" = "development" ]; then
-	SCYLLA_VERSION=0development
-fi
-cp dist/ubuntu/changelog.in debian/changelog
-sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
-sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
-
-debuild -r fakeroot --no-tgz-check -us -uc
+debuild -r fakeroot -us -uc
