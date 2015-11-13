@@ -34,6 +34,9 @@ public:
         if (_m != other) {
             BOOST_FAIL(sprint("Mutations differ, expected %s\n ...but got: %s", other, _m));
         }
+        if (other != _m) {
+            BOOST_FAIL(sprint("Mutation inequality is not symmetric for %s\n ...and: %s", other, _m));
+        }
         return *this;
     }
 
