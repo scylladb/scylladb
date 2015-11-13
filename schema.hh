@@ -169,6 +169,11 @@ struct index_info {
 
 class column_definition final {
 public:
+    struct name_comparator {
+        bool operator()(const column_definition& d1, const column_definition& d2) const {
+            return d1.name() < d2.name();
+        }
+    };
 private:
     bytes _name;
 
@@ -306,6 +311,8 @@ private:
 
     friend class schema_builder;
 public:
+    using row_column_ids_are_ordered_by_name = std::true_type;
+
     typedef std::vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;
     typedef typename columns_type::const_iterator const_iterator;

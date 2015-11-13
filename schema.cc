@@ -79,6 +79,14 @@ void schema::rebuild() {
         _columns_by_name[def.name()] = &def;
     }
 
+    static_assert(row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
+    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator())) {
+        throw std::runtime_error("Regular columns should be sorted by name");
+    }
+    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator())) {
+        throw std::runtime_error("Static columns should be sorted by name");
+    }
+
     for (const column_definition& def : regular_columns()) {
         _regular_columns_by_name[def.name()] = &def;
     }
