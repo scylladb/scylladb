@@ -442,7 +442,7 @@ public:
         serialize(value._value, i);
         return b;
     }
-    sstring name() const {
+    const sstring& name() const {
         return _name;
     }
     virtual bool is_byte_order_comparable() const {
