@@ -535,6 +535,19 @@ public:
     void reclaim_all_free_segments() {
         reclaim_segments(std::numeric_limits<size_t>::max());
     }
+
+    struct stats {
+        size_t segments_migrated;
+        size_t segments_compacted;
+    };
+private:
+    stats _stats{};
+public:
+    size_t zone_count() const { return _all_zones.size(); }
+    const stats& statistics() const { return _stats; }
+    void on_segment_migration() { _stats.segments_migrated++; }
+    void on_segment_compaction() { _stats.segments_compacted++; }
+    size_t free_segments_in_zones() const { return _free_segments_in_zones; }
 };
 
 size_t segment_pool::reclaim_segments(size_t target) {
@@ -832,6 +845,19 @@ public:
     }
     size_t reclaim_segments(size_t target) { return 0; }
     void reclaim_all_free_segments() { }
+
+    struct stats {
+        size_t segments_migrated;
+        size_t segments_compacted;
+    };
+private:
+    stats _stats{};
+public:
+    size_t zone_count() const { return 0; }
+    const stats& statistics() const { return _stats; }
+    void on_segment_migration() { _stats.segments_migrated++; }
+    void on_segment_compaction() { _stats.segments_compacted++; }
+    size_t free_segments_in_zones() const { return 0; }
 public:
     class reservation_goal;
 };
@@ -1343,6 +1369,7 @@ public:
             _segments.pop();
             _closed_occupancy -= seg->occupancy();
             compact(seg);
+            shard_segment_pool.on_segment_compaction();
         }
     }
 
@@ -1382,6 +1409,7 @@ public:
                 break;
             }
         }
+        shard_segment_pool.on_segment_migration();
     }
 
     // Compacts everything. Mainly for testing.
@@ -1796,8 +1824,24 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return memory::stats().allocated_memory() - occupancy().total_space(); })
         ),
         scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "free_space_in_zones"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.free_segments_in_zones() * segment_size; })
+        ),
+        scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "percent", "occupancy"),
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_fraction() * 100; })
+        ),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "objects", "zones"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.zone_count(); })
+        ),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "operations", "segments_migrated"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_migrated; })
+        ),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "operations", "segments_compacted"),
+            scollectd::make_typed(scollectd::data_type::DERIVE, [] { return shard_segment_pool.statistics().segments_compacted; })
         ),
     });
 }
