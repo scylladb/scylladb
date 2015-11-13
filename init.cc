@@ -25,6 +25,8 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "service/pending_range_calculator_service.hh"
+#include "to_string.hh"
+#include "gms/inet_address.hh"
 
 //
 // NOTE: there functions are (temporarily)
@@ -69,6 +71,12 @@ future<> init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_pro
         }
         if (seeds.empty()) {
             seeds.emplace(gms::inet_address("127.0.0.1"));
+        }
+        auto broadcast_address = utils::fb_utilities::get_broadcast_address();
+        if (broadcast_address != listen_address && seeds.count(listen_address)) {
+            print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
+                  to_string(seeds), listen_address, broadcast_address);
+            throw std::runtime_error("Use broadcast_address for seeds list");
         }
         return gms::get_gossiper().start().then([seeds, cluster_name] {
             auto& gossiper = gms::get_local_gossiper();
