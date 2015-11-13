@@ -417,6 +417,9 @@ partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 # segment multiple), Scylla will flush every dirty CF in the oldest
 # segment and remove it.  So a small total commitlog space will tend
 # to cause more flush activity on less-active columnfamilies.
+#
+# A value of -1 will automatically equate it to the total amount of memory
+# available for Scylla.
 commitlog_total_space_in_mb: 8192
 
 # This sets the amount of memtable flush writer threads.  These will

@@ -316,7 +316,7 @@ public:
     val(commitlog_sync_batch_window_in_ms, uint32_t, 10000, Used,     \
             "Controls how long the system waits for other writes before performing a sync in \"batch\" mode."    \
     )   \
-    val(commitlog_total_space_in_mb, uint32_t, 8192, Used,     \
+    val(commitlog_total_space_in_mb, int64_t, 8192, Used,     \
             "Total space used for commitlogs. If the used space goes above this value, Cassandra rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"  \
             "Related information: Configuring memtable throughput"  \
     )                                                   \

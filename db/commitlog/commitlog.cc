@@ -55,6 +55,7 @@
 #include <core/rwlock.hh>
 #include <core/gate.hh>
 #include <core/fstream.hh>
+#include <seastar/core/memory.hh>
 #include <net/byteorder.hh>
 
 #include "commitlog.hh"
@@ -89,7 +90,7 @@ public:
 
 db::commitlog::config::config(const db::config& cfg)
     : commit_log_location(cfg.commitlog_directory())
-    , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb())
+    , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb() >= 0 ? cfg.commitlog_total_space_in_mb() : memory::stats().total_memory())
     , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
     , commitlog_sync_period_in_ms(cfg.commitlog_sync_batch_window_in_ms())
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
