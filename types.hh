@@ -42,6 +42,7 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
 #include "net/ip.hh"
+#include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
 
 class tuple_type_impl;
@@ -1426,3 +1427,10 @@ data_value::data_value(std::experimental::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
 
+template<>
+struct appending_hash<data_type> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const data_type& v) const {
+        feed_hash(h, v->name());
+    }
+};
