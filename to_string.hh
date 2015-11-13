@@ -56,6 +56,20 @@ to_string(const std::vector<Printable>& items) {
 template<typename Printable>
 static inline
 sstring
+to_string(const std::set<Printable>& items) {
+    return "{" + join(", ", items) + "}";
+}
+
+template<typename Printable>
+static inline
+sstring
+to_string(const std::unordered_set<Printable>& items) {
+    return "{" + join(", ", items) + "}";
+}
+
+template<typename Printable>
+static inline
+sstring
 to_string(std::initializer_list<Printable> items) {
     return "[" + join(", ", std::begin(items), std::end(items)) + "]";
 }
