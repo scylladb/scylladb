@@ -592,6 +592,7 @@ private:
     size_t _active_offset;
     segment_heap _segments; // Contains only closed segments
     occupancy_stats _closed_occupancy;
+    occupancy_stats _non_lsa_occupancy;
     bool _reclaiming_enabled = true;
     bool _evictable = false;
     uint64_t _id;
@@ -760,7 +761,7 @@ public:
     }
 
     occupancy_stats occupancy() const {
-        occupancy_stats total{};
+        occupancy_stats total = _non_lsa_occupancy;
         total += _closed_occupancy;
         if (_active) {
             total += _active->occupancy();
@@ -788,7 +789,16 @@ public:
     virtual void* alloc(allocation_strategy::migrate_fn migrator, size_t size, size_t alignment) override {
         compaction_lock _(*this);
         if (size > max_managed_object_size) {
-            return standard_allocator().alloc(migrator, size, alignment);
+            auto ptr = standard_allocator().alloc(migrator, size, alignment);
+            // This isn't very acurrate, the correct free_space value would be
+            // malloc_usable_size(ptr) - size, but there is no way to get
+            // the exact object size at free.
+            auto allocated_size = malloc_usable_size(ptr);
+            _non_lsa_occupancy += occupancy_stats(0, allocated_size);
+            if (_group) {
+                _group->update(allocated_size);
+            }
+            return ptr;
         } else {
             return alloc_small(migrator, (segment::size_type) size, alignment);
         }
@@ -799,6 +809,11 @@ public:
         segment* seg = shard_segment_pool.containing_segment(obj);
 
         if (!seg) {
+            auto allocated_size = malloc_usable_size(obj);
+            _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
+            if (_group) {
+                _group->update(-allocated_size);
+            }
             standard_allocator().free(obj);
             return;
         }
@@ -849,7 +864,9 @@ public:
         _segments.merge(other._segments);
 
         _closed_occupancy += other._closed_occupancy;
+        _non_lsa_occupancy += other._non_lsa_occupancy;
         other._closed_occupancy = {};
+        other._non_lsa_occupancy = {};
 
         // Make sure both regions will notice a future increment
         // to the reclaim counter
