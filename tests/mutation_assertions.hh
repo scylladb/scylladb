@@ -46,6 +46,20 @@ public:
         }
         return *this;
     }
+
+    // Verifies that mutation data remains unchanged when upgraded to the new schema
+    void is_upgrade_equivalent(schema_ptr new_schema) {
+        mutation m2 = _m;
+        m2.upgrade(new_schema);
+        BOOST_REQUIRE(m2.schema() == new_schema);
+        mutation_assertion(m2).is_equal_to(_m);
+
+        mutation m3 = m2;
+        m3.upgrade(_m.schema());
+        BOOST_REQUIRE(m3.schema() == _m.schema());
+        mutation_assertion(m3).is_equal_to(_m);
+        mutation_assertion(m3).is_equal_to(m2);
+    }
 };
 
 static inline

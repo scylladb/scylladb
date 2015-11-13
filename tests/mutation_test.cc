@@ -845,7 +845,106 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         BOOST_REQUIRE(cell2.is_live());
         BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
     });
+}
 
+SEASTAR_TEST_CASE(test_mutation_upgrade) {
+    return seastar::async([] {
+        auto make_builder = [] {
+            return schema_builder("ks", "cf")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("ck", bytes_type, column_kind::clustering_key);
+        };
+
+        auto s = make_builder()
+                .with_column("sc1", bytes_type, column_kind::static_column)
+                .with_column("v1", bytes_type, column_kind::regular_column)
+                .with_column("v2", bytes_type, column_kind::regular_column)
+                .build();
+
+        auto pk = partition_key::from_singular(*s, data_value(bytes("key1")));
+        auto ckey1 = clustering_key::from_singular(*s, data_value(bytes("A")));
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // without v1
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // without sc1
+                            .with_column("v1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with v1 recreated as static
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with new column inserted before v1
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v0", bytes_type, column_kind::regular_column)
+                            .with_column("v1", bytes_type, column_kind::regular_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with new column inserted after v2
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v0", bytes_type, column_kind::regular_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .with_column("v3", bytes_type, column_kind::regular_column)
+                            .build());
+        }
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, "v1", data_value(bytes("v2:value")), 1);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+
+            auto s2 = make_builder() // v2 changed into a static column, v1 removed
+                    .with_column("v2", bytes_type, column_kind::static_column)
+                    .build();
+
+            m.upgrade(s2);
+
+            mutation m2(pk, s2);
+            m2.partition().clustered_row(ckey1);
+            assert_that(m).is_equal_to(m2);
+        }
+
+        {
+            mutation m(pk, make_builder()
+                    .with_column("v1", bytes_type, column_kind::regular_column)
+                    .with_column("v2", bytes_type, column_kind::regular_column)
+                    .with_column("v3", bytes_type, column_kind::regular_column)
+                    .build());
+            m.set_clustered_cell(ckey1, "v1", data_value(bytes("v1:value")), 1);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+            m.set_clustered_cell(ckey1, "v3", data_value(bytes("v3:value")), 1);
+
+            auto s2 = make_builder() // v2 changed into a static column
+                    .with_column("v1", bytes_type, column_kind::regular_column)
+                    .with_column("v2", bytes_type, column_kind::static_column)
+                    .with_column("v3", bytes_type, column_kind::regular_column)
+                    .build();
+
+            m.upgrade(s2);
+
+            mutation m2(pk, s2);
+            m2.set_clustered_cell(ckey1, "v1", data_value(bytes("v1:value")), 1);
+            m2.set_clustered_cell(ckey1, "v3", data_value(bytes("v3:value")), 1);
+
+            assert_that(m).is_equal_to(m2);
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(test_tombstone_purge) {
