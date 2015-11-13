@@ -92,6 +92,7 @@ public:
         bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
+    logalloc::allocating_section _read_section;
     mutable logalloc::region _region;
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;

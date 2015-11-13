@@ -182,13 +182,14 @@ memtable::make_reader(const query::partition_range& range) {
 
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
+        return _read_section(_region, [&] {
         auto i = partitions.find(pos, partition_entry::compare(_schema));
         if (i != partitions.end()) {
-            logalloc::reclaim_lock _(_region);
             return make_reader_returning(mutation(_schema, i->key(), i->partition()));
         } else {
             return make_empty_reader();
         }
+        });
     } else {
         return make_mutation_reader<scanning_reader>(shared_from_this(), range);
     }
