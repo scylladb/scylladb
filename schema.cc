@@ -235,7 +235,27 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._comment == y._raw._comment
         && x._raw._default_time_to_live == y._raw._default_time_to_live
         && x._raw._regular_column_name_type->equals(y._raw._regular_column_name_type)
-        && x._raw._bloom_filter_fp_chance == y._raw._bloom_filter_fp_chance;
+        && x._raw._bloom_filter_fp_chance == y._raw._bloom_filter_fp_chance
+        && x._raw._compressor_params == y._raw._compressor_params
+        && x._raw._is_dense == y._raw._is_dense
+        && x._raw._is_compound == y._raw._is_compound
+        && x._raw._type == y._raw._type
+        && x._raw._gc_grace_seconds == y._raw._gc_grace_seconds
+        && x._raw._dc_local_read_repair_chance == y._raw._dc_local_read_repair_chance
+        && x._raw._read_repair_chance == y._raw._read_repair_chance
+        && x._raw._min_compaction_threshold == y._raw._min_compaction_threshold
+        && x._raw._max_compaction_threshold == y._raw._max_compaction_threshold
+        && x._raw._min_index_interval == y._raw._min_index_interval
+        && x._raw._max_index_interval == y._raw._max_index_interval
+        && x._raw._memtable_flush_period == y._raw._memtable_flush_period
+        && x._raw._speculative_retry == y._raw._speculative_retry
+        && x._raw._compaction_strategy == y._raw._compaction_strategy
+        && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
+        && x._raw._caching_options == y._raw._caching_options;
+#if 0
+        && Objects.equal(droppedColumns, other.droppedColumns)
+        && Objects.equal(triggers, other.triggers)
+#endif
 }
 
 index_info::index_info(::index_type idx_type,
