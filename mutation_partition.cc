@@ -22,6 +22,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
+#include "converting_mutation_partition_applier.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -1220,4 +1221,13 @@ void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) 
             }
         });
     }
+}
+
+void
+mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) {
+    // We need to copy to provide strong exception guarantees.
+    mutation_partition tmp(new_schema.shared_from_this());
+    converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
+    accept(old_schema, v);
+    *this = std::move(tmp);
 }

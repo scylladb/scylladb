@@ -253,7 +253,6 @@ public:
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
-
 };
 
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
@@ -636,6 +635,12 @@ public:
     void apply(const schema& schema, mutation_partition&& p);
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     void apply(const schema& schema, mutation_partition_view);
+
+    // Converts partiton to the new schema. When succeeds the partition should only be accessed
+    // using the new schema.
+    //
+    // Strong exception guarantees.
+    void upgrade(const schema& old_schema, const schema& new_schema);
 private:
     void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
     void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);

@@ -166,3 +166,12 @@ slice(const std::vector<mutation>& partitions, const query::partition_range& r) 
               : std::lower_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp()))
             : partitions.cend());
 }
+
+void
+mutation::upgrade(const schema_ptr& new_schema) {
+    if (_ptr->_schema != new_schema) {
+        schema_ptr s = new_schema;
+        partition().upgrade(*schema(), *new_schema);
+        _ptr->_schema = std::move(s);
+    }
+}

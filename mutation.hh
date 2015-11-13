@@ -71,6 +71,25 @@ public:
     void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection&& value);
     void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
+
+    // Upgrades this mutation to a newer schema. The new schema must
+    // be obtained using only valid schema transformation:
+    //  * primary key column count must not change
+    //  * column types may only change to those with compatible representations
+    //
+    // After upgrade, mutation's partition should only be accessed using the new schema. User must
+    // ensure proper isolation of accesses.
+    //
+    // Strong exception guarantees.
+    //
+    // Note that the conversion may lose information, it's possible that m1 != m2 after:
+    //
+    //   auto m2 = m1;
+    //   m2.upgrade(s2);
+    //   m2.upgrade(m1.schema());
+    //
+    void upgrade(const schema_ptr&);
+
     std::experimental::optional<atomic_cell_or_collection> get_cell(const clustering_key& rkey, const column_definition& def) const;
     const partition_key& key() const { return _ptr->_dk._key; };
     const dht::decorated_key& decorated_key() const { return _ptr->_dk; };
