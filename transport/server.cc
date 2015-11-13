@@ -240,9 +240,16 @@ cql_server::setup_collectd() {
 }
 
 future<> cql_server::stop() {
+    _stopping = true;
+    for (auto&& l : _listeners) {
+        l.abort_accept();
+    }
+    for (auto&& c : _connections_list) {
+        c.shutdown();
+    }
     service::get_local_storage_service().unregister_subscriber(_notifier.get());
     service::get_local_migration_manager().unregister_listener(_notifier.get());
-    return make_ready_future<>();
+    return std::move(_stopped);
 }
 
 future<>
@@ -253,15 +260,24 @@ cql_server::listen(ipv4_addr addr) {
     listen_options lo;
     lo.reuse_address = true;
     _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));
-    do_accepts(_listeners.size() - 1);
+    _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1)).discard_result();
     return make_ready_future<>();
 }
 
-void
+future<>
 cql_server::do_accepts(int which) {
-    _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
+    ++_connections_being_accepted;
+    return _listeners[which].accept().then_wrapped([this, which] (future<connected_socket, socket_address> f_cs_sa) mutable {
+        --_connections_being_accepted;
+        if (_stopping) {
+            maybe_idle();
+            return;
+        }
+        auto cs_sa = f_cs_sa.get();
+        auto fd = std::get<0>(std::move(cs_sa));
+        auto addr = std::get<1>(std::move(cs_sa));
         fd.set_nodelay(true);
-        auto conn = make_shared<connection>(*this, std::move(fd), addr);
+        auto conn = make_shared<connection>(*this, std::move(fd), std::move(addr));
         ++_connects;
         ++_connections;
         conn->process().then_wrapped([this, conn] (future<> f) {
@@ -403,12 +419,17 @@ cql_server::connection::connection(cql_server& server, connected_socket&& fd, so
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::for_external_calls())
-{ }
+    , _client_state(service::client_state::for_external_calls()) {
+    ++_server._total_connections;
+    ++_server._current_connections;
+    _server._connections_list.push_back(*this);
+}
 
-cql_server::connection::~connection()
-{
+cql_server::connection::~connection() {
+    --_server._current_connections;
     _server._notifier->unregister_connection(this);
+    _server._connections_list.erase(_server._connections_list.iterator_to(*this));
+    _server.maybe_idle();
 }
 
 future<> cql_server::connection::process()
