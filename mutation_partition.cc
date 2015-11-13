@@ -577,16 +577,22 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
 }
 
 bool
-deletable_row::equal(const schema& s, const deletable_row& other) const {
+deletable_row::equal(column_kind kind, const schema& s, const deletable_row& other, const schema& other_schema) const {
     if (_deleted_at != other._deleted_at || _marker != other._marker) {
         return false;
     }
-    return _cells == other._cells;
+    return _cells.equal(kind, s, other._cells, other_schema);
 }
 
 bool
 rows_entry::equal(const schema& s, const rows_entry& other) const {
-    return key().equal(s, other.key()) && row().equal(s, other.row());
+    return equal(s, other, s);
+}
+
+bool
+rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
+    return key().equal(s, other.key()) // Only representation-compatible changes are allowed
+           && row().equal(column_kind::regular_column, s, other.row(), other_schema);
 }
 
 bool
@@ -595,24 +601,30 @@ row_tombstones_entry::equal(const schema& s, const row_tombstones_entry& other) 
 }
 
 bool mutation_partition::equal(const schema& s, const mutation_partition& p) const {
+    return equal(s, p, s);
+}
+
+bool mutation_partition::equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const {
     if (_tombstone != p._tombstone) {
         return false;
     }
 
     if (!std::equal(_rows.begin(), _rows.end(), p._rows.begin(), p._rows.end(),
-        [&s] (const rows_entry& e1, const rows_entry& e2) { return e1.equal(s, e2); }
+        [&] (const rows_entry& e1, const rows_entry& e2) {
+            return e1.equal(this_schema, e2, p_schema);
+        }
     )) {
         return false;
     }
 
     if (!std::equal(_row_tombstones.begin(), _row_tombstones.end(),
         p._row_tombstones.begin(), p._row_tombstones.end(),
-        [&s] (const row_tombstones_entry& e1, const row_tombstones_entry& e2) { return e1.equal(s, e2); }
+        [&] (const row_tombstones_entry& e1, const row_tombstones_entry& e2) { return e1.equal(this_schema, e2); }
     )) {
         return false;
     }
 
-    return _static_row == p._static_row;
+    return _static_row.equal(column_kind::static_column, this_schema, p._static_row, p_schema);
 }
 
 void
@@ -1001,8 +1013,25 @@ bool row::operator==(const row& other) const {
         return false;
     }
 
-    auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
+    auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1,
+                           std::pair<column_id, const atomic_cell_or_collection&> c2) {
         return c1.first == c2.first && c1.second == c2.second;
+    };
+    return with_both_ranges(other, [&] (auto r1, auto r2) {
+        return boost::equal(r1, r2, cells_equal);
+    });
+}
+
+bool row::equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const {
+    if (size() != other.size()) {
+        return false;
+    }
+
+    auto cells_equal = [&] (std::pair<column_id, const atomic_cell_or_collection&> c1,
+                            std::pair<column_id, const atomic_cell_or_collection&> c2) {
+        static_assert(schema::row_column_ids_are_ordered_by_name::value, "Relying on column ids being ordered by name");
+        return this_schema.column_at(kind, c1.first).name() == other_schema.column_at(kind, c2.first).name()
+               && c1.second == c2.second;
     };
     return with_both_ranges(other, [&] (auto r1, auto r2) {
         return boost::equal(r1, r2, cells_equal);

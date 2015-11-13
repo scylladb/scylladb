@@ -243,7 +243,10 @@ public:
 
     row difference(const schema&, column_kind, const row& other) const;
 
+    // Assumes the other row has the same schema
     bool operator==(const row&) const;
+
+    bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
@@ -379,7 +382,7 @@ public:
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
-    bool equal(const schema& s, const deletable_row& other) const;
+    bool equal(column_kind, const schema& s, const deletable_row& other, const schema& other_schema) const;
     bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
@@ -526,6 +529,7 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
     bool equal(const schema& s, const rows_entry& other) const;
+    bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 };
 
 namespace db {
@@ -567,7 +571,8 @@ public:
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
-    bool equal(const schema& s, const mutation_partition&) const;
+    bool equal(const schema&, const mutation_partition&) const;
+    bool equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const;
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
     void apply(tombstone t) { _tombstone.apply(t); }

@@ -117,7 +117,8 @@ mutation::get_cell(const clustering_key& rkey, const column_definition& def) con
 }
 
 bool mutation::operator==(const mutation& m) const {
-    return decorated_key().equal(*schema(), m.decorated_key()) && partition().equal(*schema(), m.partition());
+    return decorated_key().equal(*schema(), m.decorated_key())
+           && partition().equal(*schema(), m.partition(), *m.schema());
 }
 
 bool mutation::operator!=(const mutation& m) const {
