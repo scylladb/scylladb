@@ -82,6 +82,12 @@ public:
         }
         return caching_options(k, r);
     }
+    bool operator==(const caching_options& other) const {
+        return _key_cache == other._key_cache && _row_cache == other._row_cache;
+    }
+    bool operator!=(const caching_options& other) const {
+        return !(*this == other);
+    }
 };
 
 

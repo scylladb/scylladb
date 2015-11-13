@@ -147,6 +147,12 @@ public:
     double get_value() const {
         return _v;
     }
+    bool operator==(const speculative_retry& other) const {
+        return _t == other._t && _v == other._v;
+    }
+    bool operator!=(const speculative_retry& other) const {
+        return !(*this == other);
+    }
 };
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
