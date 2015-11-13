@@ -1474,7 +1474,10 @@ future<> storage_service::do_stop_rpc_server() {
     _thrift_server = {};
     if (tserver) {
         // FIXME: thrift_server::stop() doesn't kill existing connections and wait for them
-        return tserver->stop();
+        // Note: We must capture tserver so that it will not be freed before tserver->stop
+        return tserver->stop().then([tserver] {
+            logger.info("Thrift server stopped");
+        });
     }
     return make_ready_future<>();
 }
@@ -1523,7 +1526,10 @@ future<> storage_service::do_stop_native_transport() {
     _cql_server = {};
     if (cserver) {
         // FIXME: cql_server::stop() doesn't kill existing connections and wait for them
-        return cserver->stop();
+        // Note: We must capture cserver so that it will not be freed before cserver->stop
+        return cserver->stop().then([cserver] {
+            logger.info("CQL server stopped");
+        });
     }
     return make_ready_future<>();
 }
