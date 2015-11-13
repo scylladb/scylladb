@@ -2097,8 +2097,8 @@ storage_proxy::do_query(schema_ptr s,
 
     if (partition_ranges.size() != 1) {
         // FIXME: implement
-        throw std::runtime_error("more than one non singular range not supported yet");
         _stats.read.mark(lc.stop().latency_in_nano());
+        throw std::runtime_error("more than one non singular range not supported yet");
     }
 
     return query_partition_key_range(cmd, std::move(partition_ranges[0]), cl).finally([lc, p] () mutable {
