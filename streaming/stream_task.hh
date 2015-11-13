@@ -59,7 +59,7 @@ public:
     UUID cf_id;
 
     stream_task(shared_ptr<stream_session> _session, UUID _cf_id);
-    ~stream_task();
+    virtual ~stream_task();
 
 public:
     /**
