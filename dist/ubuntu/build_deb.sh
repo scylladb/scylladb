@@ -20,6 +20,7 @@ echo $VERSION > version
 ./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
 
 cp -a dist/ubuntu/debian debian
+cp dist/common/sysconfig/scylla-server debian/scylla-server.default
 cp dist/ubuntu/changelog.in debian/changelog
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
