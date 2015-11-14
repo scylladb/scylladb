@@ -837,9 +837,10 @@ future<> column_family::populate(sstring sstdir) {
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
     auto descriptor = make_lw_shared<sstable_descriptor>();
 
-    return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor] (directory_entry de) {
+  return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
+    return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-        return probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
+        auto f = probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
             if (verifier->count(entry.generation)) {
                 if (verifier->at(entry.generation) == status::has_toc_file) {
                     if (entry.component == sstables::sstable::component_type::TOC) {
@@ -870,6 +871,23 @@ future<> column_family::populate(sstring sstdir) {
                 descriptor->format = entry.format;
             }
         });
+
+        // push future returned by probe_file into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        futures.push_back(std::move(f));
+
+        return make_ready_future<>();
+    }).then([&futures] {
+        return when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
+            try {
+                for (auto& f : ret) {
+                    f.get();
+                }
+            } catch(...) {
+                throw;
+            }
+        });
     }).then([verifier, sstdir, descriptor, this] {
         return parallel_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this] (auto v) {
             if (v.second == status::has_temporary_toc_file) {
@@ -891,6 +909,7 @@ future<> column_family::populate(sstring sstdir) {
             return make_ready_future<>();
         });
     });
+  });
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});
