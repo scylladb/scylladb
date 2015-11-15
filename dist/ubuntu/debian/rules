@@ -16,7 +16,7 @@ override_dh_auto_clean:
 
 override_dh_auto_install:
 	mkdir -p $(LIMITS) && \
-	cp $(CURDIR)/debian/limits.d/scylla.conf  $(LIMITS)
+	cp $(CURDIR)/dist/common/limits.d/scylla.conf  $(LIMITS)
 
 	mkdir -p $(DOC) && \
 	cp $(CURDIR)/*.md $(DOC)
