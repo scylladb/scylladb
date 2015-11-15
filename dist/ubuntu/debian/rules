@@ -15,10 +15,6 @@ override_dh_auto_clean:
 	rm -rf build.ninja seastar/build.ninja
 
 override_dh_auto_install:
-	mkdir -p $(CURDIR)/debian/scylla-server/etc/default/ && \
-	cp $(CURDIR)/dist/redhat/sysconfig/scylla-server  \
-		$(CURDIR)/debian/scylla-server/etc/default/
-
 	mkdir -p $(LIMITS) && \
 	cp $(CURDIR)/debian/limits.d/scylla.conf  $(LIMITS)
 

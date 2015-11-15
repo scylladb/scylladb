@@ -1,9 +1,0 @@
-# Automatically added by dh_installinit
-if [ "$1" = install ] || [ "$1" = upgrade ]; then
-	if [ -e "/etc/init.d/scylla-server" ] && [ -L "/etc/init.d/scylla-server" ] \
-	   && [ $(readlink -f "/etc/init.d/scylla-server") = /lib/init/upstart-job ]
-	then
-		rm -f "/etc/init.d/scylla-server"
-	fi
-fi
-# End automatically added section

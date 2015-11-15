@@ -4,3 +4,4 @@
 build
 build.ninja
 cscope.*
+/debian/
