@@ -12,4 +12,6 @@ if [ "$1" = configure ]; then
     chown -R scylla:scylla /var/lib/scylla
 fi
 
+ln -sfT /etc/scylla /var/lib/scylla/conf
+
 #DEBHELPER#

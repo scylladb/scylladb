@@ -4,6 +4,7 @@ DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
 SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
 LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
 LIBS = $(CURDIR)/debian/scylla-server/usr/lib
+CONF = $(CURDIR)/debian/scylla-server/etc/scylla
 
 override_dh_auto_build:
 	./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=g++-5
@@ -17,6 +18,10 @@ override_dh_auto_clean:
 override_dh_auto_install:
 	mkdir -p $(LIMITS) && \
 	cp $(CURDIR)/dist/common/limits.d/scylla.conf  $(LIMITS)
+
+	mkdir -p $(CONF) && \
+	cp $(CURDIR)/conf/scylla.yaml $(CONF)
+	cp $(CURDIR)/conf/cassandra-rackdc.properties $(CONF)
 
 	mkdir -p $(DOC) && \
 	cp $(CURDIR)/*.md $(DOC)
@@ -34,11 +39,6 @@ override_dh_auto_install:
 
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog
-	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/conf
-	cp $(CURDIR)/conf/scylla.yaml \
-		$(CURDIR)/debian/scylla-server/var/lib/scylla/conf
-	cp $(CURDIR)/conf/cassandra-rackdc.properties \
-		$(CURDIR)/debian/scylla-server/var/lib/scylla/conf
 
 override_dh_strip:
 	dh_strip --dbg-package=scylla-server-dbg
