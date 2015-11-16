@@ -43,7 +43,7 @@
 
 namespace cql3 {
 
-std::experimental::optional<collection_mutation::view>
+std::experimental::optional<collection_mutation_view>
 update_parameters::get_prefetched_list(
     const partition_key& pkey,
     const clustering_key& row_key,

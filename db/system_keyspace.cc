@@ -538,7 +538,7 @@ future<> save_truncation_records(const column_family& cf, db_clock::time_point t
     out.write<db_clock::rep>(truncated_at.time_since_epoch().count());
 
     map_type_impl::native_type tmp;
-    tmp.emplace_back(cf.schema()->id(), buf);
+    tmp.emplace_back(cf.schema()->id(), data_value(buf));
     auto map_type = map_type_impl::get_instance(uuid_type, bytes_type, true);
 
     sstring req = sprint("UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'", LOCAL, LOCAL);

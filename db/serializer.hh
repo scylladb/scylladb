@@ -109,9 +109,9 @@ template<> void serializer<atomic_cell_view>::write(output&, const type&);
 template<> void serializer<atomic_cell_view>::read(atomic_cell_view&, input&);
 template<> atomic_cell_view serializer<atomic_cell_view>::read(input&);
 
-template<> serializer<collection_mutation::view>::serializer(const collection_mutation::view &);
-template<> void serializer<collection_mutation::view>::write(output&, const type&);
-template<> void serializer<collection_mutation::view>::read(collection_mutation::view&, input&);
+template<> serializer<collection_mutation_view>::serializer(const collection_mutation_view &);
+template<> void serializer<collection_mutation_view>::write(output&, const type&);
+template<> void serializer<collection_mutation_view>::read(collection_mutation_view&, input&);
 
 template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
 template<> void serializer<frozen_mutation>::write(output&, const type&);
@@ -160,7 +160,7 @@ typedef serializer<bytes> bytes_serializer; // Compatible with bytes_view_serial
 typedef serializer<bytes_view> bytes_view_serializer; // Compatible with bytes_serializer
 typedef serializer<sstring> sstring_serializer;
 typedef serializer<atomic_cell_view> atomic_cell_view_serializer;
-typedef serializer<collection_mutation::view> collection_mutation_view_serializer;
+typedef serializer<collection_mutation_view> collection_mutation_view_serializer;
 typedef serializer<utils::UUID> uuid_serializer;
 typedef serializer<partition_key_view> partition_key_view_serializer;
 typedef serializer<clustering_key_view> clustering_key_view_serializer;

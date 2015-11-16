@@ -53,8 +53,8 @@ BOOST_AUTO_TEST_CASE(test_writing_and_reading) {
         .build();
 
     partition_key key = partition_key::from_single_value(*s, bytes("key"));
-    clustering_key ck1 = clustering_key::from_deeply_exploded(*s, {bytes("ck1_0"), bytes("ck1_1")});
-    clustering_key ck2 = clustering_key::from_deeply_exploded(*s, {bytes("ck2_0"), bytes("ck2_1")});
+    clustering_key ck1 = clustering_key::from_deeply_exploded(*s, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
+    clustering_key ck2 = clustering_key::from_deeply_exploded(*s, {data_value(bytes("ck2_0")), data_value(bytes("ck2_1"))});
     auto ttl = gc_clock::duration(1);
 
     auto test_freezing = [] (const mutation& m) {
@@ -70,15 +70,15 @@ BOOST_AUTO_TEST_CASE(test_writing_and_reading) {
 
     test_freezing(m);
 
-    m.partition().apply_row_tombstone(*s, clustering_key_prefix::from_deeply_exploded(*s, {bytes("ck2_0")}), new_tombstone());
+    m.partition().apply_row_tombstone(*s, clustering_key_prefix::from_deeply_exploded(*s, {data_value(bytes("ck2_0"))}), new_tombstone());
 
     test_freezing(m);
 
-    m.set_clustered_cell(ck1, "regular_col_1", bytes("regular_col_value"), new_timestamp(), ttl);
+    m.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), new_timestamp(), ttl);
 
     test_freezing(m);
 
-    m.set_clustered_cell(ck1, "regular_col_2", bytes("regular_col_value"), new_timestamp(), ttl);
+    m.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), new_timestamp(), ttl);
 
     test_freezing(m);
 
@@ -86,15 +86,15 @@ BOOST_AUTO_TEST_CASE(test_writing_and_reading) {
 
     test_freezing(m);
 
-    m.set_clustered_cell(ck2, "regular_col_1", bytes("ck2_regular_col_1_value"), new_timestamp());
+    m.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), new_timestamp());
 
     test_freezing(m);
 
-    m.set_static_cell("static_col_1", bytes("static_col_value"), new_timestamp(), ttl);
+    m.set_static_cell("static_col_1", data_value(bytes("static_col_value")), new_timestamp(), ttl);
 
     test_freezing(m);
 
-    m.set_static_cell("static_col_2", bytes("static_col_value"), new_timestamp());
+    m.set_static_cell("static_col_2", data_value(bytes("static_col_value")), new_timestamp());
 
     test_freezing(m);
 }
@@ -109,19 +109,19 @@ BOOST_AUTO_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_a
         .build();
 
     partition_key key = partition_key::from_single_value(*s, bytes("key"));
-    clustering_key ck = clustering_key::from_deeply_exploded(*s, {bytes("ck")});
+    clustering_key ck = clustering_key::from_deeply_exploded(*s, {data_value(bytes("ck"))});
 
     mutation m1(key, s);
     m1.partition().apply(new_tombstone());
-    m1.set_clustered_cell(ck, "reg_1", bytes("val1"), new_timestamp());
-    m1.set_clustered_cell(ck, "reg_2", bytes("val2"), new_timestamp());
+    m1.set_clustered_cell(ck, "reg_1", data_value(bytes("val1")), new_timestamp());
+    m1.set_clustered_cell(ck, "reg_2", data_value(bytes("val2")), new_timestamp());
     m1.partition().apply_insert(*s, ck, new_timestamp());
-    m1.set_static_cell("static_1", bytes("val3"), new_timestamp());
+    m1.set_static_cell("static_1", data_value(bytes("val3")), new_timestamp());
 
     mutation m2(key, s);
-    m2.set_clustered_cell(ck, "reg_1", bytes("val4"), new_timestamp());
+    m2.set_clustered_cell(ck, "reg_1", data_value(bytes("val4")), new_timestamp());
     m2.partition().apply_insert(*s, ck, new_timestamp());
-    m2.set_static_cell("static_1", bytes("val5"), new_timestamp());
+    m2.set_static_cell("static_1", data_value(bytes("val5")), new_timestamp());
 
     mutation m_frozen(key, s);
     m_frozen.partition().apply(*s, freeze(m1).partition());

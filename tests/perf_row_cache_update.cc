@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
             for (unsigned i = 0; i < partitions; ++i) {
                 mutation m(new_key(s), s);
                 for (size_t j = 0; j < row_count; j++) {
-                    m.set_clustered_cell(new_ckey(s), "v", bytes(bytes::initialized_later(), cell_size), 2);
+                    m.set_clustered_cell(new_ckey(s), "v", data_value(bytes(bytes::initialized_later(), cell_size)), 2);
                 }
                 mutations.emplace_back(std::move(m));
             }

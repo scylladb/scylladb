@@ -132,7 +132,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
     mutation m(key, schema);
     m.set_cell({}, to_bytes("version"), version, timestamp);
     m.set_cell({}, to_bytes("written_at"), now, timestamp);
-    m.set_cell({}, to_bytes("data"), std::move(data), timestamp);
+    m.set_cell({}, to_bytes("data"), data_value(std::move(data)), timestamp);
 
     return m;
 }

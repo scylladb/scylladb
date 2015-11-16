@@ -214,8 +214,9 @@ public:
     }
     // common conversions from C++ types to database types
     // note: somewhat dangerous, consider a factory function instead
-    data_value(bytes);
+    explicit data_value(bytes);
     data_value(sstring);
+    data_value(bool);
     data_value(int32_t);
     data_value(int64_t);
     data_value(utils::UUID);
@@ -225,6 +226,7 @@ public:
     data_value(db_clock::time_point);
     data_value(boost::multiprecision::cpp_int);
     data_value(big_decimal);
+    explicit data_value(std::experimental::optional<bytes>);
     template <typename NativeType>
     data_value(std::experimental::optional<NativeType>);
 
@@ -385,7 +387,7 @@ protected:
     virtual size_t native_value_size() const = 0;
     virtual size_t native_value_alignment() const = 0;
     virtual void native_value_copy(const void* from, void* to) const = 0;
-    virtual void native_value_move(const void* from, void* to) const = 0;
+    virtual void native_value_move(void* from, void* to) const = 0;
     virtual void* native_value_clone(const void* from) const = 0;
     virtual void native_value_destroy(void* object) const = 0;
     virtual void native_value_delete(void* object) const = 0;
@@ -462,8 +464,8 @@ protected:
     virtual void native_value_copy(const void* from, void* to) const override {
         new (to) native_type(*reinterpret_cast<const native_type*>(from));
     }
-    virtual void native_value_move(const void* from, void* to) const override {
-        new (to) native_type(std::move(*reinterpret_cast<const native_type*>(from)));
+    virtual void native_value_move(void* from, void* to) const override {
+        new (to) native_type(std::move(*reinterpret_cast<native_type*>(from)));
     }
     virtual void native_value_destroy(void* object) const override {
         reinterpret_cast<native_type*>(object)->~native_type();
@@ -606,17 +608,17 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
-    mutation_view deserialize_mutation_form(collection_mutation::view in) const;
-    bool is_empty(collection_mutation::view in) const;
-    bool is_any_live(collection_mutation::view in, tombstone tomb, gc_clock::time_point now) const;
+    mutation_view deserialize_mutation_form(collection_mutation_view in) const;
+    bool is_empty(collection_mutation_view in) const;
+    bool is_any_live(collection_mutation_view in, tombstone tomb, gc_clock::time_point now) const;
     virtual bytes to_value(mutation_view mut, serialization_format sf) const = 0;
-    bytes to_value(collection_mutation::view mut, serialization_format sf) const;
+    bytes to_value(collection_mutation_view mut, serialization_format sf) const;
     // FIXME: use iterators?
-    collection_mutation::one serialize_mutation_form(const mutation& mut) const;
-    collection_mutation::one serialize_mutation_form(mutation_view mut) const;
-    collection_mutation::one serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
-    collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) const;
-    collection_mutation::one difference(collection_mutation::view a, collection_mutation::view b) const;
+    collection_mutation serialize_mutation_form(const mutation& mut) const;
+    collection_mutation serialize_mutation_form(mutation_view mut) const;
+    collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
+    collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
+    collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const = 0;
     virtual data_value deserialize(bytes_view v, serialization_format sf) const = 0;
     data_value deserialize_value(bytes_view v, serialization_format sf) const {
@@ -763,7 +765,7 @@ protected:
     virtual size_t native_value_size() const override;
     virtual size_t native_value_alignment() const override;
     virtual void native_value_copy(const void* from, void* to) const override;
-    virtual void native_value_move(const void* from, void* to) const override;
+    virtual void native_value_move(void* from, void* to) const override;
     virtual void native_value_destroy(void* object) const override;
     virtual void* native_value_clone(const void* object) const override;
     virtual void native_value_delete(void* object) const override;
@@ -1315,6 +1317,11 @@ data_value make_user_value(data_type tuple_type, user_type_impl::native_type val
 
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
+
+inline
+data_value::data_value(std::experimental::optional<bytes> v)
+        : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<bytes>())) {
+}
 
 template <typename NativeType>
 data_value::data_value(std::experimental::optional<NativeType> v)

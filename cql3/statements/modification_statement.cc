@@ -130,9 +130,9 @@ public:
                     const query::result_row_view& row) {
         update_parameters::prefetch_data::row cells;
 
-        auto add_cell = [&cells] (column_id id, std::experimental::optional<collection_mutation::view>&& cell) {
+        auto add_cell = [&cells] (column_id id, std::experimental::optional<collection_mutation_view>&& cell) {
             if (cell) {
-                cells.emplace(id, collection_mutation::one{to_bytes(cell->data)});
+                cells.emplace(id, collection_mutation{to_bytes(cell->data)});
             }
         };
 

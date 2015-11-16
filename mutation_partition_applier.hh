@@ -42,7 +42,7 @@ public:
         _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(cell));
     }
 
-    virtual void accept_static_cell(column_id id, collection_mutation::view collection) override {
+    virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
         _p._static_row.apply(_schema.column_at(column_kind::static_column, id), atomic_cell_or_collection(collection));
     }
 
@@ -61,7 +61,7 @@ public:
         _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(cell));
     }
 
-    virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
+    virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
         _current_row->cells().apply(_schema.column_at(column_kind::regular_column, id), atomic_cell_or_collection(collection));
     }
 };

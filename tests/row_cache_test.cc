@@ -45,7 +45,7 @@ mutation make_new_mutation(schema_ptr s, partition_key key) {
     mutation m(key, s);
     static thread_local int next_value = 1;
     static thread_local api::timestamp_type next_timestamp = 1;
-    m.set_clustered_cell(clustering_key::make_empty(*s), "v", to_bytes(sprint("v%d", next_value++)), next_timestamp++);
+    m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
     return m;
 }
 

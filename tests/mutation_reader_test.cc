@@ -44,10 +44,10 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_the_same_row) {
         auto s = make_schema();
 
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         mutation m2(partition_key::from_single_value(*s, "key1"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 2);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v2")), 2);
 
         assert_that(make_combined_reader(make_reader_returning(m1), make_reader_returning(m2)))
             .produces(m2)
@@ -60,10 +60,10 @@ SEASTAR_TEST_CASE(test_combining_two_non_overlapping_readers) {
         auto s = make_schema();
 
         mutation m1(partition_key::from_single_value(*s, "keyB"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         mutation m2(partition_key::from_single_value(*s, "keyA"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 2);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v2")), 2);
 
         auto cr = make_combined_reader(make_reader_returning(m1), make_reader_returning(m2));
         assert_that(std::move(cr))
@@ -78,13 +78,13 @@ SEASTAR_TEST_CASE(test_combining_two_partially_overlapping_readers) {
         auto s = make_schema();
 
         mutation m1(partition_key::from_single_value(*s, "keyA"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         mutation m2(partition_key::from_single_value(*s, "keyB"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 1);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v2")), 1);
 
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
-        m3.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v3"), 1);
+        m3.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v3")), 1);
 
         assert_that(make_combined_reader(make_reader_returning_many({m1, m2}), make_reader_returning_many({m2, m3})))
             .produces(m1)
@@ -99,13 +99,13 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
         auto s = make_schema();
 
         mutation m1(partition_key::from_single_value(*s, "keyA"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         mutation m2(partition_key::from_single_value(*s, "keyB"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 1);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v2")), 1);
 
         mutation m3(partition_key::from_single_value(*s, "keyC"), s);
-        m3.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v3"), 1);
+        m3.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v3")), 1);
 
         std::vector<mutation_reader> v;
         v.push_back(make_reader_returning_many({m1, m2, m3}));
@@ -119,7 +119,7 @@ SEASTAR_TEST_CASE(test_combining_one_reader_with_many_partitions) {
 
 static mutation make_mutation_with_key(schema_ptr s, sstring key) {
     mutation m(partition_key::from_single_value(*s, to_bytes(key)), s);
-    m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+    m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
     return m;
 }
 
@@ -194,7 +194,7 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
     return seastar::async([] {
         auto s = make_schema();
         mutation m1(partition_key::from_single_value(*s, "key1"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         assert_that(make_combined_reader(make_reader_returning(m1), make_empty_reader()))
             .produces(m1)
@@ -223,10 +223,10 @@ SEASTAR_TEST_CASE(test_joining_reader) {
         auto s = make_schema();
 
         mutation m1(partition_key::from_single_value(*s, "keyB"), s);
-        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+        m1.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v1")), 1);
 
         mutation m2(partition_key::from_single_value(*s, "keyA"), s);
-        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v2"), 2);
+        m2.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(bytes("v2")), 2);
 
         std::vector<mutation_reader> v;
         v.push_back(make_reader_returning(m1));

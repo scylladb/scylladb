@@ -140,14 +140,14 @@ static mutation make_mutation(mutation_settings settings) {
 
     auto s = builder.build();
 
-    mutation m(partition_key::from_single_value(*s, bytes_type->decompose(random_bytes(settings.partition_key_size))), s);
+    mutation m(partition_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.partition_key_size)))), s);
 
     for (size_t i = 0; i < settings.row_count; ++i) {
-        auto ck = clustering_key::from_single_value(*s, bytes_type->decompose(random_bytes(settings.clustering_key_size)));
+        auto ck = clustering_key::from_single_value(*s, bytes_type->decompose(data_value(random_bytes(settings.clustering_key_size))));
         for (auto&& col : s->regular_columns()) {
             m.set_clustered_cell(ck, col,
                 atomic_cell::make_live(1,
-                    bytes_type->decompose(random_bytes(settings.data_size))));
+                    bytes_type->decompose(data_value(random_bytes(settings.data_size)))));
         }
     }
     return m;

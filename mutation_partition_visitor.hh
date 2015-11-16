@@ -50,7 +50,7 @@ public:
 
     virtual void accept_static_cell(column_id, atomic_cell_view) = 0;
 
-    virtual void accept_static_cell(column_id, collection_mutation::view) = 0;
+    virtual void accept_static_cell(column_id, collection_mutation_view) = 0;
 
     virtual void accept_row_tombstone(clustering_key_prefix_view, tombstone) = 0;
 
@@ -58,5 +58,5 @@ public:
 
     virtual void accept_row_cell(column_id id, atomic_cell_view) = 0;
 
-    virtual void accept_row_cell(column_id id, collection_mutation::view) = 0;
+    virtual void accept_row_cell(column_id id, collection_mutation_view) = 0;
 };

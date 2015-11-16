@@ -234,6 +234,8 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
 };
 
+class collection_mutation_view;
+
 // Represents a mutation of a collection.  Actual format is determined by collection type,
 // and is:
 //   set:  list of atomic_cell
@@ -241,19 +243,29 @@ public:
 //   list: tbd, probably ugly
 class collection_mutation {
 public:
-    struct view {
-        bytes_view data;
-        bytes_view serialize() const { return data; }
-        static view from_bytes(bytes_view v) { return { v }; }
-    };
-    struct one {
-        managed_bytes data;
-        one() {}
-        one(managed_bytes b) : data(std::move(b)) {}
-        one(view v) : data(v.data) {}
-        operator view() const { return { data }; }
-    };
+    managed_bytes data;
+    collection_mutation() {}
+    collection_mutation(managed_bytes b) : data(std::move(b)) {}
+    collection_mutation(collection_mutation_view v);
+    operator collection_mutation_view() const;
 };
+
+class collection_mutation_view {
+public:
+    bytes_view data;
+    bytes_view serialize() const { return data; }
+    static collection_mutation_view from_bytes(bytes_view v) { return { v }; }
+};
+
+inline
+collection_mutation::collection_mutation(collection_mutation_view v)
+        : data(v.data) {
+}
+
+inline
+collection_mutation::operator collection_mutation_view() const {
+    return { data };
+}
 
 namespace db {
 template<typename T>
@@ -274,15 +286,15 @@ public:
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
-    atomic_cell_or_collection(collection_mutation::one cm) : _data(std::move(cm.data)) {}
+    atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm.data)) {}
     explicit operator bool() const {
         return !_data.empty();
     }
-    static atomic_cell_or_collection from_collection_mutation(collection_mutation::one data) {
+    static atomic_cell_or_collection from_collection_mutation(collection_mutation data) {
         return std::move(data.data);
     }
-    collection_mutation::view as_collection_mutation() const {
-        return collection_mutation::view{_data};
+    collection_mutation_view as_collection_mutation() const {
+        return collection_mutation_view{_data};
     }
     bytes_view serialize() const {
         return _data;

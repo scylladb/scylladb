@@ -143,18 +143,18 @@ atomic_cell_view db::serializer<atomic_cell_view>::read(input& in) {
 }
 
 template<>
-db::serializer<collection_mutation::view>::serializer(const collection_mutation::view& c)
+db::serializer<collection_mutation_view>::serializer(const collection_mutation_view& c)
         : _item(c), _size(bytes_view_serializer(c.serialize()).size()) {
 }
 
 template<>
-void db::serializer<collection_mutation::view>::write(output& out, const collection_mutation::view& t) {
+void db::serializer<collection_mutation_view>::write(output& out, const collection_mutation_view& t) {
     bytes_view_serializer::write(out, t.serialize());
 }
 
 template<>
-void db::serializer<collection_mutation::view>::read(collection_mutation::view& c, input& in) {
-    c = collection_mutation::view::from_bytes(bytes_view_serializer::read(in));
+void db::serializer<collection_mutation_view>::read(collection_mutation_view& c, input& in) {
+    c = collection_mutation_view::from_bytes(bytes_view_serializer::read(in));
 }
 
 template<>
@@ -278,7 +278,7 @@ template class db::serializer<bytes> ;
 template class db::serializer<bytes_view> ;
 template class db::serializer<sstring> ;
 template class db::serializer<atomic_cell_view> ;
-template class db::serializer<collection_mutation::view> ;
+template class db::serializer<collection_mutation_view> ;
 template class db::serializer<utils::UUID> ;
 template class db::serializer<partition_key_view> ;
 template class db::serializer<clustering_key_view> ;

@@ -1160,7 +1160,7 @@ public:
     virtual void native_value_copy(const void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
-    virtual void native_value_move(const void* from, void* to) const override {
+    virtual void native_value_move(void* from, void* to) const override {
         fail(unimplemented::cause::COUNTERS);
     }
     virtual void native_value_destroy(void* object) const override {
@@ -1218,7 +1218,7 @@ struct empty_type_impl : abstract_type {
         // Can't happen
         abort();
     }
-    virtual void native_value_move(const void* from, void* to) const override {
+    virtual void native_value_move(void* from, void* to) const override {
         // Can't happen
         abort();
     }
@@ -1318,7 +1318,7 @@ collection_type_impl::as_cql3_type() const {
 }
 
 bytes
-collection_type_impl::to_value(collection_mutation::view mut, serialization_format sf) const {
+collection_type_impl::to_value(collection_mutation_view mut, serialization_format sf) const {
     return to_value(deserialize_mutation_form(mut), sf);
 }
 
@@ -1578,7 +1578,7 @@ map_type_impl::cql3_type_name() const {
     return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation::view cm) const -> mutation_view {
+auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) const -> mutation_view {
     auto&& in = cm.data;
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
@@ -1601,7 +1601,7 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation::view c
     return ret;
 }
 
-bool collection_type_impl::is_empty(collection_mutation::view cm) const {
+bool collection_type_impl::is_empty(collection_mutation_view cm) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -1610,7 +1610,7 @@ bool collection_type_impl::is_empty(collection_mutation::view cm) const {
     return read_simple<uint32_t>(in) == 0;
 }
 
-bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb, gc_clock::time_point now) const {
+bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone tomb, gc_clock::time_point now) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -1632,7 +1632,7 @@ bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone t
 }
 
 template <typename Iterator>
-collection_mutation::one
+collection_mutation
 do_serialize_mutation_form(
         std::experimental::optional<tombstone> tomb,
         boost::iterator_range<Iterator> cells) {
@@ -1663,7 +1663,7 @@ do_serialize_mutation_form(
         writeb(k);
         writeb(v.serialize());
     }
-    return collection_mutation::one{std::move(ret)};
+    return collection_mutation{std::move(ret)};
 }
 
 bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_clock::time_point query_time,
@@ -1696,25 +1696,25 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
     return any_live;
 }
 
-collection_mutation::one
+collection_mutation
 collection_type_impl::serialize_mutation_form(const mutation& mut) const {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
-collection_mutation::one
+collection_mutation
 collection_type_impl::serialize_mutation_form(mutation_view mut) const {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
-collection_mutation::one
+collection_mutation
 collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
     return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
         return e.second.is_live(t, now);
     }));
 }
 
-collection_mutation::one
-collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) const {
+collection_mutation
+collection_type_impl::merge(collection_mutation_view a, collection_mutation_view b) const {
     auto aa = deserialize_mutation_form(a);
     auto bb = deserialize_mutation_form(b);
     mutation_view merged;
@@ -1752,8 +1752,8 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     return serialize_mutation_form(merged);
 }
 
-collection_mutation::one
-collection_type_impl::difference(collection_mutation::view a, collection_mutation::view b) const
+collection_mutation
+collection_type_impl::difference(collection_mutation_view a, collection_mutation_view b) const
 {
     auto aa = deserialize_mutation_form(a);
     auto bb = deserialize_mutation_form(b);
@@ -2359,7 +2359,7 @@ reversed_type_impl::native_value_copy(const void* from, void* to) const {
 }
 
 void
-reversed_type_impl::native_value_move(const void* from, void* to) const {
+reversed_type_impl::native_value_move(void* from, void* to) const {
     return _underlying_type->native_value_move(from, to);
 }
 
@@ -2452,6 +2452,9 @@ data_value::data_value(bytes v) : data_value(make_new(bytes_type, v)) {
 }
 
 data_value::data_value(sstring v) : data_value(make_new(utf8_type, v)) {
+}
+
+data_value::data_value(bool v) : data_value(make_new(boolean_type, v)) {
 }
 
 data_value::data_value(int32_t v) : data_value(make_new(int32_type, v)) {

@@ -46,7 +46,7 @@ void test_parsing_fails(const shared_ptr<const abstract_type>& type, sstring str
 }
 
 BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
-    BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(bytes{"abcdef"})));
+    BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(data_value(bytes{"abcdef"}))));
 }
 
 BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
@@ -515,8 +515,8 @@ BOOST_AUTO_TEST_CASE(test_create_reversed_type) {
     BOOST_REQUIRE(ri->is_reversed());
     BOOST_REQUIRE(ri->is_value_compatible_with(*bytes_type));
     BOOST_REQUIRE(!ri->is_compatible_with(*bytes_type));
-    auto val_lt = bytes_type->decompose(bytes("a"));
-    auto val_gt = bytes_type->decompose(bytes("b"));
+    auto val_lt = bytes_type->decompose(data_value(bytes("a")));
+    auto val_gt = bytes_type->decompose(data_value(bytes("b")));
     auto straight_comp = bytes_type->compare(bytes_view(val_lt), bytes_view(val_gt));
     auto reverse_comp = ri->compare(bytes_view(val_lt), bytes_view(val_gt));
     BOOST_REQUIRE(straight_comp == -reverse_comp);
@@ -532,13 +532,13 @@ BOOST_AUTO_TEST_CASE(test_create_reverse_collection_type) {
     std::vector<data_value> first_set;
     bytes b1("1");
     bytes b2("2");
-    first_set.push_back(b1);
-    first_set.push_back(b2);
+    first_set.push_back(data_value(b1));
+    first_set.push_back(data_value(b2));
 
     std::vector<data_value> second_set;
     bytes b3("2");
-    second_set.push_back(b1);
-    second_set.push_back(b3);
+    second_set.push_back(data_value(b1));
+    second_set.push_back(data_value(b3));
 
     auto bv1 = my_set_type->decompose(make_set_value(my_set_type, first_set));
     auto bv2 = my_set_type->decompose(make_set_value(my_set_type, second_set));

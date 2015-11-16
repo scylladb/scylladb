@@ -66,7 +66,7 @@ public:
         _w.write_blob(c.value());
     }
 
-    void add(collection_mutation::view v) {
+    void add(collection_mutation_view v) {
         // FIXME: store this in a bitmap
         _w.write<int8_t>(true);
         _w.write_blob(v.data);

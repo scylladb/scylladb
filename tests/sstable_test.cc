@@ -675,7 +675,7 @@ SEASTAR_TEST_CASE(find_key_map) {
         auto b2 = to_bytes("2");
 
         auto map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
-        auto map_element = std::make_pair<data_value, data_value>(b1, b2);
+        auto map_element = std::make_pair<data_value, data_value>(data_value(b1), data_value(b2));
         std::vector<std::pair<data_value, data_value>> map;
         map.push_back(map_element);
 
@@ -697,8 +697,8 @@ SEASTAR_TEST_CASE(find_key_set) {
         bytes b1("1");
         bytes b2("2");
 
-        set.push_back(b1);
-        set.push_back(b2);
+        set.push_back(data_value(b1));
+        set.push_back(data_value(b2));
         auto set_type = set_type_impl::get_instance(bytes_type, true);
         kk.push_back(make_set_value(set_type, set));
 
@@ -717,8 +717,8 @@ SEASTAR_TEST_CASE(find_key_list) {
 
         bytes b1("1");
         bytes b2("2");
-        list.push_back(b1);
-        list.push_back(b2);
+        list.push_back(data_value(b1));
+        list.push_back(data_value(b2));
 
         auto list_type = list_type_impl::get_instance(bytes_type, true);
         kk.push_back(make_list_value(list_type, list));
@@ -738,8 +738,8 @@ SEASTAR_TEST_CASE(find_key_composite) {
         auto b1 = bytes("HCG8Ee7ENWqfCXipk4-Ygi2hzrbfHC8pTtH3tEmV3d9p2w8gJPuMN_-wp1ejLRf4kNEPEgtgdHXa6NoFE7qUig==");
         auto b2 = bytes("VJizqYxC35YpLaPEJNt_4vhbmKJxAg54xbiF1UkL_9KQkqghVvq34rZ6Lm8eRTi7JNJCXcH6-WtNUSFJXCOfdg==");
 
-        kk.push_back(b1);
-        kk.push_back(b2);
+        kk.push_back(data_value(b1));
+        kk.push_back(data_value(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
@@ -779,8 +779,8 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
         auto b1 = bytes("ZEunFCoqAidHOrPiU3U6UAvUU01IYGvT3kYtYItJ1ODTk7FOsEAD-dqmzmFNfTDYvngzkZwKrLxthB7ItLZ4HQ==");
         auto b2 = bytes("K-GpWx-QtyzLb12z5oNS0C03d3OzNyBKdYJh1XjHiC53KudoqdoFutHUMFLe6H9Emqv_fhwIJEKEb5Csn72f9A==");
 
-        kk.push_back(b1);
-        kk.push_back(b2);
+        kk.push_back(data_value(b1));
+        kk.push_back(data_value(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0

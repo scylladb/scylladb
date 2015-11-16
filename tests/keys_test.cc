@@ -117,7 +117,7 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
 BOOST_AUTO_TEST_CASE(test_conversions_between_view_and_wrapper) {
     schema s({}, "", "", {{"c1", bytes_type}}, {}, {}, {}, utf8_type);
 
-    auto key = partition_key::from_deeply_exploded(s, {bytes("value")});
+    auto key = partition_key::from_deeply_exploded(s, {data_value(bytes("value"))});
     partition_key_view key_view = key;
 
     BOOST_REQUIRE(key_view.equal(s, key));
