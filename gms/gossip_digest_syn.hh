@@ -72,7 +72,7 @@ public:
         return _partioner;
     }
 
-    std::vector<gossip_digest> get_gossip_digests() {
+    std::vector<gossip_digest> get_gossip_digests() const {
         return _digests;
     }
 

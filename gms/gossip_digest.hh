@@ -68,19 +68,19 @@ public:
         , _max_version(version) {
     }
 
-    inet_address get_endpoint() {
+    inet_address get_endpoint() const {
         return _endpoint;
     }
 
-    int32_t get_generation() {
+    int32_t get_generation() const {
         return _generation;
     }
 
-    int32_t get_max_version() {
+    int32_t get_max_version() const {
         return _max_version;
     }
 
-    int32_t compare_to(gossip_digest d) {
+    int32_t compare_to(gossip_digest d) const {
         if (_generation != d.get_generation()) {
             return (_generation - d.get_generation());
         }

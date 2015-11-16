@@ -74,7 +74,7 @@ public:
         _version = version_generator::get_next_version();
     }
 
-    int32_t get_heart_beat_version() {
+    int32_t get_heart_beat_version() const {
         return _version;
     }
 
