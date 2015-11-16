@@ -281,7 +281,7 @@ public:
     // Throws std::bad_alloc when reserves can't be increased to a sufficient level.
     //
     template<typename Func>
-    auto operator()(logalloc::region& r, Func&& func) {
+    decltype(auto) operator()(logalloc::region& r, Func&& func) {
         auto prev_lsa_reserve = _lsa_reserve;
         auto prev_std_reserve = _std_reserve;
         try {

@@ -93,6 +93,7 @@ public:
 private:
     schema_ptr _schema;
     mutable logalloc::region _region;
+    logalloc::allocating_section _allocating_section;
     partitions_type partitions;
     db::replay_position _replay_position;
     lw_shared_ptr<sstables::sstable> _sstable;

@@ -204,9 +204,10 @@ memtable::update(const db::replay_position& rp) {
 void
 memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
-        logalloc::reclaim_lock _(_region);
-        mutation_partition& p = find_or_create_partition(m.decorated_key());
-        p.apply(*_schema, m.partition());
+        _allocating_section(_region, [&, this] {
+            mutation_partition& p = find_or_create_partition(m.decorated_key());
+            p.apply(*_schema, m.partition());
+        });
     });
     update(rp);
 }
@@ -214,9 +215,10 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
 void
 memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
-        logalloc::reclaim_lock _(_region);
-        mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
-        p.apply(*_schema, m.partition());
+        _allocating_section(_region, [&, this] {
+            mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
+            p.apply(*_schema, m.partition());
+        });
     });
     update(rp);
 }
