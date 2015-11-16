@@ -222,6 +222,7 @@ class segment_pool {
     size_t _emergency_reserve_max = 30;
     segment_stack _emergency_reserve;
     bool _allocation_failure_flag = false;
+    size_t _non_lsa_memory_in_use = 0;
 private:
     segment* allocate_or_fallback_to_reserve();
     void free_or_restore_to_reserve(segment* seg) noexcept;
@@ -242,6 +243,15 @@ public:
     bool allocation_failure_flag() { return _allocation_failure_flag; }
     void refill_emergency_reserve();
     size_t trim_emergency_reserve_to_max();
+    void update_non_lsa_memory_in_use(ssize_t n) {
+        _non_lsa_memory_in_use += n;
+    }
+    size_t non_lsa_memory_in_use() const {
+        return _non_lsa_memory_in_use;
+    }
+    size_t total_memory_in_use() const {
+        return _non_lsa_memory_in_use + _segments_in_use * segment::size;
+    }
     struct reservation_goal;
 };
 
@@ -350,6 +360,7 @@ segment_pool::segment_pool()
 class segment_pool {
     std::unordered_map<const segment*, segment_descriptor> _segments;
     size_t _segments_in_use{};
+    size_t _non_lsa_memory_in_use = 0;
 public:
     segment* new_segment() {
         ++_segments_in_use;
@@ -398,6 +409,15 @@ public:
     bool allocation_failure_flag() { return false; }
     void refill_emergency_reserve() {}
     size_t trim_emergency_reserve_to_max() { return  0; }
+    void update_non_lsa_memory_in_use(ssize_t n) {
+        _non_lsa_memory_in_use += n;
+    }
+    size_t non_lsa_memory_in_use() const {
+        return _non_lsa_memory_in_use;
+    }
+    size_t total_memory_in_use() const {
+        return _non_lsa_memory_in_use + _segments_in_use * segment::size;
+    }
 public:
     class reservation_goal;
 };
@@ -798,6 +818,7 @@ public:
             if (_group) {
                 _group->update(allocated_size);
             }
+            shard_segment_pool.update_non_lsa_memory_in_use(allocated_size);
             return ptr;
         } else {
             return alloc_small(migrator, (segment::size_type) size, alignment);
@@ -814,6 +835,7 @@ public:
             if (_group) {
                 _group->update(-allocated_size);
             }
+            shard_segment_pool.update_non_lsa_memory_in_use(-allocated_size);
             standard_allocator().free(obj);
             return;
         }
@@ -1034,21 +1056,12 @@ void tracker::impl::full_compaction() {
     logger.debug("Compaction done, {}", occupancy());
 }
 
-static void reclaim_from_evictable(region::impl& r, size_t target_segments_in_use) {
+static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
     while (true) {
-        auto deficit = (shard_segment_pool.segments_in_use() - target_segments_in_use) * segment::size;
+        auto deficit = shard_segment_pool.total_memory_in_use() - target_mem_in_use;
         auto occupancy = r.occupancy();
         auto used = occupancy.used_space();
         if (used == 0) {
-            // FIXME: There could be still some objects which are allocated
-            // using that region but were too large and are not managed by
-            // LSA. We should avoid having large objects in the first place,
-            // and make the managed_blob object fracture them internally. To
-            // handle eviction of large objects we should first move the
-            // segment pool service into the seastar allocator, so that
-            // evicting large objects counts towards that pool. It also makes
-            // sense to have the reclaimer coupled with that segment pool, and
-            // not with the page pool like it is now.
             break;
         }
         auto used_target = used - std::min(used, deficit - std::min(deficit, occupancy.free_space()));
@@ -1058,7 +1071,7 @@ static void reclaim_from_evictable(region::impl& r, size_t target_segments_in_us
                 logger.debug("Unable to evict more, evicted {} bytes", used - r.occupancy().used_space());
                 return;
             }
-            if (shard_segment_pool.segments_in_use() <= target_segments_in_use) {
+            if (shard_segment_pool.total_memory_in_use() <= target_mem_in_use) {
                 logger.debug("Target met after evicting {} bytes", used - r.occupancy().used_space());
                 return;
             }
@@ -1091,7 +1104,7 @@ struct reclaim_timer {
     }
 };
 
-size_t tracker::impl::reclaim(size_t bytes) {
+size_t tracker::impl::reclaim(size_t memory_to_release) {
     //
     // Algorithm outline.
     //
@@ -1111,28 +1124,26 @@ size_t tracker::impl::reclaim(size_t bytes) {
     // operation. Having it is still valuable during testing and in most cases
     // should work just fine even if allocates.
 
-    constexpr auto max_bytes = std::numeric_limits<size_t>::max() - segment::size;
-    auto segments_to_release = align_up(std::min(max_bytes, bytes), segment::size) >> segment::size_shift;
-    size_t nr_released = 0;
+    size_t mem_released = 0;
 
-    size_t released_from_reserve = shard_segment_pool.trim_emergency_reserve_to_max();
-    nr_released += released_from_reserve;
-    if (nr_released >= segments_to_release) {
-        return nr_released * segment::size;
+    size_t released_from_reserve = shard_segment_pool.trim_emergency_reserve_to_max() * segment::size;
+    mem_released += released_from_reserve;
+    if (mem_released >= memory_to_release) {
+        return mem_released;
     }
 
     if (!_reclaiming_enabled) {
-        return nr_released * segment::size;
+        return mem_released;
     }
 
     reclaiming_lock _(*this);
     reclaim_timer timing_guard;
 
-    size_t in_use = shard_segment_pool.segments_in_use();
-    auto target = in_use - std::min(in_use, segments_to_release - nr_released);
+    size_t mem_in_use = shard_segment_pool.total_memory_in_use();
+    auto target_mem = mem_in_use - std::min(mem_in_use, memory_to_release - mem_released);
 
-    logger.debug("Compacting, requested {} ({} B), {} segments in use ({} B), target is {}",
-        segments_to_release, bytes, in_use, in_use * segment::size, target);
+    logger.debug("Compacting, requested {} bytes, {} bytes in use, target is {}",
+        memory_to_release, mem_in_use, target_mem);
 
     // Allow dipping into reserves while compacting
     segment_pool::reservation_goal open_emergency_pool(shard_segment_pool, 0);
@@ -1153,7 +1164,7 @@ size_t tracker::impl::reclaim(size_t bytes) {
         }
     }
 
-    while (shard_segment_pool.segments_in_use() > target) {
+    while (shard_segment_pool.total_memory_in_use() > target_mem) {
         boost::range::pop_heap(_regions, cmp);
         region::impl* r = _regions.back();
 
@@ -1167,27 +1178,27 @@ size_t tracker::impl::reclaim(size_t bytes) {
         boost::range::push_heap(_regions, cmp);
     }
 
-    auto released_during_compaction = in_use - shard_segment_pool.segments_in_use();
+    auto released_during_compaction = mem_in_use - shard_segment_pool.total_memory_in_use();
 
-    if (shard_segment_pool.segments_in_use() > target) {
+    if (shard_segment_pool.total_memory_in_use() > target_mem) {
         logger.debug("Considering evictable regions.");
         // FIXME: Fair eviction
         for (region::impl* r : _regions) {
             if (r->is_evictable()) {
-                reclaim_from_evictable(*r, target);
-                if (shard_segment_pool.segments_in_use() <= target) {
+                reclaim_from_evictable(*r, target_mem);
+                if (shard_segment_pool.total_memory_in_use() <= target_mem) {
                     break;
                 }
             }
         }
     }
 
-    nr_released += in_use - shard_segment_pool.segments_in_use();
+    mem_released += mem_in_use - shard_segment_pool.total_memory_in_use();
 
-    logger.debug("Released {} segments (wanted {}), {} during compaction, {} from reserve",
-        nr_released, segments_to_release, released_during_compaction, released_from_reserve);
+    logger.debug("Released {} bytes (wanted {}), {} during compaction, {} from reserve",
+        mem_released, memory_to_release, released_during_compaction, released_from_reserve);
 
-    return nr_released * segment::size;
+    return mem_released;
 }
 
 void tracker::impl::register_region(region::impl* r) {
