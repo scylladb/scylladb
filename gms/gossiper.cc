@@ -1085,6 +1085,10 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
 
 // Runs inside seastar::async context
 void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& eps) {
+    std::experimental::optional<endpoint_state> local_ep_state;
+    if (endpoint_state_map.count(ep) > 0) {
+        local_ep_state = endpoint_state_map.at(ep);
+    }
     if (!is_dead_state(eps)) {
         if (endpoint_state_map.count(ep))  {
             logger.info("Node {} has restarted, now UP", ep);
@@ -1095,21 +1099,23 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     logger.trace("Adding endpoint state for {}", ep);
     endpoint_state_map[ep] = eps;
 
-    auto& local_state = endpoint_state_map.at(ep);
+    auto& ep_state = endpoint_state_map.at(ep);
 
-    // the node restarted: it is up to the subscriber to take whatever action is necessary
-    _subscribers.for_each([ep, local_state] (auto& subscriber) {
-        subscriber->on_restart(ep, local_state);
-    });
+    if (local_ep_state) {
+        // the node restarted: it is up to the subscriber to take whatever action is necessary
+        _subscribers.for_each([ep, local_ep_state] (auto& subscriber) {
+            subscriber->on_restart(ep, *local_ep_state);
+        });
+    }
 
-    if (!is_dead_state(local_state)) {
-        mark_alive(ep, local_state);
+    if (!is_dead_state(ep_state)) {
+        mark_alive(ep, ep_state);
     } else {
         logger.debug("Not marking {} alive due to dead state", ep);
-        mark_dead(ep, local_state);
+        mark_dead(ep, ep_state);
     }
-    _subscribers.for_each([ep, local_state] (auto& subscriber) {
-        subscriber->on_join(ep, local_state);
+    _subscribers.for_each([ep, ep_state] (auto& subscriber) {
+        subscriber->on_join(ep, ep_state);
     });
 }
 
