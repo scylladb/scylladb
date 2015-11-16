@@ -139,9 +139,46 @@ class scylla_memory(gdb.Command):
                 front = int(span['link']['_next'])
             gdb.write('{index:5} {size:13} {total}\n'.format(index=index, size=(1<<index)*page_size, total=total*page_size))
 
+class scylla_lsa(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        lsa = gdb.parse_and_eval('logalloc::shard_segment_pool')
+        segment_size = int(gdb.parse_and_eval('logalloc::segment::size'))
+
+        lsa_mem = int(lsa['_segments_in_use']) * segment_size
+        non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
+        total_mem = lsa_mem + non_lsa_mem
+        gdb.write('Log Structured Allocator\n\nLSA memory in use: {lsa_mem:>16}\n'
+            'Non-LSA memory in use: {non_lsa_mem:>12}\nTotal memory in use: {total_mem:>14}\n\n'
+            .format(lsa_mem=lsa_mem, non_lsa_mem = non_lsa_mem, total_mem = total_mem))
+
+        er_goal = int(lsa['_current_emergency_reserve_goal'])
+        er_max = int(lsa['_emergency_reserve_max'])
+        er_current = int(lsa['_emergency_reserve']['_size'])
+        gdb.write('Emergency reserve goal: {er_goal:>11}\nEmergency reserve max: {er_max:>12}\n'
+            'Emergency reserve current: {er_current:>8}\n\n'
+            .format(er_goal=er_goal, er_max=er_max, er_current=er_current))
+
+        lsa_tracker = gdb.parse_and_eval('logalloc::tracker_instance._impl')['_M_t']['_M_head_impl']
+        regions = lsa_tracker['_regions']
+        region = regions['_M_impl']['_M_start']
+        gdb.write('LSA regions:\n')
+        while region != regions['_M_impl']['_M_finish']:
+            gdb.write('    Region #{r_id}\n      - reclaimable: {r_en:>14}\n'
+                '      - evictable: {r_ev:16}\n      - non-LSA memory: {r_non_lsa:>11}\n'
+                '      - closed LSA memory: {r_lsa:>8}\n      - unused memory: {r_unused:>12}\n'
+                .format(r_id=int(region['_id']), r_en=bool(region['_reclaiming_enabled']),
+                    r_ev=bool(region['_evictable']),
+                    r_non_lsa=int(region['_non_lsa_occupancy']['_total_space']),
+                    r_lsa=int(region['_closed_occupancy']['_total_space']),
+                    r_unused=int(region['_closed_occupancy']['_free_space'])))
+            region = region + 1
+
 
 scylla()
 scylla_databases()
 scylla_keyspaces()
 scylla_column_families()
 scylla_memory()
+scylla_lsa()
