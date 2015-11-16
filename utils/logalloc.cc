@@ -1224,6 +1224,18 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_space(); })
         ),
         scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_total_space"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); })
+        ),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_used_space"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); })
+        ),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "large_objects_total_space"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [] { return shard_segment_pool.non_lsa_memory_in_use(); })
+        ),
+        scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "non_lsa_used_space"),
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return memory::stats().allocated_memory() - occupancy().total_space(); })
         ),
