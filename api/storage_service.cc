@@ -181,15 +181,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         });
     });
 
-    ss::get_natural_endpoints.set(r, [&ctx](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        auto keyspace = validate_keyspace(ctx, req->param);
-        auto column_family = req->get_query_param("cf");
-        auto key = req->get_query_param("key");
-
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::get_natural_endpoints.set(r, [&ctx](const_req req) {
+        auto keyspace = validate_keyspace(ctx, req.param);
+        return container_to_vec(service::get_local_storage_service().get_natural_endpoints(keyspace, req.get_query_param("cf"),
+                req.get_query_param("key")));
     });
 
     ss::get_snapshot_details.set(r, [](std::unique_ptr<request> req) {
