@@ -81,7 +81,18 @@ void stream_transfer_task::start() {
             msg.mutations_nr++;
             auto fm = make_lw_shared<const frozen_mutation>(m);
             return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, plan_id, id] {
-                sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, fm->column_family_id());
+                auto cf_id = fm->column_family_id();
+                // Skip sending the mutation if the cf is dropped after we
+                // call to make_local_reader in stream_session::add_transfer_ranges()
+                try {
+                    session->get_local_db().find_column_family(cf_id);
+                } catch (no_such_column_family&) {
+                    sslog.info("[Stream #{}] SEND STREAM_MUTATION to {} skipped, cf_id={}", plan_id, id, cf_id);
+                    msg.mutations_done.signal();
+                    get_local_stream_manager().mutation_send_limiter().signal();
+                    return stop_iteration::yes;
+                }
+                sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, cf_id);
                 session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, plan_id, id, fm] (auto&& f) {
                     try {
                         f.get();
