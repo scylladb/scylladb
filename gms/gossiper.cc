@@ -423,6 +423,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     }
 
     _live_endpoints.erase(endpoint);
+    _live_endpoints_just_added.remove(endpoint);
     _unreachable_endpoints.erase(endpoint);
     // do not remove endpointState until the quarantine expires
     get_local_failure_detector().remove(endpoint);
@@ -868,6 +869,12 @@ future<bool> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
         return make_ready_future<bool>(false);
     }
     logger.trace("do_gossip_to_live_member: live_endpoint nr={}", _live_endpoints.size());
+    if (!_live_endpoints_just_added.empty()) {
+        auto ep = _live_endpoints_just_added.front();
+        _live_endpoints_just_added.pop_front();
+        logger.info("do_gossip_to_live_member: Favor newly added node {}", ep);
+        return send_gossip(message, std::set<inet_address>{ep});
+    }
     return send_gossip(message, _live_endpoints);
 }
 
@@ -950,6 +957,7 @@ void gossiper::reset_endpoint_state_map() {
     endpoint_state_map.clear();
     _unreachable_endpoints.clear();
     _live_endpoints.clear();
+    _live_endpoints_just_added.clear();
 }
 
 std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() {
@@ -1059,6 +1067,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_alive();
     local_state.update_timestamp(); // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
     _live_endpoints.insert(addr);
+    _live_endpoints_just_added.push_back(addr);
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
@@ -1075,6 +1084,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     logger.trace("marking as down {}", addr);
     local_state.mark_dead();
     _live_endpoints.erase(addr);
+    _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
     logger.info("inet_address {} is now DOWN", addr);
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
