@@ -255,15 +255,17 @@ void storage_service::join_token_ring(int delay) {
         get_local_pending_range_calculator_service().block_until_finished().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
-#if 0
-        if (Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")) &&
-                (
-                    _token_metadata.getBootstrapTokens().valueSet().size() > 0 ||
-                    _token_metadata.getLeavingEndpoints().size() > 0 ||
-                    _token_metadata.getMovingEndpoints().size() > 0
-                ))
-            throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
-#endif
+
+        if (get_property_rangemovement() &&
+            (!_token_metadata.get_bootstrap_tokens().empty() ||
+             !_token_metadata.get_leaving_endpoints().empty() ||
+             !_token_metadata.get_moving_endpoints().empty())) {
+            logger.info("tokens {}, leaving {}, moving {}",
+                _token_metadata.get_bootstrap_tokens().size(),
+                _token_metadata.get_leaving_endpoints().size(),
+                _token_metadata.get_moving_endpoints().size());
+            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+        }
 
         if (!is_replacing()) {
             if (_token_metadata.is_member(get_broadcast_address())) {
