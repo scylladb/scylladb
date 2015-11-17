@@ -69,7 +69,6 @@ private:
         }
 
         if (_last_pkey) {
-            assert(_last_ckey);
             auto dpk = dht::global_partitioner().decorate_key(*_schema, *_last_pkey);
             dht::ring_position lo(dpk);
 
@@ -77,7 +76,7 @@ private:
 
             logger.trace("PKey={}, CKey={}, reversed={}", dpk, *_last_ckey, reversed);
 
-            bool has_cks = _schema->clustering_key_size() > 0;
+            bool has_cks = _last_ckey && _schema->clustering_key_size() > 0;
 
             // Note: we're assuming both that the ranges are checked
             // and "cql-compliant", and that storage_proxy will process
@@ -277,6 +276,17 @@ private:
                 // so this should never happen. Also we confuse the APE code
                 // when we've selected a row range for first key that results in
                 // zero rows.
+                if (_row_count == 0 && _is_prev_last_pkey) {
+                    return;
+                }
+                if (_row_count == 0 && included_rows == page_size) {
+                    return;
+                }
+                if (_row_count == 0) {
+                    ++included_rows;
+                    last_ckey = {};
+                }
+                visitor::accept_partition_end(static_row);
             }
         };
 
