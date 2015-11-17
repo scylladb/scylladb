@@ -93,14 +93,22 @@ void stream_transfer_task::start() {
                     return stop_iteration::yes;
                 }
                 sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, cf_id);
-                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, plan_id, id, fm] (auto&& f) {
+                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, cf_id, plan_id, id, fm] (auto&& f) {
                     try {
                         f.get();
                         sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply", plan_id);
                         msg.mutations_done.signal();
-                    } catch (...) {
-                        sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", plan_id, id, std::current_exception());
-                        msg.mutations_done.broken();
+                    } catch (std::exception& e) {
+                        auto err = std::string(e.what());
+                        // Seastar RPC does not provide exception type info, so we can not catch no_such_column_family here
+                        // Need to compare the exception error msg
+                        if (err.find("Can't find a column family with UUID") != std::string::npos) {
+                            sslog.info("[Stream #{}] remote node {} does not have the cf_id = {}", plan_id, id, cf_id);
+                            msg.mutations_done.signal();
+                        } else {
+                            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", plan_id, id, err);
+                            msg.mutations_done.broken();
+                        }
                     }
                 }).finally([] {
                     get_local_stream_manager().mutation_send_limiter().signal();
