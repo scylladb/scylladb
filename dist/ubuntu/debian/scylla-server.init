@@ -30,7 +30,7 @@ SCRIPTNAME=/etc/init.d/$NAME
 
 # Read configuration variable file if it is present
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
-export OPTS_FILE NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_ARGS
+export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
 
 # Define LSB log_* functions.
 . /lib/lsb/init-functions

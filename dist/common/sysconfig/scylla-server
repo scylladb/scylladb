@@ -1,6 +1,3 @@
-# path for options file:
-OPTS_FILE=/var/lib/scylla/conf/scylla.yaml
-
 # choose following mode: virtio, dpdk, posix
 NETWORK_MODE=posix
 
@@ -24,6 +21,12 @@ USER=scylla
 
 # group for process
 GROUP=scylla
+
+# scylla home dir
+SCYLLA_HOME=/var/lib/scylla
+
+# scylla config dir
+SCYLLA_CONF=/etc/scylla
 
 # additional arguments
 SCYLLA_ARGS=""

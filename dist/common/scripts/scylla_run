@@ -1,6 +1,6 @@
 #!/bin/sh -e
 
-args="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --options-file $OPTS_FILE $SCYLLA_ARGS"
+args="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info $SCYLLA_ARGS"
 
 if [ "$NETWORK_MODE" = "posix" ]; then
     args="$args --network-stack posix"
@@ -14,4 +14,5 @@ if [ "$SET_NIC" == "yes" ]; then
     sudo sh /usr/lib/scylla/posix_net_conf.sh >/dev/null 2>&1 || true
 fi
 
-exec sudo -u $USER env HOME=/var/lib/scylla SCYLLA_HOME=/var/lib/scylla /usr/bin/scylla $args
+export HOME=/var/lib/scylla
+exec sudo -E -u $USER /usr/bin/scylla $args

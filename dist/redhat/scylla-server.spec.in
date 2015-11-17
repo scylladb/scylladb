@@ -32,12 +32,16 @@ rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT%{_bindir}
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 
 install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
-install -m644 dist/redhat/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
+install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
+install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
+install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
+install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 dist/redhat/systemd/scylla-server.service $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
@@ -53,9 +57,6 @@ install -m644 licenses/* $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
-install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf
-install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf/
-install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/conf/
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -65,6 +66,11 @@ sed -e "s/Defaults    requiretty/#Defaults    requiretty/" /etc/sudoers > /tmp/s
 cp /tmp/sudoers /etc/sudoers
 rm /tmp/sudoers
 %endif
+TMP=""
+# This is for existing users who already installed scylla.yaml on /var/lib/scylla/conf
+if [ -d /var/lib/scylla/conf ] && [ ! -L /var/lib/scylla/conf ]; then
+    cp -a /var/lib/scylla/conf /tmp/%{name}-%{version}-%{release}
+fi
 
 %post
 %systemd_post scylla-server.service
@@ -75,14 +81,24 @@ rm /tmp/sudoers
 %postun
 %systemd_postun
 
+%posttrans
+if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
+    cp -a /tmp/%{name}-%{version}-%{release}/* /etc/scylla/
+    rm -rf /tmp/%{name}-%{version}-%{release}/
+fi
+ln -sfT /etc/scylla /var/lib/scylla/conf
+
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root)
 
-%{_sysconfdir}/sysconfig/scylla-server
+%config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
+%attr(0755,root,root) %dir %{_sysconfdir}/scylla
+%config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
+%config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
 %{_docdir}/scylla/README.md
 %{_docdir}/scylla/README-DPDK.md
 %{_docdir}/scylla/NOTICE.txt
@@ -100,9 +116,6 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
-%attr(0755,root,root) %dir %{_sharedstatedir}/scylla/conf/
-%{_sharedstatedir}/scylla/conf/scylla.yaml
-%{_sharedstatedir}/scylla/conf/cassandra-rackdc.properties
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
