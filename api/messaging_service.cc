@@ -119,6 +119,10 @@ void set_messaging_service(http_context& ctx, routes& r) {
         return c.sent_messages;
     }));
 
+    get_version.set(r, [](const_req req) {
+        return net::get_local_messaging_service().get_raw_version(req.get_query_param("addr"));
+    });
+
     get_dropped_messages_by_ver.set(r, [](std::unique_ptr<request> req) {
         shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb, 0);
 
