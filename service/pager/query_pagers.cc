@@ -61,11 +61,15 @@ private:
     future<> fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, db_clock::time_point now) override {
         auto state = _options.get_paging_state();
         uint32_t extra = 0;
-        if (state) {
+
+        if (!_last_pkey && state) {
             _max = state->get_remaining();
             _last_pkey = state->get_partition_key();
             _last_ckey = state->get_clustering_key();
+        }
 
+        if (_last_pkey) {
+            assert(_last_ckey);
             auto dpk = dht::global_partitioner().decorate_key(*_schema, *_last_pkey);
             dht::ring_position lo(dpk);
 
