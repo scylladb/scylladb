@@ -184,6 +184,30 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/messaging_service/version",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the version number",
+               "type":"int",
+               "nickname":"get_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"Address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{
