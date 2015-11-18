@@ -284,16 +284,16 @@ cql_server::do_accepts(int which) {
             --_connections;
             try {
                 f.get();
-            } catch (std::exception& ex) {
-                logger.debug("connection error: {}", ex.what());
+            } catch (...) {
+                logger.debug("connection error: {}", std::current_exception());
             }
         });
         do_accepts(which);
     }).then_wrapped([] (future<> f) {
         try {
             f.get();
-        } catch (std::exception& ex) {
-            logger.debug("accept failed: {}", ex.what());
+        } catch (...) {
+            logger.debug("accept failed: {}", std::current_exception());
         }
     });
 }
