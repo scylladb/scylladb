@@ -449,12 +449,21 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     update_sstables_known_generation(comps.generation);
     assert(_sstables->count(comps.generation) == 0);
 
-    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
-    auto fut = sst->load();
-    return std::move(fut).then([this, sst = std::move(sst)] () mutable {
-        add_sstable(std::move(*sst));
-        return make_ready_future<>();
-    }).then_wrapped([fname, comps = std::move(comps)] (future<> f) {
+    auto fut = sstable::get_sstable_key_range(*_schema, _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+    return std::move(fut).then([this, sstdir = std::move(sstdir), comps] (range<partition_key> r) {
+        // Checks whether or not sstable belongs to current shard.
+        if (!belongs_to_current_shard(*_schema, std::move(r))) {
+            sstable::mark_sstable_for_deletion(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+            return make_ready_future<>();
+        }
+
+        auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+        auto fut = sst->load();
+        return std::move(fut).then([this, sst = std::move(sst)] () mutable {
+            add_sstable(std::move(*sst));
+            return make_ready_future<>();
+        });
+    }).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
@@ -479,19 +488,6 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
 }
 
 void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
-    auto key_shard = [this] (const partition_key& pk) {
-        auto token = dht::global_partitioner().get_token(*_schema, pk);
-        return dht::shard_of(token);
-    };
-    auto s1 = key_shard(sstable->get_first_partition_key(*_schema));
-    auto s2 = key_shard(sstable->get_last_partition_key(*_schema));
-    auto me = engine().cpu_id();
-    auto included = (s1 <= me) && (me <= s2);
-    if (!included) {
-        dblog.info("sstable {} not relevant for this shard, ignoring", sstable->get_filename());
-        sstable->mark_for_deletion();
-        return;
-    }
     auto generation = sstable->generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
@@ -762,7 +758,11 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
         return sst->load().then([this, sst] {
             return sst->mutate_sstable_level(0);
         }).then([this, sst] {
-            this->add_sstable(sst);
+            auto first = sst->get_first_partition_key(*_schema);
+            auto last = sst->get_last_partition_key(*_schema);
+            if (belongs_to_current_shard(*_schema, first, last)) {
+                this->add_sstable(sst);
+            }
             return make_ready_future<>();
         });
     });
