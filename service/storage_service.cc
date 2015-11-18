@@ -244,15 +244,12 @@ void storage_service::join_token_ring(int delay) {
             }
             sleep(std::chrono::seconds(1)).get();
         }
-#if 0
         // if our schema hasn't matched yet, keep sleeping until it does
         // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-        while (!MigrationManager.isReadyForBootstrap())
-        {
+        while (!get_local_migration_manager().is_ready_for_bootstrap()) {
             set_mode(mode::JOINING, "waiting for schema information to complete", true);
-            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+            sleep(std::chrono::seconds(1)).get();
         }
-#endif
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
         get_local_pending_range_calculator_service().block_until_finished().get();
