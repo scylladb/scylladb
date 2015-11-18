@@ -127,7 +127,7 @@ modes = {
     'release': {
         'sanitize': '',
         'sanitize_libs': '',
-        'opt': '-O2',
+        'opt': '-O3',
         'libs': '',
     },
 }
