@@ -416,6 +416,23 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
+static bool belongs_to_current_shard(const schema& s, const partition_key& first, const partition_key& last) {
+    auto key_shard = [&s] (const partition_key& pk) {
+        auto token = dht::global_partitioner().get_token(s, pk);
+        return dht::shard_of(token);
+    };
+    auto s1 = key_shard(first);
+    auto s2 = key_shard(last);
+    auto me = engine().cpu_id();
+    return (s1 <= me) && (me <= s2);
+}
+
+static bool belongs_to_current_shard(const schema& s, range<partition_key> r) {
+    assert(r.start());
+    assert(r.end());
+    return belongs_to_current_shard(s, r.start()->value(), r.end()->value());
+}
+
 future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
 
     using namespace sstables;
