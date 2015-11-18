@@ -116,8 +116,7 @@ std::experimental::optional<inet_address> get_replace_address() {
 }
 
 bool get_property_join_ring() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-    return true;
+    return get_local_storage_service().db().local().get_config().join_ring();
 }
 
 bool get_property_rangemovement() {

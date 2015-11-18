@@ -744,6 +744,7 @@ public:
     val(api_doc_dir, sstring, "api/api-doc/", Used, "The API definition file directory") \
     val(load_balance, sstring, "none", Used, "CQL request load balancing: 'none' or round-robin'") \
     val(consistent_rangemovement, bool, true, Used, "For -Dcassandra.consistent.rangemovement") \
+    val(join_ring, bool, true, Used, "For -Dcassandra.join_ring") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
