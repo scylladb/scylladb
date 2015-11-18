@@ -44,7 +44,7 @@ def cpus():
     return int(gdb.parse_and_eval('smp::count'))
 
 def find_db(shard):
-    return gdb.parse_and_eval('debug::db')['_instances']['_M_impl']['_M_start'][shard]
+    return gdb.parse_and_eval('debug::db')['_instances']['_M_impl']['_M_start'][shard]['service']['_p']
 
 def find_dbs():
     return [find_db(shard) for shard in range(cpus())]
