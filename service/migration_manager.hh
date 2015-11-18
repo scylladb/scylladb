@@ -113,6 +113,8 @@ public:
     static future<> passive_announce(utils::UUID version);
 
     future<> stop();
+
+    bool is_ready_for_bootstrap();
 };
 
 extern distributed<migration_manager> _the_migration_manager;

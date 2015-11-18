@@ -88,6 +88,29 @@ future<> migration_manager::schedule_schema_pull(const gms::inet_address& endpoi
     return make_ready_future<>();
 }
 
+bool migration_manager::is_ready_for_bootstrap() {
+    auto our_version = get_local_storage_proxy().get_db().local().get_version();
+    bool match = false;
+    for (auto& x : gms::get_local_gossiper().endpoint_state_map) {
+        auto& endpoint = x.first;
+        auto& eps = x.second;
+        if (endpoint == utils::fb_utilities::get_broadcast_address() || !eps.is_alive()) {
+            continue;
+        }
+        auto schema = eps.get_application_state(gms::application_state::SCHEMA);
+        if (!schema) {
+            return false;
+        }
+        utils::UUID remote_version{schema->value};
+        if (our_version != remote_version) {
+            return false;
+        } else {
+            match = true;
+        }
+    }
+    return match;
+}
+
 /**
  * If versions differ this node sends request with local migration list to the endpoint
  * and expecting to receive a list of migrations to apply locally.
