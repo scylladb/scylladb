@@ -55,7 +55,7 @@ static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(0, std::move(value));
 };
 
-static mutation_partition get_partition(const memtable& mt, const partition_key& key) {
+static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
     auto reader = mt.make_reader(query::partition_range::make_singular(dk));
     auto mo = reader().get0();

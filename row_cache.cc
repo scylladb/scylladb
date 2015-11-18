@@ -185,8 +185,8 @@ void row_cache::on_miss() {
 
 class just_cache_scanning_reader final : public mutation_reader::impl {
     row_cache& _cache;
-    row_cache::partitions_type::const_iterator _it;
-    row_cache::partitions_type::const_iterator _end;
+    row_cache::partitions_type::iterator _it;
+    row_cache::partitions_type::iterator _end;
     const query::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
     uint64_t _last_reclaim_count;

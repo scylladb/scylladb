@@ -107,7 +107,7 @@ public:
     explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);
     ~memtable();
     schema_ptr schema() const { return _schema; }
-    future<> apply(const memtable&);
+    future<> apply(memtable&);
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
     const logalloc::region& region() const {
@@ -123,7 +123,7 @@ public:
     // doesn't need to ensure that memtable remains live.
     //
     // The 'range' parameter must be live as long as the reader is being used
-    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range);
 
     mutation_source as_data_source();
     key_source as_key_source();

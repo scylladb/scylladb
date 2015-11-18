@@ -99,23 +99,23 @@ memtable::slice(const query::partition_range& range) const {
 }
 
 class scanning_reader final : public mutation_reader::impl {
-    lw_shared_ptr<const memtable> _memtable;
+    lw_shared_ptr<memtable> _memtable;
     const query::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
-    memtable::partitions_type::const_iterator _i;
-    memtable::partitions_type::const_iterator _end;
+    memtable::partitions_type::iterator _i;
+    memtable::partitions_type::iterator _end;
     uint64_t _last_reclaim_counter;
     size_t _last_partition_count = 0;
     stdx::optional<query::partition_range> _delegate_range;
     mutation_reader _delegate;
 private:
-    memtable::partitions_type::const_iterator lookup_end() {
+    memtable::partitions_type::iterator lookup_end() {
         auto cmp = partition_entry::compare(_memtable->_schema);
         return _range.end()
             ? (_range.end()->is_inclusive()
                 ? _memtable->partitions.upper_bound(_range.end()->value(), cmp)
                 : _memtable->partitions.lower_bound(_range.end()->value(), cmp))
-            : _memtable->partitions.cend();
+            : _memtable->partitions.end();
     }
     void update_iterators() {
         // We must be prepared that iterators may get invalidated during compaction.
@@ -134,14 +134,14 @@ private:
                  ? (_range.start()->is_inclusive()
                     ? _memtable->partitions.lower_bound(_range.start()->value(), cmp)
                     : _memtable->partitions.upper_bound(_range.start()->value(), cmp))
-                 : _memtable->partitions.cbegin();
+                 : _memtable->partitions.begin();
             _end = lookup_end();
             _last_partition_count = _memtable->partition_count();
         }
         _last_reclaim_counter = current_reclaim_counter;
     }
 public:
-    scanning_reader(lw_shared_ptr<const memtable> m, const query::partition_range& range)
+    scanning_reader(lw_shared_ptr<memtable> m, const query::partition_range& range)
         : _memtable(std::move(m))
         , _range(range)
     { }
@@ -167,7 +167,7 @@ public:
         if (_i == _end) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
         }
-        const partition_entry& e = *_i;
+        partition_entry& e = *_i;
         ++_i;
         _last = e.key();
         return make_ready_future<mutation_opt>(mutation(_memtable->_schema, e.key(), e.partition()));
@@ -175,7 +175,7 @@ public:
 };
 
 mutation_reader
-memtable::make_reader(const query::partition_range& range) const {
+memtable::make_reader(const query::partition_range& range) {
     if (query::is_wrap_around(range, *_schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
@@ -202,7 +202,7 @@ memtable::update(const db::replay_position& rp) {
 }
 
 future<>
-memtable::apply(const memtable& mt) {
+memtable::apply(memtable& mt) {
     return do_with(mt.make_reader(), [this] (auto&& rd) mutable {
         return consume(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
