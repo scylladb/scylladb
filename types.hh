@@ -188,6 +188,78 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
+struct empty_t {};
+
+class empty_value_exception : public std::exception {
+public:
+    virtual const char* what() const noexcept override {
+        return "Unexpected empty value";
+    }
+};
+
+// Cassandra has a notion of empty values even for scalars (i.e. int).  This is
+// distinct from NULL which means deleted or never set.  It is serialized
+// as a zero-length byte array (whereas NULL is serialized as a negative-length
+// byte array).
+template <typename T>
+class emptyable {
+    // We don't use optional<>, to avoid lots of ifs during the copy and move constructors
+    static_assert(std::is_default_constructible<T>::value, "must be default constructible");
+    bool _is_empty = false;
+    T _value;
+public:
+    // default-constructor defaults to a non-empty value, since empty is the
+    // exception rather than the rule
+    emptyable() : _value{} {}
+    emptyable(const T& x) : _value(x) {}
+    emptyable(T&& x) : _value(std::move(x)) {}
+    emptyable(empty_t) : _is_empty(true) {}
+    template <typename... U>
+    emptyable(U&&... args) : _value(std::forward<U>(args)...) {}
+    bool empty() const { return _is_empty; }
+    operator const T& () const { verify(); return _value; }
+    operator T&& () && { verify(); return std::move(_value); }
+    const T& get() const & { verify(); return _value; }
+    T&& get() && { verify(); return std::move(_value); }
+private:
+    void verify() const {
+        if (_is_empty) {
+            throw empty_value_exception();
+        }
+    }
+};
+
+template <typename T>
+inline
+bool
+operator==(const emptyable<T>& me1, const emptyable<T>& me2) {
+    if (me1.empty() && me2.empty()) {
+        return true;
+    }
+    if (me1.empty() != me2.empty()) {
+        return false;
+    }
+    return me1.get() == me2.get();
+}
+
+template <typename T>
+inline
+bool
+operator<(const emptyable<T>& me1, const emptyable<T>& me2) {
+    if (me1.empty()) {
+        if (me2.empty()) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+    if (me2.empty()) {
+        return false;
+    } else {
+        return me1.get() < me2.get();
+    }
+}
+
 class abstract_type;
 class data_value;
 
