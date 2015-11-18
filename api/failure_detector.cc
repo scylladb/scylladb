@@ -22,15 +22,33 @@
 #include "failure_detector.hh"
 #include "api/api-doc/failure_detector.json.hh"
 #include "gms/failure_detector.hh"
+#include "gms/application_state.hh"
+#include "gms/gossiper.hh"
 namespace api {
 
 namespace fd = httpd::failure_detector_json;
 
 void set_failure_detector(http_context& ctx, routes& r) {
     fd::get_all_endpoint_states.set(r, [](std::unique_ptr<request> req) {
-        return gms::get_all_endpoint_states().then([](const sstring& str) {
-            return make_ready_future<json::json_return_type>(str);
-        });
+        std::vector<fd::endpoint_state> res;
+        for (auto i : gms::get_local_gossiper().endpoint_state_map) {
+            fd::endpoint_state val;
+            val.addrs = boost::lexical_cast<std::string>(i.first);
+            val.is_alive = i.second.is_alive();
+            val.generation = i.second.get_heart_beat_state().get_generation();
+            val.version = i.second.get_heart_beat_state().get_heart_beat_version();
+            val.update_time = i.second.get_update_timestamp().time_since_epoch().count();
+            for (auto a : i.second.get_application_state_map()) {
+                fd::version_value version_val;
+                // We return the enum index and not it's name to stay compatible to origin
+                // method that the state index are static but the name can be changed.
+                version_val.application_state = static_cast<std::underlying_type<gms::application_state>::type>(a.first);
+                version_val.value = a.second.value;
+                val.application_state.push(version_val);
+            }
+            res.push_back(val);
+        }
+        return make_ready_future<json::json_return_type>(res);
     });
 
     fd::get_up_endpoint_count.set(r, [](std::unique_ptr<request> req) {

@@ -48,7 +48,10 @@
             {
                "method":"GET",
                "summary":"Get all endpoint states",
-               "type":"string",
+               "type":"array",
+               "items":{
+                  "type":"endpoint_state"
+               },
                "nickname":"get_all_endpoint_states",
                "produces":[
                   "application/json"
@@ -146,6 +149,53 @@
                 "value": {
                     "type": "string",
                     "description": "The value"
+                }
+            }
+        },
+        "endpoint_state": {
+           "id": "states",
+           "description": "Holds an endpoint state",
+               "properties": {
+                "addrs": {
+                    "type": "string",
+                    "description": "The endpoint address"
+                },
+                "generation": {
+                    "type": "int",
+                    "description": "The heart beat generation"
+                },
+                "version": {
+                    "type": "int",
+                    "description": "The heart beat version"
+                },
+                "update_time": {
+                    "type": "long",
+                    "description": "The update timestamp"
+                },
+                "is_alive": {
+                    "type": "boolean",
+                    "description": "Is the endpoint alive"
+                },
+                "application_state" : {
+                    "type":"array",
+                    "items":{
+                        "type":"version_value"
+                    },
+                    "description": "Is the endpoint alive"
+                }
+            }
+        },
+        "version_value": {
+           "id": "version_value",
+           "description": "Holds a version value for an application state",
+               "properties": {
+                "application_state": {
+                    "type": "int",
+                    "description": "The application state enum index"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The version value"
                 }
             }
         }
