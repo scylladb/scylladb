@@ -260,6 +260,25 @@ operator<(const emptyable<T>& me1, const emptyable<T>& me2) {
     }
 }
 
+// Checks whether T::empty() const exists and returns bool
+template <typename T>
+class has_empty {
+    template <typename X>
+    constexpr static auto check(const X* x) -> std::enable_if_t<std::is_same<bool, decltype(x->empty())>::value, bool> {
+        return true;
+    }
+    template <typename X>
+    constexpr static auto check(...) -> bool {
+        return false;
+    }
+public:
+    constexpr static bool value = check<T>(nullptr);
+};
+
+template <typename T>
+using maybe_empty =
+        std::conditional_t<has_empty<T>::value, T, emptyable<T>>;
+
 class abstract_type;
 class data_value;
 
