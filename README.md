@@ -82,3 +82,15 @@ Run the image with:
 ```
 docker run -p $(hostname -i):9042:9042 -i -t <image name>
 ```
+
+
+## Contributing to Scylla
+
+Do not send pull requests.
+
+Send patches to the mailing list address scylladb-dev@googlegroups.com.
+Be sure to subscribe.
+
+In order for your patches to be merged, you must sign the Contributor's
+License Agreement, protecting your rights and ours.  See
+http://www.scylladb.com/opensource/cla/.
