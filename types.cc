@@ -110,7 +110,11 @@ struct integer_type_impl : simple_type_impl<T> {
         if (!value) {
             return;
         }
-        auto v = this->from_value(value);
+        auto v1 = this->from_value(value);
+        if (v1.empty()) {
+            return;
+        }
+        auto v = v1.get();
         auto u = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
@@ -119,7 +123,10 @@ struct integer_type_impl : simple_type_impl<T> {
             return 0;
         }
         auto v = this->from_value(value);
-        return sizeof(v);
+        if (v.empty()) {
+            return 0;
+        }
+        return sizeof(v.get());
     }
     virtual data_value deserialize(bytes_view v) const override {
         auto x = read_simple_opt<T>(v);
@@ -206,7 +213,7 @@ struct string_type_impl : public concrete_type<sstring> {
             return make_null();
         }
         // FIXME: validation?
-        return make_value(std::make_unique<sstring>(reinterpret_cast<const char*>(v.begin()), v.size()));
+        return make_value(std::make_unique<native_type>(reinterpret_cast<const char*>(v.begin()), v.size()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
@@ -277,7 +284,7 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         if (v.empty()) {
             return make_null();
         }
-        return make_value(std::make_unique<bytes>(v.begin(), v.end()));
+        return make_value(std::make_unique<native_type>(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
@@ -307,8 +314,10 @@ struct bytes_type_impl final : public concrete_type<bytes> {
 
 struct boolean_type_impl : public simple_type_impl<bool> {
     boolean_type_impl() : simple_type_impl<bool>(boolean_type_name) {}
-    void serialize_value(bool value, bytes::iterator& out) const {
-        *out++ = char(value);
+    void serialize_value(maybe_empty<bool> value, bytes::iterator& out) const {
+        if (!value.empty()) {
+            *out++ = char(value);
+        }
     }
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -318,6 +327,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
+            return 0;
+        }
+        if (from_value(value).empty()) {
             return 0;
         }
         return 1;
@@ -371,12 +383,15 @@ struct date_type_impl : public concrete_type<db_clock::time_point> {
             return;
         }
         auto& v = from_value(value);
-        int64_t i = v.time_since_epoch().count();
+        if (v.empty()) {
+            return;
+        }
+        int64_t i = v.get().time_since_epoch().count();
         i = net::hton(uint64_t(i));
         out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
     }
     virtual size_t serialized_size(const void* value) const override {
-        if (!value) {
+        if (!value || from_value(value).empty()) {
             return 0;
         }
         return 8;
@@ -415,11 +430,15 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         if (!value) {
             return;
         }
-        auto& uuid = from_value(value);
+        auto& uuid1 = from_value(value);
+        if (uuid1.empty()) {
+            return;
+        }
+        auto uuid = uuid1.get();
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
     }
     virtual size_t serialized_size(const void* value) const override {
-        if (!value) {
+        if (!value || from_value(value).empty()) {
             return 0;
         }
         return 16;
@@ -489,7 +508,7 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
         if (v.is_null()) {
             return "";
         }
-        return from_value(v).to_sstring();
+        return from_value(v).get().to_sstring();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
@@ -518,12 +537,16 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         if (!value) {
             return;
         }
-        uint64_t v = from_value(value).time_since_epoch().count();
+        auto&& v1 = from_value(value);
+        if (v1.empty()) {
+            return;
+        }
+        uint64_t v = v1.get().time_since_epoch().count();
         v = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
     }
     virtual size_t serialized_size(const void* value) const override {
-        if (!value) {
+        if (!value || from_value(value).empty()) {
             return 0;
         }
         return 8;
@@ -644,7 +667,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
             return;
         }
         auto& uuid = from_value(value);
-        out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
+        out = std::copy_n(uuid.get().to_bytes().begin(), sizeof(uuid.get()), out);
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
@@ -715,7 +738,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
         if (v.is_null()) {
             return "";
         }
-        return from_value(v).to_sstring();
+        return from_value(v).get().to_sstring();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::uuid;
@@ -732,12 +755,16 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
             return;
         }
         // FIXME: support ipv6
-        auto& ipv4 = from_value(value);
+        auto& ipv4e = from_value(value);
+        if (ipv4e.empty()) {
+            return;
+        }
+        auto& ipv4 = ipv4e.get();
         uint32_t u = htonl(ipv4.ip);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
     virtual size_t serialized_size(const void* value) const override {
-        if (!value) {
+        if (!value || from_value(value).empty()) {
             return 0;
         }
         return 4;
@@ -777,7 +804,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         if (s.empty()) {
             return bytes();
         }
-        net::ipv4_address ipv4;
+        native_type ipv4;
         try {
             ipv4 = net::ipv4_address(s.data());
         } catch (...) {
@@ -793,7 +820,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
         if (v.is_null()) {
             return  "";
         }
-        boost::asio::ip::address_v4 ipv4(from_value(v).ip);
+        boost::asio::ip::address_v4 ipv4(from_value(v).get().ip);
         return ipv4.to_string();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
@@ -950,7 +977,11 @@ public:
         if (!value) {
             return;
         }
-        auto& num = from_value(value);
+        auto& num1 = from_value(value);
+        if (num1.empty()) {
+            return;
+        }
+        auto& num = std::move(num1).get();
         boost::multiprecision::cpp_int pnum = boost::multiprecision::abs(num);
 
         std::vector<uint8_t> b;
@@ -973,7 +1004,11 @@ public:
         if (!value) {
             return 0;
         }
-        auto& num = from_value(value);
+        auto& num1 = from_value(value);
+        if (num1.empty()) {
+            return 0;
+        }
+        auto&& num = num1.get();
         if (!num) {
             return 1;
         }
@@ -1020,7 +1055,7 @@ public:
         if (v.is_null()) {
             return "";
         }
-        return from_value(v).str();
+        return from_value(v).get().str();
     }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
@@ -1028,7 +1063,7 @@ public:
         }
         try {
             std::string str(text.begin(), text.end());
-            boost::multiprecision::cpp_int num(str);
+            native_type num(str);
             bytes b(bytes::initialized_later(), serialized_size(&num));
             auto out = b.begin();
             serialize(&num, out);
@@ -1050,18 +1085,26 @@ public:
         if (!value) {
             return;
         }
-        auto bd = from_value(value);
+        auto bd1 = from_value(value);
+        if (bd1.empty()) {
+            return;
+        }
+        auto&& bd = std::move(bd1).get();
         auto u = net::hton(bd.scale());
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(int32_t), out);
-        auto&& unscaled_value = bd.unscaled_value();
+        varint_type_impl::native_type unscaled_value = bd.unscaled_value();
         varint_type->serialize(&unscaled_value, out);
     }
     virtual size_t serialized_size(const void* value) const override {
         if (!value) {
             return 0;
         }
-        auto& bd = from_value(value);
-        auto&& unscaled_value = bd.unscaled_value();
+        auto& bd1 = from_value(value);
+        if (bd1.empty()) {
+            return 0;
+        }
+        auto&& bd = std::move(bd1).get();
+        varint_type_impl::native_type unscaled_value = bd.unscaled_value();
         return sizeof(int32_t) + varint_type->serialized_size(&unscaled_value);
     }
     virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
@@ -1074,7 +1117,16 @@ public:
         auto a = from_value(deserialize(v1));
         auto b = from_value(deserialize(v2));
 
-        return a.compare(b);
+        if (a.empty() && b.empty()) {
+            return 0;
+        }
+        if (a.empty() && !b.empty()) {
+            return -1;
+        }
+        if (!a.empty() && b.empty()) {
+            return 1;
+        }
+        return a.get().compare(b.get());
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
         return compare(v1, v2) < 0;
@@ -1088,23 +1140,23 @@ public:
             return make_null();
         }
         auto scale = read_simple<int32_t>(v);
-        auto unscaled = varint_type->deserialize(v);
+        data_value unscaled = varint_type->deserialize(v);
         auto real_varint_type = static_cast<const varint_type_impl*>(varint_type.get()); // yuck
-        return make_value(big_decimal(scale, real_varint_type->from_value(unscaled)));
+        return make_value(big_decimal(scale, real_varint_type->from_value(unscaled).get()));
     }
     virtual sstring to_string(const bytes& b) const override {
         auto v = deserialize(b);
         if (v.is_null()) {
             return "";
         }
-        return from_value(v).to_string();
+        return from_value(v).get().to_string();
     }
     virtual bytes from_string(sstring_view text) const override {
         if (text.empty()) {
             return bytes();
         }
         try {
-            big_decimal bd(text);
+            native_type bd(text);
             bytes b(bytes::initialized_later(), serialized_size(&bd));
             auto out = b.begin();
             serialize(&bd, out);

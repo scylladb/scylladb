@@ -344,10 +344,10 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
-    friend data_value make_tuple_value(data_type, std::vector<data_value>);
-    friend data_value make_set_value(data_type, std::vector<data_value>);
-    friend data_value make_list_value(data_type, std::vector<data_value>);
-    friend data_value make_map_value(data_type, std::vector<std::pair<data_value, data_value>>);
+    friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_map_value(data_type, maybe_empty<std::vector<std::pair<data_value, data_value>>>);
     friend data_value make_user_value(data_type, std::vector<data_value>);
 };
 
@@ -509,31 +509,33 @@ data_value::serialize(bytes::iterator& out) const {
 }
 
 template <typename T>
+inline
 data_value
-data_value::make_new(data_type type, T&& value) {
+data_value::make_new(data_type type, T&& v) {
+    maybe_empty<std::remove_reference_t<T>> value(std::forward<T>(v));
     return data_value(type->native_value_clone(&value), type);
 }
 
 template <typename T>
 const T& value_cast(const data_value& value) {
-    if (typeid(T) != value.type()->native_typeid()) {
+    if (typeid(maybe_empty<T>) != value.type()->native_typeid()) {
         throw std::bad_cast();
     }
     if (value.is_null()) {
         throw std::runtime_error("value is null");
     }
-    return *reinterpret_cast<T*>(value._value);
+    return *reinterpret_cast<maybe_empty<T>*>(value._value);
 }
 
 template <typename T>
 T&& value_cast(data_value&& value) {
-    if (typeid(T) != value.type()->native_typeid()) {
+    if (typeid(maybe_empty<T>) != value.type()->native_typeid()) {
         throw std::bad_cast();
     }
     if (value.is_null()) {
         throw std::runtime_error("value is null");
     }
-    return std::move(*reinterpret_cast<T*>(value._value));
+    return std::move(*reinterpret_cast<maybe_empty<T>*>(value._value));
 }
 
 // CRTP: implements translation between a native_type (C++ type) to abstract_type
@@ -543,7 +545,7 @@ T&& value_cast(data_value&& value) {
 template <typename NativeType, typename AbstractType = abstract_type>
 class concrete_type : public AbstractType {
 public:
-    using native_type = NativeType;
+    using native_type = maybe_empty<NativeType>;
     using AbstractType::AbstractType;
 protected:
     virtual size_t native_value_size() const override {
@@ -571,19 +573,19 @@ protected:
         return typeid(native_type);
     }
 protected:
-    data_value make_value(std::unique_ptr<NativeType> value) const {
+    data_value make_value(std::unique_ptr<native_type> value) const {
         return data_value::make(this->shared_from_this(), std::move(value));
     }
-    data_value make_value(NativeType value) const {
-        return make_value(std::make_unique<NativeType>(std::move(value)));
+    data_value make_value(native_type value) const {
+        return make_value(std::make_unique<native_type>(std::move(value)));
     }
     data_value make_null() const {
         return data_value::make_null(this->shared_from_this());
     }
-    const NativeType& from_value(const void* v) const {
-        return *reinterpret_cast<const NativeType*>(v);
+    const native_type& from_value(const void* v) const {
+        return *reinterpret_cast<const native_type*>(v);
     }
-    const NativeType& from_value(const data_value& v) const {
+    const native_type& from_value(const data_value& v) const {
         return this->from_value(AbstractType::get_value_ptr(v));
     }
 };
