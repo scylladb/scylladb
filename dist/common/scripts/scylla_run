@@ -10,9 +10,5 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
     args="$args --network-stack native --dpdk-pmd"
 fi
 
-if [ "$SET_NIC" == "yes" ]; then
-    sudo sh /usr/lib/scylla/posix_net_conf.sh >/dev/null 2>&1 || true
-fi
-
 export HOME=/var/lib/scylla
 exec sudo -E -u $USER /usr/bin/scylla $args
