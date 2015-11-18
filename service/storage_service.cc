@@ -121,8 +121,7 @@ bool get_property_join_ring() {
 }
 
 bool get_property_rangemovement() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")
-    return true;
+    return get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
 
 bool get_property_load_ring_state() {
