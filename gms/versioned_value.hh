@@ -134,10 +134,16 @@ public:
     class factory {
         using token = dht::token;
     public:
-        sstring make_token_string(const std::unordered_set<token>& tokens) {
+        sstring make_full_token_string(const std::unordered_set<token>& tokens) {
             return ::join(";", tokens | boost::adaptors::transformed([] (const token& t) {
                 return dht::global_partitioner().to_sstring(t); })
             );
+        }
+        sstring make_token_string(const std::unordered_set<token>& tokens) {
+            if (tokens.empty()) {
+                return "";
+            }
+            return dht::global_partitioner().to_sstring(*tokens.begin());
         }
 
         versioned_value clone_with_higher_version(const versioned_value& value) {
@@ -184,7 +190,7 @@ public:
         }
 
         versioned_value tokens(const std::unordered_set<token>& tokens) {
-            return versioned_value(make_token_string(tokens));
+            return versioned_value(make_full_token_string(tokens));
         }
 
         versioned_value removing_nonlocal(const utils::UUID& host_id) {
