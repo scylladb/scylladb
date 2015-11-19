@@ -53,9 +53,14 @@ using inet_address = gms::inet_address;
 class fb_utilities {
 private:
     static std::experimental::optional<inet_address>& broadcast_address() {
-        static std::experimental::optional<inet_address> broadcast_inet_address;
+        static std::experimental::optional<inet_address> _broadcast_address;
 
-        return broadcast_inet_address;
+        return _broadcast_address;
+    }
+    static std::experimental::optional<inet_address>& broadcast_rpc_address() {
+        static std::experimental::optional<inet_address> _broadcast_rpc_address;
+
+        return _broadcast_rpc_address;
     }
 public:
    static const int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
@@ -63,6 +68,11 @@ public:
    static void set_broadcast_address(inet_address addr) {
        broadcast_address() = addr;
    }
+
+   static void set_broadcast_rpc_address(inet_address addr) {
+       broadcast_rpc_address() = addr;
+   }
+
 
    static const inet_address get_broadcast_address() {
 #if 0
@@ -73,6 +83,11 @@ public:
 #endif
        assert(broadcast_address());
        return *broadcast_address();
+   }
+
+   static const inet_address get_broadcast_rpc_address() {
+       assert(broadcast_rpc_address());
+       return *broadcast_rpc_address();
    }
 };
 }
