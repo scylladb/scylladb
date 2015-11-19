@@ -157,6 +157,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
 
 future<> simple_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
     return i_endpoint_snitch::create_snitch("RackInferringSnitch").then(
@@ -230,6 +231,7 @@ future<> simple_test() {
 
 future<> heavy_origin_test() {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     // Create the RackInferringSnitch
     return i_endpoint_snitch::create_snitch("RackInferringSnitch").then(

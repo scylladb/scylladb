@@ -61,8 +61,7 @@ future<> ec2_multi_region_snitch::start() {
                 // value to a public address in cassandra.yaml.
                 //
                 utils::fb_utilities::set_broadcast_address(local_public_address);
-                //DatabaseDescriptor.setBroadcastRpcAddress(local_public_address);
-                //
+                utils::fb_utilities::set_broadcast_rpc_address(local_public_address);
 
                 return aws_api_call(AWS_QUERY_SERVER_ADDR, PRIVATE_IP_QUERY_REQ).then(
                         [this] (sstring priv_addr) {

@@ -206,6 +206,7 @@ int main(int ac, char** av) {
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
             auto seed_provider= cfg->seed_provider();
             sstring broadcast_address = cfg->broadcast_address();
+            sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
 
             if (!broadcast_address.empty()) {
                 utils::fb_utilities::set_broadcast_address(broadcast_address);
@@ -214,6 +215,16 @@ int main(int ac, char** av) {
             } else {
                 startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
                 throw bad_configuration_error();
+            }
+
+            if (!broadcast_rpc_address.empty()) {
+                utils::fb_utilities::set_broadcast_rpc_address(broadcast_rpc_address);
+            } else {
+                if (rpc_address == "0.0.0.0") {
+                    startlog.error("If rpc_address is set to a wildcard address {}, then you must set broadcast_rpc_address to a value other than {}", rpc_address, rpc_address);
+                    throw bad_configuration_error();
+                }
+                utils::fb_utilities::set_broadcast_rpc_address(rpc_address);
             }
 
             using namespace locator;

@@ -43,6 +43,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     fname /= path(property_fname);
 
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     return i_endpoint_snitch::create_snitch<const sstring&>(
         "org.apache.cassandra.locator.GossipingPropertyFileSnitch",

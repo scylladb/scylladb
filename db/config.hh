@@ -560,7 +560,7 @@ public:
     )   \
     /* RPC (remote procedure call) settings */  \
     /* Settings for configuring and tuning client connections. */   \
-    val(broadcast_rpc_address, sstring, /* unset */, Unused,    \
+    val(broadcast_rpc_address, sstring, /* unset */, Used,    \
             "RPC address to broadcast to drivers and other Cassandra nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n"    \
     )   \
     val(rpc_port, uint16_t, 9160, Used,                \

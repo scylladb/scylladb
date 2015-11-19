@@ -202,8 +202,7 @@ future<> storage_service::prepare_to_join() {
         return db::system_keyspace::get_local_host_id();
     }).then([this, app_states] (auto local_host_id) mutable {
         _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
-        // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-        auto broadcast_rpc_address = this->get_broadcast_address();
+        auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
         app_states->emplace(gms::application_state::NET_VERSION, value_factory.network_version());
         app_states->emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
         app_states->emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
