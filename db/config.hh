@@ -745,6 +745,7 @@ public:
     val(load_balance, sstring, "none", Used, "CQL request load balancing: 'none' or round-robin'") \
     val(consistent_rangemovement, bool, true, Used, "For -Dcassandra.consistent.rangemovement") \
     val(join_ring, bool, true, Used, "For -Dcassandra.join_ring") \
+    val(load_ring_state, bool, true, Used, "For -Dcassandra.load_ring_state") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

@@ -124,8 +124,7 @@ bool get_property_rangemovement() {
 }
 
 bool get_property_load_ring_state() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true"))
-    return true;
+    return get_local_storage_service().db().local().get_config().load_ring_state();
 }
 
 bool storage_service::should_bootstrap() {
