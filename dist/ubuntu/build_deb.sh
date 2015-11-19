@@ -11,6 +11,7 @@ if [ -e debian ] || [ -e build/release ]; then
 fi
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
+CODENAME=`lsb_release -c|awk '{print $2}'`
 if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
     echo "Unsupported release: $RELEASE"
     echo "Pless any key to continue..."
@@ -31,6 +32,7 @@ cp dist/common/sysconfig/scylla-server debian/scylla-server.default
 cp dist/ubuntu/changelog.in debian/changelog
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
+sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
 
 sudo apt-get -y update
 
