@@ -106,8 +106,13 @@ std::set<inet_address> get_replace_tokens() {
 }
 
 std::experimental::optional<UUID> get_replace_node() {
-    // FIXME: DatabaseDescriptor.getReplaceNode()
-    return {};
+    try {
+        auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
+        auto uuid = utils::UUID(replace_node);
+        return uuid;
+    } catch (...) {
+        return std::experimental::nullopt;
+    }
 }
 
 std::experimental::optional<inet_address> get_replace_address() {

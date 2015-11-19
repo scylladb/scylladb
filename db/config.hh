@@ -746,6 +746,7 @@ public:
     val(consistent_rangemovement, bool, true, Used, "For -Dcassandra.consistent.rangemovement") \
     val(join_ring, bool, true, Used, "For -Dcassandra.join_ring") \
     val(load_ring_state, bool, true, Used, "For -Dcassandra.load_ring_state") \
+    val(replace_node, sstring, "", Used, "For -Dcassandra.replace_node") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
