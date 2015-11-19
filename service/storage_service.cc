@@ -85,11 +85,6 @@ static int get_generation_number() {
     return generation_number;
 }
 
-bool is_replacing() {
-    // FIXME: DatabaseDescriptor.isReplacing()
-    return false;
-}
-
 bool storage_service::is_auto_bootstrap() {
     return _db.local().get_config().auto_bootstrap();
 }
@@ -142,6 +137,17 @@ std::experimental::optional<inet_address> get_replace_address() {
         return std::experimental::nullopt;
     }
 }
+
+bool is_replacing() {
+    auto& cfg = get_local_storage_service().db().local().get_config();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
+        logger.info("Replace address on first boot requested; this node is already bootstrapped");
+        return false;
+    }
+    return bool(get_replace_address());
+}
+
 
 bool get_property_join_ring() {
     return get_local_storage_service().db().local().get_config().join_ring();
