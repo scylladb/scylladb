@@ -748,6 +748,8 @@ public:
     val(load_ring_state, bool, true, Used, "For -Dcassandra.load_ring_state") \
     val(replace_node, sstring, "", Used, "For -Dcassandra.replace_node") \
     val(replace_token, sstring, "", Used, "For -Dcassandra.replace_token") \
+    val(replace_address, sstring, "", Used, "For -Dcassandra.replace_address") \
+    val(replace_address_first_boot, sstring, "", Used, "For -Dcassandra.replace_address_first_boot") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

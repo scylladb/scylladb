@@ -128,8 +128,19 @@ std::experimental::optional<UUID> get_replace_node() {
 }
 
 std::experimental::optional<inet_address> get_replace_address() {
-    // FIXME: DatabaseDescriptor.getReplaceAddress()
-    return {};
+    auto& cfg = get_local_storage_service().db().local().get_config();
+    sstring replace_address = cfg.replace_address();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    try {
+        if (!replace_address.empty()) {
+            return gms::inet_address(replace_address);
+        } else if (!replace_address_first_boot.empty()) {
+            return gms::inet_address(replace_address_first_boot);
+        }
+        return std::experimental::nullopt;
+    } catch (...) {
+        return std::experimental::nullopt;
+    }
 }
 
 bool get_property_join_ring() {
