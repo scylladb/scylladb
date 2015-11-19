@@ -100,9 +100,21 @@ std::set<inet_address> get_seeds() {
     return gossiper.get_seeds();
 }
 
-std::set<inet_address> get_replace_tokens() {
-    // FIXME: DatabaseDescriptor.getReplaceTokens()
-    return {};
+std::unordered_set<token> get_replace_tokens() {
+    std::unordered_set<token> ret;
+    std::unordered_set<sstring> tokens;
+    auto tokens_string = get_local_storage_service().db().local().get_config().replace_token();
+    try {
+        boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
+    } catch (...) {
+        throw std::runtime_error(sprint("Unable to parse replace_token=%s", tokens_string));
+    }
+    tokens.erase("");
+    for (auto token_string : tokens) {
+        auto token = dht::global_partitioner().from_sstring(token_string);
+        ret.insert(token);
+    }
+    return ret;
 }
 
 std::experimental::optional<UUID> get_replace_node() {
