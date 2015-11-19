@@ -1,6 +1,14 @@
 #!/bin/sh -e
 
-sudo apt-get -y install build-essential debhelper openjdk-7-jre-headless build-essential autoconf automake pkg-config libtool bison flex libboost1.55-dev libboost-test1.55-dev libevent-dev libglib2.0-dev libqt4-dev python-dev python-dbg php5-dev devscripts python-support xfslibs-dev
+RELEASE=`lsb_release -r|awk '{print $2}'`
+DEP="build-essential debhelper openjdk-7-jre-headless build-essential autoconf automake pkg-config libtool bison flex libevent-dev libglib2.0-dev libqt4-dev python-dev python-dbg php5-dev devscripts python-support xfslibs-dev"
+
+if [ "$RELEASE" = "14.04" ]; then
+    DEP="$DEP libboost1.55-dev libboost-test1.55-dev"
+else
+    DEP="$DEP libboost-dev libboost-test-dev"
+fi
+sudo apt-get -y install $DEP
 
 if [ ! -f build/antlr3-tool_3.5.2-1_all.deb ]; then
     rm -rf build/antlr3-tool-3.5.2
