@@ -10,14 +10,16 @@ else
 fi
 sudo apt-get -y install $DEP
 
-if [ ! -f build/antlr3-tool_3.5.2-1_all.deb ]; then
-    rm -rf build/antlr3-tool-3.5.2
-    mkdir -p build/antlr3-tool-3.5.2
-    cp -a dist/ubuntu/dep/antlr3-tool-3.5.2/* build/antlr3-tool-3.5.2
-    cd build/antlr3-tool-3.5.2
-    wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
-    debuild -r fakeroot --no-tgz-check -us -uc
-    cd -
+if [ "$RELEASE" = "14.04" ]; then
+    if [ ! -f build/antlr3_3.5.2-1_all.deb ]; then
+        rm -rf build/antlr3-3.5.2
+        mkdir -p build/antlr3-3.5.2
+        cp -a dist/ubuntu/dep/antlr3-3.5.2/* build/antlr3-3.5.2
+        cd build/antlr3-3.5.2
+        wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
+        debuild -r fakeroot --no-tgz-check -us -uc
+        cd -
+    fi
 fi
 
 if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then

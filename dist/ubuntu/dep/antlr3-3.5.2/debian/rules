@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+override_dh_auto_install:
+	mkdir -p $(CURDIR)/debian/antlr3/usr/share/java
+	cp $(CURDIR)/antlr-3.5.2-complete-no-st3.jar \
+		$(CURDIR)/debian/antlr3/usr/share/java
+
+	mkdir -p $(CURDIR)/debian/antlr3/usr/bin
+	cp $(CURDIR)/antlr3 \
+		$(CURDIR)/debian/antlr3/usr/bin
+%:
+	dh $@

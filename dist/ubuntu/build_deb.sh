@@ -38,7 +38,7 @@ else
     DEP="$DEP libboost-dev libboost-program-options-dev libboost-system-dev libboost-thread-dev libboost-test-dev libboost-filesystem-dev libboost-filesystem-dev libsnappy1v5"
 fi
 if [ "$RELEASE" = "15.10" ]; then
-    DEP="$DEP libjsoncpp0v5 libcrypto++9v5 libyaml-cpp0.5v5"
+    DEP="$DEP libjsoncpp0v5 libcrypto++9v5 libyaml-cpp0.5v5 antlr3"
 else
     DEP="$DEP libjsoncpp0 libcrypto++9 libyaml-cpp0.5"
 fi
