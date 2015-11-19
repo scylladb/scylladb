@@ -102,9 +102,15 @@ class scylla_memory(gdb.Command):
         gdb.Command.__init__(self, 'scylla memory', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
     def invoke(self, arg, from_tty):
         cpu_mem = gdb.parse_and_eval('memory::cpu_mem')
+        page_size = int(gdb.parse_and_eval('memory::page_size'))
+        free_mem = int(cpu_mem['nr_free_pages']) * page_size
+        total_mem = int(cpu_mem['nr_pages']) * page_size
+        gdb.write('Used memory: {used_mem:>13}\nFree memory: {free_mem:>13}\nTotal memory: {total_mem:>12}\n\n'
+            .format(used_mem=total_mem-free_mem, free_mem=free_mem, total_mem=total_mem))
+
+        gdb.write('Small pools:\n')
         small_pools = cpu_mem['small_pools']
         nr = small_pools['nr_small_pools']
-        page_size = int(gdb.parse_and_eval('memory::page_size'))
         gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {wasted_percent:>5}\n'
               .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory', wasted_percent='wst%'))
         for i in range(int(nr)):
