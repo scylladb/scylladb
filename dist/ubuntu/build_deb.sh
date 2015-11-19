@@ -11,6 +11,12 @@ if [ -e debian ] || [ -e build/release ]; then
 fi
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
+if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
+    echo "Unsupported release: $RELEASE"
+    echo "Pless any key to continue..."
+    read input
+fi
+
 VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
