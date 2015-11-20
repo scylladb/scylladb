@@ -80,6 +80,14 @@ public:
 
     bool operator==(const reconcilable_result& other) const;
     bool operator!=(const reconcilable_result& other) const;
+
+    struct printer {
+        const reconcilable_result& self;
+        schema_ptr schema;
+        friend std::ostream& operator<<(std::ostream&, const printer&);
+    };
+
+    printer pretty_printer(schema_ptr) const;
 };
 
 query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&);

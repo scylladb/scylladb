@@ -55,6 +55,14 @@ public:
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
     mutation unfreeze(schema_ptr s) const;
+
+    struct printer {
+        const frozen_mutation& self;
+        schema_ptr schema;
+        friend std::ostream& operator<<(std::ostream&, const printer&);
+    };
+
+    printer pretty_printer(schema_ptr) const;
 };
 
 frozen_mutation freeze(const mutation& m);
