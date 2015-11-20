@@ -270,7 +270,7 @@ modification_statement::read_required_rows(
     for (auto&& pk : *keys) {
         pr.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
     }
-    query::read_command cmd(s->id(), ps, std::numeric_limits<uint32_t>::max());
+    query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
     return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(pr), cl).then([this, ps] (auto result) {
         // FIXME: copying

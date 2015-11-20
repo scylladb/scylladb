@@ -1015,7 +1015,8 @@ query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_na
     database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
+        std::move(slice), std::numeric_limits<uint32_t>::max());
     return proxy.local().query_mutations_locally(cmd, query::full_partition_range);
 }
 
@@ -1024,7 +1025,8 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
     database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
+        std::move(slice), std::numeric_limits<uint32_t>::max());
     return proxy.local().query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
@@ -1038,7 +1040,7 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const 
     auto slice = partition_slice_builder(*schema)
         .with_range(std::move(row_range))
         .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
     return proxy.local().query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
