@@ -197,8 +197,6 @@ public:
         std::vector<query::partition_range>&& partition_ranges,
         db::consistency_level cl);
 
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_local(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges);
-
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
         lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
 
