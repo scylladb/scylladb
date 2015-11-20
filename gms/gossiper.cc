@@ -1432,6 +1432,10 @@ bool gossiper::is_enabled() {
     return _enabled;
 }
 
+void gossiper::goto_shadow_round() {
+    _in_shadow_round = true;
+}
+
 void gossiper::finish_shadow_round() {
     if (_in_shadow_round) {
         _in_shadow_round = false;
