@@ -51,6 +51,7 @@ public:
 
     bytes_view representation() const { return _bytes; }
     utils::UUID column_family_id() const;
+    utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
     partition_key_view key(const schema& s) const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
