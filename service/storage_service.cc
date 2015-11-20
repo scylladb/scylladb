@@ -286,16 +286,32 @@ void storage_service::join_token_ring(int delay) {
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 
-        if (get_property_rangemovement() &&
+        auto t = gms::gossiper::clk::now();
+        while (get_property_rangemovement() &&
             (!_token_metadata.get_bootstrap_tokens().empty() ||
              !_token_metadata.get_leaving_endpoints().empty() ||
              !_token_metadata.get_moving_endpoints().empty())) {
-            logger.info("tokens {}, leaving {}, moving {}",
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+            logger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elpased)",
                 _token_metadata.get_bootstrap_tokens().size(),
                 _token_metadata.get_leaving_endpoints().size(),
-                _token_metadata.get_moving_endpoints().size());
-            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                _token_metadata.get_moving_endpoints().size(),
+                elapsed);
+
+            sleep(std::chrono::seconds(1)).get();
+
+            if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+                throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+            }
+
+            // Check the schema and pending range again
+            while (!get_local_migration_manager().is_ready_for_bootstrap()) {
+                set_mode(mode::JOINING, "waiting for schema information to complete", true);
+                sleep(std::chrono::seconds(1)).get();
+            }
+            get_local_pending_range_calculator_service().block_until_finished().get();
         }
+        logger.info("Checking bootstrapping/leaving/moving nodes: ok");
 
         if (!is_replacing()) {
             if (_token_metadata.is_member(get_broadcast_address())) {
@@ -877,7 +893,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
-    set_mode(mode::NORMAL, false);
+    set_mode(mode::NORMAL, "node is now in normal status", true);
     replicate_to_all_cores().get();
 }
 
