@@ -1523,7 +1523,7 @@ public:
 
         // reconcile all versions
         boost::range::transform(boost::make_iterator_range(versions.begin(), versions.end()), std::back_inserter(reconciled_partitions), [this, schema] (std::vector<version>& v) {
-            return boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema = std::move(schema)] (mutation& m, const version& ver) {
+            return boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema] (mutation& m, const version& ver) {
                 m.partition().apply(*schema, ver.par.mut().partition());
                 return std::move(m);
             });
