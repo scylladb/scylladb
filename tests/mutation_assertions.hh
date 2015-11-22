@@ -41,3 +41,27 @@ static inline
 mutation_assertion assert_that(const mutation& m) {
     return { m };
 }
+
+class mutation_opt_assertions {
+    mutation_opt _mo;
+public:
+    mutation_opt_assertions(mutation_opt mo) : _mo(std::move(mo)) {}
+
+    mutation_assertion has_mutation() {
+        if (!_mo) {
+            BOOST_FAIL("Expected engaged mutation_opt, but found not");
+        }
+        return { *_mo };
+    }
+
+    void has_no_mutation() {
+        if (_mo) {
+            BOOST_FAIL("Expected disengaged mutation_opt");
+        }
+    }
+};
+
+static inline
+mutation_opt_assertions assert_that(mutation_opt mo) {
+    return { std::move(mo) };
+}
