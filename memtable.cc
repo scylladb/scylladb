@@ -201,6 +201,16 @@ memtable::update(const db::replay_position& rp) {
     }
 }
 
+future<>
+memtable::apply(const memtable& mt) {
+    return do_with(mt.make_reader(), [this] (auto&& rd) mutable {
+        return consume(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
+            self->apply(m);
+            return stop_iteration::no;
+        });
+    });
+}
+
 void
 memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
