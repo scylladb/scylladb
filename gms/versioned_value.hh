@@ -162,7 +162,7 @@ public:
         }
 
         versioned_value load(double load) {
-            return versioned_value(to_sstring_sprintf(load, "%g"));
+            return versioned_value(to_sstring(load));
         }
 
         versioned_value schema(const utils::UUID &new_version) {
@@ -242,7 +242,7 @@ public:
         }
 
         versioned_value severity(double value) {
-            return versioned_value(to_sstring_sprintf(value, "%g"));
+            return versioned_value(to_sstring(value));
         }
     };
 
