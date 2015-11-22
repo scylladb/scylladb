@@ -416,6 +416,23 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
+static bool belongs_to_current_shard(const schema& s, const partition_key& first, const partition_key& last) {
+    auto key_shard = [&s] (const partition_key& pk) {
+        auto token = dht::global_partitioner().get_token(s, pk);
+        return dht::shard_of(token);
+    };
+    auto s1 = key_shard(first);
+    auto s2 = key_shard(last);
+    auto me = engine().cpu_id();
+    return (s1 <= me) && (me <= s2);
+}
+
+static bool belongs_to_current_shard(const schema& s, range<partition_key> r) {
+    assert(r.start());
+    assert(r.end());
+    return belongs_to_current_shard(s, r.start()->value(), r.end()->value());
+}
+
 future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sstring fname) {
 
     using namespace sstables;
@@ -432,12 +449,21 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     update_sstables_known_generation(comps.generation);
     assert(_sstables->count(comps.generation) == 0);
 
-    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
-    auto fut = sst->load();
-    return std::move(fut).then([this, sst = std::move(sst)] () mutable {
-        add_sstable(std::move(*sst));
-        return make_ready_future<>();
-    }).then_wrapped([fname, comps = std::move(comps)] (future<> f) {
+    auto fut = sstable::get_sstable_key_range(*_schema, _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+    return std::move(fut).then([this, sstdir = std::move(sstdir), comps] (range<partition_key> r) {
+        // Checks whether or not sstable belongs to current shard.
+        if (!belongs_to_current_shard(*_schema, std::move(r))) {
+            sstable::mark_sstable_for_deletion(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+            return make_ready_future<>();
+        }
+
+        auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+        auto fut = sst->load();
+        return std::move(fut).then([this, sst = std::move(sst)] () mutable {
+            add_sstable(std::move(*sst));
+            return make_ready_future<>();
+        });
+    }).then_wrapped([fname, comps] (future<> f) {
         try {
             f.get();
         } catch (malformed_sstable_exception& e) {
@@ -462,19 +488,6 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
 }
 
 void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
-    auto key_shard = [this] (const partition_key& pk) {
-        auto token = dht::global_partitioner().get_token(*_schema, pk);
-        return dht::shard_of(token);
-    };
-    auto s1 = key_shard(sstable->get_first_partition_key(*_schema));
-    auto s2 = key_shard(sstable->get_last_partition_key(*_schema));
-    auto me = engine().cpu_id();
-    auto included = (s1 <= me) && (me <= s2);
-    if (!included) {
-        dblog.info("sstable {} not relevant for this shard, ignoring", sstable->get_filename());
-        sstable->mark_for_deletion();
-        return;
-    }
     auto generation = sstable->generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
@@ -745,7 +758,11 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
         return sst->load().then([this, sst] {
             return sst->mutate_sstable_level(0);
         }).then([this, sst] {
-            this->add_sstable(sst);
+            auto first = sst->get_first_partition_key(*_schema);
+            auto last = sst->get_last_partition_key(*_schema);
+            if (belongs_to_current_shard(*_schema, first, last)) {
+                this->add_sstable(sst);
+            }
             return make_ready_future<>();
         });
     });
@@ -837,9 +854,10 @@ future<> column_family::populate(sstring sstdir) {
     auto verifier = make_lw_shared<std::unordered_map<unsigned long, status>>();
     auto descriptor = make_lw_shared<sstable_descriptor>();
 
-    return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor] (directory_entry de) {
+  return do_with(std::vector<future<>>(), [this, sstdir, verifier, descriptor] (std::vector<future<>>& futures) {
+    return lister::scan_dir(sstdir, { directory_entry_type::regular }, [this, sstdir, verifier, descriptor, &futures] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
-        return probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
+        auto f = probe_file(sstdir, de.name).then([verifier, descriptor] (auto entry) {
             if (verifier->count(entry.generation)) {
                 if (verifier->at(entry.generation) == status::has_toc_file) {
                     if (entry.component == sstables::sstable::component_type::TOC) {
@@ -870,6 +888,23 @@ future<> column_family::populate(sstring sstdir) {
                 descriptor->format = entry.format;
             }
         });
+
+        // push future returned by probe_file into an array of futures,
+        // so that the supplied callback will not block scan_dir() from
+        // reading the next entry in the directory.
+        futures.push_back(std::move(f));
+
+        return make_ready_future<>();
+    }).then([&futures] {
+        return when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
+            try {
+                for (auto& f : ret) {
+                    f.get();
+                }
+            } catch(...) {
+                throw;
+            }
+        });
     }).then([verifier, sstdir, descriptor, this] {
         return parallel_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this] (auto v) {
             if (v.second == status::has_temporary_toc_file) {
@@ -891,6 +926,7 @@ future<> column_family::populate(sstring sstdir) {
             return make_ready_future<>();
         });
     });
+  });
 }
 
 utils::UUID database::empty_version = utils::UUID_gen::get_name_UUID(bytes{});

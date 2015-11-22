@@ -39,6 +39,7 @@
 #include "index_reader.hh"
 #include "remove.hh"
 #include "memtable.hh"
+#include "range.hh"
 #include "downsampling.hh"
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
@@ -821,7 +822,7 @@ future<> sstable::read_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
-        auto r = make_lw_shared<file_random_access_reader>(std::move(f), 4096);
+        auto r = make_lw_shared<file_random_access_reader>(std::move(f), sstable_buffer_size);
         auto fut = parse(*r, component);
         return fut.finally([r = std::move(r)] {
             return r->close();
@@ -1757,6 +1758,23 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
         // Fsync'ing column family dir to guarantee that deletion completed.
         fsync_directory(dir).get();
     });
+}
+
+future<range<partition_key>>
+sstable::get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
+    auto sst = std::make_unique<sstable>(ks, cf, dir, generation, v, f);
+    auto fut = sst->read_summary();
+    return std::move(fut).then([sst = std::move(sst), &s] () mutable {
+        auto first = sst->get_first_partition_key(s);
+        auto last = sst->get_last_partition_key(s);
+        return make_ready_future<range<partition_key>>(range<partition_key>::make(first, last));
+    });
+}
+
+void sstable::mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
+    auto sst = sstable(ks, cf, dir, generation, v, f);
+    sstlog.info("sstable {} not relevant for this shard, ignoring", sst.get_filename());
+    sst.mark_for_deletion();
 }
 
 }
