@@ -582,6 +582,9 @@ protected:
     data_value make_null() const {
         return data_value::make_null(this->shared_from_this());
     }
+    data_value make_empty() const {
+        return make_value(native_type(empty_t()));
+    }
     const native_type& from_value(const void* v) const {
         return *reinterpret_cast<const native_type*>(v);
     }

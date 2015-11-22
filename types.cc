@@ -131,7 +131,7 @@ struct integer_type_impl : simple_type_impl<T> {
     virtual data_value deserialize(bytes_view v) const override {
         auto x = read_simple_opt<T>(v);
         if (!x) {
-            return this->make_null();
+            return this->make_empty();
         } else {
             return this->make_value(*x);
         }
@@ -209,9 +209,6 @@ struct string_type_impl : public concrete_type<sstring> {
         return v.size();
     }
     virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_null();
-        }
         // FIXME: validation?
         return make_value(std::make_unique<native_type>(reinterpret_cast<const char*>(v.begin()), v.size()));
     }
@@ -281,9 +278,6 @@ struct bytes_type_impl final : public concrete_type<bytes> {
         return v.size();
     }
     virtual data_value deserialize(bytes_view v) const override {
-        if (v.empty()) {
-            return make_null();
-        }
         return make_value(std::make_unique<native_type>(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) const override {
@@ -339,7 +333,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         if (v.size() != 1) {
             throw marshal_exception();
@@ -398,7 +392,7 @@ struct date_type_impl : public concrete_type<db_clock::time_point> {
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         auto tmp = read_simple_exactly<uint64_t>(v);
         return make_value(db_clock::time_point(db_clock::duration(tmp)));
@@ -445,12 +439,9 @@ struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         uint64_t msb, lsb;
-        if (v.empty()) {
-            return make_null();
-        }
         msb = read_simple<uint64_t>(v);
         lsb = read_simple<uint64_t>(v);
         if (!v.empty()) {
@@ -553,7 +544,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     }
     virtual data_value deserialize(bytes_view in) const override {
         if (in.empty()) {
-            return make_null();
+            return make_empty();
         }
         auto v = read_simple_exactly<uint64_t>(in);
         return make_value(db_clock::time_point(db_clock::duration(v)));
@@ -677,7 +668,7 @@ struct uuid_type_impl : concrete_type<utils::UUID> {
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         auto msb = read_simple<uint64_t>(v);
         auto lsb = read_simple<uint64_t>(v);
@@ -771,7 +762,7 @@ struct inet_addr_type_impl : concrete_type<net::ipv4_address> {
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         if (v.size() == 16) {
             throw std::runtime_error("IPv6 addresses not supported");
@@ -887,7 +878,7 @@ struct floating_type_impl : public simple_type_impl<T> {
 
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return this->make_null();
+            return this->make_empty();
         }
         union {
             T d;
@@ -1034,7 +1025,7 @@ public:
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         auto negative = v.front() < 0;
         boost::multiprecision::cpp_int num;
@@ -1137,7 +1128,7 @@ public:
     }
     virtual data_value deserialize(bytes_view v) const override {
         if (v.empty()) {
-            return make_null();
+            return make_empty();
         }
         auto scale = read_simple<int32_t>(v);
         data_value unscaled = varint_type->deserialize(v);
@@ -1554,9 +1545,6 @@ map_type_impl::deserialize(bytes_view v) const {
 
 data_value
 map_type_impl::deserialize(bytes_view in, serialization_format sf) const {
-    if (in.empty()) {
-        return make_null();
-    }
     native_type m;
     auto size = read_collection_size(in, sf);
     for (int i = 0; i < size; ++i) {
@@ -1976,9 +1964,6 @@ set_type_impl::deserialize(bytes_view in) const {
 
 data_value
 set_type_impl::deserialize(bytes_view in, serialization_format sf) const {
-    if (in.empty()) {
-        return make_null();
-    }
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
@@ -2140,9 +2125,6 @@ list_type_impl::deserialize(bytes_view in) const {
 
 data_value
 list_type_impl::deserialize(bytes_view in, serialization_format sf) const {
-    if (in.empty()) {
-        return make_null();
-    }
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
