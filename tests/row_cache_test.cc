@@ -257,7 +257,8 @@ SEASTAR_TEST_CASE(test_eviction) {
 }
 
 bool has_key(row_cache& cache, const dht::decorated_key& key) {
-    auto reader = cache.make_reader(query::partition_range::make_singular(key));
+    auto range = query::partition_range::make_singular(key);
+    auto reader = cache.make_reader(range);
     auto mo = reader().get0();
     return bool(mo);
 }
@@ -271,7 +272,8 @@ void verify_does_not_have(row_cache& cache, const dht::decorated_key& key) {
 }
 
 void verify_has(row_cache& cache, const mutation& m) {
-    auto reader = cache.make_reader(query::partition_range::make_singular(m.decorated_key()));
+    auto range = query::partition_range::make_singular(m.decorated_key());
+    auto reader = cache.make_reader(range);
     auto mo = reader().get0();
     BOOST_REQUIRE(bool(mo));
     assert_that(*mo).is_equal_to(m);
