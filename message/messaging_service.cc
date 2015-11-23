@@ -351,7 +351,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         if (!c->error()) {
             return c;
         }
-        remove_rpc_client(verb, id);
+        remove_error_rpc_client(verb, id);
     }
 
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), _port);
@@ -361,9 +361,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     return it->second.rpc_client;
 }
 
-void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id) {
+void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id, bool dead_only) {
     auto it = clients.find(id);
-    if (it != clients.end()) {
+    if (it != clients.end() && (!dead_only || it->second.rpc_client->error())) {
         auto client = std::move(it->second.rpc_client);
         clients.erase(it);
         //
@@ -372,17 +372,17 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id)
         // This will make sure messaging_service::stop() blocks until
         // client->stop() is over.
         //
-        client->stop().finally([c = client, ms = shared_from_this()] {}).discard_result();
+        client->stop().finally([client, ms = shared_from_this()] {}).discard_result();
     }
 }
 
-void messaging_service::remove_rpc_client(messaging_verb verb, shard_id id) {
-    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id);
+void messaging_service::remove_error_rpc_client(messaging_verb verb, shard_id id) {
+    remove_rpc_client_one(_clients[get_rpc_client_idx(verb)], id, true);
 }
 
 void messaging_service::remove_rpc_client(shard_id id) {
     for (auto& c : _clients) {
-        remove_rpc_client_one(c, id);
+        remove_rpc_client_one(c, id, false);
     }
 }
 
@@ -406,7 +406,7 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
             return std::move(f);
         } catch (rpc::closed_error) {
             // This is a transport error
-            ms->remove_rpc_client(verb, id);
+            ms->remove_error_rpc_client(verb, id);
             throw;
         } catch (...) {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
@@ -431,7 +431,7 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id i
             return std::move(f);
         } catch (rpc::closed_error) {
             // This is a transport error
-            ms->remove_rpc_client(verb, id);
+            ms->remove_error_rpc_client(verb, id);
             throw;
         } catch (...) {
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
