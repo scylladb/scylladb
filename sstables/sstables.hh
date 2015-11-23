@@ -230,8 +230,11 @@ public:
                 _summary.header.min_index_interval;
     }
 
-    // mark_for_deletion() specifies that the on-disk files for this sstable
-    // should be deleted as soon as the in-memory object is destructed.
+    // mark_for_deletion() specifies that a sstable isn't relevant to the
+    // current shard, and thus can be deleted by the deletion manager, if
+    // all shards sharing it agree. In case the sstable is unshared, it's
+    // guaranteed that all of its on-disk files will be deleted as soon as
+    // the in-memory object is destroyed.
     void mark_for_deletion() {
         _marked_for_deletion = true;
     }
