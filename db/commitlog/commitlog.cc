@@ -1402,6 +1402,10 @@ uint64_t db::commitlog::get_completed_tasks() const {
     return _segment_manager->totals.allocation_count;
 }
 
+uint64_t db::commitlog::get_flush_count() const {
+    return _segment_manager->totals.flush_count;
+}
+
 uint64_t db::commitlog::get_pending_tasks() const {
     return _segment_manager->totals.pending_operations;
 }

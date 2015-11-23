@@ -231,6 +231,7 @@ public:
 
     uint64_t get_total_size() const;
     uint64_t get_completed_tasks() const;
+    uint64_t get_flush_count() const;
     uint64_t get_pending_tasks() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
