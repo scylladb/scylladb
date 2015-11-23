@@ -1361,7 +1361,6 @@ future<> sstable::write_components(const memtable& mt) {
 future<> sstable::write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size) {
     return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size] () mutable {
-        // FIXME: write all components
         generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
         write_toc();
         create_data().get();
