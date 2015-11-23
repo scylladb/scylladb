@@ -763,6 +763,8 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
             auto last = sst->get_last_partition_key(*_schema);
             if (belongs_to_current_shard(*_schema, first, last)) {
                 this->add_sstable(sst);
+            } else {
+                sst->mark_for_deletion();
             }
             return make_ready_future<>();
         });
