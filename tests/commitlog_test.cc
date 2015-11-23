@@ -320,6 +320,110 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
         });
 }
 
+static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
+    return engine().open_file_dma(seg, open_flags::rw).then([off, value](file f) {
+        size_t size = align_up<size_t>(off, 4096);
+        return do_with(std::move(f), [size, off, value](file& f) {
+            return f.dma_read_exactly<char>(0, size).then([&f, off, value](auto buf) {
+                *reinterpret_cast<uint32_t *>(buf.get_write() + off) = value;
+                auto dst = buf.get();
+                auto size = buf.size();
+                return f.dma_write(0, dst, size).then([buf = std::move(buf)](size_t) {});
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto count = make_lw_shared<size_t>(0);
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        return do_until([count]() {return *count  > 1;},
+                    [&log, count, rps]() {
+                        auto uuid = utils::UUID_gen::get_time_UUID();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([&log, rps, count](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    rps->push_back(rp);
+                                    ++(*count);
+                                });
+                    }).then([&log, rps]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps, &log] {
+                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
+                                BOOST_CHECK_EQUAL(rp, rps->at(0));
+                                return make_ready_future<>();
+                            }).then([](auto s) {
+                                return do_with(std::move(s), [](auto& s) {
+                                    return s.done();
+                                });
+                            }).then_wrapped([](auto&& f) {
+                                try {
+                                    f.get();
+                                    BOOST_FAIL("Expected exception");
+                                } catch (commitlog::segment_data_corruption_error& e) {
+                                    // ok.
+                                    BOOST_REQUIRE(e.bytes() > 0);
+                                }
+                            });
+                        });
+                    });
+        });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) {
+        auto count = make_lw_shared<size_t>(0);
+        auto rps = make_lw_shared<std::vector<db::replay_position>>();
+        return do_until([count]() {return *count  > 1;},
+                    [&log, count, rps]() {
+                        auto uuid = utils::UUID_gen::get_time_UUID();
+                        sstring tmp = "hej bubba cow";
+                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([&log, rps, count](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    rps->push_back(rp);
+                                    ++(*count);
+                                });
+                    }).then([&log, rps]() {
+                        return log.sync_all_segments();
+                    }).then([&log, rps] {
+                        auto segments = log.get_active_segment_names();
+                        BOOST_REQUIRE(!segments.empty());
+                        auto seg = segments[0];
+                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps, &log] {
+                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
+                                BOOST_FAIL("Should not reach");
+                                return make_ready_future<>();
+                            }).then([](auto s) {
+                                return do_with(std::move(s), [](auto& s) {
+                                    return s.done();
+                                });
+                            }).then_wrapped([](auto&& f) {
+                                try {
+                                    f.get();
+                                    BOOST_FAIL("Expected exception");
+                                } catch (commitlog::segment_data_corruption_error& e) {
+                                    // ok.
+                                    BOOST_REQUIRE(e.bytes() > 0);
+                                }
+                            });
+                        });
+                    });
+        });
+}
+
 SEASTAR_TEST_CASE(test_commitlog_counters) {
     auto count_cl_counters = []() -> size_t {
         auto ids = scollectd::get_collectd_ids();
