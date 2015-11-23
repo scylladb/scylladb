@@ -188,6 +188,97 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
+struct empty_t {};
+
+class empty_value_exception : public std::exception {
+public:
+    virtual const char* what() const noexcept override {
+        return "Unexpected empty value";
+    }
+};
+
+// Cassandra has a notion of empty values even for scalars (i.e. int).  This is
+// distinct from NULL which means deleted or never set.  It is serialized
+// as a zero-length byte array (whereas NULL is serialized as a negative-length
+// byte array).
+template <typename T>
+class emptyable {
+    // We don't use optional<>, to avoid lots of ifs during the copy and move constructors
+    static_assert(std::is_default_constructible<T>::value, "must be default constructible");
+    bool _is_empty = false;
+    T _value;
+public:
+    // default-constructor defaults to a non-empty value, since empty is the
+    // exception rather than the rule
+    emptyable() : _value{} {}
+    emptyable(const T& x) : _value(x) {}
+    emptyable(T&& x) : _value(std::move(x)) {}
+    emptyable(empty_t) : _is_empty(true) {}
+    template <typename... U>
+    emptyable(U&&... args) : _value(std::forward<U>(args)...) {}
+    bool empty() const { return _is_empty; }
+    operator const T& () const { verify(); return _value; }
+    operator T&& () && { verify(); return std::move(_value); }
+    const T& get() const & { verify(); return _value; }
+    T&& get() && { verify(); return std::move(_value); }
+private:
+    void verify() const {
+        if (_is_empty) {
+            throw empty_value_exception();
+        }
+    }
+};
+
+template <typename T>
+inline
+bool
+operator==(const emptyable<T>& me1, const emptyable<T>& me2) {
+    if (me1.empty() && me2.empty()) {
+        return true;
+    }
+    if (me1.empty() != me2.empty()) {
+        return false;
+    }
+    return me1.get() == me2.get();
+}
+
+template <typename T>
+inline
+bool
+operator<(const emptyable<T>& me1, const emptyable<T>& me2) {
+    if (me1.empty()) {
+        if (me2.empty()) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+    if (me2.empty()) {
+        return false;
+    } else {
+        return me1.get() < me2.get();
+    }
+}
+
+// Checks whether T::empty() const exists and returns bool
+template <typename T>
+class has_empty {
+    template <typename X>
+    constexpr static auto check(const X* x) -> std::enable_if_t<std::is_same<bool, decltype(x->empty())>::value, bool> {
+        return true;
+    }
+    template <typename X>
+    constexpr static auto check(...) -> bool {
+        return false;
+    }
+public:
+    constexpr static bool value = check<T>(nullptr);
+};
+
+template <typename T>
+using maybe_empty =
+        std::conditional_t<has_empty<T>::value, T, emptyable<T>>;
+
 class abstract_type;
 class data_value;
 
@@ -253,10 +344,10 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
-    friend data_value make_tuple_value(data_type, std::vector<data_value>);
-    friend data_value make_set_value(data_type, std::vector<data_value>);
-    friend data_value make_list_value(data_type, std::vector<data_value>);
-    friend data_value make_map_value(data_type, std::vector<std::pair<data_value, data_value>>);
+    friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
+    friend data_value make_map_value(data_type, maybe_empty<std::vector<std::pair<data_value, data_value>>>);
     friend data_value make_user_value(data_type, std::vector<data_value>);
 };
 
@@ -418,31 +509,33 @@ data_value::serialize(bytes::iterator& out) const {
 }
 
 template <typename T>
+inline
 data_value
-data_value::make_new(data_type type, T&& value) {
+data_value::make_new(data_type type, T&& v) {
+    maybe_empty<std::remove_reference_t<T>> value(std::forward<T>(v));
     return data_value(type->native_value_clone(&value), type);
 }
 
 template <typename T>
 const T& value_cast(const data_value& value) {
-    if (typeid(T) != value.type()->native_typeid()) {
+    if (typeid(maybe_empty<T>) != value.type()->native_typeid()) {
         throw std::bad_cast();
     }
     if (value.is_null()) {
         throw std::runtime_error("value is null");
     }
-    return *reinterpret_cast<T*>(value._value);
+    return *reinterpret_cast<maybe_empty<T>*>(value._value);
 }
 
 template <typename T>
 T&& value_cast(data_value&& value) {
-    if (typeid(T) != value.type()->native_typeid()) {
+    if (typeid(maybe_empty<T>) != value.type()->native_typeid()) {
         throw std::bad_cast();
     }
     if (value.is_null()) {
         throw std::runtime_error("value is null");
     }
-    return std::move(*reinterpret_cast<T*>(value._value));
+    return std::move(*reinterpret_cast<maybe_empty<T>*>(value._value));
 }
 
 // CRTP: implements translation between a native_type (C++ type) to abstract_type
@@ -452,7 +545,7 @@ T&& value_cast(data_value&& value) {
 template <typename NativeType, typename AbstractType = abstract_type>
 class concrete_type : public AbstractType {
 public:
-    using native_type = NativeType;
+    using native_type = maybe_empty<NativeType>;
     using AbstractType::AbstractType;
 protected:
     virtual size_t native_value_size() const override {
@@ -480,19 +573,22 @@ protected:
         return typeid(native_type);
     }
 protected:
-    data_value make_value(std::unique_ptr<NativeType> value) const {
+    data_value make_value(std::unique_ptr<native_type> value) const {
         return data_value::make(this->shared_from_this(), std::move(value));
     }
-    data_value make_value(NativeType value) const {
-        return make_value(std::make_unique<NativeType>(std::move(value)));
+    data_value make_value(native_type value) const {
+        return make_value(std::make_unique<native_type>(std::move(value)));
     }
     data_value make_null() const {
         return data_value::make_null(this->shared_from_this());
     }
-    const NativeType& from_value(const void* v) const {
-        return *reinterpret_cast<const NativeType*>(v);
+    data_value make_empty() const {
+        return make_value(native_type(empty_t()));
     }
-    const NativeType& from_value(const data_value& v) const {
+    const native_type& from_value(const void* v) const {
+        return *reinterpret_cast<const native_type*>(v);
+    }
+    const native_type& from_value(const data_value& v) const {
         return this->from_value(AbstractType::get_value_ptr(v));
     }
 };

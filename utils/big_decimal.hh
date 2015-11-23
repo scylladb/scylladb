@@ -31,6 +31,7 @@ private:
     boost::multiprecision::cpp_int _unscaled_value;
 public:
     big_decimal(sstring_view text);
+    big_decimal() : big_decimal(0, 0) {}
     big_decimal(int32_t scale, boost::multiprecision::cpp_int unscaled_value)
         : _scale(scale), _unscaled_value(unscaled_value)
     { }
