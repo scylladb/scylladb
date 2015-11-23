@@ -664,7 +664,7 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
     seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency_in_nano(), _stats.writes.count);
+        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
     }
 }
 
@@ -698,7 +698,7 @@ column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
     seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency_in_nano(), _stats.writes.count);
+        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
     }
 }
 

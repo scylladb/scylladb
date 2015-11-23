@@ -45,10 +45,13 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <chrono>
 
 namespace sstables {
 
 struct estimated_histogram {
+    using clock = std::chrono::steady_clock;
+    using duration = clock::duration;
     /**
      * The series of values to which the counts in `buckets` correspond:
      * 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 17, 20, etc.
@@ -126,7 +129,7 @@ public:
         if (low == bucket_offsets.end()) {
             low--;
         }
-        auto pos = low - bucket_offsets.begin();
+        auto pos = std::distance(bucket_offsets.begin(), low);
         buckets.at(pos)++;
         _count++;
     }
@@ -138,7 +141,8 @@ public:
      * to the new count
      * @param n
      */
-    void add(int64_t n, int64_t new_count) {
+    void add_nano(int64_t n, int64_t new_count) {
+        n /= 1000;
         if (new_count <= _count) {
             return;
         }
@@ -146,9 +150,13 @@ public:
         if (low == bucket_offsets.end()) {
             low--;
         }
-        auto pos = low - bucket_offsets.begin();
+        auto pos = std::distance(bucket_offsets.begin(), low);
         buckets.at(pos)+= new_count - _count;
         _count = new_count;
+    }
+
+    void add(duration latency, int64_t new_count) {
+        add_nano(std::chrono::duration_cast<std::chrono::nanoseconds>(latency).count(), new_count);
     }
 
     /**
