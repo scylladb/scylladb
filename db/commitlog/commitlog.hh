@@ -265,6 +265,18 @@ public:
 
     typedef std::function<future<>(temporary_buffer<char>, replay_position)> commit_load_reader_func;
 
+    class segment_data_corruption_error: public std::runtime_error {
+    public:
+        segment_data_corruption_error(std::string msg, uint64_t s)
+                : std::runtime_error(msg), _bytes(s) {
+        }
+        uint64_t bytes() const {
+            return _bytes;
+        }
+    private:
+        uint64_t _bytes;
+    };
+
     static subscription<temporary_buffer<char>, replay_position> read_log_file(file, commit_load_reader_func, position_type = 0);
     static future<subscription<temporary_buffer<char>, replay_position>> read_log_file(const sstring&, commit_load_reader_func, position_type = 0);
 private:
