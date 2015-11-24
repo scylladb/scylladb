@@ -36,6 +36,13 @@ public:
         }
         return *this;
     }
+
+    mutation_assertion& has_schema(schema_ptr s) {
+        if (_m.schema() != s) {
+            BOOST_FAIL(sprint("Expected mutation of schema %s, but got %s", *s, *_m.schema()));
+        }
+        return *this;
+    }
 };
 
 static inline
