@@ -183,6 +183,7 @@ scylla_tests = [
     'tests/managed_vector_test',
     'tests/crc_test',
     'tests/flush_queue_test',
+    'tests/dynamic_bitset_test',
 ]
 
 apps = [
@@ -483,6 +484,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/crc_test',
     'tests/perf/perf_sstable',
     'tests/managed_vector_test',
+    'tests/dynamic_bitset_test',
 ])
 
 for t in tests_not_using_seastar_test_framework:
