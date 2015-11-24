@@ -41,6 +41,13 @@ public:
         return *this;
     }
 
+    mutation_assertion next_mutation() {
+        return _reader().then([] (mutation_opt&& mo) mutable {
+            BOOST_REQUIRE(bool(mo));
+            return mutation_assertion(std::move(*mo));
+        }).get0();
+    }
+
     template<typename RangeOfMutations>
     reader_assertions& produces(const RangeOfMutations& mutations) {
         for (auto&& m : mutations) {
