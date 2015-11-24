@@ -123,6 +123,8 @@ struct segment {
 
     uint8_t data[size];
 
+    segment() noexcept { }
+
     template<typename T = void>
     const T* at(size_t offset) const {
         return reinterpret_cast<const T*>(data + offset);
