@@ -35,12 +35,13 @@ public:
     int64_t min;
     int64_t max;
     int64_t sum;
+    int64_t started;
     double mean;
     double variance;
     int64_t sample_mask;
     boost::circular_buffer<int64_t> sample;
     ihistogram(size_t size = 1024, int64_t _sample_mask = 0x80)
-            : count(0), total(0), min(0), max(0), sum(0), mean(0), variance(0),
+            : count(0), total(0), min(0), max(0), sum(0), started(0), mean(0), variance(0),
               sample_mask(_sample_mask), sample(
                     size) {
     }
@@ -81,7 +82,7 @@ public:
      * Call set_latency, that would start a latency object if needed.
      */
     bool should_sample() const {
-        return total == 0 || (count & sample_mask);
+        return total == 0 || (started & sample_mask);
     }
     /**
      * Set the latency according to the sample rate.
@@ -90,6 +91,7 @@ public:
         if (should_sample()) {
             lc.start();
         }
+        started++;
         return *this;
     }
 
@@ -101,6 +103,10 @@ public:
     ihistogram& inc() {
         count++;
         return *this;
+    }
+
+    int64_t pending() const {
+        return started - count;
     }
 };
 
