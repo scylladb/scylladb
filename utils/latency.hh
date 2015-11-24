@@ -29,8 +29,9 @@ namespace utils {
 
 class latency_counter {
 public:
-    using time_point = std::chrono::system_clock::time_point;
-    using duration = std::chrono::system_clock::duration;
+    using clock = std::chrono::steady_clock;
+    using time_point = clock::time_point;
+    using duration = clock::duration;
 private:
     time_point _start;
     time_point _stop;
@@ -69,7 +70,7 @@ public:
     }
 
     static time_point now() {
-        return std::chrono::system_clock::now();
+        return clock::now();
     }
 };
 
