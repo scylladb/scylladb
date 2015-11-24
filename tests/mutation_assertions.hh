@@ -24,10 +24,10 @@
 #include "mutation.hh"
 
 class mutation_assertion {
-    const mutation& _m;
+    mutation _m;
 public:
-    mutation_assertion(const mutation& m)
-        : _m(m)
+    mutation_assertion(mutation m)
+        : _m(std::move(m))
     { }
 
     void is_equal_to(const mutation& other) {
@@ -38,8 +38,8 @@ public:
 };
 
 static inline
-mutation_assertion assert_that(const mutation& m) {
-    return { m };
+mutation_assertion assert_that(mutation m) {
+    return { std::move(m) };
 }
 
 class mutation_opt_assertions {
