@@ -200,7 +200,7 @@ public:
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
 public:
-    mutation_reader make_reader(const query::partition_range&);
+    mutation_reader make_reader(const query::partition_range& = query::full_partition_range);
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation. The mutation must contain all
