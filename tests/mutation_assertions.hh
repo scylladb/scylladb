@@ -30,10 +30,11 @@ public:
         : _m(std::move(m))
     { }
 
-    void is_equal_to(const mutation& other) {
+    mutation_assertion& is_equal_to(const mutation& other) {
         if (_m != other) {
             BOOST_FAIL(sprint("Mutations differ, expected %s\n ...but got: %s", other, _m));
         }
+        return *this;
     }
 };
 
