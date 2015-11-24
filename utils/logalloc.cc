@@ -111,10 +111,55 @@ struct segment_occupancy_descending_less_compare {
     inline bool operator()(segment* s1, segment* s2) const;
 };
 
+template<typename T>
+class prepared_buffers_allocator {
+    static thread_local T* _prepared_buffer;
+public:
+    using value_type = T;
+    using reference = T&;
+    using const_reference = const T&;
+    using pointer = T*;
+    using const_pointer = const T*;
+    using size_type = size_t;
+    using difference_type = ptrdiff_t;
+
+    template<typename U>
+    struct rebind {
+        using other = prepared_buffers_allocator<U>;
+    };
+public:
+    pointer allocate(size_t n) {
+        assert(n == 1);
+        assert(_prepared_buffer);
+        auto ptr = _prepared_buffer;
+        _prepared_buffer = nullptr;
+        return ptr;
+    }
+    void deallocate(pointer, size_t) { }
+    template<typename U, typename... Args>
+    void construct(U* p, Args&&... args) {
+        new (p) U(std::forward<Args>(args)...);
+    };
+    template<typename U>
+    void destroy(U* p) {
+        p->~U();
+    }
+public:
+    static void prepare(T* buffer) {
+        assert(!_prepared_buffer);
+        _prepared_buffer = buffer;
+    }
+};
+
+template<typename T>
+thread_local T* prepared_buffers_allocator<T>::_prepared_buffer;
+
 // FIXME: The choice of data structure was arbitrary, evaluate different heap variants.
 // Consider using an intrusive container leveraging segment_descriptor objects.
 using segment_heap = boost::heap::binomial_heap<
-    segment*, boost::heap::compare<segment_occupancy_descending_less_compare>>;
+    segment*, boost::heap::compare<segment_occupancy_descending_less_compare>,
+    boost::heap::allocator<prepared_buffers_allocator<segment*>>>;
+using segment_heap_allocator = segment_heap::allocator_type;
 
 struct segment {
     static constexpr int size_shift = segment_size_shift;
@@ -154,6 +199,12 @@ struct segment_descriptor {
     segment::size_type _offset;
     segment::size_type _free_space;
     segment_heap::handle_type _heap_handle;
+    union heap_node {
+        heap_node() { }
+        ~heap_node() { }
+        heap_node(heap_node&&) { }
+        segment_heap_allocator::value_type _node;
+    } _heap_node;
 
     segment_descriptor()
         : _lsa_managed(false)
@@ -689,6 +740,9 @@ private:
         }
         logger.trace("Closing segment {}, used={}, waste={} [B]", _active, _active->occupancy(), segment::size - _active_offset);
         _closed_occupancy += _active->occupancy();
+
+        auto heap_node = &shard_segment_pool.descriptor(_active)._heap_node._node;
+        segment_heap_allocator::prepare(heap_node);
         auto handle = _segments.push(_active);
         _active->set_heap_handle(handle);
         _active = nullptr;
