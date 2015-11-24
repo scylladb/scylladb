@@ -743,13 +743,13 @@ public:
     val(api_ui_dir, sstring, "swagger-ui/dist/", Used, "The directory location of the API GUI") \
     val(api_doc_dir, sstring, "api/api-doc/", Used, "The API definition file directory") \
     val(load_balance, sstring, "none", Used, "CQL request load balancing: 'none' or round-robin'") \
-    val(consistent_rangemovement, bool, true, Used, "For -Dcassandra.consistent.rangemovement") \
-    val(join_ring, bool, true, Used, "For -Dcassandra.join_ring") \
-    val(load_ring_state, bool, true, Used, "For -Dcassandra.load_ring_state") \
-    val(replace_node, sstring, "", Used, "For -Dcassandra.replace_node") \
-    val(replace_token, sstring, "", Used, "For -Dcassandra.replace_token") \
-    val(replace_address, sstring, "", Used, "For -Dcassandra.replace_address") \
-    val(replace_address_first_boot, sstring, "", Used, "For -Dcassandra.replace_address_first_boot") \
+    val(consistent_rangemovement, bool, true, Used, "When set to true, range movements will be consistent. It means: 1) it will refuse to bootstrapp a new node if other bootstrapping/leaving/moving nodes detected. 2) data will be streamed to a new node only from the node which is no longer responsible for the token range. Same as -Dcassandra.consistent.rangemovement in cassandra") \
+    val(join_ring, bool, true, Used, "When set to true, a node will join the token ring. When set to false, a node will not join the token ring. User can use nodetool join to initiate ring joinging later. Same as -Dcassandra.join_ring in cassandra.") \
+    val(load_ring_state, bool, true, Used, "When set to true, load tokens and host_ids previously saved. Same as -Dcassandra.load_ring_state in cassandra.") \
+    val(replace_node, sstring, "", Used, "The UUID of the node to replace. Same as -Dcassandra.replace_node in cssandra.") \
+    val(replace_token, sstring, "", Used, "The tokens of the node to replace. Same as -Dcassandra.replace_token in cassandra.") \
+    val(replace_address, sstring, "", Used, "The listen_address or broadcast_address of the dead node to replace. Same as -Dcassandra.replace_address.") \
+    val(replace_address_first_boot, sstring, "", Used, "Like replace_address option, but if the node has been bootstrapped sucessfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \
