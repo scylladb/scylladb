@@ -767,6 +767,12 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::vector<gms::inet_address> pending_endpoints =
         get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
+    // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
+    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
+        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
+    });
+    pending_endpoints.erase(itend, pending_endpoints.end());
+
     auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
     if (std::find_if(all.begin(), all.end(), std::bind1st(std::mem_fn(&storage_proxy::cannot_hint), this)) != all.end()) {
