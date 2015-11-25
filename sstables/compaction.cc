@@ -57,6 +57,8 @@
 #include "schema.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "leveled_manifest.hh"
+#include "db/system_keyspace.hh"
+#include "db/query_context.hh"
 
 namespace sstables {
 
@@ -266,7 +268,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         if (ex.size()) {
             throw std::runtime_error(ex);
         }
-    }).then([start_time, stats] {
+    }).then([start_time, stats, schema] {
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::high_resolution_clock::now();
         // time taken by compaction in seconds.
@@ -288,7 +290,21 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             stats->sstables, new_sstables_msg, stats->start_size, stats->end_size, (int) (ratio * 100),
             std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
             stats->total_partitions, stats->total_keys_written);
-        return make_ready_future<>();
+
+        // If compaction is running for testing purposes, detect that there is
+        // no query context and skip code that updates compaction history.
+        if (!db::qctx) {
+            return make_ready_future<>();
+        }
+
+        auto compacted_at = std::chrono::duration_cast<std::chrono::milliseconds>(end_time.time_since_epoch()).count();
+
+        // FIXME: add support to merged_rows. merged_rows is a histogram that
+        // shows how many sstables each row is merged from. This information
+        // cannot be accessed until we make combined_reader more generic,
+        // for example, by adding a reducer method.
+        return db::system_keyspace::update_compaction_history(schema->ks_name(), schema->cf_name(), compacted_at,
+                stats->start_size, stats->end_size, {});
     });
 }
 
