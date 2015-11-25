@@ -283,6 +283,7 @@ public:
         }
         return seastar::async([this] {
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+            utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             auto db = ::make_shared<distributed<database>>();
             init_once(db).get();

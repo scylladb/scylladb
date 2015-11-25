@@ -85,11 +85,6 @@ static int get_generation_number() {
     return generation_number;
 }
 
-bool is_replacing() {
-    // FIXME: DatabaseDescriptor.isReplacing()
-    return false;
-}
-
 bool storage_service::is_auto_bootstrap() {
     return _db.local().get_config().auto_bootstrap();
 }
@@ -100,34 +95,70 @@ std::set<inet_address> get_seeds() {
     return gossiper.get_seeds();
 }
 
-std::set<inet_address> get_replace_tokens() {
-    // FIXME: DatabaseDescriptor.getReplaceTokens()
-    return {};
+std::unordered_set<token> get_replace_tokens() {
+    std::unordered_set<token> ret;
+    std::unordered_set<sstring> tokens;
+    auto tokens_string = get_local_storage_service().db().local().get_config().replace_token();
+    try {
+        boost::split(tokens, tokens_string, boost::is_any_of(sstring(",")));
+    } catch (...) {
+        throw std::runtime_error(sprint("Unable to parse replace_token=%s", tokens_string));
+    }
+    tokens.erase("");
+    for (auto token_string : tokens) {
+        auto token = dht::global_partitioner().from_sstring(token_string);
+        ret.insert(token);
+    }
+    return ret;
 }
 
 std::experimental::optional<UUID> get_replace_node() {
-    // FIXME: DatabaseDescriptor.getReplaceNode()
-    return {};
+    try {
+        auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
+        auto uuid = utils::UUID(replace_node);
+        return uuid;
+    } catch (...) {
+        return std::experimental::nullopt;
+    }
 }
 
 std::experimental::optional<inet_address> get_replace_address() {
-    // FIXME: DatabaseDescriptor.getReplaceAddress()
-    return {};
+    auto& cfg = get_local_storage_service().db().local().get_config();
+    sstring replace_address = cfg.replace_address();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    try {
+        if (!replace_address.empty()) {
+            return gms::inet_address(replace_address);
+        } else if (!replace_address_first_boot.empty()) {
+            return gms::inet_address(replace_address_first_boot);
+        }
+        return std::experimental::nullopt;
+    } catch (...) {
+        return std::experimental::nullopt;
+    }
 }
 
+bool is_replacing() {
+    auto& cfg = get_local_storage_service().db().local().get_config();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
+        logger.info("Replace address on first boot requested; this node is already bootstrapped");
+        return false;
+    }
+    return bool(get_replace_address());
+}
+
+
 bool get_property_join_ring() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-    return true;
+    return get_local_storage_service().db().local().get_config().join_ring();
 }
 
 bool get_property_rangemovement() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")
-    return true;
+    return get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
 
 bool get_property_load_ring_state() {
-    // FIXME: Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true"))
-    return true;
+    return get_local_storage_service().db().local().get_config().load_ring_state();
 }
 
 bool storage_service::should_bootstrap() {
@@ -171,8 +202,7 @@ future<> storage_service::prepare_to_join() {
         return db::system_keyspace::get_local_host_id();
     }).then([this, app_states] (auto local_host_id) mutable {
         _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
-        // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-        auto broadcast_rpc_address = this->get_broadcast_address();
+        auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
         app_states->emplace(gms::application_state::NET_VERSION, value_factory.network_version());
         app_states->emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
         app_states->emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));

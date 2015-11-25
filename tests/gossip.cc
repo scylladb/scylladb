@@ -65,6 +65,7 @@ int main(int ac, char ** av) {
         logging::logger_registry().set_logger_level("gossip", logging::log_level::trace);
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
         utils::fb_utilities::set_broadcast_address(listen);
+        utils::fb_utilities::set_broadcast_rpc_address(listen);
         auto vv = std::make_shared<gms::versioned_value::factory>();
         locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([&db] {
             return service::init_storage_service(db);
