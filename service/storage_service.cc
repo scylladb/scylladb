@@ -769,9 +769,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("on_dead endpoint={}", endpoint);
-#if 0
-    MessagingService.instance().convict(endpoint);
-#endif
+    net::get_local_messaging_service().remove_rpc_client(net::shard_id{endpoint, 0});
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             subscriber->on_down(endpoint);
