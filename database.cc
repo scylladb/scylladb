@@ -1512,28 +1512,14 @@ column_family::as_mutation_source() const {
 
 future<lw_shared_ptr<query::result>>
 database::query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
-    static auto make_empty = [] {
-        return make_ready_future<lw_shared_ptr<query::result>>(make_lw_shared(query::result()));
-    };
-
-    try {
-        column_family& cf = find_column_family(cmd.cf_id);
-        return cf.query(cmd, ranges);
-    } catch (const no_such_column_family&) {
-        // FIXME: load from sstables
-        return make_empty();
-    }
+    column_family& cf = find_column_family(cmd.cf_id);
+    return cf.query(cmd, ranges);
 }
 
 future<reconcilable_result>
 database::query_mutations(const query::read_command& cmd, const query::partition_range& range) {
-    try {
-        column_family& cf = find_column_family(cmd.cf_id);
-        return mutation_query(cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
-    } catch (const no_such_column_family&) {
-        // FIXME: load from sstables
-        return make_ready_future<reconcilable_result>(reconcilable_result());
-    }
+    column_family& cf = find_column_family(cmd.cf_id);
+    return mutation_query(cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -1577,8 +1563,7 @@ future<> database::apply_in_memory(const frozen_mutation& m, const db::replay_po
         auto& cf = find_column_family(m.column_family_id());
         cf.apply(m, rp);
     } catch (no_such_column_family&) {
-        // TODO: log a warning
-        // FIXME: load keyspace meta-data from storage
+        dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
     }
     return make_ready_future<>();
 }
