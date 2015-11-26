@@ -427,7 +427,6 @@ cql_server::connection::connection(cql_server& server, connected_socket&& fd, so
 
 cql_server::connection::~connection() {
     --_server._current_connections;
-    _server._notifier->unregister_connection(this);
     _server._connections_list.erase(_server._connections_list.iterator_to(*this));
     _server.maybe_idle();
 }
@@ -452,6 +451,7 @@ future<> cql_server::connection::process()
             return write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error"));
         }
     }).finally([this] {
+        _server._notifier->unregister_connection(this);
         return _pending_requests_gate.close().then([this] {
             return _ready_to_respond.finally([this] {
                 return _write_buf.close();
