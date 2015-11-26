@@ -235,6 +235,7 @@ cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'C
 
 scylla_core = (['database.cc',
                  'schema.cc',
+                 'frozen_schema.cc',
                  'bytes.cc',
                  'mutation.cc',
                  'row_cache.cc',
