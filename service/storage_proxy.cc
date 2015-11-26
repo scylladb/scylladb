@@ -2594,31 +2594,29 @@ void storage_proxy::init_messaging_service() {
     });
     ms.register_mutation([] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         do_with(std::move(in), get_local_shared_storage_proxy(), [forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
-            return make_ready_future<>().then([&p, &m, reply_to, shard, response_id, forward = std::move(forward)] () mutable {
-                return when_all(
-                    // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                    futurize<void>::apply([&p, &m] {
-                        return p->mutate_locally(m);
-                    }).then_wrapped([reply_to, shard, response_id] (future<> f) {
-                        try {
-                            f.get();
-                            auto& ms = net::get_local_messaging_service();
-                            ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
-                                f.ignore_ready_future();
-                            });
-                            // return void, no need to wait for send to complete
-                        } catch(...) {
-                            logger.warn("MUTATION verb handler: {}", std::current_exception());
-                        }
-                    }),
-                    parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
+            return when_all(
+                // mutate_locally() may throw, putting it into apply() converts exception to a future.
+                futurize<void>::apply([&p, &m] {
+                    return p->mutate_locally(m);
+                }).then_wrapped([reply_to, shard, response_id] (future<> f) {
+                    try {
+                        f.get();
                         auto& ms = net::get_local_messaging_service();
-                        return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                        ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                             f.ignore_ready_future();
                         });
-                    })
-                );
-            });
+                        // return void, no need to wait for send to complete
+                    } catch(...) {
+                        logger.warn("MUTATION verb handler: {}", std::current_exception());
+                    }
+                }),
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
+                    auto& ms = net::get_local_messaging_service();
+                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                    });
+                })
+            );
         }).discard_result();
 
         return net::messaging_service::no_wait();
