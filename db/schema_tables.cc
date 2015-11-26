@@ -1193,11 +1193,6 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
     }
 #endif
 
-void create_table_from_table_row_and_columns_partition(schema_builder& builder, const query::result_set_row& table_row, const schema_result::value_type& serialized_columns)
-{
-    create_table_from_table_row_and_column_rows(builder, table_row, serialized_columns.second);
-}
-
 future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition)
 {
     return do_with(std::move(partition), [&proxy] (auto& partition) {
@@ -1214,11 +1209,8 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
 {
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
-    auto id = row.get_nonnull<utils::UUID>("cf_id");
-    return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&row, ks_name, cf_name, id] (auto serialized_columns) {
-        schema_builder builder{ks_name, cf_name, id};
-        create_table_from_table_row_and_columns_partition(builder, row, serialized_columns);
-        return builder.build();
+    return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&row] (auto serialized_columns) {
+        return create_table_from_table_row_and_column_rows(row, *serialized_columns.second);
     });
 #if 0
     // FIXME:
@@ -1235,10 +1227,13 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
 #endif
 }
 
-void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_column_definitions)
+schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_row& table_row,
+    const query::result_set& serialized_column_definitions)
 {
     auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = table_row.get_nonnull<sstring>("columnfamily_name");
+    auto id = table_row.get_nonnull<utils::UUID>("cf_id");
+    schema_builder builder{ks_name, cf_name, id};
 
 #if 0
     AbstractType<?> rawComparator = TypeParser.parse(result.getString("comparator"));
@@ -1371,6 +1366,7 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
     }
+    return builder.build();
 }
 
 #if 0
@@ -1447,14 +1443,14 @@ void drop_column_from_schema_mutation(schema_ptr table, const column_definition&
     mutations.emplace_back(m);
 }
 
-std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
+std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table, /*,
                                                                AbstractType<?> rawComparator, */
                                                                bool is_super)
 {
     std::vector<column_definition> columns;
-    for (auto&& row : rows->rows()) {
+    for (auto&& row : rows.rows()) {
         columns.emplace_back(std::move(create_column_from_column_row(row, keyspace, table, /*, rawComparator, */ is_super)));
     }
     return columns;

@@ -110,13 +110,13 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
-void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
+schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_row& table_row, const query::result_set& serialized_columns);
 
 future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition);
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
 
-std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
+std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table,/*,
                                                                AbstractType<?> rawComparator, */
