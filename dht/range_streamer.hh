@@ -62,10 +62,7 @@ public:
     using stream_plan = streaming::stream_plan;
     using stream_state = streaming::stream_state;
     using i_failure_detector = gms::i_failure_detector;
-    static bool use_strict_consistency() {
-        //FIXME: Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement","true"));
-        return true;
-    }
+    static bool use_strict_consistency();
 public:
     /**
      * A filter applied to sources to stream from when constructing a fetch map.

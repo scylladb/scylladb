@@ -45,6 +45,7 @@
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
+#include "service/storage_service.hh"
 
 namespace dht {
 
@@ -259,6 +260,10 @@ range_streamer::get_work_map(const std::unordered_multimap<range<token>, inet_ad
     std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;
     source_filters.emplace(std::move(filter));
     return get_range_fetch_map(ranges_with_source_target, source_filters, keyspace);
+}
+
+bool range_streamer::use_strict_consistency() {
+    return service::get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
 
 } // dht
