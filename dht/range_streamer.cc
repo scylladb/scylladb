@@ -109,7 +109,6 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
 
-    // std::unordered_multimap<range<token>, inet_address>
     auto tm = _metadata.clone_only_token_map();
     auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(tm));
 
