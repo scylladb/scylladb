@@ -221,25 +221,17 @@ void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<range<
         }
     }
 
-    // TODO: share code with unordered_multimap_to_unordered_map
-    std::unordered_map<inet_address, std::vector<range<token>>> tmp;
+    std::unordered_map<inet_address, std::vector<range<token>>> range_fetch_map;
     for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
-        auto& addr = x.first;
-        auto& range_ = x.second;
-        auto it = tmp.find(addr);
-        if (it != tmp.end()) {
-            it->second.push_back(range_);
-        } else {
-            tmp.emplace(addr, std::vector<range<token>>{range_});
-        }
+        range_fetch_map[x.first].emplace_back(x.second);
     }
 
     if (logger.is_enabled(logging::log_level::debug)) {
-        for (auto& x : tmp) {
+        for (auto& x : range_fetch_map) {
             logger.debug("{} : range {} from source {} for keyspace {}", _description, x.second, x.first, keyspace_name);
         }
     }
-    _to_fetch.emplace(keyspace_name, std::move(tmp));
+    _to_fetch.emplace(keyspace_name, std::move(range_fetch_map));
 }
 
 future<streaming::stream_state> range_streamer::fetch_async() {
