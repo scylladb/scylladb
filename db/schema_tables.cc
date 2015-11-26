@@ -871,7 +871,7 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
             addTypeToSchemaMutation(type, timestamp, mutation);
 #endif
         for (auto&& kv : keyspace->cf_meta_data()) {
-            add_table_to_schema_mutation(kv.second, timestamp, true, pkey, mutations);
+            add_table_to_schema_mutation(kv.second, timestamp, true, mutations);
         }
     }
     return mutations;
@@ -997,17 +997,16 @@ std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadat
 {
     // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
     auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
-    schema_ptr s = keyspaces();
-    auto pkey = partition_key::from_singular(*s, keyspace->name());
-    add_table_to_schema_mutation(table, timestamp, true, pkey, mutations);
+    add_table_to_schema_mutation(table, timestamp, true, mutations);
     return mutations;
 }
 
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations)
+void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations)
 {
     // For property that can be null (and can be changed), we insert tombstones, to make sure
     // we don't keep a property the user has removed
     schema_ptr s = columnfamilies();
+    auto pkey = partition_key::from_singular(*s, table->ks_name());
     mutation m{pkey, s};
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     m.set_clustered_cell(ckey, "cf_id", table->id(), timestamp);
