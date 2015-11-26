@@ -68,9 +68,14 @@ future<> pending_range_calculator_service::stop() {
 
 future<> pending_range_calculator_service::update() {
     return smp::submit_to(0, [] {
-        get_local_pending_range_calculator_service()._update_jobs++;
-        get_local_pending_range_calculator_service().run();
+        get_local_pending_range_calculator_service().do_update();
     });
+}
+
+void pending_range_calculator_service::do_update() {
+    assert(engine().cpu_id() == 0);
+    get_local_pending_range_calculator_service()._update_jobs++;
+    get_local_pending_range_calculator_service().run();
 }
 
 future<> pending_range_calculator_service::block_until_finished() {

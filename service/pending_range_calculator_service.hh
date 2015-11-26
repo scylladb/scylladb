@@ -51,6 +51,7 @@ private:
     void run();
 public:
     pending_range_calculator_service(distributed<database>& db) : _db(db) {}
+    void do_update();
     future<> update();
     future<> block_until_finished();
     future<> stop();

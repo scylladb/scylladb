@@ -551,7 +551,13 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     }
 
     bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
+
+    // Update pending ranges after update of normal tokens immediately to avoid
+    // a race where natural endpoint was updated to contain node A, but A was
+    // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
+    get_local_pending_range_calculator_service().do_update();
+
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
         auto replace_addr = get_replace_address();
