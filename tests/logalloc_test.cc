@@ -59,6 +59,8 @@ SEASTAR_TEST_CASE(test_compaction) {
             // Allocation should not invalidate references
             BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), reclaim_counter_1);
 
+            shard_tracker().reclaim_all_free_segments();
+
             // Free 1/3 randomly
 
             std::random_shuffle(_allocated.begin(), _allocated.end());
@@ -107,6 +109,8 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         });
 
         size_t quarter = shard_tracker().occupancy().total_space() / 4;
+
+        shard_tracker().reclaim_all_free_segments();
 
         // Can't reclaim anything yet
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) == 0);

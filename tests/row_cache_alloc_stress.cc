@@ -221,6 +221,8 @@ int main(int argc, char** argv) {
 
                 cache.populate(m);
 
+                logalloc::shard_tracker().reclaim_all_free_segments();
+
                 {
                     logalloc::reclaim_lock _(tracker.region());
                     try {
