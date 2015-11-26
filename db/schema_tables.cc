@@ -46,6 +46,7 @@
 #include "system_keyspace.hh"
 #include "query_context.hh"
 #include "query-result-set.hh"
+#include "query-result-writer.hh"
 #include "schema_builder.hh"
 #include "map_difference.hh"
 #include "utils/UUID_gen.hh"
@@ -398,6 +399,28 @@ read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstr
     return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result{}, insert);
 }
 
+static
+future<mutation> query_partition_mutation(service::storage_proxy& proxy,
+    schema_ptr s,
+    lw_shared_ptr<query::read_command> cmd,
+    partition_key pkey)
+{
+    auto dk = dht::global_partitioner().decorate_key(*s, pkey);
+    return do_with(query::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
+        return proxy.query_mutations_locally(std::move(cmd), range)
+                .then([dk = std::move(dk), s](foreign_ptr<lw_shared_ptr<reconcilable_result>> res) {
+                    auto&& partitions = res->partitions();
+                    if (partitions.size() == 0) {
+                        return mutation(std::move(dk), s);
+                    } else if (partitions.size() == 1) {
+                        return partitions[0].mut().unfreeze(s);
+                    } else {
+                        assert(false && "Results must have at most one partition");
+                    }
+                });
+    });
+}
+
 future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
 {
@@ -409,16 +432,18 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, c
     });
 }
 
-future<schema_result_value_type>
+future<mutation>
 read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
 {
     auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
-    auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
-        partition_key::from_singular(*schema, keyspace_name));
-    auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
-    return db::system_keyspace::query(proxy, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
-        return schema_result_value_type{keyspace_name, std::move(rs)};
-    });
+    auto keyspace_key = partition_key::from_singular(*schema, keyspace_name);
+    auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(
+            *schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
+    auto slice = partition_slice_builder(*schema)
+            .with_range(std::move(clustering_range))
+            .build();
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
+    return query_partition_mutation(proxy.local(), std::move(schema), std::move(cmd), std::move(keyspace_key));
 }
 
 static semaphore the_merge_lock;
@@ -1001,7 +1026,7 @@ std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadat
     return mutations;
 }
 
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations)
+schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers)
 {
     // For property that can be null (and can be changed), we insert tombstones, to make sure
     // we don't keep a property the user has removed
@@ -1072,9 +1097,10 @@ void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestam
 
     m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
 
+    mutation columns_mutation(pkey, columns());
     if (with_columns_and_triggers) {
         for (auto&& column : table->all_columns_in_select_order()) {
-            add_column_to_schema_mutation(table, column, timestamp, pkey, mutations);
+            add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
         }
 
 #if 0
@@ -1082,7 +1108,12 @@ void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestam
             addTriggerToSchemaMutation(table, trigger, timestamp, mutation);
 #endif
     }
-    mutations.emplace_back(std::move(m));
+    return schema_mutations{std::move(m), std::move(columns_mutation)};
+}
+
+void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations)
+{
+    make_table_mutations(table, timestamp, with_columns_and_triggers).copy_to(mutations);
 }
 
 #if 0
@@ -1160,11 +1191,27 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
-    return read_schema_partition_for_table(proxy, COLUMNFAMILIES, keyspace, table).then([&proxy, keyspace, table] (auto partition) {
-        if (partition.second->empty()) {
+    return read_schema_partition_for_table(proxy, COLUMNFAMILIES, keyspace, table).then([&proxy, keyspace, table] (mutation cf_m) {
+        if (!cf_m.live_row_count()) {
             throw std::runtime_error(sprint("%s:%s not found in the schema definitions keyspace.", keyspace, table));
         }
-        return create_table_from_table_partition(proxy, std::move(partition.second));
+        return read_schema_partition_for_table(proxy, COLUMNS, keyspace, table).then([cf_m = std::move(cf_m)] (mutation col_m) {
+                    schema_mutations tm{std::move(cf_m), std::move(col_m)};
+                    return create_table_from_mutations(std::move(tm));
+                });
+#if 0
+        // FIXME:
+    Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
+    try
+    {
+        for (TriggerDefinition trigger : createTriggersFromTriggersPartition(serializedTriggers))
+            cfm.addTriggerDefinition(trigger);
+    }
+    catch (InvalidRequestException e)
+    {
+        throw new RuntimeException(e);
+    }
+#endif
     });
 }
 
@@ -1193,13 +1240,6 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
     }
 #endif
 
-future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition)
-{
-    return do_with(std::move(partition), [&proxy] (auto& partition) {
-        return create_table_from_table_row(proxy, partition->row(0));
-    });
-}
-
 /**
  * Deserialize table metadata from low-level representation
  *
@@ -1209,27 +1249,14 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
 {
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
-    return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&row] (auto serialized_columns) {
-        return create_table_from_table_row_and_column_rows(row, *serialized_columns.second);
-    });
-#if 0
-    // FIXME:
-    Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
-    try
-    {
-        for (TriggerDefinition trigger : createTriggersFromTriggersPartition(serializedTriggers))
-            cfm.addTriggerDefinition(trigger);
-    }
-    catch (InvalidRequestException e)
-    {
-        throw new RuntimeException(e);
-    }
-#endif
+    return create_table_from_name(proxy, ks_name, cf_name);
 }
 
-schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_row& table_row,
-    const query::result_set& serialized_column_definitions)
+schema_ptr create_table_from_mutations(schema_mutations sm)
 {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    query::result_set_row table_row = table_rs.row(0);
+
     auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = table_row.get_nonnull<sstring>("columnfamily_name");
     auto id = table_row.get_nonnull<utils::UUID>("cf_id");
@@ -1251,11 +1278,12 @@ schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_r
     AbstractType<?> fullRawComparator = CFMetaData.makeRawAbstractType(rawComparator, subComparator);
 #endif
 
-    std::vector<column_definition> column_defs = create_columns_from_column_rows(serialized_column_definitions,
-                                                                    ks_name,
-                                                                    cf_name,/*,
-                                                                    fullRawComparator, */
-                                                                    cf == cf_type::super);
+    std::vector<column_definition> column_defs = create_columns_from_column_rows(
+            query::result_set(sm.columns_mutation()),
+            ks_name,
+            cf_name,/*,
+            fullRawComparator, */
+            cf == cf_type::super);
 
     bool is_dense;
     if (table_row.has("is_dense")) {
@@ -1386,12 +1414,9 @@ schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_r
 void add_column_to_schema_mutation(schema_ptr table,
                                    const column_definition& column,
                                    api::timestamp_type timestamp,
-                                   const partition_key& pkey,
-                                   std::vector<mutation>& mutations)
+                                   mutation& m)
 {
-    schema_ptr s = columns();
-    mutation m{pkey, s};
-    auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table->cf_name()), column.name()});
+    auto ckey = clustering_key::from_exploded(*m.schema(), {utf8_type->decompose(table->cf_name()), column.name()});
     m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
     m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
     if (!column.is_on_all_components()) {
@@ -1402,7 +1427,6 @@ void add_column_to_schema_mutation(schema_ptr table,
     adder.add("index_type", column.getIndexType() == null ? null : column.getIndexType().toString());
     adder.add("index_options", json(column.getIndexOptions()));
 #endif
-    mutations.emplace_back(std::move(m));
 }
 
 sstring serialize_kind(column_kind kind)

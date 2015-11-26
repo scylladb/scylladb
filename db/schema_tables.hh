@@ -43,6 +43,7 @@
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "schema.hh"
+#include "schema_mutations.hh"
 
 #include <vector>
 #include <map>
@@ -100,6 +101,8 @@ mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace
 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
+schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers = true);
+
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations);
@@ -110,9 +113,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
-schema_ptr create_table_from_table_row_and_column_rows(const query::result_set_row& table_row, const query::result_set& serialized_columns);
-
-future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition);
+schema_ptr create_table_from_mutations(schema_mutations);
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
 
@@ -129,11 +130,14 @@ column_definition create_column_from_column_row(const query::result_set_row& row
                                                 bool is_super);
 
 
-void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, const partition_key& pkey, std::vector<mutation>& mutations);
+void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
+
+schema_ptr columns();
+schema_ptr columnfamilies();
 
 } // namespace schema_tables
 } // namespace db
