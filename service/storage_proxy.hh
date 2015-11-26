@@ -63,6 +63,18 @@ class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*imp
         rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
 
+    using response_id_type = uint64_t;
+    struct unique_response_handler {
+        response_id_type id;
+        storage_proxy& p;
+        unique_response_handler(storage_proxy& p_, response_id_type id_);
+        unique_response_handler(const unique_response_handler&) = delete;
+        unique_response_handler& operator=(const unique_response_handler&) = delete;
+        unique_response_handler(unique_response_handler&& x);
+        ~unique_response_handler();
+        response_id_type release();
+    };
+
 public:
     struct stats {
         uint64_t read_timeouts = 0;
@@ -84,10 +96,9 @@ public:
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
     };
-    using response_id_type = uint64_t;
 private:
     distributed<database>& _db;
-    response_id_type _next_response_id = 0;
+    response_id_type _next_response_id = 1; // 0 is reserved for unique_response_handler
     std::unordered_map<response_id_type, rh_entry> _response_handlers;
     constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
     size_t _total_hints_in_progress = 0;
@@ -136,9 +147,9 @@ private:
         std::vector<query::partition_range>&& partition_ranges,
         db::consistency_level cl);
     template<typename Range, typename CreateWriteHandler>
-    future<std::vector<storage_proxy::response_id_type>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
-    future<std::vector<storage_proxy::response_id_type>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
-    future<> mutate_begin(const std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl);
+    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
+    future<std::vector<unique_response_handler>> mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type);
+    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl);
     future<> mutate_end(future<> mutate_result, utils::latency_counter);
     future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
 

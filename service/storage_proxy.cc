@@ -343,6 +343,19 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
 
 storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
+storage_proxy::unique_response_handler::unique_response_handler(storage_proxy& p_, response_id_type id_) : id(id_), p(p_) {}
+storage_proxy::unique_response_handler::unique_response_handler(unique_response_handler&& x) : id(x.id), p(x.p) { x.id = 0; };
+storage_proxy::unique_response_handler::~unique_response_handler() {
+    if (id) {
+        p.remove_response_handler(id);
+    }
+}
+storage_proxy::response_id_type storage_proxy::unique_response_handler::release() {
+    auto r = id;
+    id = 0;
+    return r;
+}
+
 #if 0
     static
     {
@@ -810,29 +823,27 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
 }
 
 template<typename Range, typename CreateWriteHandler>
-future<std::vector<storage_proxy::response_id_type>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
-    std::vector<response_id_type> ids;
-
-    try {
+future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
+    // apply is used to convert exceptions to exceptional future
+    return futurize<std::vector<storage_proxy::unique_response_handler>>::apply([this] (const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler create_handler) {
+        std::vector<unique_response_handler> ids;
         ids.reserve(mutations.size());
         for (auto& m : mutations) {
-            ids.emplace_back(create_handler(m, cl, type));
+            ids.emplace_back(*this, create_handler(m, cl, type));
         }
-        return make_ready_future<std::vector<response_id_type>>(std::move(ids));
-    } catch(...) {
-        boost::for_each(ids, std::bind(&storage_proxy::remove_response_handler, this, std::placeholders::_1));
-        return make_exception_future<std::vector<response_id_type>>(std::current_exception());
-    }
+        return make_ready_future<std::vector<unique_response_handler>>(std::move(ids));
+    }, mutations, cl, type, std::move(create_handler));
 }
 
-future<std::vector<storage_proxy::response_id_type>> storage_proxy::mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type) {
+future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutate_prepare(std::vector<mutation>& mutations, db::consistency_level cl, db::write_type type) {
     return mutate_prepare<>(mutations, cl, type, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
         return create_write_response_handler(m, cl, type);
     });
 }
 
-future<> storage_proxy::mutate_begin(std::vector<storage_proxy::response_id_type> ids, db::consistency_level cl) {
-    return parallel_for_each(ids, [this, cl] (storage_proxy::response_id_type response_id) {
+future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl) {
+    return parallel_for_each(ids, [this, cl] (unique_response_handler& protected_response) {
+        auto response_id = protected_response.id;
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
         // response_id handler will be removed, so we will have to do hint with separate
@@ -841,7 +852,7 @@ future<> storage_proxy::mutate_begin(std::vector<storage_proxy::response_id_type
 
         // call before send_to_live_endpoints() for the same reason as above
         auto f = response_wait(response_id);
-        send_to_live_endpoints(response_id);
+        send_to_live_endpoints(protected_response.release()); // response is now running and it will either complete or timeout
         return std::move(f);
     });
 }
@@ -891,7 +902,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type).then([this, cl] (std::vector<storage_proxy::response_id_type> ids) {
+    return mutate_prepare(mutations, cl, type).then([this, cl] (std::vector<storage_proxy::unique_response_handler> ids) {
         return mutate_begin(std::move(ids), cl);
     }).then_wrapped([p = shared_from_this(), lc] (future<> f) {
         return p->mutate_end(std::move(f), lc);
@@ -965,7 +976,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
                 return _p.create_write_response_handler(ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
-            }).then([this, cl] (std::vector<response_id_type> ids) {
+            }).then([this, cl] (std::vector<unique_response_handler> ids) {
                 return _p.mutate_begin(std::move(ids), cl);
             });
         }
@@ -985,16 +996,9 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         };
 
         future<> run() {
-            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH).then([this] (std::vector<response_id_type> ids) {
-                return sync_write_to_batchlog().then_wrapped([this, ids = std::move(ids)] (future<> f) {
-                    try {
-                        f.get();
-                        return _p.mutate_begin(std::move(ids), _cl);
-                    } catch(...) {
-                        // writing batchlog failed, remove responce handlers that will not be used now
-                        boost::for_each(ids, std::bind(&storage_proxy::remove_response_handler, &_p, std::placeholders::_1));
-                        throw;
-                    }
+            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH).then([this] (std::vector<unique_response_handler> ids) {
+                return sync_write_to_batchlog().then([this, ids = std::move(ids)] () mutable {
+                    return _p.mutate_begin(std::move(ids), _cl);
                 }).then(std::bind(&context::async_remove_from_batchlog, this));
             });
         }
@@ -1301,7 +1305,7 @@ future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, st
         return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
             auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
             return create_write_response_handler(ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
-        }).then([this] (std::vector<response_id_type> ids) {
+        }).then([this] (std::vector<unique_response_handler> ids) {
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
         }).then_wrapped([this, lc] (future<> f) {
             return mutate_end(std::move(f), lc);
