@@ -1534,6 +1534,31 @@ std::unordered_set<sstring> database::get_initial_tokens() {
     return tokens;
 }
 
+std::experimental::optional<gms::inet_address> database::get_replace_address() {
+    auto& cfg = get_config();
+    sstring replace_address = cfg.replace_address();
+    sstring replace_address_first_boot = cfg.replace_address_first_boot();
+    try {
+        if (!replace_address.empty()) {
+            return gms::inet_address(replace_address);
+        } else if (!replace_address_first_boot.empty()) {
+            return gms::inet_address(replace_address_first_boot);
+        }
+        return std::experimental::nullopt;
+    } catch (...) {
+        return std::experimental::nullopt;
+    }
+}
+
+bool database::is_replacing() {
+    sstring replace_address_first_boot = get_config().replace_address_first_boot();
+    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
+        dblog.info("Replace address on first boot requested; this node is already bootstrapped");
+        return false;
+    }
+    return bool(get_replace_address());
+}
+
 std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
     return out << to_hex(c._data);
 }

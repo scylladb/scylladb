@@ -122,33 +122,6 @@ std::experimental::optional<UUID> get_replace_node() {
     }
 }
 
-std::experimental::optional<inet_address> get_replace_address() {
-    auto& cfg = get_local_storage_service().db().local().get_config();
-    sstring replace_address = cfg.replace_address();
-    sstring replace_address_first_boot = cfg.replace_address_first_boot();
-    try {
-        if (!replace_address.empty()) {
-            return gms::inet_address(replace_address);
-        } else if (!replace_address_first_boot.empty()) {
-            return gms::inet_address(replace_address_first_boot);
-        }
-        return std::experimental::nullopt;
-    } catch (...) {
-        return std::experimental::nullopt;
-    }
-}
-
-bool is_replacing() {
-    auto& cfg = get_local_storage_service().db().local().get_config();
-    sstring replace_address_first_boot = cfg.replace_address_first_boot();
-    if (!replace_address_first_boot.empty() && db::system_keyspace::bootstrap_complete()) {
-        logger.info("Replace address on first boot requested; this node is already bootstrapped");
-        return false;
-    }
-    return bool(get_replace_address());
-}
-
-
 bool get_property_join_ring() {
     return get_local_storage_service().db().local().get_config().join_ring();
 }
@@ -172,13 +145,13 @@ future<> storage_service::prepare_to_join() {
 
     auto app_states = make_shared<std::map<gms::application_state, gms::versioned_value>>();
     auto f = make_ready_future<>();
-    if (is_replacing() && !get_property_join_ring()) {
+    if (db().local().is_replacing() && !get_property_join_ring()) {
         throw std::runtime_error("Cannot set both join_ring=false and attempt to replace a node");
     }
     if (get_replace_tokens().size() > 0 || get_replace_node()) {
          throw std::runtime_error("Replace method removed; use cassandra.replace_address instead");
     }
-    if (is_replacing()) {
+    if (db().local().is_replacing()) {
         if (db::system_keyspace::bootstrap_complete()) {
             throw std::runtime_error("Cannot replace address with a node that is already bootstrapped");
         }
@@ -297,14 +270,14 @@ void storage_service::join_token_ring(int delay) {
             throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
         }
 
-        if (!is_replacing()) {
+        if (!db().local().is_replacing()) {
             if (_token_metadata.is_member(get_broadcast_address())) {
                 throw std::runtime_error("This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)");
             }
             set_mode(mode::JOINING, "getting bootstrap token", true);
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata, _db.local());
         } else {
-            auto replace_addr = get_replace_address();
+            auto replace_addr = db().local().get_replace_address();
             if (replace_addr && *replace_addr != get_broadcast_address()) {
                 // Sleep additionally to make sure that the server actually is not alive
                 // and giving it more time to gossip if alive.
@@ -416,7 +389,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     db::system_keyspace::update_tokens(tokens).get();
     auto& gossiper = gms::get_local_gossiper();
-    if (!is_replacing()) {
+    if (!db().local().is_replacing()) {
         // if not an existing token then bootstrap
         gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens)).get();
         gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens)).get();
@@ -425,7 +398,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
-        auto replace_addr = get_replace_address();
+        auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
@@ -491,10 +464,10 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (gossiper.uses_host_id(endpoint)) {
         auto host_id = gossiper.get_host_id(endpoint);
         auto existing = _token_metadata.get_endpoint_for_host_id(host_id);
-        if (is_replacing() &&
-            get_replace_address() &&
-            gossiper.get_endpoint_state_for_endpoint(get_replace_address().value())  &&
-            (host_id == gossiper.get_host_id(get_replace_address().value()))) {
+        if (db().local().is_replacing() &&
+            db().local().get_replace_address() &&
+            gossiper.get_endpoint_state_for_endpoint(db().local().get_replace_address().value())  &&
+            (host_id == gossiper.get_host_id(db().local().get_replace_address().value()))) {
             logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
         } else {
             if (existing && *existing != endpoint) {
@@ -554,8 +527,8 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
-        auto replace_addr = get_replace_address();
-        if (is_replacing() && replace_addr && *replace_addr == ep) {
+        auto replace_addr = db().local().get_replace_address();
+        if (db().local().is_replacing() && replace_addr && *replace_addr == ep) {
             gossiper.replacement_quarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
         }
     }
@@ -1112,10 +1085,10 @@ void storage_service::remove_endpoint(inet_address endpoint) {
 }
 
 future<std::unordered_set<token>> storage_service::prepare_replacement_info() {
-    if (!get_replace_address()) {
+    if (!db().local().get_replace_address()) {
         throw std::runtime_error(sprint("replace_address is empty"));
     }
-    auto replace_address = get_replace_address().value();
+    auto replace_address = db().local().get_replace_address().value();
     logger.info("Gathering node replacement information for {}", replace_address);
 
     // if (!MessagingService.instance().isListening())
