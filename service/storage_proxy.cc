@@ -2598,17 +2598,14 @@ void storage_proxy::init_messaging_service() {
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
                 futurize<void>::apply([&p, &m] {
                     return p->mutate_locally(m);
-                }).then_wrapped([reply_to, shard, response_id] (future<> f) {
-                    try {
-                        f.get();
-                        auto& ms = net::get_local_messaging_service();
-                        ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
-                            f.ignore_ready_future();
-                        });
-                        // return void, no need to wait for send to complete
-                    } catch(...) {
-                        logger.warn("MUTATION verb handler: {}", std::current_exception());
-                    }
+                }).then([reply_to, shard, response_id] {
+                    auto& ms = net::get_local_messaging_service();
+                    ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
+                        f.ignore_ready_future();
+                    });
+                    // return void, no need to wait for send to complete
+                }).handle_exception([] (std::exception_ptr eptr) {
+                    logger.warn("MUTATION verb handler: {}", eptr);
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
