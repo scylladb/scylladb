@@ -56,6 +56,7 @@ using column_id = column_count_type;
 using table_schema_version = utils::UUID;
 
 class schema;
+class schema_registry_entry;
 
 // Useful functions to manipulate the schema's comparator field
 namespace cell_comparator {
@@ -361,6 +362,7 @@ private:
     };
     raw_schema _raw;
     thrift_schema _thrift;
+    mutable schema_registry_entry* _registry_entry = nullptr;
 
     const std::array<column_count_type, 4> _offsets;
 
@@ -564,6 +566,9 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
+    friend class schema_registry_entry;
+    // May be called from different shard
+    schema_registry_entry* registry_entry() const noexcept;
 };
 
 bool operator==(const schema&, const schema&);

@@ -28,6 +28,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "db/marshal/type_parser.hh"
 #include "version.hh"
+#include "schema_registry.hh"
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -300,6 +301,14 @@ schema::schema(const schema& o)
 }
 
 schema::~schema() {
+    if (_registry_entry) {
+        _registry_entry->detach_schema();
+    }
+}
+
+schema_registry_entry*
+schema::registry_entry() const noexcept {
+    return _registry_entry;
 }
 
 sstring schema::thrift_key_validator() const {
