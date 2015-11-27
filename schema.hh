@@ -322,6 +322,7 @@ extern template class serializer<column_mapping>;
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
+ * Use global_schema_ptr for safe across-shard access.
  */
 class schema final : public enable_lw_shared_from_this<schema> {
 private:

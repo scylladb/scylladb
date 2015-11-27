@@ -132,3 +132,22 @@ public:
 };
 
 schema_registry& local_schema_registry();
+
+// Schema pointer which can be safely accessed/passed across shards via
+// const&. Useful for ensuring that schema version obtained on one shard is
+// automatically propagated to other shards, no matter how long the processing
+// chain will last.
+class global_schema_ptr {
+    schema_ptr _ptr;
+    unsigned _cpu_of_origin;
+public:
+    // Note: the schema_ptr must come from the current shard and can't be nullptr.
+    global_schema_ptr(const schema_ptr&);
+    // The other may come from a different shard.
+    global_schema_ptr(const global_schema_ptr& other);
+    // The other must come from current shard.
+    global_schema_ptr(global_schema_ptr&& other);
+    // May be invoked across shards. Always returns an engaged pointer.
+    schema_ptr get() const;
+    operator schema_ptr() const { return get(); }
+};

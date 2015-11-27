@@ -199,3 +199,45 @@ frozen_schema schema_registry_entry::frozen() const {
 schema_registry& local_schema_registry() {
     return registry;
 }
+
+global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)
+    : global_schema_ptr(o.get())
+{ }
+
+global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) {
+    auto current = engine().cpu_id();
+    if (o._cpu_of_origin != current) {
+        throw std::runtime_error("Attempted to move global_schema_ptr across shards");
+    }
+    _ptr = std::move(o._ptr);
+    _cpu_of_origin = current;
+}
+
+schema_ptr global_schema_ptr::get() const {
+    if (engine().cpu_id() == _cpu_of_origin) {
+        return _ptr;
+    } else {
+        // 'e' points to a foreign entry, but we know it won't be evicted
+        // because _ptr is preventing this.
+        const schema_registry_entry& e = *_ptr->registry_entry();
+        schema_ptr s = local_schema_registry().get_or_load(e.version(), [&e] (table_schema_version) {
+            return e.frozen();
+        });
+        return s;
+    }
+}
+
+global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
+    : _ptr([&ptr]() {
+        // _ptr must always have an associated registry entry,
+        // if ptr doesn't, we need to load it into the registry.
+        schema_registry_entry* e = ptr->registry_entry();
+        if (e) {
+            return ptr;
+        }
+        return local_schema_registry().get_or_load(ptr->version(), [&ptr] (table_schema_version) {
+                return frozen_schema(ptr);
+            });
+        }())
+    , _cpu_of_origin(engine().cpu_id())
+{ }
