@@ -574,7 +574,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         db::system_keyspace::update_local_tokens(std::unordered_set<dht::token>(), local_tokens_to_remove).discard_result().get();
     }
 
-    if (is_moving) {
+    if (is_moving || _operation_mode == mode::MOVING) {
         _token_metadata.remove_from_moving(endpoint);
         get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
