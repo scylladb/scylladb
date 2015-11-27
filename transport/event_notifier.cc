@@ -244,21 +244,29 @@ void cql_server::event_notifier::on_move(const gms::inet_address& endpoint)
 
 void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
 {
-    for (auto&& conn : _status_change_listeners) {
-        using namespace transport;
-        with_gate(conn->_pending_requests_gate, [&] {
-            return conn->write_response(conn->make_status_change_event(event::status_change::node_up(endpoint, _port)));
-        });
+    bool was_up = _last_status_change.count(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::UP;
+    _last_status_change[endpoint] = event::status_change::status_type::UP;
+    if (!was_up) {
+        for (auto&& conn : _status_change_listeners) {
+            using namespace transport;
+            with_gate(conn->_pending_requests_gate, [&] {
+                return conn->write_response(conn->make_status_change_event(event::status_change::node_up(endpoint, _port)));
+            });
+        }
     }
 }
 
 void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
 {
-    for (auto&& conn : _status_change_listeners) {
-        using namespace transport;
-        with_gate(conn->_pending_requests_gate, [&] {
-            return conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, _port)));
-        });
+    bool was_down = _last_status_change.count(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
+    _last_status_change[endpoint] = event::status_change::status_type::DOWN;
+    if (!was_down) {
+        for (auto&& conn : _status_change_listeners) {
+            using namespace transport;
+            with_gate(conn->_pending_requests_gate, [&] {
+                return conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, _port)));
+            });
+        }
     }
 }
 

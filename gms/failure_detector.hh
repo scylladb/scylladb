@@ -78,7 +78,7 @@ public:
     // this value defaults to the same initial value the FD is seeded with
     static clk::duration get_max_interval();
 
-    void add(clk::time_point value);
+    void add(clk::time_point value, const gms::inet_address& ep);
 
     double mean();
 
