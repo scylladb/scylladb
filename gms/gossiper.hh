@@ -121,8 +121,19 @@ public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
 
-    const std::vector<sstring> DEAD_STATES = { versioned_value::REMOVING_TOKEN, versioned_value::REMOVED_TOKEN,
-                                               versioned_value::STATUS_LEFT, versioned_value::HIBERNATE };
+    const std::vector<sstring> DEAD_STATES = {
+        versioned_value::REMOVING_TOKEN,
+        versioned_value::REMOVED_TOKEN,
+        versioned_value::STATUS_LEFT,
+        versioned_value::HIBERNATE
+    };
+    const std::vector<sstring> SILENT_SHUTDOWN_STATES = {
+        versioned_value::REMOVING_TOKEN,
+        versioned_value::REMOVED_TOKEN,
+        versioned_value::STATUS_LEFT,
+        versioned_value::HIBERNATE,
+        versioned_value::STATUS_BOOTSTRAPPING,
+    };
     static constexpr std::chrono::milliseconds INTERVAL{1000};
     static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
 
@@ -367,7 +378,7 @@ private:
 public:
     clk::time_point get_expire_time_for_endpoint(inet_address endpoint);
 
-    std::experimental::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep);
+    std::experimental::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) const;
 
     // removes ALL endpoint states; should only be called after shadow gossip
     void reset_endpoint_state_map();
@@ -484,6 +495,11 @@ public:
 public:
     void dump_endpoint_state_map();
     void debug_show();
+public:
+    bool is_shutdown(const inet_address& endpoint) const;
+    bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
+    void mark_as_shutdown(const inet_address& endpoint);
+    void force_newer_generation();
 };
 
 extern distributed<gossiper> _the_gossiper;

@@ -49,6 +49,7 @@ constexpr const char* versioned_value::STATUS_MOVING;
 constexpr const char* versioned_value::REMOVING_TOKEN;
 constexpr const char* versioned_value::REMOVED_TOKEN;
 constexpr const char* versioned_value::HIBERNATE;
+constexpr const char* versioned_value::SHUTDOWN;
 constexpr const char* versioned_value::REMOVAL_COORDINATOR;
 
 void versioned_value::serialize(bytes::iterator& out) const {
