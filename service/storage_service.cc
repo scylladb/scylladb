@@ -750,11 +750,13 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
             return;
         }
-        do_update_system_peers_table(endpoint, state, value);
-        if (state == application_state::SCHEMA) {
-            get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
-                logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
-            });
+        if (get_token_metadata().is_member(endpoint)) {
+            do_update_system_peers_table(endpoint, state, value);
+            if (state == application_state::SCHEMA) {
+                get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
+                    logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+                });
+            }
         }
     }
     replicate_to_all_cores().get();
