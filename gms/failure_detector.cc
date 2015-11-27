@@ -86,13 +86,13 @@ clk::duration arrival_window::get_max_interval() {
     return get_initial_value();
 }
 
-void arrival_window::add(clk::time_point value) {
+void arrival_window::add(clk::time_point value, const gms::inet_address& ep) {
     if (_tlast > clk::time_point::min()) {
         auto inter_arrival_time = value - _tlast;
         if (inter_arrival_time <= get_max_interval()) {
             _arrival_intervals.add(inter_arrival_time.count());
         } else  {
-            logger.debug("failure_detector: Ignoring interval time of {}", inter_arrival_time.count());
+            logger.debug("failure_detector: Ignoring interval time of {} for {}", inter_arrival_time.count(), ep);
         }
     } else {
         // We use a very large initial interval since the "right" average depends on the cluster size
@@ -220,10 +220,10 @@ void failure_detector::report(inet_address ep) {
     if (it == _arrival_samples.end()) {
         // avoid adding an empty ArrivalWindow to the Map
         auto heartbeat_window = arrival_window(SAMPLE_SIZE);
-        heartbeat_window.add(now);
+        heartbeat_window.add(now, ep);
         _arrival_samples.emplace(ep, heartbeat_window);
     } else {
-        it->second.add(now);
+        it->second.add(now, ep);
     }
 }
 
