@@ -322,7 +322,7 @@ extern template class serializer<column_mapping>;
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
  */
-class schema final {
+class schema final : public enable_lw_shared_from_this<schema> {
 private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
