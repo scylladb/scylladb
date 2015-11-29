@@ -36,6 +36,8 @@
 
 namespace net {
 
+static logging::logger logger("messaging_service");
+
 using inet_address = gms::inet_address;
 using gossip_digest_syn = gms::gossip_digest_syn;
 using gossip_digest_ack = gms::gossip_digest_ack;
@@ -372,7 +374,9 @@ void messaging_service::remove_rpc_client_one(clients_map& clients, shard_id id,
         // This will make sure messaging_service::stop() blocks until
         // client->stop() is over.
         //
-        client->stop().finally([client, ms = shared_from_this()] {}).discard_result();
+        client->stop().finally([id, client, ms = shared_from_this()] {
+            logger.debug("dropped connection to {}", id.addr);
+        }).discard_result();
     }
 }
 
