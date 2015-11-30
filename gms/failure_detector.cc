@@ -197,15 +197,11 @@ void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_sta
 }
 
 void failure_detector::set_phi_convict_threshold(double phi) {
-    // FIXME
-    // DatabaseDescriptor.setPhiConvictThreshold(phi);
+    _phi = phi;
 }
 
 double failure_detector::get_phi_convict_threshold() {
-    // FIXME: phi_convict_threshold must be between 5 and 16"
-    // return DatabaseDescriptor.getPhiConvictThreshold();
-    warn(unimplemented::cause::GOSSIP);
-    return 8;
+    return _phi;
 }
 
 bool failure_detector::is_alive(inet_address ep) {
@@ -236,6 +232,7 @@ void failure_detector::interpret(inet_address ep) {
     auto now = clk::now();
     double phi = hb_wnd.phi(now);
     logger.trace("failure_detector: PHI for {} : {}", ep, phi);
+    logger.trace("failure_detector: phi_convict_threshold={}", _phi);
 
     if (PHI_FACTOR * phi > get_phi_convict_threshold()) {
         logger.trace("failure_detector: notifying listeners that {} is down", ep);

@@ -105,9 +105,13 @@ private:
     static constexpr double PHI_FACTOR{1.0 / std::log(10.0)}; // 0.434...
     std::map<inet_address, arrival_window> _arrival_samples;
     std::list<i_failure_detection_event_listener*> _fd_evnt_listeners;
+    double _phi = 8;
 
 public:
     failure_detector() {
+    }
+
+    failure_detector(double phi) : _phi(phi) {
     }
 
     future<> stop() {
@@ -188,7 +192,7 @@ inline future<> set_phi_convict_threshold(double phi) {
     });
 }
 
-inline  future<double> get_phi_convict_threshold() {
+inline future<double> get_phi_convict_threshold() {
     return smp::submit_to(0, [] {
         return get_local_failure_detector().get_phi_convict_threshold();
     });

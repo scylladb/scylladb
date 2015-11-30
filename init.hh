@@ -27,4 +27,4 @@
 #include "database.hh"
 
 future<> init_storage_service(distributed<database>& db);
-future<> init_ms_fd_gossiper(sstring listen_address, uint16_t storage_port, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster");
+future<> init_ms_fd_gossiper(sstring listen_address, uint16_t storage_port, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster", double phi = 8);

@@ -290,7 +290,7 @@ public:
             "Related information: Configuring compaction"   \
     )                                                   \
     /* Common fault detection setting */    \
-    val(phi_convict_threshold, uint32_t, 8, Unused,     \
+    val(phi_convict_threshold, uint32_t, 8, Used,     \
             "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"  \
             "Related information: Failure detection and recovery"  \
     )                                                   \

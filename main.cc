@@ -200,6 +200,7 @@ int main(int ac, char** av) {
             uint16_t storage_port = cfg->storage_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
+            double phi = cfg->phi_convict_threshold();
             sstring cluster_name = cfg->cluster_name();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
@@ -247,8 +248,8 @@ int main(int ac, char** av) {
                         });
                     });
                 });
-            }).then([listen_address, storage_port, seed_provider, cluster_name] {
-                return init_ms_fd_gossiper(listen_address, storage_port, seed_provider, cluster_name);
+            }).then([listen_address, storage_port, seed_provider, cluster_name, phi] {
+                return init_ms_fd_gossiper(listen_address, storage_port, seed_provider, cluster_name, phi);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
