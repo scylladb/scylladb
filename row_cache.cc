@@ -164,7 +164,7 @@ public:
     { }
 
     virtual future<mutation_opt> operator()() override {
-        return _delegate().then([this] (mutation_opt&& mo) {
+        return _delegate().then([this, op = _cache._populate_phaser.start()] (mutation_opt&& mo) {
             if (mo) {
                 _cache.populate(*mo);
             }
@@ -250,11 +250,13 @@ class scanning_and_populating_reader final : public mutation_reader::impl {
     mutation_opt _next_primary;
     mutation_source& _underlying;
     mutation_reader _secondary;
+    utils::phased_barrier::phase_type _secondary_phase;
     const query::partition_range& _original_range;
     query::partition_range _range;
     key_source& _underlying_keys;
     key_reader _keys;
     dht::decorated_key_opt _next_key;
+    dht::decorated_key_opt _last_secondary_key;
 public:
     scanning_and_populating_reader(row_cache& cache, const query::partition_range& range)
         : _cache(cache), _schema(cache._schema),
@@ -293,6 +295,8 @@ public:
                     end = _original_range.end();
                 }
                 _range = query::partition_range(query::partition_range::bound { std::move(*dk), true }, std::move(end));
+                _last_secondary_key = {};
+                _secondary_phase = _cache._populate_phaser.phase();
                 _secondary = _underlying(_range);
                 _secondary_only = true;
                 return next_secondary();
@@ -301,7 +305,14 @@ public:
     }
 private:
     future<mutation_opt> next_secondary() {
-        return _secondary().then([this] (mutation_opt&& mo) {
+        if (_secondary_phase != _cache._populate_phaser.phase()) {
+            assert(_last_secondary_key);
+            auto cmp = dht::ring_position_comparator(*_schema);
+            _range = _range.split_after(*_last_secondary_key, cmp);
+            _secondary_phase = _cache._populate_phaser.phase();
+            _secondary = _underlying(_range);
+        }
+        return _secondary().then([this, op = _cache._populate_phaser.start()] (mutation_opt&& mo) {
             if (!mo && _next_primary) {
                 auto cmp = dht::ring_position_comparator(*_schema);
                 _range = _original_range.split_after(_next_primary->decorated_key(), cmp);
@@ -312,6 +323,7 @@ private:
             }
             if (mo) {
                 _cache.populate(*mo);
+                _last_secondary_key = mo->decorated_key();
             }
             _cache.on_miss();
             return std::move(mo);
@@ -397,6 +409,7 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             m.partitions.clear_and_dispose(current_deleter<partition_entry>());
           });
       });
+      _populate_phaser.advance_and_await().get();
       while (!m.partitions.empty()) {
         with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
             unsigned quota = 30;

@@ -107,6 +107,7 @@ public:
     explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);
     ~memtable();
     schema_ptr schema() const { return _schema; }
+    future<> apply(const memtable&);
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
     void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
     const logalloc::region& region() const {

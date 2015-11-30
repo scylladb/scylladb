@@ -31,6 +31,7 @@
 #include "mutation_partition.hh"
 #include "utils/logalloc.hh"
 #include "key_reader.hh"
+#include "utils/phased_barrier.hh"
 
 namespace scollectd {
 
@@ -174,6 +175,17 @@ private:
     partitions_type _partitions; // Cached partitions are complete.
     mutation_source _underlying;
     key_source _underlying_keys;
+
+    // Synchronizes populating reads with update() to ensure that cache
+    // remains consistent across flushes with the underlying data source.
+    // Readers obtained from the underlying data source in earlier than
+    // current phases must not be used to populate the cache, unless they hold
+    // phaser::operation created in the reader's phase of origin. Readers
+    // should hold to a phase only briefly because this inhibits progress of
+    // update(). Phase changes occur only in update(), which can be assumed to
+    // be asynchronous wrt invoking of the underlying data source.
+    utils::phased_barrier _populate_phaser;
+
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
@@ -188,7 +200,7 @@ public:
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
 public:
-    mutation_reader make_reader(const query::partition_range&);
+    mutation_reader make_reader(const query::partition_range& = query::full_partition_range);
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation. The mutation must contain all

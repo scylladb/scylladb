@@ -73,6 +73,7 @@ public:
     std::experimental::optional<atomic_cell_or_collection> get_cell(const clustering_key& rkey, const column_definition& def) const;
     const partition_key& key() const { return _ptr->_dk._key; };
     const dht::decorated_key& decorated_key() const { return _ptr->_dk; };
+    dht::ring_position ring_position() const { return { decorated_key() }; }
     const dht::token& token() const { return _ptr->_dk._token; }
     const schema_ptr& schema() const { return _ptr->_schema; }
     const mutation_partition& partition() const { return _ptr->_p; }
