@@ -1073,7 +1073,9 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
-    logger.info("inet_address {} is now UP", addr);
+    if (!_in_shadow_round) {
+        logger.info("InetAddress {} is now UP", addr);
+    }
 
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_alive(addr, local_state);
@@ -1101,7 +1103,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     if (endpoint_state_map.count(ep) > 0) {
         local_ep_state = endpoint_state_map.at(ep);
     }
-    if (!is_dead_state(eps)) {
+    if (!is_dead_state(eps) && !_in_shadow_round) {
         if (endpoint_state_map.count(ep))  {
             logger.info("Node {} has restarted, now UP", ep);
         } else {
