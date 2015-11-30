@@ -259,16 +259,32 @@ void storage_service::join_token_ring(int delay) {
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 
-        if (get_property_rangemovement() &&
+        auto t = gms::gossiper::clk::now();
+        while (get_property_rangemovement() &&
             (!_token_metadata.get_bootstrap_tokens().empty() ||
              !_token_metadata.get_leaving_endpoints().empty() ||
              !_token_metadata.get_moving_endpoints().empty())) {
-            logger.info("tokens {}, leaving {}, moving {}",
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+            logger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elpased)",
                 _token_metadata.get_bootstrap_tokens().size(),
                 _token_metadata.get_leaving_endpoints().size(),
-                _token_metadata.get_moving_endpoints().size());
-            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                _token_metadata.get_moving_endpoints().size(),
+                elapsed);
+
+            sleep(std::chrono::seconds(1)).get();
+
+            if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+                throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+            }
+
+            // Check the schema and pending range again
+            while (!get_local_migration_manager().is_ready_for_bootstrap()) {
+                set_mode(mode::JOINING, "waiting for schema information to complete", true);
+                sleep(std::chrono::seconds(1)).get();
+            }
+            get_local_pending_range_calculator_service().block_until_finished().get();
         }
+        logger.info("Checking bootstrapping/leaving/moving nodes: ok");
 
         if (!db().local().is_replacing()) {
             if (_token_metadata.is_member(get_broadcast_address())) {
@@ -856,7 +872,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
-    set_mode(mode::NORMAL, false);
+    set_mode(mode::NORMAL, "node is now in normal status", true);
     replicate_to_all_cores().get();
 }
 
@@ -1045,33 +1061,50 @@ future<> storage_service::check_for_endpoint_collision() {
     if (!MessagingService.instance().isListening())
         MessagingService.instance().listen(FBUtilities.getLocalAddress());
 #endif
-    auto& gossiper = gms::get_local_gossiper();
-    return gossiper.do_shadow_round().then([this, &gossiper] {
-        auto addr = get_broadcast_address();
-        auto eps = gossiper.get_endpoint_state_for_endpoint(addr);
-        if (eps && !gossiper.is_dead_state(*eps) && !gossiper.is_gossip_only_member(addr)) {
-            throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
-                "Use cassandra.replace_address if you want to replace this node.", addr));
-        }
-        if (dht::range_streamer::use_strict_consistency()) {
-            for (auto& x : gossiper.get_endpoint_states()) {
-                auto status = x.second.get_application_state(application_state::STATUS);
-                if (!status) {
-                    continue;
-                }
+    return seastar::async([this] {
+        auto& gossiper = gms::get_local_gossiper();
+        auto t = gms::gossiper::clk::now();
+        bool found_bootstrapping_node = false;
+        do {
+            gossiper.do_shadow_round().get();
+            auto addr = get_broadcast_address();
+            auto eps = gossiper.get_endpoint_state_for_endpoint(addr);
+            if (eps && !gossiper.is_dead_state(*eps) && !gossiper.is_gossip_only_member(addr)) {
+                throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
+                    "Use cassandra.replace_address if you want to replace this node.", addr));
+            }
+            if (dht::range_streamer::use_strict_consistency()) {
+                found_bootstrapping_node = false;
+                for (auto& x : gossiper.get_endpoint_states()) {
+                    auto status = x.second.get_application_state(application_state::STATUS);
+                    if (!status) {
+                        continue;
+                    }
 
-                std::vector<sstring> pieces;
-                boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-                assert(pieces.size() > 0);
-                auto state = pieces[0];
-                logger.debug("Check node={}, state={}", x.first, state);
-                if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
-                    state == sstring(versioned_value::STATUS_LEAVING) ||
-                    state == sstring(versioned_value::STATUS_MOVING)) {
-                    throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
+                    std::vector<sstring> pieces;
+                    boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+                    assert(pieces.size() > 0);
+                    auto state = pieces[0];
+                    logger.debug("Checking node={}, status={} (check_for_endpoint_collision)", x.first, state);
+                    if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
+                        state == sstring(versioned_value::STATUS_LEAVING) ||
+                        state == sstring(versioned_value::STATUS_MOVING)) {
+                        if (gms::gossiper::clk::now() > t + std::chrono::seconds(60)) {
+                            throw std::runtime_error("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true (check_for_endpoint_collision)");
+                        } else {
+                            gossiper.goto_shadow_round();
+                            gossiper.reset_endpoint_state_map();
+                            found_bootstrapping_node = true;
+                            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
+                            logger.info("Checking node={}, status={}, sleep 1 second and check again ({} seconds elpased) (check_for_endpoint_collision)", x.first, state, elapsed);
+                            sleep(std::chrono::seconds(1)).get();
+                            break;
+                        }
+                    }
                 }
             }
-        }
+        } while (found_bootstrapping_node);
+        logger.info("Checking bootstrapping/leaving/moving nodes: ok (check_for_endpoint_collision)");
         gossiper.reset_endpoint_state_map();
     });
 }
