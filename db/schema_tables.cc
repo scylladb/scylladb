@@ -1310,10 +1310,10 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
         builder.set_max_compaction_threshold(table_row.get_nonnull<int>("max_compaction_threshold"));
     }
 
-#if 0
-    if (result.has("comment"))
-        cfm.comment(result.getString("comment"));
-#endif
+    if (table_row.has("comment")) {
+        builder.set_comment(table_row.get_nonnull<sstring>("comment"));
+    }
+
     if (table_row.has("memtable_flush_period_in_ms")) {
         builder.set_memtable_flush_period(table_row.get_nonnull<int32_t>("memtable_flush_period_in_ms"));
     }
