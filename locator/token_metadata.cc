@@ -461,9 +461,22 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
     _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
 
     if (logger.is_enabled(logging::log_level::debug)) {
-        // TODO: Enable printPendingRanges
-        // logger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : printPendingRanges()));
+        logger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
     }
+}
+sstring token_metadata::print_pending_ranges() {
+    std::stringstream ss;
+
+    for (auto& x : _pending_ranges) {
+        auto& keyspace_name = x.first;
+        ss << "\nkeyspace_name = " << keyspace_name << " {\n";
+        for (auto& m : x.second) {
+            ss << m.second << " : " << m.first << "\n";
+        }
+        ss << "}\n";
+    }
+
+    return sstring(ss.str());
 }
 
 void token_metadata::add_leaving_endpoint(inet_address endpoint) {

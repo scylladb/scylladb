@@ -865,23 +865,9 @@ public:
 
         return sb.toString();
     }
-
-    private String printPendingRanges()
-    {
-        StringBuilder sb = new StringBuilder();
-
-        for (Map.Entry<String, Multimap<Range<Token>, InetAddress>> entry : _pending_ranges.entrySet())
-        {
-            for (Map.Entry<Range<Token>, InetAddress> rmap : entry.getValue().entries())
-            {
-                sb.append(rmap.getValue()).append(":").append(rmap.getKey());
-                sb.append(System.getProperty("line.separator"));
-            }
-        }
-
-        return sb.toString();
-    }
 #endif
+    sstring print_pending_ranges();
+public:
     std::vector<gms::inet_address> pending_endpoints_for(const token& token, const sstring& keyspace_name);
 #if 0
     /**
