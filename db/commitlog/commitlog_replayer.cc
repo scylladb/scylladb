@@ -69,6 +69,7 @@ public:
         uint64_t invalid_mutations = 0;
         uint64_t skipped_mutations = 0;
         uint64_t applied_mutations = 0;
+        uint64_t corrupt_bytes = 0;
     };
 
     future<> process(stats*, temporary_buffer<char> buf, replay_position rp);
@@ -168,7 +169,14 @@ db::commitlog_replayer::impl::recover(sstring file) {
                     std::placeholders::_2), p).then([](auto s) {
         auto f = s.done();
         return f.finally([s = std::move(s)] {});
-    }).then([s] {
+    }).then_wrapped([s](future<> f) {
+        try {
+            f.get();
+        } catch (commitlog::segment_data_corruption_error& e) {
+            s->corrupt_bytes += e.bytes();
+        } catch (...) {
+            throw;
+        }
         return make_ready_future<stats>(*s);
     });
 }
@@ -250,31 +258,32 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
-    logger.info("Replaying {}", files);
-
     return parallel_for_each(files, [this](auto f) {
-        return this->recover(f).handle_exception([f](auto ep) {
-            logger.error("Error recovering {}: {}", f, ep);
-            try {
-                std::rethrow_exception(ep);
-            } catch (std::invalid_argument&) {
-                logger.error("Scylla cannot process {}. Make sure to fully flush all Cassandra commit log files to sstable before migrating.");
-                throw;
-            } catch (...) {
-                throw;
-            }
-        });
+        return this->recover(f);
     });
 }
 
-future<> db::commitlog_replayer::recover(sstring file) {
-    return _impl->recover(file).then([file](impl::stats stats) {
+future<> db::commitlog_replayer::recover(sstring f) {
+    return _impl->recover(f).then([f](impl::stats stats) {
+        if (stats.corrupt_bytes != 0) {
+            logger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+        }
         logger.info("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
-                , file
+                , f
                 , stats.applied_mutations
                 , stats.invalid_mutations
                 , stats.skipped_mutations
                 );
-    });
+    }).handle_exception([f](auto ep) {
+        logger.error("Error recovering {}: {}", f, ep);
+        try {
+            std::rethrow_exception(ep);
+        } catch (std::invalid_argument&) {
+            logger.error("Scylla cannot process {}. Make sure to fully flush all Cassandra commit log files to sstable before migrating.");
+            throw;
+        } catch (...) {
+            throw;
+        }
+    });;
 }
 

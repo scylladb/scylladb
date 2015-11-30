@@ -1192,6 +1192,8 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         size_t next = 0;
         size_t start_off = 0;
         size_t skip_to = 0;
+        size_t file_size = 0;
+        size_t corrupt_size = 0;
         bool eof = false;
         bool header = true;
 
@@ -1289,7 +1291,11 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
 
                 auto cs = crc.checksum();
                 if (cs != checksum) {
-                    throw std::runtime_error("Checksum error in chunk header");
+                    // if a chunk header checksum is broken, we shall just assume that all
+                    // remaining is as well. We cannot trust the "next" pointer, so...
+                    logger.debug("Checksum error in segment chunk at {}.", pos);
+                    corrupt_size += (file_size - pos);
+                    return stop();
                 }
 
                 this->next = next;
@@ -1315,21 +1321,24 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                 auto size = in.read<uint32_t>();
                 auto checksum = in.read<uint32_t>();
 
-                if (size == 0) {
-                    // special scylla case: zero padding due to dma blocks
-                    auto slack = next - pos;
-                    return skip(slack);
-                }
+                crc32_nbo crc;
+                crc.process(size);
 
-                if (size < 3 * sizeof(uint32_t)) {
-                    throw std::runtime_error("Invalid entry size");
+                if (size < 3 * sizeof(uint32_t) || checksum != crc.checksum()) {
+                    auto slack = next - pos;
+                    if (size != 0) {
+                        logger.debug("Segment entry at {} has broken header. Skipping to next chunk ({} bytes)", rp, slack);
+                        corrupt_size += slack;
+                    }
+                    // size == 0 -> special scylla case: zero padding due to dma blocks
+                    return skip(slack);
                 }
 
                 if (start_off > pos) {
                     return skip(size - entry_header_size);
                 }
 
-                return fin.read_exactly(size - entry_header_size).then([this, size, checksum, rp](temporary_buffer<char> buf) {
+                return fin.read_exactly(size - entry_header_size).then([this, size, crc = std::move(crc), rp](temporary_buffer<char> buf) mutable {
                     advance(buf);
 
                     data_input in(buf);
@@ -1338,12 +1347,15 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                     in.skip(data_size);
                     auto checksum = in.read<uint32_t>();
 
-                    crc32_nbo crc;
-                    crc.process(size);
                     crc.process_bytes(buf.get(), data_size);
 
                     if (crc.checksum() != checksum) {
-                        throw std::runtime_error("Checksum error in data entry");
+                        // If we're getting a checksum error here, most likely the rest of
+                        // the file will be corrupt as well. But it does not hurt to retry.
+                        // Just go to the next entry (since "size" in header seemed ok).
+                        logger.debug("Segment entry at {} checksum error. Skipping {} bytes", rp, size);
+                        corrupt_size += size;
+                        return make_ready_future<>();
                     }
 
                     return s.produce(buf.share(0, data_size), rp);
@@ -1351,10 +1363,18 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
             });
         }
         future<> read_file() {
-            return read_header().then(
-                    [this] {
-                        return do_until(std::bind(&work::end_of_file, this), std::bind(&work::read_chunk, this));
-                    });
+            return f.size().then([this](uint64_t size) {
+                file_size = size;
+            }).then([this] {
+                return read_header().then(
+                        [this] {
+                            return do_until(std::bind(&work::end_of_file, this), std::bind(&work::read_chunk, this));
+                }).then([this] {
+                  if (corrupt_size > 0) {
+                      throw segment_data_corruption_error("Data corruption", corrupt_size);
+                  }
+                });
+            });
         }
     };
 
@@ -1380,6 +1400,10 @@ uint64_t db::commitlog::get_total_size() const {
 
 uint64_t db::commitlog::get_completed_tasks() const {
     return _segment_manager->totals.allocation_count;
+}
+
+uint64_t db::commitlog::get_flush_count() const {
+    return _segment_manager->totals.flush_count;
 }
 
 uint64_t db::commitlog::get_pending_tasks() const {
