@@ -192,8 +192,7 @@ void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_sta
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        // FIXME: Add operator<< for application_state
-        ss << "  " << int32_t(app_state) << ":" << value.value << "\n";
+        ss << "  " << app_state << ":" << value.value << "\n";
     }
 }
 
