@@ -648,6 +648,8 @@ public:
     }
 
     std::unordered_set<sstring> get_initial_tokens();
+    std::experimental::optional<gms::inet_address> get_replace_address();
+    bool is_replacing();
 };
 
 // FIXME: stub

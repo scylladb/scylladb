@@ -45,6 +45,7 @@
 #include "log.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
+#include "service/storage_service.hh"
 
 namespace dht {
 
@@ -109,7 +110,6 @@ range_streamer::get_all_ranges_with_sources_for(const sstring& keyspace_name, st
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
 
-    // std::unordered_multimap<range<token>, inet_address>
     auto tm = _metadata.clone_only_token_map();
     auto range_addresses = unordered_multimap_to_unordered_map(strat.get_range_addresses(tm));
 
@@ -205,9 +205,7 @@ range_streamer::get_all_ranges_with_strict_sources_for(const sstring& keyspace_n
 bool range_streamer::use_strict_sources_for_ranges(const sstring& keyspace_name) {
     auto& ks = _db.local().find_keyspace(keyspace_name);
     auto& strat = ks.get_replication_strategy();
-    // FIXME: DatabaseDescriptor.isReplacing()
-    auto is_replacing = false;
-    return !is_replacing
+    return !_db.local().is_replacing()
            && use_strict_consistency()
            && !_tokens.empty()
            && _metadata.get_all_endpoints().size() != strat.get_replication_factor();
@@ -224,25 +222,17 @@ void range_streamer::add_ranges(const sstring& keyspace_name, std::vector<range<
         }
     }
 
-    // TODO: share code with unordered_multimap_to_unordered_map
-    std::unordered_map<inet_address, std::vector<range<token>>> tmp;
+    std::unordered_map<inet_address, std::vector<range<token>>> range_fetch_map;
     for (auto& x : get_range_fetch_map(ranges_for_keyspace, _source_filters, keyspace_name)) {
-        auto& addr = x.first;
-        auto& range_ = x.second;
-        auto it = tmp.find(addr);
-        if (it != tmp.end()) {
-            it->second.push_back(range_);
-        } else {
-            tmp.emplace(addr, std::vector<range<token>>{range_});
-        }
+        range_fetch_map[x.first].emplace_back(x.second);
     }
 
     if (logger.is_enabled(logging::log_level::debug)) {
-        for (auto& x : tmp) {
+        for (auto& x : range_fetch_map) {
             logger.debug("{} : range {} from source {} for keyspace {}", _description, x.second, x.first, keyspace_name);
         }
     }
-    _to_fetch.emplace(keyspace_name, std::move(tmp));
+    _to_fetch.emplace(keyspace_name, std::move(range_fetch_map));
 }
 
 future<streaming::stream_state> range_streamer::fetch_async() {
@@ -270,6 +260,10 @@ range_streamer::get_work_map(const std::unordered_multimap<range<token>, inet_ad
     std::unordered_set<std::unique_ptr<i_source_filter>> source_filters;
     source_filters.emplace(std::move(filter));
     return get_range_fetch_map(ranges_with_source_target, source_filters, keyspace);
+}
+
+bool range_streamer::use_strict_consistency() {
+    return service::get_local_storage_service().db().local().get_config().consistent_rangemovement();
 }
 
 } // dht
