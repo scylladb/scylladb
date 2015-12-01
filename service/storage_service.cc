@@ -1608,6 +1608,10 @@ future<> storage_service::decommission() {
                 throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
             }
 
+            if (ss._operation_mode != mode::NORMAL) {
+                throw std::runtime_error(sprint("Node in %s state; wait for status to become normal or restart", ss._operation_mode));
+            }
+
             get_local_pending_range_calculator_service().block_until_finished().get();
 
             auto non_system_keyspaces = db.get_non_system_keyspaces();
