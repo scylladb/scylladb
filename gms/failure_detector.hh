@@ -124,7 +124,7 @@ private:
     }
 
     arrival_window::clk::time_point _last_interpret;
-    bool _was_paused = false;
+    arrival_window::clk::time_point _last_paused;
 
 public:
     failure_detector() {

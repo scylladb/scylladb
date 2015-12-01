@@ -236,11 +236,11 @@ void failure_detector::interpret(inet_address ep) {
     _last_interpret = now;
     if (diff > get_max_local_pause()) {
         logger.warn("Not marking nodes down due to local pause of {} > {} (milliseconds)", diff.count(), get_max_local_pause().count());
-        _was_paused = true;
+        _last_paused = now;
         return;
     }
-    if (_was_paused) {
-        _was_paused = false;
+    if (clk::now() - _last_paused < get_max_local_pause()) {
+        logger.debug("Still not marking nodes down due to local pause");
         return;
     }
     double phi = hb_wnd.phi(now);
