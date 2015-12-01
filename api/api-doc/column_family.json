@@ -580,30 +580,6 @@
          ]
       },
       {
-         "path":"/column_family/sstables/snapshots_size/{name}",
-         "operations":[
-            {
-               "method":"GET",
-               "summary":"the size of SSTables in 'snapshots' subdirectory which aren't live anymore",
-               "type":"double",
-               "nickname":"true_snapshots_size",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-                  {
-                     "name":"name",
-                     "description":"The column family name in keysspace:name format",
-                     "required":true,
-                     "allowMultiple":false,
-                     "type":"string",
-                     "paramType":"path"
-                  }
-               ]
-            }
-         ]
-      },
-      {
          "path":"/column_family/metrics/memtable_columns_count/{name}",
          "operations":[
             {
@@ -2041,7 +2017,7 @@
          ]
       },
       {
-         "path":"/column_family/metrics/true_snapshots_size/{name}",
+         "path":"/column_family/metrics/snapshots_size/{name}",
          "operations":[
             {
                "method":"GET",
