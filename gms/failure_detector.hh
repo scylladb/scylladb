@@ -107,11 +107,32 @@ private:
     std::list<i_failure_detection_event_listener*> _fd_evnt_listeners;
     double _phi = 8;
 
+    static constexpr std::chrono::milliseconds DEFAULT_MAX_PAUSE{5000};
+
+    std::chrono::milliseconds get_max_local_pause() {
+        // FIXME: cassandra.max_local_pause_in_ms
+#if 0
+        if (System.getProperty("cassandra.max_local_pause_in_ms") != null) {
+            long pause = Long.parseLong(System.getProperty("cassandra.max_local_pause_in_ms"));
+            logger.warn("Overriding max local pause time to {}ms", pause);
+            return pause * 1000000L;
+        } else {
+            return DEFAULT_MAX_PAUSE;
+        }
+#endif
+        return DEFAULT_MAX_PAUSE;
+    }
+
+    arrival_window::clk::time_point _last_interpret;
+    bool _was_paused = false;
+
 public:
     failure_detector() {
+        _last_interpret = arrival_window::clk::now();
     }
 
     failure_detector(double phi) : _phi(phi) {
+        _last_interpret = arrival_window::clk::now();
     }
 
     future<> stop() {

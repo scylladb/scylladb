@@ -50,6 +50,8 @@ namespace gms {
 
 extern logging::logger logger;
 
+constexpr std::chrono::milliseconds failure_detector::DEFAULT_MAX_PAUSE;
+
 using clk = arrival_window::clk;
 
 static clk::duration get_initial_value() {
@@ -230,6 +232,17 @@ void failure_detector::interpret(inet_address ep) {
     }
     arrival_window& hb_wnd = it->second;
     auto now = clk::now();
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - _last_interpret);
+    _last_interpret = now;
+    if (diff > get_max_local_pause()) {
+        logger.warn("Not marking nodes down due to local pause of {} > {} (milliseconds)", diff.count(), get_max_local_pause().count());
+        _was_paused = true;
+        return;
+    }
+    if (_was_paused) {
+        _was_paused = false;
+        return;
+    }
     double phi = hb_wnd.phi(now);
     logger.trace("failure_detector: PHI for {} : {}", ep, phi);
     logger.trace("failure_detector: phi_convict_threshold={}", _phi);
