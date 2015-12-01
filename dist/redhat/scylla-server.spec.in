@@ -57,6 +57,10 @@ install -m644 licenses/* $RPM_BUILD_ROOT%{_docdir}/scylla/licenses/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/data
 install -d -m755 $RPM_BUILD_ROOT%{_sharedstatedir}/scylla/commitlog
+install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
+cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
+install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
+cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -73,6 +77,11 @@ if [ -d /var/lib/scylla/conf ] && [ ! -L /var/lib/scylla/conf ]; then
 fi
 
 %post
+grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
+echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
+echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
+mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+
 %systemd_post scylla-server.service
 
 %preun
@@ -113,6 +122,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
+%{_prefix}/lib/scylla/swagger-ui/dist/*
+%{_prefix}/lib/scylla/api/api-doc/*
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
