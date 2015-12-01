@@ -321,6 +321,10 @@ public:
         return _stats;
     }
 
+    compaction_manager& get_compaction_manager() const {
+        return _compaction_manager;
+    }
+
     template<typename Func, typename Result = futurize_t<std::result_of_t<Func()>>>
     Result run_with_compaction_disabled(Func && func) {
         ++_compaction_disabled;
