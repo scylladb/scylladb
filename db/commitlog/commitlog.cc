@@ -281,6 +281,43 @@ private:
  * A single commit log file on disk. Manages creation of the file and writing mutations to disk,
  * as well as tracking the last mutation position of any "dirty" CFs covered by the segment file. Segment
  * files are initially allocated to a fixed size and can grow to accomidate a larger value if necessary.
+ *
+ * The IO flow is somewhat convoluted and goes something like this:
+ *
+ * Mutation path:
+ *  - Adding data to the segment usually writes into the internal buffer
+ *  - On EOB or overflow we issue a write to disk ("cycle").
+ *      - A cycle call will acquire the segment read lock and send the
+ *        buffer to the corresponding position in the file
+ *  - If we are periodic and crossed a timing threshold, or running "batch" mode
+ *    we might be forced to issue a flush ("sync") after adding data
+ *      - A sync call acquires the write lock, thus locking out writes
+ *        and waiting for pending writes to finish. It then checks the
+ *        high data mark, and issues the actual file flush.
+ *        Note that the write lock is released prior to issuing the
+ *        actual file flush, thus we are allowed to write data to
+ *        after a flush point concurrently with a pending flush.
+ *
+ * Sync timer:
+ *  - In periodic mode, we try to primarily issue sync calls in
+ *    a timer task issued every N seconds. The timer does the same
+ *    operation as the above described sync, and resets the timeout
+ *    so that mutation path will not trigger syncs and delay.
+ *
+ * Note that we do not care which order segment chunks finish writing
+ * to disk, other than all below a flush point must finish before flushing.
+ *
+ * We currently do not wait for flushes to finish before issueing the next
+ * cycle call ("after" flush point in the file). This might not be optimal.
+ *
+ * To close and finish a segment, we first close the gate object that guards
+ * writing data to it, then flush it fully (including waiting for futures create
+ * by the timer to run their course), and finally wait for it to
+ * become "clean", i.e. get notified that all mutations it holds have been
+ * persisted to sstables elsewhere. Once this is done, we can delete the
+ * segment. If a segment (object) is deleted without being fully clean, we
+ * do not remove the file on disk.
+ *
  */
 
 class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
@@ -370,6 +407,7 @@ public:
     void reset_sync_time() {
         _sync_time = clock_type::now();
     }
+    // See class comment for info
     future<sseg_ptr> sync() {
         // Note: this is not a marker for when sync was finished.
         // It is when it was initiated
@@ -386,6 +424,7 @@ public:
     future<> shutdown() {
         return _gate.close();
     }
+    // See class comment for info
     future<sseg_ptr> flush(uint64_t pos = 0) {
         auto me = shared_from_this();
         assert(!me.owned());
@@ -431,6 +470,7 @@ public:
     /**
      * Send any buffer contents to disk and get a new tmp buffer
      */
+    // See class comment for info
     future<sseg_ptr> cycle(size_t s = 0) {
         auto size = clear_buffer_slack();
         auto buf = std::move(_buffer);
