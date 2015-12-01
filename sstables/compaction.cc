@@ -64,15 +64,6 @@ namespace sstables {
 
 logging::logger logger("compaction");
 
-struct compaction_stats {
-    size_t sstables = 0;
-    uint64_t start_size = 0;
-    uint64_t end_size = 0;
-    uint64_t total_partitions = 0;
-    uint64_t total_keys_written = 0;
-    std::vector<shared_sstable> new_sstables;
-};
-
 class sstable_reader final : public ::mutation_reader::impl {
     shared_sstable _sst;
     mutation_reader _reader;
