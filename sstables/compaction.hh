@@ -47,6 +47,8 @@ namespace sstables {
     };
 
     struct compaction_stats {
+        sstring ks;
+        sstring cf;
         size_t sstables = 0;
         uint64_t start_size = 0;
         uint64_t end_size = 0;

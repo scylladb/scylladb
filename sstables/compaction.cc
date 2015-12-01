@@ -140,6 +140,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     sstable_logger_msg += "]";
     stats->sstables = sstables.size();
+    stats->ks = schema->ks_name();
+    stats->cf = schema->cf_name();
     logger.info("Compacting {}", sstable_logger_msg);
 
     class compacting_reader final : public ::mutation_reader::impl {
@@ -259,7 +261,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         if (ex.size()) {
             throw std::runtime_error(ex);
         }
-    }).then([start_time, stats, schema] {
+    }).then([start_time, stats] {
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::high_resolution_clock::now();
         // time taken by compaction in seconds.
@@ -294,7 +296,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(schema->ks_name(), schema->cf_name(), compacted_at,
+        return db::system_keyspace::update_compaction_history(stats->ks, stats->cf, compacted_at,
                 stats->start_size, stats->end_size, {});
     });
 }
