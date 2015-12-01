@@ -394,7 +394,7 @@ future<> storage_service::join_ring() {
 
 future<bool> storage_service::is_joined() {
     return run_with_read_api_lock([] (storage_service& ss) {
-        return ss._joined;
+        return ss._joined && !ss._is_survey_mode;
     });
 }
 
@@ -726,7 +726,8 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
             handle_state_bootstrap(endpoint);
-        } else if (move_name == sstring(versioned_value::STATUS_NORMAL)) {
+        } else if (move_name == sstring(versioned_value::STATUS_NORMAL) ||
+                   move_name == sstring(versioned_value::SHUTDOWN)) {
             handle_state_normal(endpoint);
         } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
                    move_name == sstring(versioned_value::REMOVED_TOKEN)) {
@@ -869,11 +870,15 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     db::system_keyspace::update_tokens(tokens).get();
     _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
     auto local_tokens = get_local_tokens();
+    set_gossip_tokens(local_tokens);
+    set_mode(mode::NORMAL, "node is now in normal status", true);
+    replicate_to_all_cores().get();
+}
+
+void storage_service::set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens) {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens)).get();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens)).get();
-    set_mode(mode::NORMAL, "node is now in normal status", true);
-    replicate_to_all_cores().get();
 }
 
 void storage_service::register_subscriber(endpoint_lifecycle_subscriber* subscriber)
@@ -1283,13 +1288,16 @@ future<bool> storage_service::is_gossip_running() {
 
 future<> storage_service::start_gossiping() {
     return run_with_write_api_lock([] (storage_service& ss) {
-        if (!ss._initialized) {
-            logger.warn("Starting gossip by operator request");
-            return gms::get_local_gossiper().start(get_generation_number()).then([&ss] {
-                ss._initialized = true;
-            });
-        }
-        return make_ready_future<>();
+        return seastar::async([&ss] {
+            if (!ss._initialized) {
+                logger.warn("Starting gossip by operator request");
+                ss.set_gossip_tokens(ss.get_local_tokens());
+                gms::get_local_gossiper().force_newer_generation();
+                gms::get_local_gossiper().start(get_generation_number()).then([&ss] {
+                    ss._initialized = true;
+                }).get();
+            }
+        });
     });
 }
 
@@ -1598,6 +1606,10 @@ future<> storage_service::decommission() {
 
             if (tm.clone_after_all_left().sorted_tokens().size() < 2) {
                 throw std::runtime_error("no other normal nodes in the ring; decommission would be pointless");
+            }
+
+            if (ss._operation_mode != mode::NORMAL) {
+                throw std::runtime_error(sprint("Node in %s state; wait for status to become normal or restart", ss._operation_mode));
             }
 
             get_local_pending_range_calculator_service().block_until_finished().get();

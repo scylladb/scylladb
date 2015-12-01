@@ -50,6 +50,8 @@ namespace gms {
 
 extern logging::logger logger;
 
+constexpr std::chrono::milliseconds failure_detector::DEFAULT_MAX_PAUSE;
+
 using clk = arrival_window::clk;
 
 static clk::duration get_initial_value() {
@@ -186,13 +188,19 @@ sstring failure_detector::get_endpoint_state(sstring address) {
 void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_state& state) {
     ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
     ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
-    for (auto& entry : state.get_application_state_map()) {
+    for (const auto& entry : state.get_application_state_map()) {
         auto& app_state = entry.first;
-        auto& value = entry.second;
+        auto& versioned_val = entry.second;
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        ss << "  " << app_state << ":" << value.value << "\n";
+        ss << "  " << app_state << ":" << versioned_val.version << ":" << versioned_val.value << "\n";
+    }
+    const auto& app_state_map = state.get_application_state_map();
+    if (app_state_map.count(application_state::TOKENS)) {
+        ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version << ":<hidden>\n";
+    } else {
+        ss << "  TOKENS: not present" << "\n";
     }
 }
 
@@ -230,6 +238,17 @@ void failure_detector::interpret(inet_address ep) {
     }
     arrival_window& hb_wnd = it->second;
     auto now = clk::now();
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - _last_interpret);
+    _last_interpret = now;
+    if (diff > get_max_local_pause()) {
+        logger.warn("Not marking nodes down due to local pause of {} > {} (milliseconds)", diff.count(), get_max_local_pause().count());
+        _last_paused = now;
+        return;
+    }
+    if (clk::now() - _last_paused < get_max_local_pause()) {
+        logger.debug("Still not marking nodes down due to local pause");
+        return;
+    }
     double phi = hb_wnd.phi(now);
     logger.trace("failure_detector: PHI for {} : {}", ep, phi);
     logger.trace("failure_detector: phi_convict_threshold={}", _phi);

@@ -251,8 +251,8 @@ void gossiper::init_messaging_service_handler() {
                 logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
                 return make_ready_future<>();
             }
-            return seastar::async([from, fd = get_local_failure_detector().shared_from_this()] {
-                fd->force_conviction(from);
+            return seastar::async([from] {
+                gms::get_local_gossiper().mark_as_shutdown(from);
             });
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
@@ -664,11 +664,13 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
+    // FIXME: Add getGossipStatus
+    // logger.debug("Convicting {} with status {} - alive {}", endpoint, getGossipStatus(epState), state.is_alive());
     logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
-    if (state.is_alive() && !is_dead_state(state)) {
-        mark_dead(endpoint, state);
+    if (is_shutdown(endpoint)) {
+        mark_as_shutdown(endpoint);
     } else {
-        state.mark_dead();
+        mark_dead(endpoint, state);
     }
 }
 
@@ -944,7 +946,7 @@ clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) {
     }
 }
 
-std::experimental::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) {
+std::experimental::optional<endpoint_state> gossiper::get_endpoint_state_for_endpoint(inet_address ep) const {
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
         return {};
@@ -1071,7 +1073,9 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state& local_state) {
     _unreachable_endpoints.erase(addr);
     _expire_time_endpoint_map.erase(addr);
     logger.debug("removing expire time for endpoint : {}", addr);
-    logger.info("inet_address {} is now UP", addr);
+    if (!_in_shadow_round) {
+        logger.info("InetAddress {} is now UP", addr);
+    }
 
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_alive(addr, local_state);
@@ -1099,7 +1103,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     if (endpoint_state_map.count(ep) > 0) {
         local_ep_state = endpoint_state_map.at(ep);
     }
-    if (!is_dead_state(eps)) {
+    if (!is_dead_state(eps) && !_in_shadow_round) {
         if (endpoint_state_map.count(ep))  {
             logger.info("Node {} has restarted, now UP", ep);
         } else {
@@ -1127,6 +1131,10 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     _subscribers.for_each([ep, ep_state] (auto& subscriber) {
         subscriber->on_join(ep, ep_state);
     });
+    // check this at the end so nodes will learn about the endpoint
+    if (is_shutdown(ep)) {
+        mark_as_shutdown(ep);
+    }
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
@@ -1139,6 +1147,47 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
     assert(pieces.size() > 0);
     sstring state = pieces[0];
     for (auto& deadstate : DEAD_STATES) {
+        if (state == deadstate) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool gossiper::is_shutdown(const inet_address& endpoint) const {
+    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return false;
+    }
+
+    auto app_state = ep_state->get_application_state(application_state::STATUS);
+    if (!app_state) {
+        return false;
+    }
+
+    auto value = app_state->value;
+    std::vector<sstring> pieces;
+    boost::split(pieces, value, boost::is_any_of(","));
+    assert(pieces.size() > 0);
+    sstring state = pieces[0];
+
+    return state == sstring(versioned_value::SHUTDOWN);
+}
+
+
+bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
+    auto app_state = ep_state.get_application_state(application_state::STATUS);
+    if (!app_state) {
+        return false;
+    }
+
+    auto value = app_state->value;
+    std::vector<sstring> pieces;
+    boost::split(pieces, value, boost::is_any_of(","));
+    assert(pieces.size() > 0);
+    sstring state = pieces[0];
+
+    for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
         }
@@ -1401,22 +1450,29 @@ future<> gossiper::stop() {
 
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
-        _scheduled_gossip_task.cancel();
-        logger.info("Announcing shutdown");
-        sleep(INTERVAL * 2).get();
-        for (inet_address addr : _live_endpoints) {
-            shard_id id = get_shard_id(addr);
-            logger.trace("Sending a GossipShutdown to {}", id);
-            ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
-                try {
-                    f.get();
-                    logger.trace("Got GossipShutdown Reply");
-                } catch (...) {
-                    logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
-                }
-                return make_ready_future<>();
-            }).get();
+        auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
+        if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
+            logger.info("Announcing shutdown");
+            add_local_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true)).get();
+            for (inet_address addr : _live_endpoints) {
+                shard_id id = get_shard_id(addr);
+                logger.trace("Sending a GossipShutdown to {}", id);
+                ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
+                    try {
+                        f.get();
+                        logger.trace("Got GossipShutdown Reply");
+                    } catch (...) {
+                        logger.warn("Fail to send GossipShutdown to {}: {}", id, std::current_exception());
+                    }
+                    return make_ready_future<>();
+                }).get();
+            }
+            // FIXME: Integer.getInteger("cassandra.shutdown_announce_in_ms", 2000)
+            sleep(INTERVAL * 2).get();
+        } else {
+            logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
+        _scheduled_gossip_task.cancel();
         _handlers.stop().then([this] () {
             logger.debug("gossip::handler::stop on cpu {}", engine().cpu_id());
             if (engine().cpu_id() == 0) {
@@ -1485,5 +1541,30 @@ bool gossiper::is_alive(inet_address ep) {
         return false;
     }
 }
+
+/**
+ * This method is used to mark a node as shutdown; that is it gracefully exited on its own and told us about it
+ * @param endpoint endpoint that has shut itself down
+ */
+// Runs inside seastar::async context
+void gossiper::mark_as_shutdown(const inet_address& endpoint) {
+    auto it = endpoint_state_map.find(endpoint);
+    if (it != endpoint_state_map.end()) {
+        auto& ep_state = it->second;
+        ep_state.add_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true));
+        ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
+        mark_dead(endpoint, ep_state);
+        get_local_failure_detector().force_conviction(endpoint);
+    }
+}
+
+void gossiper::force_newer_generation() {
+    auto it = endpoint_state_map.find(get_broadcast_address());
+    if (it != endpoint_state_map.end()) {
+        auto& ep_state = it->second;
+        ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+    }
+}
+
 
 } // namespace gms

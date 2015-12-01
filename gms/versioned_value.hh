@@ -83,6 +83,7 @@ public:
     static constexpr const char* REMOVED_TOKEN = "removed";
 
     static constexpr const char* HIBERNATE = "hibernate";
+    static constexpr const char* SHUTDOWN = "shutdown";
 
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
@@ -210,6 +211,10 @@ public:
 
         versioned_value hibernate(bool value) {
             return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
+        }
+
+        versioned_value shutdown(bool value) {
+            return versioned_value(sstring(SHUTDOWN) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
         }
 
         versioned_value datacenter(const sstring& dc_id) {

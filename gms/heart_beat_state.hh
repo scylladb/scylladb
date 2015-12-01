@@ -42,6 +42,7 @@
 #include "types.hh"
 #include "utils/serialization.hh"
 #include <ostream>
+#include <limits>
 
 namespace gms {
 /**
@@ -80,6 +81,10 @@ public:
 
     void force_newer_generation_unsafe() {
         _generation += 1;
+    }
+
+    void force_highest_possible_version_unsafe() {
+        _version = std::numeric_limits<int32_t>::max();
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const heart_beat_state& h) {

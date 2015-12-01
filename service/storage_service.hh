@@ -248,6 +248,7 @@ public:
 
     /** This method updates the local token on disk  */
     void set_tokens(std::unordered_set<token> tokens);
+    void set_gossip_tokens(const std::unordered_set<dht::token>& local_tokens);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
