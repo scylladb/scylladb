@@ -394,7 +394,7 @@ future<> storage_service::join_ring() {
 
 future<bool> storage_service::is_joined() {
     return run_with_read_api_lock([] (storage_service& ss) {
-        return ss._joined;
+        return ss._joined && !ss._is_survey_mode;
     });
 }
 
