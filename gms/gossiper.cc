@@ -664,13 +664,13 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
+    // FIXME: Add getGossipStatus
+    // logger.debug("Convicting {} with status {} - alive {}", endpoint, getGossipStatus(epState), state.is_alive());
     logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
-    if (is_shutdown(endpoint) && state.is_alive()) {
+    if (is_shutdown(endpoint)) {
         mark_as_shutdown(endpoint);
-    } else if (state.is_alive() && !is_dead_state(state)) {
-        mark_dead(endpoint, state);
     } else {
-        state.mark_dead();
+        mark_dead(endpoint, state);
     }
 }
 
