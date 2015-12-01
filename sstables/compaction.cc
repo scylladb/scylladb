@@ -96,7 +96,11 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     uint64_t estimated_partitions = 0;
     auto ancestors = make_lw_shared<std::vector<unsigned long>>();
     auto stats = make_lw_shared<compaction_stats>();
+    auto& cm = cf.get_compaction_manager();
     sstring sstable_logger_msg = "[";
+
+    // register compaction_stats of starting compaction into compaction manager
+    cm.register_compaction(stats);
 
     assert(sstables.size() > 0);
 
@@ -244,7 +248,10 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     }).then([output_reader] {});
 
     // Wait for both read_done and write_done fibers to finish.
-    return when_all(std::move(read_done), std::move(write_done)).then([] (std::tuple<future<>, future<>> t) {
+    return when_all(std::move(read_done), std::move(write_done)).then([&cm, stats] (std::tuple<future<>, future<>> t) {
+        // deregister compaction_stats of finished compaction from compaction manager.
+        cm.deregister_compaction(stats);
+
         sstring ex;
         try {
             std::get<0>(t).get();
