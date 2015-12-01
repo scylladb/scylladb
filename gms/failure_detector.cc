@@ -188,13 +188,19 @@ sstring failure_detector::get_endpoint_state(sstring address) {
 void failure_detector::append_endpoint_state(std::stringstream& ss, endpoint_state& state) {
     ss << "  generation:" << state.get_heart_beat_state().get_generation() << "\n";
     ss << "  heartbeat:" << state.get_heart_beat_state().get_heart_beat_version() << "\n";
-    for (auto& entry : state.get_application_state_map()) {
+    for (const auto& entry : state.get_application_state_map()) {
         auto& app_state = entry.first;
-        auto& value = entry.second;
+        auto& versioned_val = entry.second;
         if (app_state == application_state::TOKENS) {
             continue;
         }
-        ss << "  " << app_state << ":" << value.value << "\n";
+        ss << "  " << app_state << ":" << versioned_val.version << ":" << versioned_val.value << "\n";
+    }
+    const auto& app_state_map = state.get_application_state_map();
+    if (app_state_map.count(application_state::TOKENS)) {
+        ss << "  TOKENS:" << app_state_map.at(application_state::TOKENS).version << ":<hidden>\n";
+    } else {
+        ss << "  TOKENS: not present" << "\n";
     }
 }
 
