@@ -1321,10 +1321,8 @@ future<> gossiper::start(int generation_number) {
 future<> gossiper::start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
-    return _handlers.start().then([this] {
-        return _handlers.invoke_on_all([this] (handler& h) {
-            this->init_messaging_service_handler();
-        });
+    return get_gossiper().invoke_on_all([] (gossiper& g) {
+        g.init_messaging_service_handler();
     }).then([this, generation_nbr, preload_local_states] {
         build_seeds_list();
         /* initialize the heartbeat state for this localEndpoint */
@@ -1467,12 +1465,11 @@ future<> gossiper::do_stop_gossiping() {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
         _scheduled_gossip_task.cancel();
-        _handlers.stop().then([this] () {
-            logger.debug("gossip::handler::stop on cpu {}", engine().cpu_id());
+        get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
-                get_local_failure_detector().unregister_failure_detection_event_listener(this);
+                get_local_failure_detector().unregister_failure_detection_event_listener(&g);
             }
-            uninit_messaging_service_handler();
+            g.uninit_messaging_service_handler();
             return make_ready_future<>();
         }).get();
     });
@@ -1485,7 +1482,7 @@ future<> gossiper::stop_gossiping() {
 }
 
 future<> gossiper::stop() {
-    return _handlers.stop();
+    return make_ready_future();
 }
 
 bool gossiper::is_enabled() {

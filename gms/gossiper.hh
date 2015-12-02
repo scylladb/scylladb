@@ -86,13 +86,6 @@ private:
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
-    class handler {
-    public:
-        future<> stop() {
-            return make_ready_future<>();
-        }
-    };
-    distributed<handler> _handlers;
     void init_messaging_service_handler();
     void uninit_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
