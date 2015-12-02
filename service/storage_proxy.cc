@@ -863,7 +863,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     assert(mutate_result.available());
     _stats.write.mark(lc.stop().latency_in_nano());
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency_in_nano(), _stats.write.count);
+        _stats.estimated_write.add(lc.latency(), _stats.write.count);
     }
     try {
         mutate_result.get();
@@ -2096,7 +2096,7 @@ storage_proxy::do_query(schema_ptr s,
             return query_singular(cmd, std::move(partition_ranges), cl).finally([lc, p] () mutable {
                     p->_stats.read.mark(lc.stop().latency_in_nano());
                     if (lc.is_start()) {
-                        p->_stats.estimated_read.add(lc.latency_in_nano(), p->_stats.read.count);
+                        p->_stats.estimated_read.add(lc.latency(), p->_stats.read.count);
                     }
             });
         } catch (const no_such_column_family&) {

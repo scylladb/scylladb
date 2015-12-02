@@ -1498,7 +1498,7 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
     }).finally([lc, this]() mutable {
         _stats.reads.mark(lc);
         if (lc.is_start()) {
-            _stats.estimated_read.add(lc.latency_in_nano(), _stats.reads.count);
+            _stats.estimated_read.add(lc.latency(), _stats.reads.count);
         }
     });
 }
