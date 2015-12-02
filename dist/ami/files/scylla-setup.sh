@@ -5,7 +5,7 @@ RAIDDEV=`grep xvdb /proc/mdstat | awk '{print $1}'`
 
 if [ $RAIDCNT -ge 1 ]; then
     echo "RAID already constructed."
-    mount -o noatime,discard /dev/$RAIDDEV /var/lib/scylla
+    mount -o noatime /dev/$RAIDDEV /var/lib/scylla
 else
     echo "RAID does not constructed, going to initialize..."
 
@@ -31,7 +31,7 @@ else
         echo "DEVICE $DISKS" > /etc/mdadm.conf
         mdadm --detail --scan >> /etc/mdadm.conf
         UUID=`blkid /dev/md0 | awk '{print $2}'`
-        mount -o noatime,discard /dev/md0 /var/lib/scylla
+        mount -o noatime /dev/md0 /var/lib/scylla
     else
         echo "WARN: Scylla is not using XFS to store data. Perforamnce will suffer." > /home/fedora/WARN_PLEASE_READ.TXT
     fi
