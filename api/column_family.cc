@@ -110,23 +110,25 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
         utils::ihistogram column_family::stats::*f) {
     utils::UUID uuid = get_uuid(name, ctx.db.local());
     return ctx.db.map_reduce0([f, uuid](const database& p) {return p.find_column_family(uuid).get_stats().*f;},
-            httpd::utils_json::histogram(),
+            utils::ihistogram(),
             add_histogram)
-            .then([](const httpd::utils_json::histogram& val) {
-                return make_ready_future<json::json_return_type>(val);
+            .then([](const utils::ihistogram& val) {
+                return make_ready_future<json::json_return_type>(to_json(val));
     });
 }
 
 static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils::ihistogram column_family::stats::*f) {
-    std::function<httpd::utils_json::histogram(const database&)> fun = [f] (const database& db)  {
-        httpd::utils_json::histogram res;
+    std::function<utils::ihistogram(const database&)> fun = [f] (const database& db)  {
+        utils::ihistogram res;
         for (auto i : db.get_column_families()) {
             res = add_histogram(res, i.second->get_stats().*f);
         }
         return res;
     };
-    return ctx.db.map(fun).then([](const std::vector<httpd::utils_json::histogram> &res) {
-        return make_ready_future<json::json_return_type>(res);
+    return ctx.db.map(fun).then([](const std::vector<utils::ihistogram> &res) {
+        std::vector<httpd::utils_json::histogram> r;
+        boost::copy(res | boost::adaptors::transformed(to_json), std::back_inserter(r));
+        return make_ready_future<json::json_return_type>(r);
     });
 }
 
