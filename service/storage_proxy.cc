@@ -2648,8 +2648,7 @@ void storage_proxy::init_messaging_service() {
     });
 
     ms.register_replication_finished([] (gms::inet_address from) {
-        get_local_storage_service().confirm_replication(from);
-        return make_ready_future<>();
+        return get_local_storage_service().confirm_replication(from);
     });
 }
 
