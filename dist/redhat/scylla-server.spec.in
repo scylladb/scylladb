@@ -15,6 +15,11 @@ Requires:       systemd-libs xfsprogs
 
 %description
 
+%define __debug_install_post   \
+    %{_rpmconfigdir}/find-debuginfo.sh %{?_missing_build_ids_terminate_build:--strict-build-id} %{?_find_debuginfo_opts} "%{_builddir}/%{?buildsubdir}";\
+    cp scylla-gdb.py ${RPM_BUILD_ROOT}/usr/src/debug/%{name}-%{version}/;\
+    %{nil}
+
 %prep
 %setup -q
 
