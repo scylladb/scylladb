@@ -35,6 +35,7 @@
 #include <boost/move/iterator.hpp>
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
+#include "noexcept_traits.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -92,9 +93,11 @@ with_cob(tcxx::function<void (const T& ret)>&& cob,
         tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
         Func&& func) {
     // then_wrapped() terminates the fiber by calling one of the cob objects
-    futurize<T>::apply(func).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<T> f) {
+    futurize<noexcept_movable_t<T>>::apply([func = std::forward<Func>(func)] {
+        return noexcept_movable<T>::wrap(func());
+    }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (auto&& f) {
         try {
-            cob(f.get0());
+            cob(noexcept_movable<T>::unwrap(f.get0()));
         } catch (...) {
             delayed_exception_wrapper dew(std::current_exception());
             exn_cob(&dew);
