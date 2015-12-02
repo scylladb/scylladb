@@ -2,6 +2,8 @@
 
 DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
 SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
+SWAGGER = $(SCRIPTS)/swagger-ui
+API = $(SCRIPTS)/api
 LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
 LIBS = $(CURDIR)/debian/scylla-server/usr/lib
 CONF = $(CURDIR)/debian/scylla-server/etc/scylla
@@ -32,6 +34,12 @@ override_dh_auto_install:
 	mkdir -p $(SCRIPTS) && \
 	cp $(CURDIR)/seastar/dpdk/tools/dpdk_nic_bind.py $(SCRIPTS)
 	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
+
+	mkdir -p $(SWAGGER) && \
+	cp -r $(CURDIR)/swagger-ui/dist $(SWAGGER)
+
+	mkdir -p $(API) && \
+	cp -r $(CURDIR)/api/api-doc $(API)
 
 	mkdir -p $(CURDIR)/debian/scylla-server/usr/bin/ && \
 	cp $(CURDIR)/build/release/scylla \
