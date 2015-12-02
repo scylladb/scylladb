@@ -1706,7 +1706,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
 
             // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
             // we add our own token so other nodes to let us know when they're done
-            gossiper.advertise_removing(endpoint, host_id, local_host_id);
+            gossiper.advertise_removing(endpoint, host_id, local_host_id).get();
 
             // kick off streaming commands
             ss.restore_replica_count(endpoint, my_address).get();
@@ -1720,7 +1720,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
             ss.excise(std::move(tmp), endpoint);
 
             // gossiper will indicate the token has left
-            gossiper.advertise_token_removed(endpoint, host_id);
+            gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
             ss._removing_node = {};
