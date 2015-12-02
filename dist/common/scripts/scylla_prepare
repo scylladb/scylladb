@@ -14,7 +14,7 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
         echo $NR_HUGEPAGES > $n/hugepages/hugepages-2048kB/nr_hugepages
     done
 else # NETWORK_MODE = posix
-    if [ "$SET_NIC" == "yes" ]; then
+    if [ "$SET_NIC" = "yes" ]; then
         sudo sh /usr/lib/scylla/posix_net_conf.sh >/dev/null 2>&1 || true
     fi
 fi
