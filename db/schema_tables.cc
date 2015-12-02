@@ -398,18 +398,18 @@ read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstr
     return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result{}, insert);
 }
 
-future<schema_result::value_type>
+future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
 {
     auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
     auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
         partition_key::from_singular(*schema, keyspace_name));
     return db::system_keyspace::query(proxy, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
-        return schema_result::value_type{keyspace_name, std::move(rs)};
+        return schema_result_value_type{keyspace_name, std::move(rs)};
     });
 }
 
-future<schema_result::value_type>
+future<schema_result_value_type>
 read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
 {
     auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
@@ -417,7 +417,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, cons
         partition_key::from_singular(*schema, keyspace_name));
     auto clustering_range = query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({utf8_type->decompose(table_name)})));
     return db::system_keyspace::query(proxy, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
-        return schema_result::value_type{keyspace_name, std::move(rs)};
+        return schema_result_value_type{keyspace_name, std::move(rs)};
     });
 }
 
@@ -528,7 +528,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 
 future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
 {
-    std::vector<schema_result::value_type> created;
+    std::vector<schema_result_value_type> created;
     std::vector<sstring> altered;
     std::set<sstring> dropped;
 
@@ -552,7 +552,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     for (auto&& key : diff.entries_only_on_right) {
         auto&& value = after[key];
         if (!value->empty()) {
-            created.emplace_back(schema_result::value_type{key, std::move(value)});
+            created.emplace_back(schema_result_value_type{key, std::move(value)});
         }
     }
     for (auto&& key : diff.entries_differing) {
@@ -566,7 +566,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
         } else if (!pre->empty()) {
             dropped.emplace(keyspace_name);
         } else if (!post->empty()) { // a (re)created keyspace
-            created.emplace_back(schema_result::value_type{key, std::move(post)});
+            created.emplace_back(schema_result_value_type{key, std::move(post)});
         }
     }
     return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
@@ -899,7 +899,7 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
  *
  * @param partition Keyspace attributes in serialized form
  */
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& result)
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& result)
 {
     auto&& rs = result.second;
     if (rs->empty()) {
