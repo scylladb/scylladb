@@ -1683,6 +1683,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                 auto& ks = ss.db().local().find_keyspace(keyspace_name);
                 // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
                 if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                    logger.warn("keyspace={} has replication factor 1, the data is probably lost", keyspace_name);
                     continue;
                 }
 
