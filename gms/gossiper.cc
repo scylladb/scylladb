@@ -1090,7 +1090,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state& local_state) {
     _live_endpoints.erase(addr);
     _live_endpoints_just_added.remove(addr);
     _unreachable_endpoints[addr] = now();
-    logger.info("inet_address {} is now DOWN", addr);
+    logger.info("InetAddress {} is now DOWN", addr);
     _subscribers.for_each([addr, local_state] (auto& subscriber) {
         subscriber->on_dead(addr, local_state);
         logger.trace("Notified {}", subscriber.get());
