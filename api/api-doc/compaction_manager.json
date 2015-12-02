@@ -65,6 +65,25 @@
          ]
       },
       {
+         "path":"/compaction_manager/compaction_info",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get a list of all active compaction info",
+               "type":"array",
+               "items":{
+                  "type":"compaction_info"
+               },
+               "nickname":"get_compaction_info",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/compaction_manager/force_user_defined_compaction",
          "operations":[
             {
@@ -187,6 +206,28 @@
                "description":"The value"
             }
          }
+      },
+      "compaction_info" :{
+          "id": "compaction_info",
+          "description":"A key value mapping",
+          "properties":{
+            "operation_type":{
+               "type":"string",
+               "description":"The operation type"
+            },
+            "completed":{
+               "type":"long",
+               "description":"The current completed"
+            },
+            "total":{
+               "type":"long",
+               "description":"The total to compact"
+            },
+            "unit":{
+               "type":"string",
+               "description":"The compacted unit"
+            }
+          }
       },
       "jsonmap":{
          "id":"jsonmap",
