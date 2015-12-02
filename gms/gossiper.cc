@@ -1441,13 +1441,7 @@ future<> gossiper::add_local_application_state(application_state state, versione
     });
 }
 
-future<> gossiper::stop() {
-    logger.debug("gossip::stop on cpu {}", engine().cpu_id());
-
-    if (engine().cpu_id() != 0) {
-        return make_ready_future<>();
-    }
-
+future<> gossiper::do_stop_gossiping() {
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
@@ -1482,6 +1476,16 @@ future<> gossiper::stop() {
             return make_ready_future<>();
         }).get();
     });
+}
+
+future<> gossiper::stop_gossiping() {
+    return get_gossiper().invoke_on(0, [] (gossiper& g) {
+        return g.do_stop_gossiping();
+    });
+}
+
+future<> gossiper::stop() {
+    return _handlers.stop();
 }
 
 bool gossiper::is_enabled() {

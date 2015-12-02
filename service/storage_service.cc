@@ -1305,7 +1305,7 @@ future<> storage_service::stop_gossiping() {
     return run_with_write_api_lock([] (storage_service& ss) {
         if (ss._initialized) {
             logger.warn("Stopping gossip by operator request");
-            return gms::get_local_gossiper().stop().then([&ss] {
+            return gms::get_local_gossiper().stop_gossiping().then([&ss] {
                 ss._initialized = false;
             });
         }
@@ -1632,7 +1632,7 @@ future<> storage_service::decommission() {
 
             // FIXME: proper shutdown
             ss.shutdown_client_servers().get();
-            gms::get_local_gossiper().stop().get();
+            gms::get_local_gossiper().stop_gossiping().get();
             // MessagingService.instance().shutdown();
             // StageManager.shutdownNow();
             ss.set_mode(mode::DECOMMISSIONED, true);

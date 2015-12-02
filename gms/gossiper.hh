@@ -477,7 +477,11 @@ public:
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
+    // Needed by seastar::sharded
     future<> stop();
+    future<> stop_gossiping();
+private:
+    future<> do_stop_gossiping();
 
 public:
     bool is_enabled();
