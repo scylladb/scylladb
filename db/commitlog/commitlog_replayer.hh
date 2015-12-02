@@ -57,7 +57,7 @@ class commitlog;
 
 class commitlog_replayer {
 public:
-    commitlog_replayer(commitlog_replayer&&);
+    commitlog_replayer(commitlog_replayer&&) noexcept;
     ~commitlog_replayer();
 
     static future<commitlog_replayer> create_replayer(seastar::sharded<cql3::query_processor>&);

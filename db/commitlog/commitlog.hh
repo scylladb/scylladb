@@ -139,7 +139,7 @@ public:
         const uint32_t ver;
     };
 
-    commitlog(commitlog&&);
+    commitlog(commitlog&&) noexcept;
     ~commitlog();
 
     /**

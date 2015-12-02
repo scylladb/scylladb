@@ -31,7 +31,7 @@ namespace utils {
     public:
         file_lock() = delete;
         file_lock(const file_lock&) = delete;
-        file_lock(file_lock&&);
+        file_lock(file_lock&&) noexcept;
         ~file_lock();
 
         file_lock& operator=(file_lock&&) = default;

@@ -1097,7 +1097,7 @@ db::commitlog::commitlog(config cfg)
         : _segment_manager(new segment_manager(std::move(cfg))) {
 }
 
-db::commitlog::commitlog(commitlog&& v)
+db::commitlog::commitlog(commitlog&& v) noexcept
         : _segment_manager(std::move(v._segment_manager)) {
 }
 

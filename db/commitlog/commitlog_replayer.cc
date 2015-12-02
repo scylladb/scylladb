@@ -241,7 +241,7 @@ db::commitlog_replayer::commitlog_replayer(seastar::sharded<cql3::query_processo
     : _impl(std::make_unique<impl>(qp))
 {}
 
-db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r)
+db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
     : _impl(std::move(r._impl))
 {}
 
