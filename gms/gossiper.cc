@@ -1314,11 +1314,11 @@ void gossiper::examine_gossiper(std::vector<gossip_digest>& g_digest_list,
     }
 }
 
-future<> gossiper::start(int generation_number) {
-    return start(generation_number, std::map<application_state, versioned_value>());
+future<> gossiper::start_gossiping(int generation_number) {
+    return start_gossiping(generation_number, std::map<application_state, versioned_value>());
 }
 
-future<> gossiper::start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
+future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
     return get_gossiper().invoke_on_all([] (gossiper& g) {

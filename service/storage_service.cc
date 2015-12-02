@@ -186,7 +186,7 @@ future<> storage_service::prepare_to_join() {
         gossiper.register_(this->shared_from_this());
         // FIXME: SystemKeyspace.incrementAndGetGeneration()
         print("Start gossiper service ...\n");
-        return gossiper.start(get_generation_number(), *app_states).then([this] {
+        return gossiper.start_gossiping(get_generation_number(), *app_states).then([this] {
 #if SS_DEBUG
             gms::get_local_gossiper().debug_show();
             _token_metadata.debug_show();
@@ -1293,7 +1293,7 @@ future<> storage_service::start_gossiping() {
                 logger.warn("Starting gossip by operator request");
                 ss.set_gossip_tokens(ss.get_local_tokens());
                 gms::get_local_gossiper().force_newer_generation();
-                gms::get_local_gossiper().start(get_generation_number()).then([&ss] {
+                gms::get_local_gossiper().start_gossiping(get_generation_number()).then([&ss] {
                     ss._initialized = true;
                 }).get();
             }

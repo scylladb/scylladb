@@ -442,12 +442,12 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    future<> start(int generation_number);
+    future<> start_gossiping(int generation_number);
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      */
-    future<> start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
+    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
 
 public:
     /**
