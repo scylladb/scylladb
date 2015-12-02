@@ -62,7 +62,7 @@ namespace gms {
 
 using clk = gossiper::clk;
 
-logging::logger logger("gossip");
+static logging::logger logger("gossip");
 
 constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;

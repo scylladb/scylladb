@@ -43,12 +43,13 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
+#include "log.hh"
 #include <iostream>
 #include <chrono>
 
 namespace gms {
 
-extern logging::logger logger;
+static logging::logger logger("failure_detector");
 
 constexpr std::chrono::milliseconds failure_detector::DEFAULT_MAX_PAUSE;
 
