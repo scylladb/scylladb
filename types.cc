@@ -1559,8 +1559,36 @@ map_type_impl::deserialize(bytes_view in, serialization_format sf) const {
 
 sstring
 map_type_impl::to_string(const bytes& b) const {
-    // FIXME:
-    abort();
+    bool include_frozen_type = !is_multi_cell();
+    std::ostringstream out;
+    bool first = true;
+    auto v = bytes_view(b);
+    auto sf = serialization_format::internal();
+
+    if (include_frozen_type) {
+        out << "(";
+    }
+
+    auto size = read_collection_size(v, sf);
+    for (int i = 0; i < size; ++i) {
+        auto kb = read_collection_value(v, sf);
+        auto vb = read_collection_value(v, sf);
+
+        if (first) {
+            first = false;
+        } else {
+            out << ", ";
+        }
+
+        out << "{" << _keys->to_string(bytes(kb.begin(), kb.end())) << " : ";
+        out << _values->to_string(bytes(vb.begin(), vb.end())) << "}";
+    }
+
+    if (include_frozen_type) {
+        out << ")";
+    }
+
+    return out.str();
 }
 
 size_t
