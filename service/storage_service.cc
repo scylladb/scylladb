@@ -113,12 +113,15 @@ std::unordered_set<token> get_replace_tokens() {
 }
 
 std::experimental::optional<UUID> get_replace_node() {
-    try {
-        auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
-        auto uuid = utils::UUID(replace_node);
-        return uuid;
-    } catch (...) {
+    auto replace_node = get_local_storage_service().db().local().get_config().replace_node();
+    if (replace_node.empty()) {
         return std::experimental::nullopt;
+    }
+    try {
+        return utils::UUID(replace_node);
+    } catch (...) {
+        logger.error("Format of host-id = {} is incorrect {}", std::current_exception());
+        throw;
     }
 }
 
