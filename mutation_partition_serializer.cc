@@ -21,6 +21,7 @@
  */
 
 #include "mutation_partition_serializer.hh"
+#include "mutation_partition.hh"
 #include "db/serializer.hh"
 
 //

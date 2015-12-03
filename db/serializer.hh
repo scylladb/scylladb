@@ -26,7 +26,6 @@
 #include "utils/data_output.hh"
 #include "bytes_ostream.hh"
 #include "bytes.hh"
-#include "mutation.hh"
 #include "keys.hh"
 #include "database_fwd.hh"
 #include "frozen_mutation.hh"
