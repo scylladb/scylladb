@@ -15,7 +15,7 @@
                "summary":"get List of running compactions",
                "type":"array",
                "items":{
-                  "type":"jsonmap"
+                  "type":"summary"
                },
                "nickname":"get_compactions",
                "produces":[
@@ -37,25 +37,6 @@
                   "type":"history"
                },
                "nickname":"get_compaction_history",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[
-               ]
-            }
-         ]
-      },
-      {
-         "path":"/compaction_manager/compaction_summary",
-         "operations":[
-            {
-               "method":"GET",
-               "summary":"get compaction summary",
-               "type":"array",
-               "items":{
-                  "type":"string"
-               },
-               "nickname":"get_compaction_summary",
                "produces":[
                   "application/json"
                ],
@@ -193,17 +174,17 @@
     }
    ],
    "models":{
-      "mapper":{
-         "id":"mapper",
-         "description":"A key value mapping",
+      "row_merged":{
+         "id":"row_merged",
+         "description":"A row merged information",
          "properties":{
             "key":{
-               "type":"string",
-               "description":"The key"
+               "type":"int",
+               "description":"The number of sstable"
             },
             "value":{
-               "type":"string",
-               "description":"The value"
+               "type":"long",
+               "description":"The number or row compacted"
             }
          }
       },
@@ -229,16 +210,37 @@
             }
           }
       },
-      "jsonmap":{
-         "id":"jsonmap",
-         "description":"A json representation of a map as a list of key value",
+      "summary":{
+         "id":"summary",
+         "description":"A compaction summary object",
          "properties":{
-            "value":{
-               "type":"array",
-               "items":{
-                  "type":"mapper"
-               },
-               "description":"A list of key, value mapping"
+            "id":{
+               "type":"string",
+               "description":"The UUID"
+            },
+            "ks":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family name"
+            },
+            "completed":{
+               "type":"long",
+               "description":"The number of units completed"
+            },
+            "total":{
+               "type":"long",
+               "description":"The total number of units"
+            },
+            "task_type":{
+               "type":"string",
+               "description":"The task compaction type"
+            },
+            "unit":{
+               "type":"string",
+               "description":"The units being used"
             }
          }
       },
@@ -273,7 +275,7 @@
             "rows_merged":{
                "type":"array",
                "items":{
-                  "type":"mapper"
+                  "type":"row_merged"
                },
                "description":"The merged rows"
             }

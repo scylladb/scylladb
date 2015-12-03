@@ -42,16 +42,8 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         //TBD
         // FIXME
         warn(unimplemented::cause::API);
-        std::vector<cm::jsonmap> map;
+        std::vector<cm::summary> map;
         return make_ready_future<json::json_return_type>(map);
-    });
-
-    cm::get_compaction_summary.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        warn(unimplemented::cause::API);
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
     });
 
     cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<request> req) {
