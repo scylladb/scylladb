@@ -39,12 +39,25 @@ static future<json::json_return_type> get_cm_stats(http_context& ctx,
 }
 
 void set_compaction_manager(http_context& ctx, routes& r) {
-    cm::get_compactions.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        warn(unimplemented::cause::API);
-        std::vector<cm::summary> map;
-        return make_ready_future<json::json_return_type>(map);
+    cm::get_compactions.set(r, [&ctx] (std::unique_ptr<request> req) {
+        return ctx.db.map_reduce0([](database& db) {
+            std::vector<cm::summary> summaries;
+            const compaction_manager& cm = db.get_compaction_manager();
+
+            for (const auto& c : cm.get_compactions()) {
+                cm::summary s;
+                s.ks = c->ks;
+                s.cf = c->cf;
+                s.unit = "keys";
+                s.task_type = "compaction";
+                s.completed = c->total_keys_written;
+                s.total = c->total_partitions;
+                summaries.push_back(std::move(s));
+            }
+            return summaries;
+        }, std::vector<cm::summary>(), concat<cm::summary>).then([](const std::vector<cm::summary>& res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
     cm::force_user_defined_compaction.set(r, [] (std::unique_ptr<request> req) {
