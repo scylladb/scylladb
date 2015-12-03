@@ -515,6 +515,13 @@ std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token
     return endpoints;
 }
 
+std::map<token, inet_address> token_metadata::get_normal_and_bootstrapping_token_to_endpoint_map() {
+    std::map<token, inet_address> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
+    ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
+    return ret;
+}
+
+
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
     _dc_endpoints.clear();

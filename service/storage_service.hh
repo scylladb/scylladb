@@ -609,20 +609,14 @@ public:
         return ranges;
     }
 
+    /**
+     * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
+     *
+     * @return a map of tokens to endpoints in ascending order
+     */
+    std::map<token, inet_address> get_token_to_endpoint_map();
+
 #if 0
-    public Map<String, String> getTokenToEndpointMap()
-    {
-        Map<Token, InetAddress> mapInetAddress = _token_metadata.getNormalAndBootstrappingTokenToEndpointMap();
-        // in order to preserve tokens in ascending order, we use LinkedHashMap here
-        Map<String, String> mapString = new LinkedHashMap<>(mapInetAddress.size());
-        List<Token> tokens = new ArrayList<>(mapInetAddress.keySet());
-        Collections.sort(tokens);
-        for (Token token : tokens)
-        {
-            mapString.put(token.toString(), mapInetAddress.get(token).getHostAddress());
-        }
-        return mapString;
-    }
 
     public String getLocalHostId()
     {

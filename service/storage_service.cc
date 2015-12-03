@@ -2597,5 +2597,9 @@ future<> storage_service::move(token new_token) {
     });
 }
 
+std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
+    return _token_metadata.get_normal_and_bootstrapping_token_to_endpoint_map();
+}
+
 } // namespace service
 

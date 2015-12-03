@@ -894,27 +894,15 @@ public:
             lock.readLock().unlock();
         }
     }
-
+#endif
+public:
     /**
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.
      */
-    public Map<Token, InetAddress> getNormalAndBootstrappingTokenToEndpointMap()
-    {
-        lock.readLock().lock();
-        try
-        {
-            Map<Token, InetAddress> map = new HashMap<Token, InetAddress>(tokenToEndpointMap.size() + _bootstrap_tokens.size());
-            map.putAll(tokenToEndpointMap);
-            map.putAll(_bootstrap_tokens);
-            return map;
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
+    std::map<token, inet_address> get_normal_and_bootstrapping_token_to_endpoint_map();
 
+#if 0
     /**
      * @return the Topology map of nodes to DCs + Racks
      *
