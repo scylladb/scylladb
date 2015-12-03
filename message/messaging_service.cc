@@ -110,17 +110,11 @@ query::read_command net::serializer::read(Input& in, rpc::type<query::read_comma
 
 template <typename Output>
 void net::serializer::write(Output& out, const query::result& v) const {
-    // FIXME: allow const call to query::result::serialize()
-    uint32_t sz = v.serialized_size();
-    write(out, sz);
-    bytes b(bytes::initialized_later(), sz);
-    auto _out = b.begin();
-    const_cast<query::result&>(v).serialize(_out);
-    out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+    write_serializable(out, v);
 }
 template <typename Input>
 query::result net::serializer::read(Input& in, rpc::type<query::result>) const {
-    return read_gms<query::result>(in);
+    return read_serializable<query::result>(in);
 }
 
 template <typename Output>

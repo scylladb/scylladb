@@ -25,6 +25,7 @@
 #include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 #include "query-request.hh"
+#include "db/serializer.hh"
 
 namespace query {
 
@@ -139,17 +140,16 @@ public:
         return result_digest(std::move(b));
     }
     sstring pretty_print(schema_ptr, const query::partition_slice&) const;
-    size_t serialized_size() const { return _w.size(); }
-    void serialize(bytes::iterator& out) {
-        auto v = _w.linearize();
-        out = std::copy(v.begin(), v.end(), out);
-    }
-    static result deserialize(bytes_view& in) {
-        bytes_ostream w;
-        w.write(in);
-        in.remove_prefix(in.size());
-        return result(std::move(w));
-    }
 };
+
+}
+
+namespace db {
+
+template<> serializer<query::result>::serializer(const query::result&);
+template<> void serializer<query::result>::write(output&, const query::result&);
+template<> query::result serializer<query::result>::read(input&);
+
+extern template class serializer<query::result>;
 
 }
