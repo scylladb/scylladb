@@ -97,7 +97,7 @@ int main(int ac, char ** av) {
             using namespace std::chrono;
             auto now = high_resolution_clock::now().time_since_epoch();
             int generation_number = duration_cast<seconds>(now).count();
-            return gossiper.start(generation_number, app_states);
+            return gossiper.start_gossiping(generation_number, app_states);
         }).then([vv] {
             return seastar::async([vv] {
                 static double load = 0.5;

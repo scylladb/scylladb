@@ -1314,17 +1314,15 @@ void gossiper::examine_gossiper(std::vector<gossip_digest>& g_digest_list,
     }
 }
 
-future<> gossiper::start(int generation_number) {
-    return start(generation_number, std::map<application_state, versioned_value>());
+future<> gossiper::start_gossiping(int generation_number) {
+    return start_gossiping(generation_number, std::map<application_state, versioned_value>());
 }
 
-future<> gossiper::start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
+future<> gossiper::start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
     // Although gossiper runs on cpu0 only, we need to listen incoming gossip
     // message on all cpus and forard them to cpu0 to process.
-    return _handlers.start().then([this] {
-        return _handlers.invoke_on_all([this] (handler& h) {
-            this->init_messaging_service_handler();
-        });
+    return get_gossiper().invoke_on_all([] (gossiper& g) {
+        g.init_messaging_service_handler();
     }).then([this, generation_nbr, preload_local_states] {
         build_seeds_list();
         /* initialize the heartbeat state for this localEndpoint */
@@ -1441,13 +1439,7 @@ future<> gossiper::add_local_application_state(application_state state, versione
     });
 }
 
-future<> gossiper::stop() {
-    logger.debug("gossip::stop on cpu {}", engine().cpu_id());
-
-    if (engine().cpu_id() != 0) {
-        return make_ready_future<>();
-    }
-
+future<> gossiper::do_stop_gossiping() {
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
@@ -1473,15 +1465,24 @@ future<> gossiper::stop() {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
         _scheduled_gossip_task.cancel();
-        _handlers.stop().then([this] () {
-            logger.debug("gossip::handler::stop on cpu {}", engine().cpu_id());
+        get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
-                get_local_failure_detector().unregister_failure_detection_event_listener(this);
+                get_local_failure_detector().unregister_failure_detection_event_listener(&g);
             }
-            uninit_messaging_service_handler();
+            g.uninit_messaging_service_handler();
             return make_ready_future<>();
         }).get();
     });
+}
+
+future<> gossiper::stop_gossiping() {
+    return get_gossiper().invoke_on(0, [] (gossiper& g) {
+        return g.do_stop_gossiping();
+    });
+}
+
+future<> gossiper::stop() {
+    return make_ready_future();
 }
 
 bool gossiper::is_enabled() {

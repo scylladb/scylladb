@@ -86,13 +86,6 @@ private:
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
-    class handler {
-    public:
-        future<> stop() {
-            return make_ready_future<>();
-        }
-    };
-    distributed<handler> _handlers;
     void init_messaging_service_handler();
     void uninit_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
@@ -449,12 +442,12 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    future<> start(int generation_number);
+    future<> start_gossiping(int generation_number);
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      */
-    future<> start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
+    future<> start_gossiping(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
 
 public:
     /**
@@ -477,7 +470,11 @@ public:
 
     future<> add_local_application_state(application_state state, versioned_value value);
 
+    // Needed by seastar::sharded
     future<> stop();
+    future<> stop_gossiping();
+private:
+    future<> do_stop_gossiping();
 
 public:
     bool is_enabled();
