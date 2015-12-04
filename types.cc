@@ -1066,6 +1066,9 @@ public:
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::varint;
     }
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
+        return &other == this || int32_type->is_value_compatible_with(other) || long_type->is_value_compatible_with(other);
+    }
     friend class decimal_type_impl;
 };
 
