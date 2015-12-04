@@ -202,11 +202,14 @@ public:
             auto current_first = current->get_first_decorated_key(s);
 
             if (previous != nullptr && current_first.tri_compare(s, previous->get_last_decorated_key(s)) <= 0) {
-#if 0
-                logger.warn(String.format("At level %d, %s [%s, %s] overlaps %s [%s, %s].  This could be caused by a bug in Cassandra 1.1.0 .. 1.1.3 or due to the fact that you have dropped sstables from another node into the data directory. " +
-                                            "Sending back to L0.  If you didn't drop in sstables, and have not yet run scrub, you should do so since you may also have rows out-of-order within an sstable",
-                                            level, previous, previous.first, previous.last, current, current.first, current.last));
-#endif
+
+                logger.warn("At level {}, {} [{}, {}] overlaps {} [{}, {}].  This could be caused by a bug in Cassandra 1.1.0 .. 1.1.3 " \
+                    "or due to the fact that you have dropped sstables from another node into the data directory. " \
+                    "Sending back to L0. If you didn't drop in sstables, and have not yet run scrub, you should do so since you may also " \
+                    "have rows out-of-order within an sstable",
+                    level, previous->get_filename(), previous->get_first_partition_key(s), previous->get_last_partition_key(s),
+                    current->get_filename(), current->get_first_partition_key(s), current->get_last_partition_key(s));
+
                 out_of_order_sstables.push_back(current);
             } else {
                 previous = &*current;
@@ -605,9 +608,9 @@ public:
     std::vector<sstables::shared_sstable> get_candidates_for(int level) {
         const schema& s = *_schema;
         assert(!get_level(level).empty());
-#if 0
-        logger.debug("Choosing candidates for L{}", level);
 
+        logger.debug("Choosing candidates for L{}", level);
+#if 0
         final Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
 #endif
         if (level == 0) {
