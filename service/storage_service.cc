@@ -148,6 +148,17 @@ void storage_service::prepare_to_join() {
     }
 
     std::map<gms::application_state, gms::versioned_value> app_states;
+    if (db::system_keyspace::was_decommissioned()) {
+        if (db().local().get_config().override_decommission()) {
+            logger.warn("This node was decommissioned, but overriding by operator request.");
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
+        } else {
+            auto msg = sstring("This node was decommissioned and will not rejoin the ring unless cassandra.override_decommission=true has been set,"
+                               "or all existing data is removed and the node is bootstrapped again");
+            logger.error(msg.c_str());
+            throw std::runtime_error(msg.c_str());
+        }
+    }
     if (db().local().is_replacing() && !get_property_join_ring()) {
         throw std::runtime_error("Cannot set both join_ring=false and attempt to replace a node");
     }
@@ -1631,8 +1642,13 @@ future<> storage_service::decommission() {
             // FIXME: proper shutdown
             ss.shutdown_client_servers().get();
             gms::get_local_gossiper().stop_gossiping().get();
-            // MessagingService.instance().shutdown();
+            try {
+                // MessagingService.instance().shutdown();
+            } catch (...) {
+                logger.info("failed to shutdown message service: {}", std::current_exception());
+            }
             // StageManager.shutdownNow();
+            db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             ss.set_mode(mode::DECOMMISSIONED, true);
             // let op be responsible for killing the process
         });

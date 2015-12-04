@@ -750,6 +750,7 @@ public:
     val(replace_token, sstring, "", Used, "The tokens of the node to replace. Same as -Dcassandra.replace_token in cassandra.") \
     val(replace_address, sstring, "", Used, "The listen_address or broadcast_address of the dead node to replace. Same as -Dcassandra.replace_address.") \
     val(replace_address_first_boot, sstring, "", Used, "Like replace_address option, but if the node has been bootstrapped sucessfully it will be ignored. Same as -Dcassandra.replace_address_first_boot.") \
+    val(override_decommission, bool, false, Used, "Set true to force a decommissioned node to join the cluster")
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

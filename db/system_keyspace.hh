@@ -153,7 +153,8 @@ load_dc_rack_info();
 enum class bootstrap_state {
     NEEDS_BOOTSTRAP,
     COMPLETED,
-    IN_PROGRESS
+    IN_PROGRESS,
+    DECOMMISSIONED
 };
 
 #if 0
@@ -519,6 +520,7 @@ enum class bootstrap_state {
 bool bootstrap_complete();
 bool bootstrap_in_progress();
 bootstrap_state get_bootstrap_state();
+bool was_decommissioned();
 future<> set_bootstrap_state(bootstrap_state state);
 
 #if 0
