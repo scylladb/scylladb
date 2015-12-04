@@ -57,6 +57,7 @@
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
 #include "utils/flush_queue.hh"
+#include "schema_registry.hh"
 
 using namespace std::chrono_literals;
 
@@ -1185,6 +1186,7 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
+    schema = local_schema_registry().learn(schema);
     auto uuid = schema->id();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
