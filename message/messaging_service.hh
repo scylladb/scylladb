@@ -33,6 +33,7 @@
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
 #include "frozen_mutation.hh"
+#include "frozen_schema.hh"
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
@@ -89,7 +90,8 @@ enum class messaging_verb : int32_t {
     COMPLETE_MESSAGE = 19,
     REPAIR_CHECKSUM_RANGE = 20,
     // end of streaming verbs
-    LAST = 21,
+    GET_SCHEMA_VERSION = 21,
+    LAST = 22,
 };
 
 } // namespace net
@@ -234,6 +236,16 @@ struct serializer {
     template <typename Input>
     frozen_mutation read(Input& in, rpc::type<frozen_mutation>) const {
         return read_serializable<frozen_mutation>(in);
+    }
+
+    // For frozen_schema
+    template <typename Output>
+    void write(Output& out, const frozen_schema& v) const{
+        return write_serializable(out, v);
+    }
+    template <typename Input>
+    frozen_schema read(Input& in, rpc::type<frozen_schema>) const {
+        return read_serializable<frozen_schema>(in);
     }
 
     // For reconcilable_result
@@ -479,6 +491,11 @@ public:
     void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_data();
     future<query::result> send_read_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
+
+    // Wrapper for GET_SCHEMA_VERSION
+    void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
+    void unregister_get_schema_version();
+    future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);

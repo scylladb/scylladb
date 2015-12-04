@@ -35,6 +35,7 @@
 #include "db/config.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
+#include "frozen_schema.hh"
 
 namespace net {
 
@@ -116,7 +117,7 @@ rpc::stats messaging_service::shard_info::get_stats() const {
 }
 
 void messaging_service::foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const {
-    for (unsigned idx = 0; idx < 2; idx ++) {
+    for (unsigned idx = 0; idx < _clients.size(); idx ++) {
         for (auto i = _clients[idx].cbegin(); i != _clients[idx].cend(); i++) {
             f(i->first, i->second);
         }
@@ -221,10 +222,15 @@ rpc::no_wait_type messaging_service::no_wait() {
 
 static unsigned get_rpc_client_idx(messaging_verb verb) {
     unsigned idx = 0;
+    // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
+    // sent on a different connection to avoid potential deadlocks
+    // as well as reduce latency as there are potentially many requests
+    // blocked on schema version request.
     if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
         verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
         verb == messaging_verb::GOSSIP_SHUTDOWN ||
-        verb == messaging_verb::ECHO) {
+        verb == messaging_verb::ECHO ||
+        verb == messaging_verb::GET_SCHEMA_VERSION) {
         idx = 1;
     }
     return idx;
@@ -609,6 +615,16 @@ void messaging_service::unregister_read_data() {
 }
 future<query::result> messaging_service::send_read_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr) {
     return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
+}
+
+void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
+    register_handler(this, net::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
+}
+void messaging_service::unregister_get_schema_version() {
+    _rpc->unregister_handler(net::messaging_verb::GET_SCHEMA_VERSION);
+}
+future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
+    return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
 }
 
 void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
