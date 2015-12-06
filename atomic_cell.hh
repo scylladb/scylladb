@@ -302,6 +302,12 @@ public:
     bool operator==(const atomic_cell_or_collection& other) const {
         return _data == other._data;
     }
+    void linearize() {
+        _data.linearize();
+    }
+    void unlinearize() {
+        _data.scatter();
+    }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };
 
