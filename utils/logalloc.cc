@@ -805,6 +805,7 @@ public:
     explicit region_impl(region_group* group = nullptr)
         : _group(group), _id(next_id())
     {
+        _preferred_max_contiguous_allocation = max_managed_object_size;
         tracker_instance._impl->register_region(this);
         if (group) {
             group->add(this);
