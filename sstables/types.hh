@@ -136,6 +136,14 @@ struct summary_ka {
     // filled with the same data. It's too early to judge that the data is useless.
     // However, it was tested that Cassandra loads successfully a Summary file with
     // this structure removed from it. Anyway, let's pay attention to it.
+
+    /*
+     * Returns total amount of memory used by the summary
+     * Similar to origin off heap size
+     */
+    uint64_t memory_footprint() const {
+        return sizeof(summary_entry) * entries.size() + sizeof(uint32_t) * positions.size() + sizeof(*this);
+    }
 };
 using summary = summary_ka;
 
