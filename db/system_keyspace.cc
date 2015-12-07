@@ -1037,5 +1037,28 @@ future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compa
                        make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result();
 }
 
+future<std::vector<compaction_history_entry>> get_compaction_history()
+{
+    sstring req = "SELECT * from system.%s";
+    return execute_cql(req, COMPACTION_HISTORY).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        std::vector<compaction_history_entry> history;
+
+        for (auto& row : *msg) {
+            compaction_history_entry entry;
+            entry.id = row.get_as<utils::UUID>("id");
+            entry.ks = row.get_as<sstring>("keyspace_name");
+            entry.cf = row.get_as<sstring>("columnfamily_name");
+            entry.compacted_at = row.get_as<int64_t>("compacted_at");
+            entry.bytes_in = row.get_as<int64_t>("bytes_in");
+            entry.bytes_out = row.get_as<int64_t>("bytes_out");
+            if (row.has("rows_merged")) {
+                entry.rows_merged = row.get_map<int32_t, int64_t>("rows_merged");
+            }
+            history.push_back(std::move(entry));
+        }
+        return std::move(history);
+    });
+}
+
 } // namespace system_keyspace
 } // namespace db

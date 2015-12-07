@@ -265,8 +265,21 @@ enum class bootstrap_state {
         return CompactionHistoryTabularData.from(queryResultSet);
     }
 #endif
+    struct compaction_history_entry {
+        utils::UUID id;
+        sstring ks;
+        sstring cf;
+        int64_t compacted_at = 0;
+        int64_t bytes_in = 0;
+        int64_t bytes_out = 0;
+        // Key: number of rows merged
+        // Value: counter
+        std::unordered_map<int32_t, int64_t> rows_merged;
+    };
+
     future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
                                        std::unordered_map<int32_t, int64_t> rows_merged);
+    future<std::vector<compaction_history_entry>> get_compaction_history();
 
     typedef std::vector<db::replay_position> replay_positions;
 
