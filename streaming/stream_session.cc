@@ -134,22 +134,22 @@ void stream_session::init_messaging_service_handler() {
         });
     });
     ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        msg_addr from = net::messaging_service::get_source(cinfo);
         return smp::submit_to(dst_cpu_id, [plan_id, from, fm = std::move(fm)] () mutable {
             if (sslog.is_enabled(logging::log_level::debug)) {
                 auto cf_id = fm.column_family_id();
-                sslog.debug("[Stream #{}] GOT STREAM_MUTATION: cf_id={}, from={}", plan_id, cf_id, from);
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION: cf_id={}, from={}", plan_id, cf_id, from.addr);
             }
             auto f = get_stream_result_future(plan_id);
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_next_session(from.addr);
                 assert(session);
                 session->start_keep_alive_timer();
-                warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
-                auto s = local_schema_registry().get(fm.schema_version());
-                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
+                return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
+                    return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
+                });
             } else {
                 auto err = sprint("[Stream #%s] GOT STREAM_MUTATION: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());

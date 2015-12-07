@@ -170,10 +170,11 @@ future<> migration_manager::merge_schema_from(net::messaging_service::msg_addr i
 
 future<> migration_manager::merge_schema_from(net::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
 {
-    logger.info("Applying schema mutations from {}", src);
+    logger.debug("Applying schema mutations from {}", src);
     return map_reduce(mutations, [src](const frozen_mutation& fm) {
         // schema table's schema is not syncable so just use get_schema_definition()
         return get_schema_definition(fm.schema_version(), src).then([&fm](schema_ptr s) {
+            s->registry_entry()->mark_synced();
             return fm.unfreeze(std::move(s));
         });
     }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
@@ -636,5 +637,47 @@ public static class MigrationsSerializer implements IVersionedSerializer<Collect
     }
 }
 #endif
+
+
+// Ensure that given schema version 's' was synced with on current node. See schema::is_synced().
+//
+// The endpoint is the node from which 's' originated.
+//
+// FIXME: Avoid the sync if the source was/is synced by schema_tables::merge_schema().
+static future<> maybe_sync(const schema_ptr& s, net::messaging_service::msg_addr endpoint) {
+    if (s->is_synced()) {
+        return make_ready_future<>();
+    }
+
+    // Serialize schema sync by always doing it on shard 0.
+    return smp::submit_to(0, [gs = global_schema_ptr(s), endpoint] {
+        schema_ptr s = gs.get();
+        schema_registry_entry& e = *s->registry_entry();
+        return e.maybe_sync([endpoint, s] {
+            logger.debug("Syncing schema of {}.{} (v={}) with {}", s->ks_name(), s->cf_name(), s->version(), endpoint);
+            return get_local_migration_manager().merge_schema_from(endpoint);
+        });
+    });
+}
+
+future<schema_ptr> get_schema_definition(table_schema_version v, net::messaging_service::msg_addr dst) {
+    return local_schema_registry().get_or_load(v, [dst] (table_schema_version v) {
+        logger.debug("Requesting schema {} from {}", v, dst);
+        auto& ms = net::get_local_messaging_service();
+        return ms.send_get_schema_version(dst, v);
+    });
+}
+
+future<schema_ptr> get_schema_for_read(table_schema_version v, net::messaging_service::msg_addr dst) {
+    return get_schema_definition(v, dst);
+}
+
+future<schema_ptr> get_schema_for_write(table_schema_version v, net::messaging_service::msg_addr dst) {
+    return get_schema_definition(v, dst).then([dst] (schema_ptr s) {
+        return maybe_sync(s, dst).then([s] {
+            return s;
+        });
+    });
+}
 
 }

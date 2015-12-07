@@ -2659,14 +2659,10 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
 
 void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
-    ms.register_definitions_update( [] (std::vector<frozen_mutation> m) {
-        do_with(std::move(m), get_local_shared_storage_proxy(), [] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
-            std::vector<mutation> schema;
-            for (auto& m : mutations) {
-                schema_ptr s = p->get_db().local().find_schema(m.column_family_id());
-                schema.emplace_back(m.unfreeze(s));
-            }
-            return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
+    ms.register_definitions_update([] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
+        auto src = net::messaging_service::get_source(cinfo);
+        do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+            return service::get_local_migration_manager().merge_schema_from(src, mutations);
         }).discard_result();
         return net::messaging_service::no_wait();
     });
@@ -2675,14 +2671,14 @@ void storage_proxy::init_messaging_service() {
             // keep local proxy alive
         });
     });
-    ms.register_mutation([] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
-        do_with(std::move(in), get_local_shared_storage_proxy(), [forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
+    ms.register_mutation([] (const rpc::client_info& cinfo, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
+        do_with(std::move(in), get_local_shared_storage_proxy(), [&cinfo, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize<void>::apply([&p, &m, reply_to, shard] {
-                    warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
-                    schema_ptr s = local_schema_registry().get(m.schema_version());
-                    return p->mutate_locally(std::move(s), m);
+                futurize<void>::apply([&p, &m, reply_to, &cinfo] {
+                    return get_schema_for_write(m.schema_version(), net::messaging_service::get_source(cinfo)).then([&m, &p] (schema_ptr s) {
+                        return p->mutate_locally(std::move(s), m);
+                    });
                 }).then([reply_to, shard, response_id] {
                     auto& ms = net::get_local_messaging_service();
                     ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
@@ -2711,25 +2707,25 @@ void storage_proxy::init_messaging_service() {
         });
         return net::messaging_service::no_wait();
     });
-    ms.register_read_data([] (query::read_command cmd, query::partition_range pr) {
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), [cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
-            warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
-            schema_ptr s = local_schema_registry().get(cmd->schema_version);
-            return p->query_singular_local(std::move(s), cmd, pr);
+    ms.register_read_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
+            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+                return p->query_singular_local(std::move(s), cmd, pr);
+            });
         });
     });
-    ms.register_read_mutation_data([] (query::read_command cmd, query::partition_range pr) {
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), [cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
-            warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
-            schema_ptr s = local_schema_registry().get(cmd->schema_version);
-            return p->query_mutations_locally(std::move(s), cmd, pr);
+    ms.register_read_mutation_data([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
+            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+                return p->query_mutations_locally(std::move(s), cmd, pr);
+            });
         });
     });
-    ms.register_read_digest([] (query::read_command cmd, query::partition_range pr) {
-        return do_with(std::move(pr), get_local_shared_storage_proxy(), [cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
-            warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
-            schema_ptr s = local_schema_registry().get(cmd->schema_version);
-            return p->query_singular_local_digest(std::move(s), cmd, pr);
+    ms.register_read_digest([] (const rpc::client_info& cinfo, query::read_command cmd, query::partition_range pr) {
+        return do_with(std::move(pr), get_local_shared_storage_proxy(), [&cinfo, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr, shared_ptr<storage_proxy>& p) {
+            return get_schema_for_read(cmd->schema_version, net::messaging_service::get_source(cinfo)).then([cmd, &pr, &p] (schema_ptr s) {
+                return p->query_singular_local_digest(std::move(s), cmd, pr);
+            });
         });
     });
     ms.register_truncate([](sstring ksname, sstring cfname) {
