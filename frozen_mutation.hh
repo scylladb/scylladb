@@ -23,9 +23,9 @@
 
 #include "atomic_cell.hh"
 #include "keys.hh"
-#include "mutation.hh"
 #include "mutation_partition_view.hh"
 
+class mutation;
 
 // Immutable, compact form of mutation.
 //

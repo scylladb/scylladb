@@ -19,6 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <limits>
 #include "db/serializer.hh"
 #include "query-request.hh"
 #include "query-result.hh"
@@ -269,4 +270,35 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     return out.str();
 }
 
+}
+
+template class db::serializer<query::result>;
+
+using query_result_size_type = uint32_t;
+
+template<>
+db::serializer<query::result>::serializer(const query::result& v)
+        : _item(v)
+        , _size(sizeof(query_result_size_type) + v.buf().size())
+{
+    static_assert(std::numeric_limits<bytes_ostream::size_type>::max() <=
+                  std::numeric_limits<query_result_size_type>::max(), "query_result_size_type too small");
+}
+
+template<>
+void
+db::serializer<query::result>::write(output& out, const query::result& v) {
+    const bytes_ostream& buf = v.buf();
+    out.write<query_result_size_type>(buf.size());
+    for (bytes_view frag : buf.fragments()) {
+        out.write(frag.begin(), frag.end());
+    }
+}
+
+template<>
+query::result db::serializer<query::result>::read(input& in) {
+    bytes_ostream buf;
+    auto size = in.read<query_result_size_type>();
+    buf.write(in.read_view(size));
+    return query::result(std::move(buf));
 }

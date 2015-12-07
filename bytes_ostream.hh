@@ -33,8 +33,10 @@
  *
  */
 class bytes_ostream {
+public:
     using size_type = bytes::size_type;
     using value_type = bytes::value_type;
+private:
     static_assert(sizeof(value_type) == 1, "value_type is assumed to be one byte long");
     struct chunk {
         // FIXME: group fragment pointers to reduce pointer chasing when packetizing

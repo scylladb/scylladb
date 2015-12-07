@@ -25,6 +25,7 @@
 #include "db/serializer.hh"
 #include "utils/data_input.hh"
 #include "mutation_partition_serializer.hh"
+#include "mutation_partition.hh"
 
 //
 // See mutation_partition_serializer.cc for representation layout.
