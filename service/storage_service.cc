@@ -1686,6 +1686,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                 auto& ks = ss.db().local().find_keyspace(keyspace_name);
                 // if the replication factor is 1 the data is lost so we shouldn't wait for confirmation
                 if (ks.get_replication_strategy().get_replication_factor() == 1) {
+                    logger.warn("keyspace={} has replication factor 1, the data is probably lost", keyspace_name);
                     continue;
                 }
 
@@ -1709,7 +1710,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
 
             // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
             // we add our own token so other nodes to let us know when they're done
-            gossiper.advertise_removing(endpoint, host_id, local_host_id);
+            gossiper.advertise_removing(endpoint, host_id, local_host_id).get();
 
             // kick off streaming commands
             ss.restore_replica_count(endpoint, my_address).get();
@@ -1723,7 +1724,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
             ss.excise(std::move(tmp), endpoint);
 
             // gossiper will indicate the token has left
-            gossiper.advertise_token_removed(endpoint, host_id);
+            gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
             ss._removing_node = {};
@@ -2090,15 +2091,17 @@ future<> storage_service::send_replication_notification(inet_address remote) {
     );
 }
 
-void storage_service::confirm_replication(inet_address node) {
-    // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
-    // but restarted before all 'replication finished' messages arrived. In that case, we'll
-    // still go ahead and acknowledge it.
-    if (!_replicating_nodes.empty()) {
-        _replicating_nodes.erase(node);
-    } else {
-        logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
-    }
+future<> storage_service::confirm_replication(inet_address node) {
+    return run_with_no_api_lock([node] (storage_service& ss) {
+        // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
+        // but restarted before all 'replication finished' messages arrived. In that case, we'll
+        // still go ahead and acknowledge it.
+        if (!ss._replicating_nodes.empty()) {
+            ss._replicating_nodes.erase(node);
+        } else {
+            logger.info("Received unexpected REPLICATION_FINISHED message from {}. Was this node recently a removal coordinator?", node);
+        }
+    });
 }
 
 // Runs inside seastar::async context

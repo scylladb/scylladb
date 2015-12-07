@@ -769,7 +769,7 @@ private:
      */
     std::unordered_multimap<inet_address, range<token>> get_new_source_ranges(const sstring& keyspaceName, const std::vector<range<token>>& ranges);
 public:
-    void confirm_replication(inet_address node);
+    future<> confirm_replication(inet_address node);
 
 private:
 
