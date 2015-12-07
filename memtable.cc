@@ -103,6 +103,7 @@ memtable::slice(const query::partition_range& range) const {
 
 class scanning_reader final : public mutation_reader::impl {
     lw_shared_ptr<memtable> _memtable;
+    schema_ptr _schema;
     const query::partition_range& _range;
     stdx::optional<dht::decorated_key> _last;
     memtable::partitions_type::iterator _i;
@@ -144,8 +145,9 @@ private:
         _last_reclaim_counter = current_reclaim_counter;
     }
 public:
-    scanning_reader(lw_shared_ptr<memtable> m, const query::partition_range& range)
+    scanning_reader(schema_ptr s, lw_shared_ptr<memtable> m, const query::partition_range& range)
         : _memtable(std::move(m))
+        , _schema(std::move(s))
         , _range(range)
     { }
 
@@ -159,7 +161,7 @@ public:
             // FIXME: Use cache. See column_family::make_reader().
             _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
             _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
-                _memtable->_sstable, _memtable->_schema, *_delegate_range);
+                _memtable->_sstable, _schema, *_delegate_range);
             _memtable = {};
             _last = {};
             return _delegate();
@@ -174,13 +176,13 @@ public:
         ++_i;
         _last = e.key();
         _memtable->upgrade_entry(e);
-        return make_ready_future<mutation_opt>(mutation(_memtable->_schema, e.key(), e.partition()));
+        return make_ready_future<mutation_opt>(e.read(_schema));
     }
 };
 
 mutation_reader
-memtable::make_reader(const query::partition_range& range) {
-    if (query::is_wrap_around(range, *_schema)) {
+memtable::make_reader(schema_ptr s, const query::partition_range& range) {
+    if (query::is_wrap_around(range, *s)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
 
@@ -190,13 +192,13 @@ memtable::make_reader(const query::partition_range& range) {
         auto i = partitions.find(pos, partition_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
-            return make_reader_returning(mutation(_schema, i->key(), i->partition()));
+            return make_reader_returning(i->read(s));
         } else {
             return make_empty_reader();
         }
         });
     } else {
-        return make_mutation_reader<scanning_reader>(shared_from_this(), range);
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range);
     }
 }
 
@@ -209,7 +211,7 @@ memtable::update(const db::replay_position& rp) {
 
 future<>
 memtable::apply(memtable& mt) {
-    return do_with(mt.make_reader(), [this] (auto&& rd) mutable {
+    return do_with(mt.make_reader(_schema), [this] (auto&& rd) mutable {
         return consume(rd, [self = this->shared_from_this(), &rd] (mutation&& m) {
             self->apply(m);
             return stop_iteration::no;
@@ -244,14 +246,14 @@ logalloc::occupancy_stats memtable::occupancy() const {
 }
 
 mutation_source memtable::as_data_source() {
-    return [mt = shared_from_this()] (const query::partition_range& range) {
-        return mt->make_reader(range);
+    return [mt = shared_from_this()] (schema_ptr s, const query::partition_range& range) {
+        return mt->make_reader(std::move(s), range);
     };
 }
 
 key_source memtable::as_key_source() {
     return [mt = shared_from_this()] (const query::partition_range& range) {
-        return make_key_from_mutation_reader(mt->make_reader(range));
+        return make_key_from_mutation_reader(mt->make_reader(mt->_schema, range));
     };
 }
 
@@ -276,6 +278,12 @@ void memtable::mark_flushed(lw_shared_ptr<sstables::sstable> sst) {
 
 bool memtable::is_flushed() const {
     return bool(_sstable);
+}
+
+mutation partition_entry::read(const schema_ptr& target_schema) {
+    auto m = mutation(_schema, _key, _p);
+    m.upgrade(target_schema);
+    return m;
 }
 
 void memtable::upgrade_entry(partition_entry& e) {

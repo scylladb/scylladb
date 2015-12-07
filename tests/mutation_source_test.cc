@@ -70,7 +70,7 @@ static void test_range_queries(populate_fn populate) {
 
     auto test_slice = [&] (query::range<dht::ring_position> r) {
         BOOST_MESSAGE(sprint("Testing range %s", r));
-        assert_that(ds(r))
+        assert_that(ds(s, r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();
     };

@@ -127,8 +127,8 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
 
 mutation_source
 column_family::sstables_as_mutation_source() {
-    return [this] (const query::partition_range& r) {
-        return make_sstable_reader(r);
+    return [this] (schema_ptr s, const query::partition_range& r) {
+        return make_sstable_reader(std::move(s), r);
     };
 }
 
@@ -207,16 +207,16 @@ public:
 };
 
 mutation_reader
-column_family::make_sstable_reader(const query::partition_range& pr) const {
+column_family::make_sstable_reader(schema_ptr s, const query::partition_range& pr) const {
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return make_mutation_reader<single_key_sstable_reader>(_schema, _sstables, *pos.key());
+        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key());
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return make_mutation_reader<range_sstable_reader>(_schema, _sstables, pr);
+        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr);
     }
 }
 
@@ -240,9 +240,9 @@ key_source column_family::sstables_as_key_source() const {
 
 // Exposed for testing, not performance critical.
 future<column_family::const_mutation_partition_ptr>
-column_family::find_partition(const dht::decorated_key& key) const {
-    return do_with(query::partition_range::make_singular(key), [this] (auto& range) {
-        return do_with(this->make_reader(range), [] (mutation_reader& reader) {
+column_family::find_partition(schema_ptr s, const dht::decorated_key& key) const {
+    return do_with(query::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
+        return do_with(this->make_reader(s, range), [] (mutation_reader& reader) {
             return reader().then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
@@ -254,13 +254,13 @@ column_family::find_partition(const dht::decorated_key& key) const {
 }
 
 future<column_family::const_mutation_partition_ptr>
-column_family::find_partition_slow(const partition_key& key) const {
-    return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
+column_family::find_partition_slow(schema_ptr s, const partition_key& key) const {
+    return find_partition(s, dht::global_partitioner().decorate_key(*s, key));
 }
 
 future<column_family::const_row_ptr>
-column_family::find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const {
-    return find_partition(partition_key).then([clustering_key = std::move(clustering_key)] (const_mutation_partition_ptr p) {
+column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, clustering_key clustering_key) const {
+    return find_partition(std::move(s), partition_key).then([clustering_key = std::move(clustering_key)] (const_mutation_partition_ptr p) {
         if (!p) {
             return make_ready_future<const_row_ptr>();
         }
@@ -275,8 +275,8 @@ column_family::find_row(const dht::decorated_key& partition_key, clustering_key 
 }
 
 mutation_reader
-column_family::make_reader(const query::partition_range& range) const {
-    if (query::is_wrap_around(range, *_schema)) {
+column_family::make_reader(schema_ptr s, const query::partition_range& range) const {
+    if (query::is_wrap_around(range, *s)) {
         // make_combined_reader() can't handle streams that wrap around yet.
         fail(unimplemented::cause::WRAP_AROUND);
     }
@@ -305,13 +305,13 @@ column_family::make_reader(const query::partition_range& range) const {
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(range));
+        readers.emplace_back(mt->make_reader(s, range));
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_reader(range));
+        readers.emplace_back(_cache.make_reader(s, range));
     } else {
-        readers.emplace_back(make_sstable_reader(range));
+        readers.emplace_back(make_sstable_reader(s, range));
     }
 
     return make_combined_reader(std::move(readers));
@@ -319,7 +319,7 @@ column_family::make_reader(const query::partition_range& range) const {
 
 template <typename Func>
 future<bool>
-column_family::for_all_partitions(Func&& func) const {
+column_family::for_all_partitions(schema_ptr s, Func&& func) const {
     static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
                   "bad Func signature");
 
@@ -330,13 +330,13 @@ column_family::for_all_partitions(Func&& func) const {
         bool empty = false;
     public:
         bool done() const { return !ok || empty; }
-        iteration_state(const column_family& cf, Func&& func)
-            : reader(cf.make_reader())
+        iteration_state(schema_ptr s, const column_family& cf, Func&& func)
+            : reader(cf.make_reader(std::move(s)))
             , func(std::move(func))
         { }
     };
 
-    return do_with(iteration_state(*this, std::move(func)), [] (iteration_state& is) {
+    return do_with(iteration_state(std::move(s), *this, std::move(func)), [] (iteration_state& is) {
         return do_until([&is] { return is.done(); }, [&is] {
             return is.reader().then([&is](mutation_opt&& mo) {
                 if (!mo) {
@@ -352,8 +352,8 @@ column_family::for_all_partitions(Func&& func) const {
 }
 
 future<bool>
-column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
-    return for_all_partitions(std::move(func));
+column_family::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
+    return for_all_partitions(std::move(s), std::move(func));
 }
 
 class lister {
@@ -1486,13 +1486,17 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 }
 
 struct query_state {
-    explicit query_state(const query::read_command& cmd, const std::vector<query::partition_range>& ranges)
-            : cmd(cmd)
+    explicit query_state(schema_ptr s,
+                         const query::read_command& cmd,
+                         const std::vector<query::partition_range>& ranges)
+            : schema(std::move(s))
+            , cmd(cmd)
             , builder(cmd.slice)
             , limit(cmd.row_limit)
             , current_partition_range(ranges.begin())
             , range_end(ranges.end()){
     }
+    schema_ptr schema;
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
@@ -1506,21 +1510,21 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
+column_family::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    return do_with(query_state(cmd, partition_ranges), [this] (query_state& qs) {
+    return do_with(query_state(std::move(s), cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            qs.reader = make_reader(range);
+            qs.reader = make_reader(qs.schema, range);
             qs.range_empty = false;
-            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [this, &qs] {
-                return qs.reader().then([this, &qs](mutation_opt mo) {
+            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [&qs] {
+                return qs.reader().then([&qs](mutation_opt mo) {
                     if (mo) {
                         auto p_builder = qs.builder.add_partition(*mo->schema(), mo->key());
                         auto is_distinct = qs.cmd.slice.options.contains(query::partition_slice::option::distinct);
                         auto limit = !is_distinct ? qs.limit : 1;
-                        mo->partition().query(p_builder, *_schema, qs.cmd.timestamp, limit);
+                        mo->partition().query(p_builder, *qs.schema, qs.cmd.timestamp, limit);
                         qs.limit -= p_builder.row_count();
                     } else {
                         qs.range_empty = true;
@@ -1541,21 +1545,21 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
 
 mutation_source
 column_family::as_mutation_source() const {
-    return [this] (const query::partition_range& range) {
-        return this->make_reader(range);
+    return [this] (schema_ptr s, const query::partition_range& range) {
+        return this->make_reader(std::move(s), range);
     };
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
+database::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(cmd, ranges);
+    return cf.query(std::move(s), cmd, ranges);
 }
 
 future<reconcilable_result>
-database::query_mutations(const query::read_command& cmd, const query::partition_range& range) {
+database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {

@@ -189,7 +189,8 @@ private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
-    mutation_reader make_sstable_reader(const query::partition_range& range) const;
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_sstable_reader(schema_ptr schema, const query::partition_range& range) const;
 
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
@@ -200,7 +201,8 @@ public:
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
-    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_reader(schema_ptr schema, const query::partition_range& range = query::full_partition_range) const;
 
     mutation_source as_mutation_source() const;
 
@@ -227,16 +229,18 @@ public:
     ~column_family();
     schema_ptr schema() const { return _schema; }
     db::commitlog* commitlog() { return _commitlog; }
-    future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
-    future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
-    future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
+    future<const_mutation_partition_ptr> find_partition(schema_ptr, const dht::decorated_key& key) const;
+    future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, const partition_key& key) const;
+    future<const_row_ptr> find_row(schema_ptr, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
 
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<lw_shared_ptr<query::result>> query(schema_ptr,
+        const query::read_command& cmd,
+        const std::vector<query::partition_range>& ranges);
 
     future<> populate(sstring datadir);
 
@@ -362,14 +366,14 @@ private:
     // so that iteration can be stopped by returning false.
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
-    future<bool> for_all_partitions(Func&& func) const;
+    future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
     void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
-    future<bool> for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
+    future<bool> for_all_partitions_slow(schema_ptr, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
     // Testing purposes.
@@ -621,8 +625,8 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
-    future<reconcilable_result> query_mutations(const query::read_command& cmd, const query::partition_range& range);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
     future<> apply(schema_ptr, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;

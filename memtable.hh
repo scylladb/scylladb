@@ -58,6 +58,7 @@ public:
     mutation_partition& partition() { return _p; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
+    mutation read(const schema_ptr&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -132,7 +133,9 @@ public:
     // doesn't need to ensure that memtable remains live.
     //
     // The 'range' parameter must be live as long as the reader is being used
-    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range);
+    //
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_reader(schema_ptr, const query::partition_range& range = query::full_partition_range);
 
     mutation_source as_data_source();
     key_source as_key_source();

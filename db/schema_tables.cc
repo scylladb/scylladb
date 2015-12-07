@@ -423,7 +423,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 {
     auto dk = dht::global_partitioner().decorate_key(*s, pkey);
     return do_with(query::partition_range::make_singular(dk), [&proxy, dk, s = std::move(s), cmd = std::move(cmd)] (auto& range) {
-        return proxy.query_mutations_locally(std::move(cmd), range)
+        return proxy.query_mutations_locally(s, std::move(cmd), range)
                 .then([dk = std::move(dk), s](foreign_ptr<lw_shared_ptr<reconcilable_result>> res) {
                     auto&& partitions = res->partitions();
                     if (partitions.size() == 0) {

@@ -1017,7 +1017,7 @@ query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_na
     auto slice = partition_slice_builder(*schema).build();
     auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
         std::move(slice), std::numeric_limits<uint32_t>::max());
-    return proxy.local().query_mutations_locally(cmd, query::full_partition_range);
+    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), query::full_partition_range);
 }
 
 future<lw_shared_ptr<query::result_set>>

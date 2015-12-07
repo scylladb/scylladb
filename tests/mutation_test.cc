@@ -57,7 +57,7 @@ static atomic_cell make_atomic_cell(bytes value) {
 
 static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
-    auto reader = mt.make_reader(query::partition_range::make_singular(dk));
+    auto reader = mt.make_reader(mt.schema(), query::partition_range::make_singular(dk));
     auto mo = reader().get0();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
@@ -296,7 +296,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                 insert_row(1003, 2003)).discard_result().then([s, &r1_col, &cf, key] {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-                return cf.find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
+                return cf.find_row(cf.schema(), dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
                     BOOST_REQUIRE(i);
@@ -353,13 +353,13 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner1 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner2 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner3 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
             assert_that_scanner1.produces(mutations[1]);
@@ -432,7 +432,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         }
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
-            return cf.for_all_partitions_slow([&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+            return cf.for_all_partitions_slow(s, [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));

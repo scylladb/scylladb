@@ -57,6 +57,7 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
+// Schema-dependent.
 class partition_slice {
 public:
     enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry, reversed, distinct };

@@ -83,6 +83,7 @@ public:
     mutation_partition& partition() { return _p; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
+    mutation read(const schema_ptr&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -194,7 +195,7 @@ private:
     logalloc::allocating_section _update_section;
     logalloc::allocating_section _populate_section;
     logalloc::allocating_section _read_section;
-    mutation_reader make_scanning_reader(const query::partition_range&);
+    mutation_reader make_scanning_reader(schema_ptr, const query::partition_range&);
     void on_hit();
     void on_miss();
     void upgrade_entry(cache_entry&);
@@ -206,7 +207,10 @@ public:
     row_cache(const row_cache&) = delete;
     row_cache& operator=(row_cache&&) = default;
 public:
-    mutation_reader make_reader(const query::partition_range& = query::full_partition_range);
+    // Implements mutation_source for this cache, see mutation_reader.hh
+    // User needs to ensure that the row_cache object stays alive
+    // as long as the reader is used.
+    mutation_reader make_reader(schema_ptr, const query::partition_range& = query::full_partition_range);
     const stats& stats() const { return _stats; }
 public:
     // Populate cache from given mutation. The mutation must contain all

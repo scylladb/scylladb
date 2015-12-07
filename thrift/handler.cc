@@ -195,16 +195,18 @@ public:
                     throw unimplemented_exception();
                 } else if (predicate.__isset.slice_range) {
                   auto&& range = predicate.slice_range;
-                  return cf.find_row(dk, clustering_key::make_empty(*cf.schema())).then([&cf, range = std::move(range)] (column_family::const_row_ptr rw) {
+                    auto s = cf.schema();
+                    return cf.find_row(s, dk, clustering_key::make_empty(*s)).then(
+                          [s, &cf, range = std::move(range)] (column_family::const_row_ptr rw) {
                     std::vector<ColumnOrSuperColumn> ret;
                     if (rw) {
-                        auto beg = cf.schema()->regular_begin();
+                        auto beg = s->regular_begin();
                         if (!range.start.empty()) {
-                            beg = cf.schema()->regular_lower_bound(to_bytes(range.start));
+                            beg = s->regular_lower_bound(to_bytes(range.start));
                         }
-                        auto end = cf.schema()->regular_end();
+                        auto end = s->regular_end();
                         if (!range.finish.empty()) {
-                            end = cf.schema()->regular_upper_bound(to_bytes(range.finish));
+                            end = s->regular_upper_bound(to_bytes(range.finish));
                         }
                         auto count = range.count;
                         // FIXME: force limit count?
