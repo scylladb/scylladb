@@ -242,6 +242,7 @@ public:
         return _tracker;
     }
 
+    void set_schema(schema_ptr) noexcept;
     const schema_ptr& schema() const;
 
     friend class just_cache_scanning_reader;

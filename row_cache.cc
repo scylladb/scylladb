@@ -549,6 +549,10 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
     }
 }
 
+void row_cache::set_schema(schema_ptr new_schema) noexcept {
+    _schema = std::move(new_schema);
+}
+
 mutation cache_entry::read(const schema_ptr& s) {
     auto m = mutation(_schema, _key, _p);
     if (_schema != s) {

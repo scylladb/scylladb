@@ -295,3 +295,7 @@ void memtable::upgrade_entry(partition_entry& e) {
         });
     }
 }
+
+void memtable::set_schema(schema_ptr new_schema) noexcept {
+    _schema = std::move(new_schema);
+}

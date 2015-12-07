@@ -2237,3 +2237,15 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
     os << "}";
     return os;
 }
+
+void column_family::set_schema(schema_ptr s) {
+    dblog.debug("Changing schema version of {}.{} ({}) from {} to {}",
+                _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
+
+    for (auto& m : *_memtables) {
+        m->set_schema(s);
+    }
+
+    _cache.set_schema(s);
+    _schema = std::move(s);
+}
