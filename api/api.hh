@@ -128,47 +128,54 @@ inline double pow2(double a) {
     return a * a;
 }
 
-inline httpd::utils_json::histogram add_histogram(httpd::utils_json::histogram res,
+// FIXME: Move to utils::ihistogram::operator+=()
+inline utils::ihistogram add_histogram(utils::ihistogram res,
         const utils::ihistogram& val) {
-    if (!res.count._set) {
-        res = val;
-        return res;
+    if (res.count == 0) {
+        return val;
     }
     if (val.count == 0) {
-        return res;
+        return std::move(res);
     }
-    if (res.min() > val.min) {
+    if (res.min > val.min) {
         res.min = val.min;
     }
-    if (res.max() < val.max) {
+    if (res.max < val.max) {
         res.max = val.max;
     }
-    double ncount = res.count() + val.count;
+    double ncount = res.count + val.count;
     // To get an estimated sum we take the estimated mean
     // and multiply it by the true count
-    res.sum = res.sum() + val.mean * val.count;
-    double a = res.count()/ncount;
+    res.sum = res.sum + val.mean * val.count;
+    double a = res.count/ncount;
     double b = val.count/ncount;
 
-    double mean =  a * res.mean() + b * val.mean;
+    double mean =  a * res.mean + b * val.mean;
 
-    res.variance = (res.variance() + pow2(res.mean() - mean) )* a +
+    res.variance = (res.variance + pow2(res.mean - mean) )* a +
             (val.variance + pow2(val.mean -mean))* b;
 
     res.mean = mean;
-    res.count = res.count() + val.count;
+    res.count = res.count + val.count;
     for (auto i : val.sample) {
-        res.sample.push(i);
+        res.sample.push_back(i);
     }
     return res;
+}
+
+inline
+httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
+    httpd::utils_json::histogram h;
+    h = val;
+    return h;
 }
 
 template<class T, class F>
 future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::ihistogram F::*f) {
 
-    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, httpd::utils_json::histogram(),
-            add_histogram).then([](const httpd::utils_json::histogram& val) {
-        return make_ready_future<json::json_return_type>(val);
+    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, utils::ihistogram(),
+            add_histogram).then([](const utils::ihistogram& val) {
+        return make_ready_future<json::json_return_type>(to_json(val));
     });
 }
 

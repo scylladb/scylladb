@@ -117,13 +117,13 @@ private:
         };
     }
 public:
-    bytes_ostream()
+    bytes_ostream() noexcept
         : _begin()
         , _current(nullptr)
         , _size(0)
     { }
 
-    bytes_ostream(bytes_ostream&& o)
+    bytes_ostream(bytes_ostream&& o) noexcept
         : _begin(std::move(o._begin))
         , _current(o._current)
         , _size(o._size)
@@ -148,7 +148,7 @@ public:
         return *this;
     }
 
-    bytes_ostream& operator=(bytes_ostream&& o) {
+    bytes_ostream& operator=(bytes_ostream&& o) noexcept {
         _size = o._size;
         _begin = std::move(o._begin);
         _current = o._current;

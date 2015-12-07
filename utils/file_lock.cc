@@ -56,7 +56,7 @@ utils::file_lock::file_lock(sstring path)
     : _impl(std::make_unique<impl>(std::move(path)))
 {}
 
-utils::file_lock::file_lock(file_lock&& f)
+utils::file_lock::file_lock(file_lock&& f) noexcept
     : _impl(std::move(f._impl))
 {}
 

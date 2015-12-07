@@ -1702,23 +1702,6 @@ remove_by_toc_name(sstring sstable_toc_name) {
     });
 }
 
-static future<bool>
-file_exists(sstring filename) {
-    return engine().open_file_dma(filename, open_flags::ro).then([] (file f) {
-        return f.close().finally([f] {});
-    }).then_wrapped([] (future<> f) {
-        bool exists = true;
-        try {
-            f.get();
-        } catch (std::system_error& e) {
-            if (e.code() == std::error_code(ENOENT, std::system_category())) {
-                exists = false;
-            }
-        }
-        return make_ready_future<bool>(exists);
-    });
-}
-
 future<>
 sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {

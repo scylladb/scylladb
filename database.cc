@@ -1032,7 +1032,7 @@ template <typename Func>
 static future<>
 do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
     using namespace db::schema_tables;
-    static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result::value_type&)>>::value,
+    static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result_value_type&)>>::value,
                   "bad Func signature");
 
 
@@ -1067,11 +1067,11 @@ do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring
 
 future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
     using namespace db::schema_tables;
-    return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result::value_type &v) {
+    return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
     }).then([&proxy, this] {
-        return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
+        return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
                 for (auto& t: tables) {
                     auto s = t.second;

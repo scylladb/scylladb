@@ -347,8 +347,13 @@ public:
 };
 
 data_consume_context::~data_consume_context() = default;
-data_consume_context::data_consume_context(data_consume_context&&) = default;
-data_consume_context& data_consume_context::operator=(data_consume_context&&) = default;
+data_consume_context::data_consume_context(data_consume_context&& o) noexcept
+    : _pimpl(std::move(o._pimpl))
+{ }
+data_consume_context& data_consume_context::operator=(data_consume_context&& o) noexcept {
+    _pimpl = std::move(o._pimpl);
+    return *this;
+}
 data_consume_context::data_consume_context(std::unique_ptr<impl> p) : _pimpl(std::move(p)) { }
 future<> data_consume_context::read() {
     return _pimpl->read();

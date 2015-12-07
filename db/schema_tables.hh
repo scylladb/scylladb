@@ -55,6 +55,7 @@ namespace db {
 namespace schema_tables {
 
 using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
+using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
 static constexpr auto KEYSPACES = "schema_keyspaces";
 static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
@@ -74,7 +75,7 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
 
 future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy);
 
-future<schema_result::value_type>
+future<schema_result_value_type>
 read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 
 future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations);
@@ -89,11 +90,11 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
 
 std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp);
 
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& partition);
 
 future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
 
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& partition);
 
 mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 

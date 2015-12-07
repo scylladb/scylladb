@@ -1097,7 +1097,7 @@ db::commitlog::commitlog(config cfg)
         : _segment_manager(new segment_manager(std::move(cfg))) {
 }
 
-db::commitlog::commitlog(commitlog&& v)
+db::commitlog::commitlog(commitlog&& v) noexcept
         : _segment_manager(std::move(v._segment_manager)) {
 }
 
@@ -1173,10 +1173,11 @@ const db::commitlog::config& db::commitlog::active_config() const {
     return _segment_manager->cfg;
 }
 
-future<subscription<temporary_buffer<char>, db::replay_position>>
+future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
 db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
     return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next), off](file f) {
-       return read_log_file(std::move(f), std::move(next), off);
+       return std::make_unique<subscription<temporary_buffer<char>, replay_position>>(
+           read_log_file(std::move(f), std::move(next), off));
     });
 }
 

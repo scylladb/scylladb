@@ -76,8 +76,8 @@ public:
     // Define (as defaults) the destructor and move operations in the source
     // file, so here we don't need to know the incomplete impl type.
     ~data_consume_context();
-    data_consume_context(data_consume_context&&);
-    data_consume_context& operator=(data_consume_context&&);
+    data_consume_context(data_consume_context&&) noexcept;
+    data_consume_context& operator=(data_consume_context&&) noexcept;
 };
 
 // mutation_reader is an object returned by sstable::read_rows() et al. which

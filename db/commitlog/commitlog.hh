@@ -139,7 +139,7 @@ public:
         const uint32_t ver;
     };
 
-    commitlog(commitlog&&);
+    commitlog(commitlog&&) noexcept;
     ~commitlog();
 
     /**
@@ -279,7 +279,8 @@ public:
     };
 
     static subscription<temporary_buffer<char>, replay_position> read_log_file(file, commit_load_reader_func, position_type = 0);
-    static future<subscription<temporary_buffer<char>, replay_position>> read_log_file(const sstring&, commit_load_reader_func, position_type = 0);
+    static future<std::unique_ptr<subscription<temporary_buffer<char>, replay_position>>> read_log_file(
+            const sstring&, commit_load_reader_func, position_type = 0);
 private:
     commitlog(config);
 };

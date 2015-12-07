@@ -167,7 +167,7 @@ db::commitlog_replayer::impl::recover(sstring file) {
     return db::commitlog::read_log_file(file,
             std::bind(&impl::process, this, s.get(), std::placeholders::_1,
                     std::placeholders::_2), p).then([](auto s) {
-        auto f = s.done();
+        auto f = s->done();
         return f.finally([s = std::move(s)] {});
     }).then_wrapped([s](future<> f) {
         try {
@@ -241,7 +241,7 @@ db::commitlog_replayer::commitlog_replayer(seastar::sharded<cql3::query_processo
     : _impl(std::make_unique<impl>(qp))
 {}
 
-db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r)
+db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
     : _impl(std::move(r._impl))
 {}
 

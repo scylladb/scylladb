@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                                     return make_ready_future<>();
                                 }).then([](auto s) {
                                     return do_with(std::move(s), [](auto& s) {
-                                        return s.done();
+                                        return s->done();
                                     });
                                 });
                     }).then([count, count2] {
@@ -363,7 +363,7 @@ SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
                                 return make_ready_future<>();
                             }).then([](auto s) {
                                 return do_with(std::move(s), [](auto& s) {
-                                    return s.done();
+                                    return s->done();
                                 });
                             }).then_wrapped([](auto&& f) {
                                 try {
@@ -408,7 +408,7 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
                                 return make_ready_future<>();
                             }).then([](auto s) {
                                 return do_with(std::move(s), [](auto& s) {
-                                    return s.done();
+                                    return s->done();
                                 });
                             }).then_wrapped([](auto&& f) {
                                 try {
