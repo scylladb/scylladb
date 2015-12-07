@@ -2021,7 +2021,11 @@ future<> column_family::clear_snapshot(sstring tag) {
 future<std::unordered_map<sstring, column_family::snapshot_details>> column_family::get_snapshot_details() {
     std::unordered_map<sstring, snapshot_details> all_snapshots;
     return do_with(std::move(all_snapshots), [this] (auto& all_snapshots) {
-        return lister::scan_dir(_config.datadir + "/snapshots",  { directory_entry_type::directory }, [this, &all_snapshots] (directory_entry de) {
+        return engine().file_exists(_config.datadir + "/snapshots").then([this, &all_snapshots](bool file_exists) {
+            if (!file_exists) {
+                return make_ready_future<>();
+            }
+            return lister::scan_dir(_config.datadir + "/snapshots",  { directory_entry_type::directory }, [this, &all_snapshots] (directory_entry de) {
             auto snapshot_name = de.name;
             auto snapshot = _config.datadir + "/snapshots/" + snapshot_name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
@@ -2056,6 +2060,7 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
                     });
                 });
             });
+        });
         }).then([&all_snapshots] {
             return std::move(all_snapshots);
         });
