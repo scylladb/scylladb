@@ -750,8 +750,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
             my_set_type->serialize_mutation_form(mset3));
 
         mutation m12(partition_key::from_single_value(*s, "key1"), s);
-        m12.partition().apply(*s, m1.partition());
-        m12.partition().apply(*s, m2.partition());
+        m12.apply(m1);
+        m12.apply(m2);
 
         auto m2_1 = m2.partition().difference(s, m1.partition());
         BOOST_REQUIRE_EQUAL(m2_1.partition_tombstone(), tombstone());
@@ -765,8 +765,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
 
         mutation m12_1(partition_key::from_single_value(*s, "key1"), s);
-        m12_1.partition().apply(*s, m1.partition());
-        m12_1.partition().apply(*s, m2_1);
+        m12_1.apply(m1);
+        m12_1.partition().apply(*s, m2_1, *s);
         BOOST_REQUIRE_EQUAL(m12, m12_1);
 
         auto m1_2 = m1.partition().difference(s, m2.partition());
@@ -782,8 +782,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
 
         mutation m12_2(partition_key::from_single_value(*s, "key1"), s);
-        m12_2.partition().apply(*s, m2.partition());
-        m12_2.partition().apply(*s, m1_2);
+        m12_2.apply(m2);
+        m12_2.partition().apply(*s, m1_2, *s);
         BOOST_REQUIRE_EQUAL(m12, m12_2);
 
         auto m3_12 = m3.partition().difference(s, m12.partition());
@@ -793,8 +793,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE_EQUAL(m12_3.partition_tombstone(), m12.partition().partition_tombstone());
 
         mutation m123(partition_key::from_single_value(*s, "key1"), s);
-        m123.partition().apply(*s, m3.partition());
-        m123.partition().apply(*s, m12_3);
+        m123.apply(m3);
+        m123.partition().apply(*s, m12_3, *s);
         BOOST_REQUIRE_EQUAL(m12, m123);
     });
 }

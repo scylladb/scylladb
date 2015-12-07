@@ -76,16 +76,16 @@ BOOST_AUTO_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_a
     m2.set_static_cell("static_1", data_value(bytes("val5")), new_timestamp());
 
     mutation m_frozen(key, s);
-    m_frozen.partition().apply(*s, freeze(m1).partition());
-    m_frozen.partition().apply(*s, freeze(m2).partition());
+    m_frozen.partition().apply(*s, freeze(m1).partition(), *s);
+    m_frozen.partition().apply(*s, freeze(m2).partition(), *s);
 
     mutation m_unfrozen(key, s);
-    m_unfrozen.partition().apply(*s, m1.partition());
-    m_unfrozen.partition().apply(*s, m2.partition());
+    m_unfrozen.partition().apply(*s, m1.partition(), *s);
+    m_unfrozen.partition().apply(*s, m2.partition(), *s);
 
     mutation m_refrozen(key, s);
-    m_refrozen.partition().apply(*s, freeze(m1).unfreeze(s).partition());
-    m_refrozen.partition().apply(*s, freeze(m2).unfreeze(s).partition());
+    m_refrozen.partition().apply(*s, freeze(m1).unfreeze(s).partition(), *s);
+    m_refrozen.partition().apply(*s, freeze(m2).unfreeze(s).partition(), *s);
 
     assert_that(m_unfrozen).is_equal_to(m_refrozen);
     assert_that(m_unfrozen).is_equal_to(m_frozen);

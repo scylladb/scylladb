@@ -63,8 +63,11 @@ memtable::find_or_create_partition(const dht::decorated_key& key) {
     auto i = partitions.lower_bound(key, partition_entry::compare(_schema));
     if (i == partitions.end() || !key.equal(*_schema, i->key())) {
         partition_entry* entry = current_allocator().construct<partition_entry>(
-            dht::decorated_key(key), mutation_partition(_schema));
+            _schema, dht::decorated_key(key), mutation_partition(_schema));
         i = partitions.insert(i, *entry);
+        return entry->partition();
+    } else {
+        upgrade_entry(*i);
     }
     return i->partition();
 }
@@ -170,6 +173,7 @@ public:
         partition_entry& e = *_i;
         ++_i;
         _last = e.key();
+        _memtable->upgrade_entry(e);
         return make_ready_future<mutation_opt>(mutation(_memtable->_schema, e.key(), e.partition()));
     }
 };
@@ -185,6 +189,7 @@ memtable::make_reader(const query::partition_range& range) {
         return _read_section(_region, [&] {
         auto i = partitions.find(pos, partition_entry::compare(_schema));
         if (i != partitions.end()) {
+            upgrade_entry(*i);
             return make_reader_returning(mutation(_schema, i->key(), i->partition()));
         } else {
             return make_empty_reader();
@@ -217,18 +222,18 @@ memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
         _allocating_section(_region, [&, this] {
             mutation_partition& p = find_or_create_partition(m.decorated_key());
-            p.apply(*_schema, m.partition());
+            p.apply(*_schema, m.partition(), *m.schema());
         });
     });
     update(rp);
 }
 
 void
-memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
-    with_allocator(_region.allocator(), [this, &m] {
+memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
+    with_allocator(_region.allocator(), [this, &m, &m_schema] {
         _allocating_section(_region, [&, this] {
             mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
-            p.apply(*_schema, m.partition());
+            p.apply(*_schema, m.partition(), *m_schema);
         });
     });
     update(rp);
@@ -256,6 +261,7 @@ size_t memtable::partition_count() const {
 
 partition_entry::partition_entry(partition_entry&& o) noexcept
     : _link()
+    , _schema(std::move(o._schema))
     , _key(std::move(o._key))
     , _p(std::move(o._p))
 {
@@ -270,4 +276,14 @@ void memtable::mark_flushed(lw_shared_ptr<sstables::sstable> sst) {
 
 bool memtable::is_flushed() const {
     return bool(_sstable);
+}
+
+void memtable::upgrade_entry(partition_entry& e) {
+    if (e._schema != _schema) {
+        assert(!_region.reclaiming_enabled());
+        with_allocator(_region.allocator(), [this, &e] {
+            e._p.upgrade(*e._schema, *_schema);
+            e._schema = _schema;
+        });
+    }
 }

@@ -111,6 +111,7 @@ protected:
     db::consistency_level _cl;
     keyspace& _ks;
     db::write_type _type;
+    schema_ptr _schema;
     lw_shared_ptr<const frozen_mutation> _mutation;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
     size_t _pending_endpoints; // how many endpoints in bootstrap state there is
@@ -133,9 +134,10 @@ protected:
     }
 public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            schema_ptr s,
             lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
-            : _id(p->_next_response_id++), _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
+            : _id(p->_next_response_id++), _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _schema(std::move(s)), _mutation(std::move(mutation)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
     virtual ~abstract_write_response_handler() {
@@ -187,6 +189,9 @@ public:
     lw_shared_ptr<const frozen_mutation> get_mutation() {
         return _mutation;
     }
+    const schema_ptr& get_schema() const {
+        return _schema;
+    }
     storage_proxy::response_id_type id() const {
       return _id;
     }
@@ -222,9 +227,10 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
     }
 public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            schema_ptr s,
             lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints,
             std::vector<gms::inet_address> dead_endpoints) :
-        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(mutation), targets, pending_endpoints, dead_endpoints) {
+        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(s), std::move(mutation), targets, pending_endpoints, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
@@ -300,7 +306,7 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
         return *_response_handlers.find(id)->second.handler;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation,
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(schema_ptr s, keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation,
                              std::unordered_set<gms::inet_address> targets, const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address> dead_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
@@ -311,11 +317,11 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     } else {
-        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
 }
@@ -788,16 +794,16 @@ storage_proxy::response_id_type storage_proxy::unique_response_handler::release(
 future<>
 storage_proxy::mutate_locally(const mutation& m) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [m = freeze(m)] (database& db) -> future<> {
-        return db.apply(m);
+    return _db.invoke_on(shard, [s = global_schema_ptr(m.schema()), m = freeze(m)] (database& db) -> future<> {
+        return db.apply(s, m);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(const frozen_mutation& m) {
+storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [&m] (database& db) -> future<> {
-        return db.apply(m);
+    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s)] (database& db) -> future<> {
+        return db.apply(gs, m);
     });
 }
 
@@ -853,7 +859,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
 
-    return create_write_response_handler(ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints));
+    return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints));
 }
 
 void
@@ -1022,7 +1028,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
         future<> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
             return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, [this] (const mutation& m, db::consistency_level cl, db::write_type type) {
                 auto& ks = _p._db.local().find_keyspace(m.schema()->ks_name());
-                return _p.create_write_response_handler(ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
+                return _p.create_write_response_handler(m.schema(), ks, cl, type, freeze(m), _batchlog_endpoints, {}, {});
             }).then([this, cl] (std::vector<unique_response_handler> ids) {
                 return _p.mutate_begin(std::move(ids), cl);
             });
@@ -1103,14 +1109,16 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
         }
     }
 
-    auto mptr = get_write_response_handler(response_id).get_mutation();
+    auto&& handler = get_write_response_handler(response_id);
+    auto mptr = handler.get_mutation();
+    auto schema = handler.get_schema();
     auto& m = *mptr;
     auto all = boost::range::join(local, dc_groups);
     auto my_address = utils::fb_utilities::get_broadcast_address();
 
     // lambda for applying mutation locally
-    auto lmutate = [&m, mptr = std::move(mptr), response_id, this, my_address] {
-        return mutate_locally(m).then([response_id, this, my_address, mptr = std::move(mptr), p = shared_from_this()] {
+    auto lmutate = [&m, schema = std::move(schema), mptr = std::move(mptr), response_id, this, my_address] {
+        return mutate_locally(schema, m).then([response_id, this, my_address, mptr = std::move(mptr), p = shared_from_this()] {
             // make mutation alive until it is processed locally, otherwise it
             // may disappear if write timeouts before this future is ready
             got_response(response_id, my_address);
@@ -1365,7 +1373,7 @@ future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, st
 
         return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
             auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
-            return create_write_response_handler(ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
+            return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
         }).then([this] (std::vector<unique_response_handler> ids) {
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
         }).then_wrapped([this, lc] (future<> f) {
@@ -1595,7 +1603,7 @@ public:
         // reconcile all versions
         boost::range::transform(boost::make_iterator_range(versions.begin(), versions.end()), std::back_inserter(reconciled_partitions), [this, schema] (std::vector<version>& v) {
             return boost::accumulate(v, mutation(v.front().par.mut().key(*schema), schema), [this, schema] (mutation& m, const version& ver) {
-                m.partition().apply(*schema, ver.par.mut().partition());
+                m.partition().apply(*schema, ver.par.mut().partition(), *schema);
                 return std::move(m);
             });
         });
@@ -2670,8 +2678,10 @@ void storage_proxy::init_messaging_service() {
         do_with(std::move(in), get_local_shared_storage_proxy(), [forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
-                futurize<void>::apply([&p, &m] {
-                    return p->mutate_locally(m);
+                futurize<void>::apply([&p, &m, reply_to, shard] {
+                    warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
+                    schema_ptr s = local_schema_registry().get(m.schema_version());
+                    return p->mutate_locally(std::move(s), m);
                 }).then([reply_to, shard, response_id] {
                     auto& ms = net::get_local_messaging_service();
                     ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {

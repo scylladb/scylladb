@@ -587,9 +587,14 @@ private:
     friend class mutation_partition_applier;
     friend class converting_mutation_partition_applier;
 public:
+    struct copy_comparators_only {};
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
         , _row_tombstones(row_tombstones_entry::compare(*s))
+    { }
+    mutation_partition(mutation_partition& other, copy_comparators_only)
+        : _rows(other._rows.comp())
+        , _row_tombstones(other._row_tombstones.comp())
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
@@ -618,25 +623,26 @@ public:
     //
     // Applies p to current object.
     //
+    // Commutative when this_schema == p_schema. If schemas differ, data in p which
+    // is not representable in this_schema is dropped, thus apply() loses commutativity.
+    //
     // Basic exception guarantees. If apply() throws after being called in
     // some entry state p0, the object is left in some consistent state p1 and
     // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
     //
     // FIXME: make stronger exception guarantees (p1 = p0).
-    //
-    void apply(const schema& schema, const mutation_partition& p);
+    void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
     //
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     //
     // In case of exception the current object and external object (moved-from)
     // are both left in some valid states, such that they still will commute to
     // a state the current object would have should the exception had not occurred.
-    //
-    void apply(const schema& schema, mutation_partition&& p);
-    // Same guarantees as for apply(const schema&, const mutation_partition&).
-    void apply(const schema& schema, mutation_partition_view);
+    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
+    // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
+    void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
 
-    // Converts partiton to the new schema. When succeeds the partition should only be accessed
+    // Converts partition to the new schema. When succeeds the partition should only be accessed
     // using the new schema.
     //
     // Strong exception guarantees.
@@ -690,6 +696,7 @@ public:
 
     // Returns the minimal mutation_partition that when applied to "other" will
     // create a mutation_partition equal to the sum of other and this one.
+    // This and other must both be governed by the same schema s.
     mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
 
     // Returns true if there is no live data or tombstones.

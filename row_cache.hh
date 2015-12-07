@@ -54,6 +54,7 @@ class cache_entry {
     using lru_link_type = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
     using cache_link_type = bi::set_member_hook<bi::link_mode<bi::auto_unlink>>;
 
+    schema_ptr _schema;
     dht::decorated_key _key;
     mutation_partition _p;
     lru_link_type _lru_link;
@@ -63,13 +64,15 @@ public:
     friend class row_cache;
     friend class cache_tracker;
 
-    cache_entry(const dht::decorated_key& key, const mutation_partition& p)
-        : _key(key)
+    cache_entry(schema_ptr s, const dht::decorated_key& key, const mutation_partition& p)
+        : _schema(std::move(s))
+        , _key(key)
         , _p(p)
     { }
 
-    cache_entry(dht::decorated_key&& key, mutation_partition&& p) noexcept
-        : _key(std::move(key))
+    cache_entry(schema_ptr s, dht::decorated_key&& key, mutation_partition&& p) noexcept
+        : _schema(std::move(s))
+        , _key(std::move(key))
         , _p(std::move(p))
     { }
 
@@ -78,6 +81,8 @@ public:
     const dht::decorated_key& key() const { return _key; }
     const mutation_partition& partition() const { return _p; }
     mutation_partition& partition() { return _p; }
+    const schema_ptr& schema() const { return _schema; }
+    schema_ptr& schema() { return _schema; }
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -192,6 +197,7 @@ private:
     mutation_reader make_scanning_reader(const query::partition_range&);
     void on_hit();
     void on_miss();
+    void upgrade_entry(cache_entry&);
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
@@ -231,6 +237,8 @@ public:
     const cache_tracker& get_cache_tracker() const {
         return _tracker;
     }
+
+    const schema_ptr& schema() const;
 
     friend class just_cache_scanning_reader;
     friend class scanning_and_populating_reader;

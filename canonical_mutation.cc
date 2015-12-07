@@ -67,10 +67,16 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
 
     mutation m(std::move(pk), std::move(s));
 
-    assert(version == m.schema()->version()); // FIXME: no multi-schema apply() yet
-    db::serializer<column_mapping>::skip(in);
-    auto partition_view = mutation_partition_serializer::read_as_view(in);
-    m.partition().apply(*m.schema(), partition_view);
+    if (version == m.schema()->version()) {
+        db::serializer<column_mapping>::skip(in);
+        auto partition_view = mutation_partition_serializer::read_as_view(in);
+        m.partition().apply(*m.schema(), partition_view, *m.schema());
+    } else {
+        column_mapping cm = db::serializer<column_mapping>::read(in);
+        converting_mutation_partition_applier v(cm, *m.schema(), m.partition());
+        auto partition_view = mutation_partition_serializer::read_as_view(in);
+        partition_view.accept(cm, v);
+    }
     return m;
 }
 

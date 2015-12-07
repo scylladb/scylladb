@@ -210,7 +210,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             auto& cf = db.find_column_family(fm.column_family_id());
 
             if (logger.is_enabled(logging::log_level::debug)) {
-                logger.debug("replaying at {} {}:{} at {}", fm.column_family_id(),
+                logger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
                         cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
             }
             // Removed forwarding "new" RP. Instead give none/empty.
@@ -218,7 +218,12 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             // The end result should be that once sstables are flushed out
             // their "replay_position" attribute will be empty, which is
             // lower than anything the new session will produce.
-            cf.apply(fm);
+            if (cf.schema()->version() != fm.schema_version()) {
+                // TODO: Convert fm to current schema
+                fail(unimplemented::cause::SCHEMA_CHANGE);
+            } else {
+                cf.apply(fm, cf.schema());
+            }
             s->applied_mutations++;
             return make_ready_future<>();
         }).handle_exception([s](auto ep) {

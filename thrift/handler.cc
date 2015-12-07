@@ -36,6 +36,7 @@
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
+#include "schema_registry.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -314,8 +315,9 @@ public:
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
                     auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
-                    mutation m_to_apply(key_from_thrift(cf.schema(), thrift_key), cf.schema());
-                    auto empty_clustering_key = clustering_key::make_empty(*cf.schema());
+                    auto schema = cf.schema();
+                    mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
+                    auto empty_clustering_key = clustering_key::make_empty(*schema);
                     for (const Mutation& m : mutations) {
                         if (m.__isset.column_or_supercolumn) {
                             auto&& cosc = m.column_or_supercolumn;
@@ -359,8 +361,8 @@ public:
                         }
                     }
                     auto shard = _db.local().shard_of(m_to_apply);
-                    return _db.invoke_on(shard, [this, cf_name, m = freeze(m_to_apply)] (database& db) {
-                        return db.apply(m);
+                    return _db.invoke_on(shard, [this, gs = global_schema_ptr(schema), cf_name, m = freeze(m_to_apply)] (database& db) {
+                        return db.apply(gs, m);
                     });
                 });
             });

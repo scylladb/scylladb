@@ -23,6 +23,7 @@
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
 #include "converting_mutation_partition_applier.hh"
+#include "partition_builder.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -127,14 +128,21 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 }
 
 void
-mutation_partition::apply(const schema& schema, const mutation_partition& p) {
+mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    if (s.version() != p_schema.version()) {
+        auto p2 = p;
+        p2.upgrade(p_schema, s);
+        apply(s, std::move(p2), s);
+        return;
+    }
+
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(schema, e.prefix(), e.t());
+        apply_row_tombstone(s, e.prefix(), e.t());
     }
 
-    _static_row.merge(schema, column_kind::static_column, p._static_row);
+    _static_row.merge(s, column_kind::static_column, p._static_row);
 
     for (auto&& entry : p._rows) {
         auto i = _rows.find(entry);
@@ -144,13 +152,19 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         } else {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
-            i->row().cells().merge(schema, column_kind::regular_column, entry.row().cells());
+            i->row().cells().merge(s, column_kind::regular_column, entry.row().cells());
         }
     }
 }
 
 void
-mutation_partition::apply(const schema& s, mutation_partition&& p) {
+mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
+    if (s.version() != p_schema.version()) {
+        // We can't upgrade p in-place due to exception guarantees
+        apply(s, p, p_schema);
+        return;
+    }
+
     _tombstone.apply(p._tombstone);
 
     p._row_tombstones.clear_and_dispose([this, &s] (row_tombstones_entry* e) {
@@ -177,9 +191,17 @@ mutation_partition::apply(const schema& s, mutation_partition&& p) {
 }
 
 void
-mutation_partition::apply(const schema& schema, mutation_partition_view p) {
-    mutation_partition_applier applier(schema, *this);
-    p.accept(schema, applier);
+mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    if (p_schema.version() == s.version()) {
+        mutation_partition_applier applier(s, *this);
+        p.accept(s, applier);
+    } else {
+        mutation_partition p2(*this, copy_comparators_only{});
+        partition_builder b(p_schema, p2);
+        p.accept(p_schema, b);
+        p2.upgrade(p_schema, s);
+        apply(s, std::move(p2), s);
+    }
 }
 
 tombstone

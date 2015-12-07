@@ -62,6 +62,7 @@
 #include "streaming/stream_exception.hh"
 #include "service/storage_proxy.hh"
 #include "query-request.hh"
+#include "schema_registry.hh"
 
 namespace streaming {
 
@@ -146,7 +147,9 @@ void stream_session::init_messaging_service_handler() {
                 auto session = coordinator->get_or_create_next_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
-                return service::get_storage_proxy().local().mutate_locally(fm);
+                warn(unimplemented::cause::SCHEMA_CHANGE); // FIXME
+                auto s = local_schema_registry().get(fm.schema_version());
+                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
             } else {
                 auto err = sprint("[Stream #%s] GOT STREAM_MUTATION: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());

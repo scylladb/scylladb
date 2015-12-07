@@ -103,10 +103,14 @@ public:
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:
+    // The supplied partition_slice must be governed by this mutation's schema
     query::result query(const query::partition_slice&, gc_clock::time_point now = gc_clock::now(), uint32_t row_limit = query::max_rows) const;
 
     // See mutation_partition::live_row_count()
     size_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
+    void apply(mutation&&);
+    void apply(const mutation&);
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
     friend class mutation_opt;
@@ -190,7 +194,7 @@ void apply(mutation_opt& dst, mutation&& src) {
     if (!dst) {
         dst = std::move(src);
     } else {
-        dst->partition().apply(*src.schema(), src.partition());
+        dst->apply(std::move(src));
     }
 }
 

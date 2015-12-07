@@ -1619,28 +1619,32 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, const db::replay_position& rp) {
+future<> database::apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
     try {
         auto& cf = find_column_family(m.column_family_id());
-        cf.apply(m, rp);
+        cf.apply(m, m_schema, rp);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
     }
     return make_ready_future<>();
 }
 
-future<> database::do_apply(const frozen_mutation& m) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
-    auto& cf = find_column_family(m.column_family_id());
+    auto uuid = m.column_family_id();
+    auto& cf = find_column_family(uuid);
+    if (cf.schema()->version() != s->version()) {
+        // TODO: When conversion is lossy, force schema sync and retry
+        fail(unimplemented::cause::SCHEMA_CHANGE);
+    }
     if (cf.commitlog() != nullptr) {
-        auto uuid = m.column_family_id();
         bytes_view repr = m.representation();
         auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
-        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
+        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this, s](auto rp) {
             try {
-                return this->apply_in_memory(m, rp);
+                return this->apply_in_memory(m, s, rp);
             } catch (replay_position_reordered_exception&) {
                 // expensive, but we're assuming this is super rare.
                 // if we failed to apply the mutation due to future re-ordering
@@ -1648,11 +1652,11 @@ future<> database::do_apply(const frozen_mutation& m) {
                 // let's just try again, add the mutation to the CL once more,
                 // and assume success in inevitable eventually.
                 dblog.debug("replay_position reordering detected");
-                return this->apply(m);
+                return this->apply(s, m);
             }
         });
     }
-    return apply_in_memory(m, db::replay_position());
+    return apply_in_memory(m, s, db::replay_position());
 }
 
 future<> database::throttle() {
@@ -1686,9 +1690,9 @@ void database::unthrottle() {
     }
 }
 
-future<> database::apply(const frozen_mutation& m) {
-    return throttle().then([this, &m] {
-        return do_apply(m);
+future<> database::apply(schema_ptr s, const frozen_mutation& m) {
+    return throttle().then([this, &m, s = std::move(s)] {
+        return do_apply(std::move(s), m);
     });
 }
 

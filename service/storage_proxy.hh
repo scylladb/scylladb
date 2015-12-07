@@ -129,7 +129,7 @@ private:
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
+    response_id_type create_write_response_handler(schema_ptr s, keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
@@ -174,7 +174,7 @@ public:
     }
 
     future<> mutate_locally(const mutation& m);
-    future<> mutate_locally(const frozen_mutation& m);
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
     /**

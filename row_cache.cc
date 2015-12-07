@@ -237,6 +237,7 @@ public:
             auto& ce = *_it;
             ++_it;
             _last = ce.key();
+            _cache.upgrade_entry(ce);
             return make_ready_future<mutation_opt>(mutation(_cache._schema, ce.key(), ce.partition()));
         });
     }
@@ -358,6 +359,7 @@ row_cache::make_reader(const query::partition_range& range) {
                 cache_entry& e = *i;
                 _tracker.touch(e);
                 on_hit();
+                upgrade_entry(e);
                 return make_reader_returning(mutation(_schema, dk, e.partition()));
             } else {
                 on_miss();
@@ -378,7 +380,9 @@ void row_cache::populate(const mutation& m) {
         _populate_section(_tracker.region(), [&] {
         auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
         if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
-            cache_entry* entry = current_allocator().construct<cache_entry>(m.decorated_key(), m.partition());
+            cache_entry* entry = current_allocator().construct<cache_entry>(
+                    m.schema(), m.decorated_key(), m.partition());
+            upgrade_entry(*entry);
             _tracker.insert(*entry);
             _partitions.insert(i, *entry);
         } else {
@@ -417,7 +421,6 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             try {
                 _update_section(_tracker.region(), [&] {
                     auto i = m.partitions.begin();
-                    const schema& s = *m.schema();
                     while (i != m.partitions.end() && quota) {
                         partition_entry& mem_e = *i;
                         // FIXME: Optimize knowing we lookup in-order.
@@ -425,15 +428,17 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                         // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
                         // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
                         //        search it.
-                        if (cache_i != _partitions.end() && cache_i->key().equal(s, mem_e.key())) {
+                        if (cache_i != _partitions.end() && cache_i->key().equal(*_schema, mem_e.key())) {
                             cache_entry& entry = *cache_i;
-                            entry.partition().apply(s, std::move(mem_e.partition()));
+                            upgrade_entry(entry);
+                            entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
                             _tracker.touch(entry);
                             _tracker.on_merge();
                         } else if (presence_checker(mem_e.key().key()) ==
                                    partition_presence_checker_result::definitely_doesnt_exist) {
                             cache_entry* entry = current_allocator().construct<cache_entry>(
-                                std::move(mem_e.key()), std::move(mem_e.partition()));
+                                mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
+                            upgrade_entry(*entry);
                             _tracker.insert(*entry);
                             _partitions.insert(cache_i, *entry);
                         }
@@ -518,7 +523,8 @@ row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source 
 { }
 
 cache_entry::cache_entry(cache_entry&& o) noexcept
-    : _key(std::move(o._key))
+    : _schema(std::move(o._schema))
+    , _key(std::move(o._key))
     , _p(std::move(o._p))
     , _lru_link()
     , _cache_link()
@@ -533,5 +539,20 @@ cache_entry::cache_entry(cache_entry&& o) noexcept
         using container_type = row_cache::partitions_type;
         container_type::node_algorithms::replace_node(o._cache_link.this_ptr(), _cache_link.this_ptr());
         container_type::node_algorithms::init(o._cache_link.this_ptr());
+    }
+}
+
+const schema_ptr& row_cache::schema() const {
+    return _schema;
+}
+
+void row_cache::upgrade_entry(cache_entry& e) {
+    if (e._schema != _schema) {
+        auto& r = _tracker.region();
+        assert(!r.reclaiming_enabled());
+        with_allocator(r.allocator(), [this, &e] {
+            e._p.upgrade(*e._schema, *_schema);
+            e._schema = _schema;
+        });
     }
 }
