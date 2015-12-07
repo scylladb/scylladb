@@ -24,7 +24,6 @@ else
     echo Creating RAID0 for scylla using $NR disk\(s\): $DISKS
 
     if [ $NR -ge 1 ]; then
-        cp -a /var/lib/scylla/conf /tmp/scylla-conf
         mdadm --create --verbose --force --run /dev/md0 --level=0 -c256 --raid-devices=$NR $DISKS
         blockdev --setra 65536 /dev/md0
         mkfs.xfs /dev/md0 -f
@@ -40,7 +39,6 @@ else
     mkdir -p /var/lib/scylla/commitlog
     chown scylla:scylla /var/lib/scylla/*
     chown scylla:scylla /var/lib/scylla/
-    cp -a /tmp/scylla-conf /var/lib/scylla/conf
 
     CPU_NR=`cat /proc/cpuinfo |grep processor|wc -l`
     if [ $CPU_NR -ge 8 ]; then
