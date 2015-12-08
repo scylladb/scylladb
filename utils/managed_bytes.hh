@@ -33,11 +33,15 @@ struct blob_storage {
 
     blob_storage** backref;
     size_type size;
+    size_type frag_size;
+    blob_storage* next;
     char_type data[];
 
-    blob_storage(blob_storage** backref, size_type size) noexcept
+    blob_storage(blob_storage** backref, size_type size, size_type frag_size) noexcept
         : backref(backref)
         , size(size)
+        , frag_size(frag_size)
+        , next(nullptr)
     {
         *backref = this;
     }
@@ -45,8 +49,14 @@ struct blob_storage {
     blob_storage(blob_storage&& o) noexcept
         : backref(o.backref)
         , size(o.size)
+        , frag_size(o.frag_size)
+        , next(o.next)
     {
         *backref = this;
+        o.next = nullptr;
+        if (next) {
+            next->backref = &next;
+        }
         memcpy(data, o.data, size);
     }
 } __attribute__((packed));
@@ -67,6 +77,17 @@ private:
     bool external() const {
         return _u.small.size < 0;
     }
+    size_t max_seg(allocation_strategy& alctr) {
+        return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
+    }
+    void free_chain(blob_storage* p) {
+        auto& alctr = current_allocator();
+        while (p) {
+            auto n = p->next;
+            alctr.destroy(p);
+            p = n;
+        }
+    }
 public:
     using size_type = blob_storage::size_type;
     struct initialized_later {};
@@ -85,25 +106,89 @@ public:
             _u.small.size = size;
         } else {
             _u.small.size = -1;
-            void* p = current_allocator().alloc(&standard_migrator<blob_storage>::object,
-                sizeof(blob_storage) + size, alignof(blob_storage));
-            new (p) blob_storage(&_u.ptr, size);
+            auto& alctr = current_allocator();
+            auto maxseg = max_seg(alctr);
+            auto now = std::min(size_t(size), maxseg);
+            void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
+                sizeof(blob_storage) + now, alignof(blob_storage));
+            auto first = new (p) blob_storage(&_u.ptr, size, now);
+            auto last = first;
+            size -= now;
+            try {
+                while (size) {
+                    auto now = std::min(size_t(size), maxseg);
+                    void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
+                        sizeof(blob_storage) + now, alignof(blob_storage));
+                    last = new (p) blob_storage(&last->next, 0, now);
+                    size -= now;
+                }
+            } catch (...) {
+                free_chain(first);
+                throw;
+            }
         }
     }
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
-        memcpy(data(), v.data(), v.size());
+        auto p = v.data();
+        auto s = v.size();
+        if (!external()) {
+            memcpy(_u.small.data, p, s);
+            return;
+        }
+        auto b = _u.ptr;
+        while (s) {
+            memcpy(b->data, p, b->frag_size);
+            p += b->frag_size;
+            s -= b->frag_size;
+            b = b->next;
+        }
+        assert(!b);
     }
 
     managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
 
     ~managed_bytes() {
         if (external()) {
-            current_allocator().destroy(_u.ptr);
+            free_chain(_u.ptr);
         }
     }
 
-    managed_bytes(const managed_bytes& o) : managed_bytes(static_cast<bytes_view>(o)) {}
+    managed_bytes(const managed_bytes& o) : managed_bytes(initialized_later(), o.size()) {
+        if (!external()) {
+            memcpy(data(), o.data(), size());
+            return;
+        }
+        auto s = size();
+        blob_storage* const* next_src = &o._u.ptr;
+        blob_storage* blob_src = nullptr;
+        size_type size_src = 0;
+        size_type offs_src = 0;
+        blob_storage** next_dst = &_u.ptr;
+        blob_storage* blob_dst = nullptr;
+        size_type size_dst = 0;
+        size_type offs_dst = 0;
+        while (s) {
+            if (!size_src) {
+                blob_src = *next_src;
+                next_src = &blob_src->next;
+                size_src = blob_src->frag_size;
+                offs_src = 0;
+            }
+            if (!size_dst) {
+                blob_dst = *next_dst;
+                next_dst = &blob_dst->next;
+                size_dst = blob_dst->frag_size;
+                offs_dst = 0;
+            }
+            auto now = std::min(size_src, size_dst);
+            memcpy(blob_dst->data + offs_dst, blob_src->data + offs_src, now);
+            s -= now;
+            offs_src += now; size_src -= now;
+            offs_dst += now; size_dst -= now;
+        }
+        assert(size_src == 0 && size_dst == 0);
+    }
 
     managed_bytes(managed_bytes&& o) noexcept
         : _u(o._u)
@@ -183,6 +268,7 @@ public:
 
     blob_storage::char_type* data() {
         if (external()) {
+            assert(!_u.ptr->next);  // must be linearized
             return _u.ptr->data;
         } else {
             return _u.small.data;
@@ -191,6 +277,37 @@ public:
 
     const blob_storage::char_type* data() const {
         return const_cast<managed_bytes*>(this)->data();
+    }
+
+    void linearize() {
+        if (!external() || !_u.ptr->next) {
+            return;
+        }
+        auto& alctr = current_allocator();
+        auto size = _u.ptr->size;
+        void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
+            sizeof(blob_storage) + size, alignof(blob_storage));
+        auto old = _u.ptr;
+        auto blob = new (p) blob_storage(&_u.ptr, size, size);
+        auto pos = size_type(0);
+        while (old) {
+            memcpy(blob->data + pos, old->data, old->frag_size);
+            pos += old->frag_size;
+            auto next = old->next;
+            alctr.destroy(old);
+            old = next;
+        }
+        assert(pos == size);
+    }
+
+    void scatter() {
+        if (!external()) {
+            return;
+        }
+        if (_u.ptr->size <= max_seg(current_allocator())) {
+            return;
+        }
+        *this = managed_bytes(*this);
     }
 };
 

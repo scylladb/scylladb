@@ -75,6 +75,8 @@ standard_migrator<T> standard_migrator<T>::object;
 // across deferring points.
 //
 class allocation_strategy {
+protected:
+    size_t _preferred_max_contiguous_allocation = std::numeric_limits<size_t>::max();
 public:
     using migrate_fn = const migrate_fn_type*;
 
@@ -115,6 +117,10 @@ public:
     void destroy(T* obj) {
         obj->~T();
         free(obj);
+    }
+
+    size_t preferred_max_contiguous_allocation() const {
+        return _preferred_max_contiguous_allocation;
     }
 };
 

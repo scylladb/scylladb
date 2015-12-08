@@ -607,6 +607,8 @@ void
 merge_column(const column_definition& def,
              atomic_cell_or_collection& old,
              atomic_cell_or_collection&& neww) {
+    old.linearize();
+    neww.linearize();
     if (def.is_atomic()) {
         if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
             old = std::move(neww);
@@ -615,6 +617,7 @@ merge_column(const column_definition& def,
         auto ct = static_pointer_cast<const collection_type_impl>(def.type);
         old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
     }
+    old.unlinearize();
 }
 
 void

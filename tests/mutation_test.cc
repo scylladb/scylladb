@@ -796,3 +796,54 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE_EQUAL(m12, m123);
     });
 }
+
+SEASTAR_TEST_CASE(test_large_blobs) {
+    return seastar::async([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        auto make_blob = [] (size_t blob_size) -> bytes {
+            bytes big_blob(bytes::initialized_later(), blob_size);
+            std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
+            for (auto&& b : big_blob) {
+                b = random_bytes();
+            }
+            return big_blob;
+        };
+
+        auto blob1 = make_blob(1234567);
+        auto blob2 = make_blob(2345678);
+
+
+        const column_definition& s1_col = *s->get_column_definition("s1");
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+
+        mutation m(key, s);
+        m.set_static_cell(s1_col, make_atomic_cell(bytes_type->decompose(data_value(blob1))));
+        mt->apply(std::move(m));
+
+        auto p = get_partition(*mt, key);
+        row& r = p.static_row();
+        auto i = r.find_cell(s1_col.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_atomic_cell();
+        BOOST_REQUIRE(cell.is_live());
+        BOOST_REQUIRE(bytes_type->equal(cell.value(), bytes_type->decompose(data_value(blob1))));
+
+        // Stress managed_bytes::linearize and scatter by merging a value into the cell
+        mutation m2(key, s);
+        m2.set_static_cell(s1_col, atomic_cell::make_live(7, bytes_type->decompose(data_value(blob2))));
+        mt->apply(std::move(m2));
+
+        auto p2 = get_partition(*mt, key);
+        row& r2 = p2.static_row();
+        auto i2 = r2.find_cell(s1_col.id);
+        BOOST_REQUIRE(i2);
+        auto cell2 = i2->as_atomic_cell();
+        BOOST_REQUIRE(cell2.is_live());
+        BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
+    });
+
+}
