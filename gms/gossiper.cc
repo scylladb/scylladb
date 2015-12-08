@@ -1571,5 +1571,24 @@ void gossiper::force_newer_generation() {
     }
 }
 
+sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
+    auto app_state = ep_state.get_application_state(application_state::STATUS);
+    if (!app_state) {
+        return "";
+    }
+    auto value = app_state->value;
+    std::vector<sstring> pieces;
+    boost::split(pieces, value, boost::is_any_of(","));
+    assert(pieces.size() > 0);
+    return pieces[0];
+}
+
+sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
+    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return "";
+    }
+    return get_gossip_status(*ep_state);
+}
 
 } // namespace gms
