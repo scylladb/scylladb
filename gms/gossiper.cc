@@ -1142,14 +1142,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
-    if (!eps.get_application_state(application_state::STATUS)) {
-        return false;
-    }
-    auto value = eps.get_application_state(application_state::STATUS)->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
+    sstring state = get_gossip_status(eps);
     for (auto& deadstate : DEAD_STATES) {
         if (state == deadstate) {
             return true;
@@ -1159,38 +1152,11 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
 }
 
 bool gossiper::is_shutdown(const inet_address& endpoint) const {
-    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
-    if (!ep_state) {
-        return false;
-    }
-
-    auto app_state = ep_state->get_application_state(application_state::STATUS);
-    if (!app_state) {
-        return false;
-    }
-
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
-
-    return state == sstring(versioned_value::SHUTDOWN);
+    return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
 }
 
-
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
-    auto app_state = ep_state.get_application_state(application_state::STATUS);
-    if (!app_state) {
-        return false;
-    }
-
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
-
+    sstring state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
