@@ -1129,7 +1129,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     if (!is_dead_state(ep_state)) {
         mark_alive(ep, ep_state);
     } else {
-        logger.debug("Not marking {} alive due to dead state", ep);
+        logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
         mark_dead(ep, ep_state);
     }
     _subscribers.for_each([ep, ep_state] (auto& subscriber) {
