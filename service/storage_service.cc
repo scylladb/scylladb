@@ -697,7 +697,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
 
 void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) {
     logger.debug("endpoint={} on_join", endpoint);
-    for (auto e : ep_state.get_application_state_map()) {
+    for (const auto& e : ep_state.get_application_state_map()) {
         on_change(endpoint, e.first, e.second);
     }
     get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
@@ -722,11 +722,11 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
     }
 }
 
-void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) {
+void storage_service::before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) {
     logger.debug("endpoint={} before_change: new app_state={}, new versioned_value={}", endpoint, new_state_key, new_value);
 }
 
-void storage_service::on_change(inet_address endpoint, application_state state, versioned_value value) {
+void storage_service::on_change(inet_address endpoint, application_state state, const versioned_value& value) {
     logger.debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;

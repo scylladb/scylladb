@@ -649,7 +649,7 @@ public:
 
 public:
     virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override;
+    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -682,7 +682,7 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override;
+    virtual void on_change(inet_address endpoint, application_state state, const versioned_value& value) override;
     virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_remove(gms::inet_address endpoint) override;

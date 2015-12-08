@@ -65,7 +65,7 @@ public:
         _gossiper.unregister_(shared_from_this());
     }
 
-    void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) {
+    void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
         if (state == gms::application_state::LOAD) {
             _load_info[endpoint] = std::stod(value.value);
         }
@@ -78,7 +78,7 @@ public:
         }
     }
     
-    void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value newValue) {}
+    void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& newValue) {}
 
     void on_alive(gms::inet_address endpoint, gms::endpoint_state) override {}
 
