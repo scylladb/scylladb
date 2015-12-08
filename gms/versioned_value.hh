@@ -96,11 +96,6 @@ public:
                value   == other.value;
     }
 
-    versioned_value()
-        : version(version_generator::get_next_version())
-        , value("") {
-    }
-
 private:
     versioned_value(const sstring& value, int version = version_generator::get_next_version())
         : version(version), value(value) {
