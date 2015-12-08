@@ -507,6 +507,10 @@ public:
 
     future<> mutate_sstable_level(uint32_t);
 
+    const summary& get_summary() const {
+        return _summary;
+    }
+
     // Return sstable key range as range<partition_key> reading only the summary component.
     static future<range<partition_key>>
     get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f);
