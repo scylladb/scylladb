@@ -72,6 +72,11 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
     const ::schema* _schema = nullptr;
 
+    enum class sync_state { NOT_SYNCED, SYNCING, SYNCED };
+    sync_state _sync_state;
+    promise<> _synced_promise; // valid when _sync_state == SYNCING
+    shared_future<> _synced_future; // valid when _sync_state == SYNCING
+
     friend class schema_registry;
 public:
     schema_registry_entry(table_schema_version v, schema_registry& r);
@@ -81,6 +86,12 @@ public:
     schema_ptr load(frozen_schema);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
+    // Can be called from other shards
+    bool is_synced() const;
+    // Initiates asynchronous schema sync or returns ready future when is already synced.
+    future<> maybe_sync(std::function<future<>()> sync);
+    // Marks this schema version as synced. Syncing cannot be in progress.
+    void mark_synced();
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards

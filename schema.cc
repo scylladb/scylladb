@@ -824,3 +824,7 @@ schema::position(const column_definition& column) const {
     }
     return clustering_key_size();
 }
+
+bool schema::is_synced() const {
+    return _registry_entry && _registry_entry->is_synced();
+}

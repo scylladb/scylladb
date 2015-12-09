@@ -47,6 +47,7 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
     : _state(state::INITIAL)
     , _version(v)
     , _registry(r)
+    , _sync_state(sync_state::NOT_SYNCED)
 { }
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
@@ -196,6 +197,51 @@ frozen_schema schema_registry_entry::frozen() const {
     return *_frozen_schema;
 }
 
+future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
+    switch (_sync_state) {
+        case schema_registry_entry::sync_state::SYNCED:
+            return make_ready_future<>();
+        case schema_registry_entry::sync_state::SYNCING:
+            return _synced_future;
+        case schema_registry_entry::sync_state::NOT_SYNCED:
+            logger.debug("Syncing {}", _version);
+            _synced_promise = {};
+            do_with(std::move(syncer), [] (auto& syncer) {
+                return syncer();
+            }).then_wrapped([this, self = shared_from_this()] (auto&& f) {
+                if (_sync_state != sync_state::SYNCING) {
+                    return;
+                }
+                if (f.failed()) {
+                    logger.debug("Syncing of {} failed", _version);
+                    _sync_state = schema_registry_entry::sync_state::NOT_SYNCED;
+                    _synced_promise.set_exception(f.get_exception());
+                } else {
+                    logger.debug("Synced {}", _version);
+                    _sync_state = schema_registry_entry::sync_state::SYNCED;
+                    _synced_promise.set_value();
+                }
+            });
+            _synced_future = _synced_promise.get_future();
+            _sync_state = schema_registry_entry::sync_state::SYNCING;
+            return _synced_future;
+        default:
+            assert(0);
+    }
+}
+
+bool schema_registry_entry::is_synced() const {
+    return _sync_state == sync_state::SYNCED;
+}
+
+void schema_registry_entry::mark_synced() {
+    if (_sync_state == sync_state::SYNCING) {
+        _synced_promise.set_value();
+    }
+    _sync_state = sync_state::SYNCED;
+    logger.debug("Marked {} as synced", _version);
+}
+
 schema_registry& local_schema_registry() {
     return registry;
 }
@@ -220,9 +266,15 @@ schema_ptr global_schema_ptr::get() const {
         // 'e' points to a foreign entry, but we know it won't be evicted
         // because _ptr is preventing this.
         const schema_registry_entry& e = *_ptr->registry_entry();
-        schema_ptr s = local_schema_registry().get_or_load(e.version(), [&e] (table_schema_version) {
-            return e.frozen();
-        });
+        schema_ptr s = local_schema_registry().get_or_null(e.version());
+        if (!s) {
+            s = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
+                return e.frozen();
+            });
+            if (e.is_synced()) {
+                s->registry_entry()->mark_synced();
+            }
+        }
         return s;
     }
 }

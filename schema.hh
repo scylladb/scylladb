@@ -570,6 +570,11 @@ public:
     friend class schema_registry_entry;
     // May be called from different shard
     schema_registry_entry* registry_entry() const noexcept;
+    // Returns true iff this schema version was synced with on current node.
+    // Schema version is said to be synced with when its mutations were merged
+    // into current node's schema, so that current node's schema is at least as
+    // recent as this version.
+    bool is_synced() const;
 };
 
 bool operator==(const schema&, const schema&);
