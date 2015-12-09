@@ -357,8 +357,6 @@ int main(int ac, char** av) {
                 }).then([api_address, api_port] {
                     print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
                 });
-            }).then([] {
-                startlog.warn("Polling mode enabled. ScyllaDB will use 100% of all your CPUs.\nSee https://github.com/scylladb/scylla/issues/417 for a more detailed explanation");
             });
         }).or_terminate();
     });
