@@ -10,6 +10,9 @@ BRIDGE=virbr0
 # ethernet device name
 IFNAME=eth0
 
+# setup NIC's interrupts, RPS, XPS (posix)
+SET_NIC=no
+
 # ethernet device driver (dpdk)
 ETHDRV=
 
