@@ -93,7 +93,7 @@ public:
     reconnectable_snitch_helper(sstring local_dc)
             : _local_dc(local_dc) {}
 
-    void before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, gms::versioned_value new_value) override {
+    void before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) override {
         // do nothing.
     }
 
@@ -105,7 +105,7 @@ public:
         }
     }
 
-    void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) override {
+    void on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) override {
         if (state == gms::application_state::INTERNAL_IP) {
             reconnect(endpoint, value);
         }

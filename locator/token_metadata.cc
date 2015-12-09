@@ -81,6 +81,9 @@ void token_metadata::update_normal_token(token t, inet_address endpoint)
 }
 
 void token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    if (tokens.empty()) {
+        return;
+    }
     std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, tokens}});
     update_normal_tokens(endpoint_tokens);
 }
@@ -122,7 +125,7 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
             auto prev = _token_to_endpoint_map.insert(std::pair<token, inet_address>(t, endpoint));
             should_sort_tokens |= prev.second; // new token inserted -> sort
             if (prev.first->second != endpoint) {
-                // logger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
+                logger.warn("Token {} changing ownership from {} to {}", t, prev.first->second, endpoint);
                 prev.first->second = endpoint;
             }
         }
@@ -514,6 +517,21 @@ std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token
     }
     return endpoints;
 }
+
+std::map<token, inet_address> token_metadata::get_normal_and_bootstrapping_token_to_endpoint_map() {
+    std::map<token, inet_address> ret(_token_to_endpoint_map.begin(), _token_to_endpoint_map.end());
+    ret.insert(_bootstrap_tokens.begin(), _bootstrap_tokens.end());
+    return ret;
+}
+
+std::multimap<inet_address, token> token_metadata::get_endpoint_to_token_map_for_reading() {
+    std::multimap<inet_address, token> cloned;
+    for (const auto& x : _token_to_endpoint_map) {
+        cloned.emplace(x.second, x.first);
+    }
+    return cloned;
+}
+
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {

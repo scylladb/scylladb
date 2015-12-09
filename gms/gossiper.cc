@@ -666,6 +666,10 @@ void gossiper::convict(inet_address endpoint, double phi) {
     auto& state = it->second;
     // FIXME: Add getGossipStatus
     // logger.debug("Convicting {} with status {} - alive {}", endpoint, getGossipStatus(epState), state.is_alive());
+    if (!state.is_alive()) {
+        return;
+    }
+
     logger.trace("convict ep={}, phi={}, is_alive={}, is_dead_state={}", endpoint, phi, state.is_alive(), is_dead_state(state));
     if (is_shutdown(endpoint)) {
         mark_as_shutdown(endpoint);
@@ -1125,7 +1129,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     if (!is_dead_state(ep_state)) {
         mark_alive(ep, ep_state);
     } else {
-        logger.debug("Not marking {} alive due to dead state", ep);
+        logger.debug("Not marking {} alive due to dead state {}", ep, get_gossip_status(eps));
         mark_dead(ep, ep_state);
     }
     _subscribers.for_each([ep, ep_state] (auto& subscriber) {
@@ -1138,14 +1142,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
 }
 
 bool gossiper::is_dead_state(const endpoint_state& eps) const {
-    if (!eps.get_application_state(application_state::STATUS)) {
-        return false;
-    }
-    auto value = eps.get_application_state(application_state::STATUS)->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
+    sstring state = get_gossip_status(eps);
     for (auto& deadstate : DEAD_STATES) {
         if (state == deadstate) {
             return true;
@@ -1155,38 +1152,11 @@ bool gossiper::is_dead_state(const endpoint_state& eps) const {
 }
 
 bool gossiper::is_shutdown(const inet_address& endpoint) const {
-    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
-    if (!ep_state) {
-        return false;
-    }
-
-    auto app_state = ep_state->get_application_state(application_state::STATUS);
-    if (!app_state) {
-        return false;
-    }
-
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
-
-    return state == sstring(versioned_value::SHUTDOWN);
+    return get_gossip_status(endpoint) == sstring(versioned_value::SHUTDOWN);
 }
 
-
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
-    auto app_state = ep_state.get_application_state(application_state::STATUS);
-    if (!app_state) {
-        return false;
-    }
-
-    auto value = app_state->value;
-    std::vector<sstring> pieces;
-    boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
-    sstring state = pieces[0];
-
+    sstring state = get_gossip_status(ep_state);
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
@@ -1567,5 +1537,24 @@ void gossiper::force_newer_generation() {
     }
 }
 
+sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
+    auto app_state = ep_state.get_application_state(application_state::STATUS);
+    if (!app_state) {
+        return "";
+    }
+    auto value = app_state->value;
+    std::vector<sstring> pieces;
+    boost::split(pieces, value, boost::is_any_of(","));
+    assert(pieces.size() > 0);
+    return pieces[0];
+}
+
+sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
+    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return "";
+    }
+    return get_gossip_status(*ep_state);
+}
 
 } // namespace gms

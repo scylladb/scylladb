@@ -89,7 +89,7 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_token_endpoint.set(r, [] (const_req req) {
-        auto token_to_ep = service::get_local_storage_service().get_token_metadata().get_token_to_endpoint();
+        auto token_to_ep = service::get_local_storage_service().get_token_to_endpoint_map();
         std::vector<storage_service_json::mapper> res;
         return map_to_key_value(token_to_ep, res);
     });

@@ -365,7 +365,7 @@ public:
 #endif
 private:
     bool should_bootstrap();
-    future<> prepare_to_join();
+    void prepare_to_join();
     void join_token_ring(int delay);
 public:
     future<> join_ring();
@@ -609,20 +609,14 @@ public:
         return ranges;
     }
 
+    /**
+     * Retrieve a map of tokens to endpoints, including the bootstrapping ones.
+     *
+     * @return a map of tokens to endpoints in ascending order
+     */
+    std::map<token, inet_address> get_token_to_endpoint_map();
+
 #if 0
-    public Map<String, String> getTokenToEndpointMap()
-    {
-        Map<Token, InetAddress> mapInetAddress = _token_metadata.getNormalAndBootstrappingTokenToEndpointMap();
-        // in order to preserve tokens in ascending order, we use LinkedHashMap here
-        Map<String, String> mapString = new LinkedHashMap<>(mapInetAddress.size());
-        List<Token> tokens = new ArrayList<>(mapInetAddress.keySet());
-        Collections.sort(tokens);
-        for (Token token : tokens)
-        {
-            mapString.put(token.toString(), mapInetAddress.get(token).getHostAddress());
-        }
-        return mapString;
-    }
 
     public String getLocalHostId()
     {
@@ -655,7 +649,7 @@ public:
 
 public:
     virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
-    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override;
+    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, const gms::versioned_value& new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -688,7 +682,7 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override;
+    virtual void on_change(inet_address endpoint, application_state state, const versioned_value& value) override;
     virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_remove(gms::inet_address endpoint) override;

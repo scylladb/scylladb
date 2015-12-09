@@ -464,7 +464,8 @@ static future<> build_bootstrap_info() {
         static auto state_map = std::unordered_map<sstring, bootstrap_state>({
             { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
             { "COMPLETED", bootstrap_state::COMPLETED },
-            { "IN_PROGRESS", bootstrap_state::IN_PROGRESS }
+            { "IN_PROGRESS", bootstrap_state::IN_PROGRESS },
+            { "DECOMMISSIONED", bootstrap_state::DECOMMISSIONED }
         });
         bootstrap_state state = bootstrap_state::NEEDS_BOOTSTRAP;
 
@@ -796,6 +797,8 @@ future<> remove_endpoint(gms::inet_address ep) {
     }).then([ep] {
         sstring req = "DELETE FROM system.%s WHERE peer = ?";
         return execute_cql(req, PEERS, ep.addr()).discard_result();
+    }).then([] {
+        return force_blocking_flush(PEERS);
     });
 }
 
@@ -874,6 +877,10 @@ bool bootstrap_in_progress() {
     return get_bootstrap_state() == bootstrap_state::IN_PROGRESS;
 }
 
+bool was_decommissioned() {
+    return get_bootstrap_state() == bootstrap_state::DECOMMISSIONED;
+}
+
 bootstrap_state get_bootstrap_state() {
     return _local_cache.local()._state;
 }
@@ -882,7 +889,8 @@ future<> set_bootstrap_state(bootstrap_state state) {
     static std::unordered_map<bootstrap_state, sstring, enum_hash<bootstrap_state>> state_to_name({
         { bootstrap_state::NEEDS_BOOTSTRAP, "NEEDS_BOOTSTRAP" },
         { bootstrap_state::COMPLETED, "COMPLETED" },
-        { bootstrap_state::IN_PROGRESS, "IN_PROGRESS" }
+        { bootstrap_state::IN_PROGRESS, "IN_PROGRESS" },
+        { bootstrap_state::DECOMMISSIONED, "DECOMMISSIONED" }
     });
 
     sstring state_name = state_to_name.at(state);
