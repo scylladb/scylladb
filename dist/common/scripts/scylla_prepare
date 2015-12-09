@@ -15,7 +15,7 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
     done
 else # NETWORK_MODE = posix
     if [ "$SET_NIC" = "yes" ]; then
-        sudo sh /usr/lib/scylla/posix_net_conf.sh >/dev/null 2>&1 || true
+        sudo sh /usr/lib/scylla/posix_net_conf.sh $IFNAME >/dev/null 2>&1 || true
     fi
 fi
 . /etc/os-release
