@@ -81,6 +81,9 @@ void token_metadata::update_normal_token(token t, inet_address endpoint)
 }
 
 void token_metadata::update_normal_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    if (tokens.empty()) {
+        return;
+    }
     std::unordered_map<inet_address, std::unordered_set<token>> endpoint_tokens ({{endpoint, tokens}});
     update_normal_tokens(endpoint_tokens);
 }
