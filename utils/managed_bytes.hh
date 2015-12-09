@@ -57,7 +57,7 @@ struct blob_storage {
         if (next) {
             next->backref = &next;
         }
-        memcpy(data, o.data, size);
+        memcpy(data, o.data, frag_size);
     }
 } __attribute__((packed));
 
