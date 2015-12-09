@@ -425,6 +425,7 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
         auto replace_addr = db().local().get_replace_address();
         if (replace_addr) {
+            logger.debug("Removing replaced endpoint {} from system.peers", *replace_addr);
             db::system_keyspace::remove_endpoint(*replace_addr).get();
         }
     }
