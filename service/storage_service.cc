@@ -532,16 +532,20 @@ void storage_service::handle_state_normal(inet_address endpoint) {
             logger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, *current_owner, t);
             tokens_to_update_in_metadata.insert(t);
             tokens_to_update_in_system_keyspace.insert(t);
-#if 0
-
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
             // a host no longer has any tokens, we'll want to remove it.
-            Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
-            epToTokenCopy.get(currentOwner).remove(token);
-            if (epToTokenCopy.get(currentOwner).size() < 1)
-                endpointsToRemove.add(currentOwner);
-
-#endif
+            std::multimap<inet_address, token> ep_to_token_copy = get_token_metadata().get_endpoint_to_token_map_for_reading();
+            auto rg = ep_to_token_copy.equal_range(*current_owner);
+            for (auto it = rg.first; it != rg.second; it++) {
+                if (it->second == t) {
+                    logger.info("handle_state_normal: remove endpoint={} token={}", *current_owner, t);
+                    ep_to_token_copy.erase(it);
+                }
+            }
+            if (ep_to_token_copy.count(*current_owner) < 1) {
+                logger.info("handle_state_normal: endpoints_to_remove endpoint={}", *current_owner);
+                endpoints_to_remove.insert(*current_owner);
+            }
             logger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", endpoint, *current_owner, t, endpoint);
         } else {
             logger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", endpoint, *current_owner, t, endpoint);
