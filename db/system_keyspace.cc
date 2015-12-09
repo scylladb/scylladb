@@ -797,6 +797,8 @@ future<> remove_endpoint(gms::inet_address ep) {
     }).then([ep] {
         sstring req = "DELETE FROM system.%s WHERE peer = ?";
         return execute_cql(req, PEERS, ep.addr()).discard_result();
+    }).then([] {
+        return force_blocking_flush(PEERS);
     });
 }
 
