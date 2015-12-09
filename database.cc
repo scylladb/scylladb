@@ -1187,6 +1187,7 @@ void database::drop_keyspace(const sstring& name) {
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     schema = local_schema_registry().learn(schema);
+    schema->registry_entry()->mark_synced();
     auto uuid = schema->id();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
@@ -1214,7 +1215,9 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
 
 future<> database::update_column_family(schema_ptr new_schema) {
     column_family& old_cfm = find_column_family(new_schema->id());
-    old_cfm.set_schema(local_schema_registry().learn(new_schema));
+    auto s = local_schema_registry().learn(new_schema);
+    s->registry_entry()->mark_synced();
+    old_cfm.set_schema(std::move(s));
     return make_ready_future<>();
 }
 
