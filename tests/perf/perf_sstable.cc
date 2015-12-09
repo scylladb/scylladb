@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
         ("num_columns", bpo::value<unsigned>()->default_value(5), "number of columns per row")
         ("column_size", bpo::value<unsigned>()->default_value(64), "size in bytes for each column")
         ("mode", bpo::value<sstring>()->default_value("index_write"), "one of: random_read, sequential_read, index_read, write, index_write (default)")
-        ("testdir", bpo::value<sstring>()->default_value("/var/lib/cassandra/perf-tests"), "directory in which to store the sstables");
+        ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables");
 
     return app.run_deprecated(argc, argv, [&app] {
         auto test = make_lw_shared<distributed<test_env>>();
