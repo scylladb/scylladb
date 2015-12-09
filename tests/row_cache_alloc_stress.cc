@@ -221,6 +221,8 @@ int main(int argc, char** argv) {
 
                 cache.populate(m);
 
+                logalloc::shard_tracker().reclaim_all_free_segments();
+
                 {
                     logalloc::reclaim_lock _(tracker.region());
                     try {
@@ -234,7 +236,9 @@ int main(int argc, char** argv) {
 
                 try {
                     auto reader = cache.make_reader(range);
-                    reader().get0();
+                    assert(!reader().get0());
+                    auto evicted_from_cache = logalloc::segment_size + cell_size * row_count;
+                    new char[evicted_from_cache + logalloc::segment_size];
                     assert(false); // The test is not invoking the case which it's supposed to test
                 } catch (const std::bad_alloc&) {
                     // expected

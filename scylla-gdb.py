@@ -155,7 +155,7 @@ class scylla_lsa(gdb.Command):
 
         er_goal = int(lsa['_current_emergency_reserve_goal'])
         er_max = int(lsa['_emergency_reserve_max'])
-        er_current = int(lsa['_emergency_reserve']['_size'])
+        er_current = int(lsa['_emergency_reserve']['_stack']['data_']['root_plus_size_']['size_'])
         gdb.write('Emergency reserve goal: {er_goal:>11}\nEmergency reserve max: {er_max:>12}\n'
             'Emergency reserve current: {er_current:>8}\n\n'
             .format(er_goal=er_goal, er_max=er_max, er_current=er_current))
@@ -175,6 +175,29 @@ class scylla_lsa(gdb.Command):
                     r_unused=int(region['_closed_occupancy']['_free_space'])))
             region = region + 1
 
+def lsa_zone_tree(node):
+    if node:
+        zone = node.cast(gdb.lookup_type('logalloc::segment_zone').pointer())
+
+        for x in lsa_zone_tree(node['left_']):
+            yield x
+
+        yield zone
+
+        for x in lsa_zone_tree(node['right_']):
+            yield x
+
+class scylla_lsa_zones(gdb.Command):
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla lsa_zones', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
+    def invoke(self, arg, from_tty):
+        gdb.write('LSA zones:\n')
+        all_zones = gdb.parse_and_eval('logalloc::shard_segment_pool._all_zones')
+        for zone in lsa_zone_tree(all_zones['holder']['root']['parent_']):
+            gdb.write('    Zone:\n      - base: {z_base:08X}\n      - size: {z_size:>12}\n'
+                '      - used: {z_used:>12}\n'
+                .format(z_base=int(zone['_base']), z_size=int(zone['_segments']['_bits_count']),
+                    z_used=int(zone['_used_segment_count'])));
 
 scylla()
 scylla_databases()
@@ -182,3 +205,4 @@ scylla_keyspaces()
 scylla_column_families()
 scylla_memory()
 scylla_lsa()
+scylla_lsa_zones()

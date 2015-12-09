@@ -59,6 +59,8 @@ SEASTAR_TEST_CASE(test_compaction) {
             // Allocation should not invalidate references
             BOOST_REQUIRE_EQUAL(reg.reclaim_counter(), reclaim_counter_1);
 
+            shard_tracker().reclaim_all_free_segments();
+
             // Free 1/3 randomly
 
             std::random_shuffle(_allocated.begin(), _allocated.end());
@@ -107,6 +109,8 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
         });
 
         size_t quarter = shard_tracker().occupancy().total_space() / 4;
+
+        shard_tracker().reclaim_all_free_segments();
 
         // Can't reclaim anything yet
         BOOST_REQUIRE(shard_tracker().reclaim(quarter) == 0);
@@ -347,6 +351,63 @@ SEASTAR_TEST_CASE(test_region_lock) {
 
             BOOST_REQUIRE(reg.reclaiming_enabled());
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_large_allocation) {
+    return seastar::async([] {
+        logalloc::region r_evictable;
+        logalloc::region r_non_evictable;
+
+        static constexpr unsigned element_size = 16 * 1024;
+
+        std::deque<managed_bytes> evictable;
+        std::deque<managed_bytes> non_evictable;
+        try {
+            while (true) {
+                with_allocator(r_evictable.allocator(), [&] {
+                    evictable.push_back(bytes(bytes::initialized_later(),element_size));
+                });
+                with_allocator(r_non_evictable.allocator(), [&] {
+                    non_evictable.push_back(bytes(bytes::initialized_later(),element_size));
+                });
+            }
+        } catch (const std::bad_alloc&) {
+            // expected
+        }
+
+        std::random_shuffle(evictable.begin(), evictable.end());
+        r_evictable.make_evictable([&] {
+            return with_allocator(r_evictable.allocator(), [&] {
+                if (evictable.empty()) {
+                    return memory::reclaiming_result::reclaimed_nothing;
+                }
+                evictable.pop_front();
+                return memory::reclaiming_result::reclaimed_something;
+            });
+        });
+
+        auto clear_all = [&] {
+            with_allocator(r_non_evictable.allocator(), [&] {
+                non_evictable.clear();
+            });
+            with_allocator(r_evictable.allocator(), [&] {
+                evictable.clear();
+            });
+        };
+
+        try {
+            new char[evictable.size() * element_size];
+        } catch (const std::bad_alloc&) {
+            // This shouldn't have happened, but clear remaining lsa data
+            // properly so that humans see bad_alloc instead of some confusing
+            // assertion failure caused by destroying evictable and
+            // non_evictable without with_allocator().
+            clear_all();
+            throw;
+        }
+
+        clear_all();
     });
 }
 #endif

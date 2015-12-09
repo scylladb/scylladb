@@ -113,8 +113,12 @@ public:
     // Invalidates references to objects in all compactible and evictable regions.
     void full_compaction();
 
+    void reclaim_all_free_segments();
+
     // Returns aggregate statistics for all pools.
     occupancy_stats occupancy();
+
+    impl& get_impl() { return *_impl; }
 };
 
 tracker& shard_tracker();

@@ -183,6 +183,7 @@ scylla_tests = [
     'tests/managed_vector_test',
     'tests/crc_test',
     'tests/flush_queue_test',
+    'tests/dynamic_bitset_test',
 ]
 
 apps = [
@@ -339,6 +340,7 @@ scylla_core = (['database.cc',
                  'utils/rate_limiter.cc',
                  'utils/compaction_manager.cc',
                  'utils/file_lock.cc',
+                 'utils/dynamic_bitset.cc',
                  'gms/version_generator.cc',
                  'gms/versioned_value.cc',
                  'gms/gossiper.cc',
@@ -482,6 +484,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/crc_test',
     'tests/perf/perf_sstable',
     'tests/managed_vector_test',
+    'tests/dynamic_bitset_test',
 ])
 
 for t in tests_not_using_seastar_test_framework:
@@ -498,7 +501,7 @@ deps['tests/sstable_test'] += ['tests/sstable_datafile_test.cc']
 deps['tests/bytes_ostream_test'] = ['tests/bytes_ostream_test.cc']
 deps['tests/UUID_test'] = ['utils/UUID_gen.cc', 'tests/UUID_test.cc']
 deps['tests/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'tests/murmur_hash_test.cc']
-deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'log.cc']
+deps['tests/allocation_strategy_test'] = ['tests/allocation_strategy_test.cc', 'utils/logalloc.cc', 'log.cc', 'utils/dynamic_bitset.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
