@@ -32,7 +32,7 @@
 template <typename Func>
 static
 void time_it(Func func, int iterations = 5, int iterations_between_clock_readings = 1000) {
-    using clk = std::chrono::high_resolution_clock;
+    using clk = std::chrono::steady_clock;
 
     for (int i = 0; i < iterations; i++) {
         auto start = clk::now();
@@ -116,7 +116,7 @@ public:
 template <typename Func>
 static
 future<> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5) {
-    using clk = std::chrono::high_resolution_clock;
+    using clk = std::chrono::steady_clock;
     return do_n_times(iterations, [func, concurrency_per_core] {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);

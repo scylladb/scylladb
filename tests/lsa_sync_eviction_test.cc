@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
                 std::cout << "Allocated " << refs.size() << " evictable objects" << std::endl;
                 print_region_stats();
 
-                using clk = std::chrono::high_resolution_clock;
+                using clk = std::chrono::steady_clock;
                 auto start = clk::now();
 
                 // Allocate native memory, should evict
