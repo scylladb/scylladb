@@ -49,7 +49,7 @@ static logging::logger logger("lsa");
 static logging::logger timing_logger("lsa-timing");
 static thread_local tracker tracker_instance;
 
-using clock = std::chrono::high_resolution_clock;
+using clock = std::chrono::steady_clock;
 
 class tracker::impl {
     std::vector<region::impl*> _regions;
