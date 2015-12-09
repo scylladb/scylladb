@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "schema_registry.hh"
 #include "service/migration_manager.hh"
 
 #include "service/migration_listener.hh"
@@ -155,6 +156,32 @@ future<> migration_manager::maybe_schedule_schema_pull(const utils::UUID& their_
 future<> migration_manager::submit_migration_task(const gms::inet_address& endpoint)
 {
     return service::migration_task::run_may_throw(get_storage_proxy(), endpoint);
+}
+
+future<> migration_manager::merge_schema_from(net::messaging_service::msg_addr id)
+{
+    auto& ms = net::get_local_messaging_service();
+    return ms.send_migration_request(std::move(id)).then([this, id] (std::vector<frozen_mutation> mutations) {
+        return do_with(std::move(mutations), [this, id] (auto&& mutations) {
+            return this->merge_schema_from(id, mutations);
+        });
+    });
+}
+
+future<> migration_manager::merge_schema_from(net::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations)
+{
+    logger.info("Applying schema mutations from {}", src);
+    return map_reduce(mutations, [src](const frozen_mutation& fm) {
+        // schema table's schema is not syncable so just use get_schema_definition()
+        return get_schema_definition(fm.schema_version(), src).then([&fm](schema_ptr s) {
+            return fm.unfreeze(std::move(s));
+        });
+    }, std::vector<mutation>(), [](std::vector<mutation>&& all, mutation&& m) {
+        all.emplace_back(std::move(m));
+        return std::move(all);
+    }).then([](std::vector<mutation> schema) {
+        return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
+    });
 }
 
 bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoint)

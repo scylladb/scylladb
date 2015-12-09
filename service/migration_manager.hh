@@ -71,6 +71,14 @@ public:
 
     future<> submit_migration_task(const gms::inet_address& endpoint);
 
+    // Fetches schema from remote node and applies it locally.
+    // Differs from submit_migration_task() in that all errors are propagated.
+    future<> merge_schema_from(net::messaging_service::msg_addr);
+
+    // Merge mutations received from src.
+    // Keep mutations alive around whole async operation.
+    future<> merge_schema_from(net::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations);
+
     static future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
 
     static future<> notify_create_column_family(schema_ptr cfm);
