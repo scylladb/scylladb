@@ -877,25 +877,11 @@ public:
     {
         return ImmutableList.copyOf(Iterables.concat(naturalEndpoints, pendingEndpointsFor(token, keyspaceName)));
     }
-
-    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
-    public Multimap<InetAddress, Token> getEndpointToTokenMapForReading()
-    {
-        lock.readLock().lock();
-        try
-        {
-            Multimap<InetAddress, Token> cloned = HashMultimap.create();
-            for (Map.Entry<Token, InetAddress> entry : tokenToEndpointMap.entrySet())
-                cloned.put(entry.getValue(), entry.getKey());
-            return cloned;
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
 #endif
+
 public:
+    /** @return an endpoint to token multimap representation of tokenToEndpointMap (a copy) */
+    std::multimap<inet_address, token> get_endpoint_to_token_map_for_reading();
     /**
      * @return a (stable copy, won't be modified) Token to Endpoint map for all the normal and bootstrapping nodes
      *         in the cluster.

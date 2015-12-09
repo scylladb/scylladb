@@ -524,6 +524,14 @@ std::map<token, inet_address> token_metadata::get_normal_and_bootstrapping_token
     return ret;
 }
 
+std::multimap<inet_address, token> token_metadata::get_endpoint_to_token_map_for_reading() {
+    std::multimap<inet_address, token> cloned;
+    for (const auto& x : _token_to_endpoint_map) {
+        cloned.emplace(x.second, x.first);
+    }
+    return cloned;
+}
+
 
 /////////////////// class topology /////////////////////////////////////////////
 inline void topology::clear() {
