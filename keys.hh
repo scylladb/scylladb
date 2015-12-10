@@ -460,6 +460,25 @@ public:
             t->begin(prefix), t->end(prefix),
             equal);
     }
+
+    // In prefix equality two sequences are equal if any of them is a prefix
+    // of the other. Otherwise lexicographical ordering is applied.
+    // Note: full compounds sorted according to lexicographical ordering are also
+    // sorted according to prefix equality ordering.
+    struct prefix_equality_less_compare {
+        typename TopLevel::compound prefix_type;
+
+        prefix_equality_less_compare(const schema& s)
+            : prefix_type(TopLevel::get_compound_type(s))
+        { }
+
+        bool operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare) < 0;
+        }
+    };
 };
 
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
