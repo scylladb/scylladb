@@ -332,6 +332,7 @@ future<> stream_session::on_initialization_complete() {
         sslog.debug("[Stream #{}] SEND PREPARE_DONE_MESSAGE to {}", plan_id, id);
         return ms().send_prepare_done_message(id, plan_id, from, this->connecting, this->dst_cpu_id).handle_exception([id, plan_id] (auto ep) {
             sslog.error("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
+            std::rethrow_exception(ep);
         });
     });
 }
