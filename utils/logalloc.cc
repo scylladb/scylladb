@@ -390,6 +390,7 @@ public:
 };
 
 thread_local size_t segment_zone::next_attempt_size = segment_zone::initial_size;
+constexpr size_t segment_zone::minimum_size;
 
 segment_zone::segment_zone()
 {
