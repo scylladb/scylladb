@@ -26,6 +26,7 @@
 #include <memory>
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
+#include <seastar/core/unaligned.hh>
 
 struct blob_storage {
     using size_type = uint32_t;
@@ -43,7 +44,7 @@ struct blob_storage {
         , frag_size(frag_size)
         , next(nullptr)
     {
-        *backref = this;
+        *unaligned_cast<blob_storage**>(backref) = this;
     }
 
     blob_storage(blob_storage&& o) noexcept
@@ -52,7 +53,7 @@ struct blob_storage {
         , frag_size(o.frag_size)
         , next(o.next)
     {
-        *backref = this;
+        *unaligned_cast<blob_storage**>(backref) = this;
         o.next = nullptr;
         if (next) {
             next->backref = &next;
@@ -170,13 +171,13 @@ public:
         size_type offs_dst = 0;
         while (s) {
             if (!size_src) {
-                blob_src = *next_src;
+                blob_src = *unaligned_cast<blob_storage**>(next_src);
                 next_src = &blob_src->next;
                 size_src = blob_src->frag_size;
                 offs_src = 0;
             }
             if (!size_dst) {
-                blob_dst = *next_dst;
+                blob_dst = *unaligned_cast<blob_storage**>(next_dst);
                 next_dst = &blob_dst->next;
                 size_dst = blob_dst->frag_size;
                 offs_dst = 0;
