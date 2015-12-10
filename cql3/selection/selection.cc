@@ -384,7 +384,11 @@ void result_set_builder::visitor::accept_new_row(
             _builder.add(_partition_key[def->component_index()]);
             break;
         case column_kind::clustering_key:
-            _builder.add(_clustering_key[def->component_index()]);
+            if (_clustering_key.size() > def->component_index()) {
+                _builder.add(_clustering_key[def->component_index()]);
+            } else {
+                _builder.add({});
+            }
             break;
         case column_kind::regular_column:
             add_value(*def, row_iterator);
