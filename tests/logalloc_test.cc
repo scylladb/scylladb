@@ -397,7 +397,7 @@ SEASTAR_TEST_CASE(test_large_allocation) {
         };
 
         try {
-            new char[evictable.size() * element_size];
+            new char[evictable.size() * element_size / 4 * 3];
         } catch (const std::bad_alloc&) {
             // This shouldn't have happened, but clear remaining lsa data
             // properly so that humans see bad_alloc instead of some confusing
