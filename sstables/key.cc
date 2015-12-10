@@ -156,7 +156,6 @@ composite composite::from_clustering_element(const schema& s, const ClusteringEl
     return from_components(ce.begin(s), ce.end(s), sstable_serializer());
 }
 
-template composite composite::from_clustering_element(const schema& s, const clustering_key& ck);
 template composite composite::from_clustering_element(const schema& s, const clustering_key_prefix& ck);
 
 composite composite::from_exploded(const std::vector<bytes_view>& v, composite_marker m) {

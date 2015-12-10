@@ -181,10 +181,12 @@ mutation_partition::range_tombstone_for_row(const schema& schema, const clusteri
     }
 
     auto c = row_tombstones_entry::key_comparator(
-        clustering_key::prefix_view_type::less_compare_with_prefix(schema));
+        clustering_key_prefix::prefix_view_type::less_compare_with_prefix(schema));
 
     // _row_tombstones contains only strict prefixes
-    for (unsigned prefix_len = 1; prefix_len < schema.clustering_key_size(); ++prefix_len) {
+    unsigned key_length = std::distance(key.begin(schema), key.end(schema));
+    assert(key_length <= schema.clustering_key_size());
+    for (unsigned prefix_len = 1; prefix_len <= key_length; ++prefix_len) {
         auto i = _row_tombstones.find(key.prefix_view(schema, prefix_len), c);
         if (i != _row_tombstones.end()) {
             t.apply(i->t());
@@ -316,7 +318,7 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
-    auto cmp = rows_entry::key_comparator(clustering_key::prefix_equality_less_compare(schema));
+    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
     auto i1 = r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
             : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();

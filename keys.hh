@@ -51,10 +51,10 @@
 
 class partition_key;
 class partition_key_view;
-class clustering_key;
-class clustering_key_view;
 class clustering_key_prefix;
 class clustering_key_prefix_view;
+using clustering_key = clustering_key_prefix;
+using clustering_key_view = clustering_key_prefix_view;
 
 // Abstracts a view to serialized compound.
 template <typename TopLevelView>
@@ -576,49 +576,6 @@ public:
         return _v.size() == s.clustering_key_size();
     }
     friend std::ostream& operator<<(std::ostream& os, const exploded_clustering_prefix& ecp);
-};
-
-class clustering_key_view : public compound_view_wrapper<clustering_key_view> {
-public:
-    clustering_key_view(bytes_view v)
-        : compound_view_wrapper<clustering_key_view>(v)
-    { }
-public:
-    static clustering_key_view from_bytes(bytes_view v) {
-        return { v };
-    }
-};
-
-class clustering_key : public prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix> {
-    clustering_key(bytes&& b)
-        : prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix>(std::move(b))
-    { }
-public:
-    clustering_key(const clustering_key_view& v)
-        : clustering_key(bytes(v.representation().begin(), v.representation().end()))
-    { }
-
-    using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
-
-    static clustering_key from_bytes(bytes b) {
-        return clustering_key(std::move(b));
-    }
-
-    static const compound& get_compound_type(const schema& s) {
-        return s.clustering_key_type();
-    }
-
-    static clustering_key from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
-        if (prefix.is_full(s)) {
-            return from_exploded(s, prefix.components());
-        }
-        assert(s.is_dense());
-        auto components = prefix.components();
-        components.resize(s.clustering_key_size());
-        return from_exploded(s, std::move(components));
-    }
-
-    friend std::ostream& operator<<(std::ostream& out, const clustering_key& ck);
 };
 
 class clustering_key_prefix_view : public prefix_compound_view_wrapper<clustering_key_prefix_view, clustering_key> {
