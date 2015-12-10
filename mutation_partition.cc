@@ -272,15 +272,6 @@ void mutation_partition::insert_row(const schema& s, const clustering_key& key, 
     _rows.insert(_rows.end(), *e);
 }
 
-const rows_entry*
-mutation_partition::find_entry(const schema& schema, const clustering_key_prefix& key) const {
-    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(schema)));
-    if (i == _rows.end()) {
-        return nullptr;
-    }
-    return &*i;
-}
-
 const row*
 mutation_partition::find_row(const clustering_key& key) const {
     auto i = _rows.find(key);

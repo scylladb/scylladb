@@ -656,7 +656,6 @@ public:
     const rows_type& clustered_rows() const { return _rows; }
     const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     const row* find_row(const clustering_key& key) const;
-    const rows_entry* find_entry(const schema& schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
