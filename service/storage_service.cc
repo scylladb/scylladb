@@ -1104,7 +1104,7 @@ future<> storage_service::check_for_endpoint_collision() {
                     boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
                     assert(pieces.size() > 0);
                     auto state = pieces[0];
-                    logger.debug("Checking node={}, status={} (check_for_endpoint_collision)", x.first, state);
+                    logger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||
                         state == sstring(versioned_value::STATUS_MOVING)) {
@@ -1115,7 +1115,7 @@ future<> storage_service::check_for_endpoint_collision() {
                             gossiper.reset_endpoint_state_map();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-                            logger.info("Checking node={}, status={}, sleep 1 second and check again ({} seconds elpased) (check_for_endpoint_collision)", x.first, state, elapsed);
+                            logger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elpased) (check_for_endpoint_collision)", x.first, state, elapsed);
                             sleep(std::chrono::seconds(1)).get();
                             break;
                         }
