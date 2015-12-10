@@ -51,10 +51,10 @@
 
 class partition_key;
 class partition_key_view;
-class clustering_key;
-class clustering_key_view;
 class clustering_key_prefix;
 class clustering_key_prefix_view;
+using clustering_key = clustering_key_prefix;
+using clustering_key_view = clustering_key_prefix_view;
 
 // Abstracts a view to serialized compound.
 template <typename TopLevelView>
@@ -301,6 +301,53 @@ public:
     };
 };
 
+template <typename TopLevel>
+class prefix_view_on_prefix_compound {
+public:
+    using iterator = typename compound_type<allow_prefixes::yes>::iterator;
+private:
+    bytes_view _b;
+    unsigned _prefix_len;
+    iterator _begin;
+    iterator _end;
+public:
+    prefix_view_on_prefix_compound(const schema& s, bytes_view b, unsigned prefix_len)
+        : _b(b)
+        , _prefix_len(prefix_len)
+        , _begin(TopLevel::get_compound_type(s)->begin(_b))
+        , _end(_begin)
+    {
+        std::advance(_end, prefix_len);
+    }
+
+    iterator begin() const { return _begin; }
+    iterator end() const { return _end; }
+
+    struct less_compare_with_prefix {
+        typename TopLevel::compound prefix_type;
+
+        less_compare_with_prefix(const schema& s)
+            : prefix_type(TopLevel::get_compound_type(s))
+        { }
+
+        bool operator()(const prefix_view_on_prefix_compound& k1, const TopLevel& k2) const {
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
+                k1.begin(), k1.end(),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare) < 0;
+        }
+
+        bool operator()(const TopLevel& k1, const prefix_view_on_prefix_compound& k2) const {
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                k2.begin(), k2.end(),
+                tri_compare) < 0;
+        }
+    };
+};
+
 template <typename TopLevel, typename TopLevelView, typename PrefixTopLevel>
 class prefixable_full_compound : public compound_wrapper<TopLevel, TopLevelView> {
     using base = compound_wrapper<TopLevel, TopLevelView>;
@@ -391,6 +438,12 @@ class prefix_compound_wrapper : public compound_wrapper<TopLevel, TopLevelView> 
 protected:
     prefix_compound_wrapper(bytes&& b) : base(std::move(b)) {}
 public:
+    using prefix_view_type = prefix_view_on_prefix_compound<TopLevel>;
+
+    prefix_view_type prefix_view(const schema& s, unsigned prefix_len) const {
+        return { s, this->representation(), prefix_len };
+    }
+
     bool is_full(const schema& s) const {
         return TopLevel::get_compound_type(s)->is_full(base::_bytes);
     }
@@ -407,6 +460,25 @@ public:
             t->begin(prefix), t->end(prefix),
             equal);
     }
+
+    // In prefix equality two sequences are equal if any of them is a prefix
+    // of the other. Otherwise lexicographical ordering is applied.
+    // Note: full compounds sorted according to lexicographical ordering are also
+    // sorted according to prefix equality ordering.
+    struct prefix_equality_less_compare {
+        typename TopLevel::compound prefix_type;
+
+        prefix_equality_less_compare(const schema& s)
+            : prefix_type(TopLevel::get_compound_type(s))
+        { }
+
+        bool operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare) < 0;
+        }
+    };
 };
 
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
@@ -504,49 +576,6 @@ public:
         return _v.size() == s.clustering_key_size();
     }
     friend std::ostream& operator<<(std::ostream& os, const exploded_clustering_prefix& ecp);
-};
-
-class clustering_key_view : public compound_view_wrapper<clustering_key_view> {
-public:
-    clustering_key_view(bytes_view v)
-        : compound_view_wrapper<clustering_key_view>(v)
-    { }
-public:
-    static clustering_key_view from_bytes(bytes_view v) {
-        return { v };
-    }
-};
-
-class clustering_key : public prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix> {
-    clustering_key(bytes&& b)
-        : prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix>(std::move(b))
-    { }
-public:
-    clustering_key(const clustering_key_view& v)
-        : clustering_key(bytes(v.representation().begin(), v.representation().end()))
-    { }
-
-    using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
-
-    static clustering_key from_bytes(bytes b) {
-        return clustering_key(std::move(b));
-    }
-
-    static const compound& get_compound_type(const schema& s) {
-        return s.clustering_key_type();
-    }
-
-    static clustering_key from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
-        if (prefix.is_full(s)) {
-            return from_exploded(s, prefix.components());
-        }
-        assert(s.is_dense());
-        auto components = prefix.components();
-        components.resize(s.clustering_key_size());
-        return from_exploded(s, std::move(components));
-    }
-
-    friend std::ostream& operator<<(std::ostream& out, const clustering_key& ck);
 };
 
 class clustering_key_prefix_view : public prefix_compound_view_wrapper<clustering_key_prefix_view, clustering_key> {

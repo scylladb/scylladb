@@ -23,10 +23,9 @@
 #include "bytes.hh"
 #include "schema.hh"
 #include "core/future.hh"
+#include "database_fwd.hh"
 
-class partition_key;
 class partition_key_view;
-class clustering_key;
 
 namespace sstables {
 
