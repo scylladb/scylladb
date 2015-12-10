@@ -1096,7 +1096,7 @@ void sstable::write_clustered_row(file_writer& out, const schema& schema, const 
             }
         } else {
             if (schema.is_dense()) {
-                write_column_name(out, bytes_view(clustered_row.key()));
+                write_column_name(out, bytes_view(clustered_row.key().get_component(schema, 0)));
             } else {
                 write_column_name(out, bytes_view(column_name));
             }
