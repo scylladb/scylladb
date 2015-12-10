@@ -21,6 +21,8 @@
 
 #include "query-result-set.hh"
 #include "query-result-reader.hh"
+#include "partition_slice_builder.hh"
+#include "mutation.hh"
 
 namespace query {
 
@@ -195,5 +197,12 @@ result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const re
         return make(w.linearize());
     }
 }
+
+result_set::result_set(const mutation& m) : result_set([&m] {
+    auto slice = partition_slice_builder(*m.schema()).build();
+    auto qr = m.query(slice);
+    return result_set::from_raw_result(m.schema(), slice, qr);
+}())
+{ }
 
 }

@@ -172,17 +172,10 @@ public:
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
-        return _db->invoke_on_all([schema_maker, id, this] (database& db) {
-            schema_builder builder(make_lw_shared(schema_maker(ks_name)));
-            builder.set_uuid(id);
-            auto cf_schema = builder.build(schema_builder::compact_storage::no);
-            auto& ks = db.find_keyspace(ks_name);
-            auto cfg = ks.make_column_family_config(*cf_schema);
-            db.add_column_family(cf_schema, std::move(cfg));
-            return do_with(std::move(cf_schema), [&ks, id] (schema_ptr& cf_schema) {
-                return ks.make_directory_for_column_family(cf_schema->cf_name(), id);
-            });
-        });
+        schema_builder builder(make_lw_shared(schema_maker(ks_name)));
+        builder.set_uuid(id);
+        auto s = builder.build(schema_builder::compact_storage::no);
+        return service::get_local_migration_manager().announce_new_column_family(s, true);
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {
