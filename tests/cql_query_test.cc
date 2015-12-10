@@ -1869,12 +1869,15 @@ SEASTAR_TEST_CASE(test_compact_storage) {
         }).then([&e] {
             return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, 5, 7);").discard_result();
         }).then([&e] {
+            return e.execute_cql("insert into tcs3 (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8);").discard_result();
+        }).then([&e] {
             return e.execute_cql("select * from tcs3 where p1 = 1;");
         }).then([&e] (auto msg) {
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(2), {}, int32_type->decompose(5) },
                 { int32_type->decompose(1), int32_type->decompose(2), int32_type->decompose(3), int32_type->decompose(4) },
                 { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
                 { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
             });
             return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 2;").discard_result();
@@ -1883,9 +1886,18 @@ SEASTAR_TEST_CASE(test_compact_storage) {
         }).then([&e] (auto msg) {
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
                 { int32_type->decompose(1), int32_type->decompose(3), int32_type->decompose(5), int32_type->decompose(7) },
             });
             return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = 5;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from tcs3 where p1 = 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
+                { int32_type->decompose(1), int32_type->decompose(3), bytes(), int32_type->decompose(8) },
+            });
+            return e.execute_cql("delete from tcs3 where p1 = 1 and c1 = 3 and c2 = blobasint(0x);").discard_result();
         }).then([&e] {
             return e.execute_cql("select * from tcs3 where p1 = 1;");
         }).then([&e] (auto msg) {
