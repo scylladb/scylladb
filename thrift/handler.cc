@@ -606,7 +606,8 @@ private:
         }
         return sstring("org.apache.cassandra.db.marshal.") + it->second;
     }
-    static sstring class_from_compound_type(const compound_type<allow_prefixes::no>& ct) {
+    template<allow_prefixes IsPrefixable>
+    static sstring class_from_compound_type(const compound_type<IsPrefixable>& ct) {
         if (ct.is_singular()) {
             return class_from_data_type(ct.types().front());
         }

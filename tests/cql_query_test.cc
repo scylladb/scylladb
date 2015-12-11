@@ -1967,3 +1967,34 @@ SEASTAR_TEST_CASE(test_collections_of_collections) {
     });
 }
 
+
+SEASTAR_TEST_CASE(test_result_order) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table tro (p1 int, c1 text, r1 int, PRIMARY KEY (p1, c1)) with compact storage;").discard_result().then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'z', 1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'bbbb', 2);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'a', 3);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'aaa', 4);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'bb', 5);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tro (p1, c1, r1) values (1, 'cccc', 6);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from tro where p1 = 1;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(1), utf8_type->decompose(sstring("a")), int32_type->decompose(3) },
+                { int32_type->decompose(1), utf8_type->decompose(sstring("aaa")), int32_type->decompose(4) },
+                { int32_type->decompose(1), utf8_type->decompose(sstring("bb")), int32_type->decompose(5) },
+                { int32_type->decompose(1), utf8_type->decompose(sstring("bbbb")), int32_type->decompose(2) },
+                { int32_type->decompose(1), utf8_type->decompose(sstring("cccc")), int32_type->decompose(6) },
+                { int32_type->decompose(1), utf8_type->decompose(sstring("z")), int32_type->decompose(1) },
+            });
+        });
+    });
+}
+
+
