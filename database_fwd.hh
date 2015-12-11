@@ -32,6 +32,9 @@ class mutation_partition;
 class schema;
 class column_definition;
 
+// schema_mutations.hh
+class schema_mutations;
+
 // keys.hh
 class exploded_clustering_prefix;
 class partition_key;
