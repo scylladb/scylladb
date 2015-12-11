@@ -23,7 +23,7 @@
 
 #include "atomic_cell.hh"
 #include "schema.hh"
-
+#include "hashing.hh"
 
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determined by the schema.
@@ -54,6 +54,14 @@ public:
     }
     bool operator==(const atomic_cell_or_collection& other) const {
         return _data == other._data;
+    }
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const column_definition& def) const {
+        if (def.is_atomic()) {
+            ::feed_hash(h, as_atomic_cell());
+        } else {
+            ::feed_hash(as_collection_mutation(), h, def.type);
+        }
     }
     void linearize() {
         _data.linearize();

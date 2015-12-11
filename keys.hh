@@ -26,6 +26,7 @@
 #include "types.hh"
 #include "compound_compat.hh"
 #include "utils/managed_bytes.hh"
+#include "hashing.hh"
 
 //
 // This header defines type system for primary key holders.
@@ -121,6 +122,18 @@ public:
         auto it = begin(s);
         std::advance(it, idx);
         return *it;
+    }
+
+    // Returns a range of bytes_view
+    auto components(const schema& s) const {
+        return boost::make_iterator_range(begin(s), end(s));
+    }
+
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        for (bytes_view v : components(s)) {
+            ::feed_hash(h, v);
+        }
     }
 };
 
@@ -251,6 +264,11 @@ public:
         auto it = begin(s);
         std::advance(it, idx);
         return *it;
+    }
+
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        view().feed_hash(h, s);
     }
 };
 

@@ -27,6 +27,7 @@
 #include "keys.hh"
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
+#include "hashing.hh"
 
 class mutation final {
 private:
@@ -144,6 +145,19 @@ public:
     }
     bool operator!=(const mutation_opt& other) const {
         return !(*this == other);
+    }
+};
+
+// Consistent with operator==()
+// Consistent across the cluster, so should not rely on particular
+// serialization format, only on actual data stored.
+template<>
+struct appending_hash<mutation> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const mutation& m) const {
+        const schema& s = *m.schema();
+        m.key().feed_hash(h, s);
+        m.partition().feed_hash(h, s);
     }
 };
 

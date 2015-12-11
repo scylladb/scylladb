@@ -29,12 +29,14 @@
 #include <boost/range/adaptor/filtered.hpp>
 
 #include "schema.hh"
+#include "tombstone.hh"
 #include "keys.hh"
 #include "atomic_cell_or_collection.hh"
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
 #include "mutation_partition_visitor.hh"
 #include "utils/managed_vector.hh"
+#include "hashing_partition_visitor.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -245,11 +247,13 @@ public:
     row difference(const schema&, column_kind, const row& other) const;
 
     // Assumes the other row has the same schema
+    // Consistent with feed_hash()
     bool operator==(const row&) const;
 
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
+
 };
 
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
@@ -339,6 +343,7 @@ public:
         }
         return !is_missing() && _ttl != dead;
     }
+    // Consistent with feed_hash()
     bool operator==(const row_marker& other) const {
         if (_timestamp != other._timestamp) {
             return false;
@@ -354,7 +359,26 @@ public:
     bool operator!=(const row_marker& other) const {
         return !(*this == other);
     }
+    // Consistent with operator==()
+    template<typename Hasher>
+    void feed_hash(Hasher& h) const {
+        ::feed_hash(h, _timestamp);
+        if (!is_missing()) {
+            ::feed_hash(h, _ttl);
+            if (_ttl != no_ttl) {
+                ::feed_hash(h, _expiry);
+            }
+        }
+    }
     friend std::ostream& operator<<(std::ostream& os, const row_marker& rm);
+};
+
+template<>
+struct appending_hash<row_marker> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const row_marker& m) const {
+        m.feed_hash(h);
+    }
 };
 
 class deletable_row final {
@@ -574,6 +598,12 @@ public:
     mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema&, const mutation_partition&) const;
     bool equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const;
+    // Consistent with equal()
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        hashing_partition_visitor<Hasher> v(h, s);
+        accept(s, v);
+    }
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
