@@ -296,8 +296,7 @@ private:
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
     std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
-    lw_shared_ptr<compound_type<allow_prefixes::no>> _clustering_key_type;
-    lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_prefix_type;
+    lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
 
     friend class schema_builder;
 public:
@@ -467,11 +466,11 @@ public:
     const lw_shared_ptr<compound_type<allow_prefixes::no>>& partition_key_type() const {
         return _partition_key_type;
     }
-    const lw_shared_ptr<compound_type<allow_prefixes::no>>& clustering_key_type() const {
+    const lw_shared_ptr<compound_type<allow_prefixes::yes>>& clustering_key_type() const {
         return _clustering_key_type;
     }
     const lw_shared_ptr<compound_type<allow_prefixes::yes>>& clustering_key_prefix_type() const {
-        return _clustering_key_prefix_type;
+        return _clustering_key_type;
     }
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;

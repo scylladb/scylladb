@@ -70,8 +70,7 @@ schema::make_column_specification(const column_definition& def) {
 
 void schema::rebuild() {
     _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(partition_key_columns()));
-    _clustering_key_type = make_lw_shared<compound_type<>>(get_column_types(clustering_key_columns()));
-    _clustering_key_prefix_type = make_lw_shared(_clustering_key_type->as_prefix());
+    _clustering_key_type = make_lw_shared<compound_prefix>(get_column_types(clustering_key_columns()));
 
     _columns_by_name.clear();
     _regular_columns_by_name.clear();
