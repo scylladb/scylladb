@@ -1442,8 +1442,21 @@ map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell
     return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
 }
 
+sstring make_map_type_name(data_type keys, data_type values, bool is_multi_cell)
+{
+    sstring ret = "";
+    if (!is_multi_cell) {
+        ret = "org.apache.cassandra.db.marshal.FrozenType(";
+    }
+    ret += "org.apache.cassandra.db.marshal.MapType(" + keys->name() + "," + values->name() + ")";
+    if (!is_multi_cell) {
+        ret += ")";
+    }
+    return ret;
+}
+
 map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
-        : concrete_type("org.apache.cassandra.db.marshal.MapType(" + keys->name() + "," + values->name() + ")", kind::map)
+        : concrete_type(make_map_type_name(keys, values, is_multi_cell), kind::map)
         , _keys(std::move(keys))
         , _values(std::move(values))
         , _is_multi_cell(is_multi_cell) {
@@ -1915,8 +1928,21 @@ set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
 }
 
+sstring make_set_type_name(data_type elements, bool is_multi_cell)
+{
+    sstring ret = "";
+    if (!is_multi_cell) {
+        ret = "org.apache.cassandra.db.marshal.FrozenType(";
+    }
+    ret += "org.apache.cassandra.db.marshal.SetType(" + elements->name() + ")";
+    if (!is_multi_cell) {
+        ret += ")";
+    }
+    return ret;
+}
+
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type("org.apache.cassandra.db.marshal.SetType(" + elements->name() + ")", kind::set)
+        : concrete_type(make_set_type_name(elements, is_multi_cell), kind::set)
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
@@ -2072,8 +2098,21 @@ list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
 }
 
+sstring make_list_type_name(data_type elements, bool is_multi_cell)
+{
+    sstring ret = "";
+    if (!is_multi_cell) {
+        ret = "org.apache.cassandra.db.marshal.FrozenType(";
+    }
+    ret += "org.apache.cassandra.db.marshal.ListType(" + elements->name() + ")";
+    if (!is_multi_cell) {
+        ret += ")";
+    }
+    return ret;
+}
+
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-        : concrete_type("org.apache.cassandra.db.marshal.ListType(" + elements->name() + ")", kind::list)
+        : concrete_type(make_list_type_name(elements, is_multi_cell), kind::list)
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
