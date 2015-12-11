@@ -114,30 +114,26 @@ maps::literal::validate_assignable_to(database& db, const sstring& keyspace, col
 
 assignment_testable::test_result
 maps::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
-    throw std::runtime_error("not implemented");
-#if 0
-    if (!(receiver.type instanceof MapType))
-        return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
+    if (!dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
+        return assignment_testable::test_result::NOT_ASSIGNABLE;
+    }
     // If there is no elements, we can't say it's an exact match (an empty map if fundamentally polymorphic).
-    if (entries.isEmpty())
-        return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
-    ColumnSpecification keySpec = Maps.keySpecOf(receiver);
-    ColumnSpecification valueSpec = Maps.valueSpecOf(receiver);
+    if (entries.empty()) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+    auto key_spec = maps::key_spec_of(*receiver);
+    auto value_spec = maps::value_spec_of(*receiver);
     // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
-    AssignmentTestable.TestResult res = AssignmentTestable.TestResult.EXACT_MATCH;
-    for (Pair<Term.Raw, Term.Raw> entry : entries)
-    {
-        AssignmentTestable.TestResult t1 = entry.left.testAssignment(keyspace, keySpec);
-        AssignmentTestable.TestResult t2 = entry.right.testAssignment(keyspace, valueSpec);
-        if (t1 == AssignmentTestable.TestResult.NOT_ASSIGNABLE || t2 == AssignmentTestable.TestResult.NOT_ASSIGNABLE)
-            return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-        if (t1 != AssignmentTestable.TestResult.EXACT_MATCH || t2 != AssignmentTestable.TestResult.EXACT_MATCH)
-            res = AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+    auto res = assignment_testable::test_result::EXACT_MATCH;
+    for (auto entry : entries) {
+        auto t1 = entry.first->test_assignment(db, keyspace, key_spec);
+        auto t2 = entry.second->test_assignment(db, keyspace, value_spec);
+        if (t1 == assignment_testable::test_result::NOT_ASSIGNABLE || t2 == assignment_testable::test_result::NOT_ASSIGNABLE)
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        if (t1 != assignment_testable::test_result::EXACT_MATCH || t2 != assignment_testable::test_result::EXACT_MATCH)
+            res = assignment_testable::test_result::WEAKLY_ASSIGNABLE;
     }
     return res;
-#endif
 }
 
 sstring
