@@ -163,7 +163,7 @@ private:
         }
         else
 #endif
-            return 5 * 1000;
+            return 30 * 1000;
     }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
