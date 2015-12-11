@@ -30,7 +30,7 @@
 
 #include "schema.hh"
 #include "keys.hh"
-#include "atomic_cell.hh"
+#include "atomic_cell_or_collection.hh"
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
 #include "utils/managed_vector.hh"
