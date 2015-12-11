@@ -8,5 +8,4 @@ sed -e "s/seeds:.*/seeds: $IP/g" /var/lib/scylla/conf/scylla.yaml > $HOME/scylla
                 --options-file $HOME/scylla.yaml \
                 --listen-address $IP \
                 --rpc-address $IP \
-                --network-stack posix \
-                --smp 1
+                --network-stack posix
