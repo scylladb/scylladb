@@ -75,6 +75,18 @@ public:
     void write(data_output& out) const {
         write(out, _item);
     }
+
+    bytes to_bytes() const {
+        bytes b(bytes::initialized_later(), _size);
+        data_output out(b);
+        write(out);
+        return b;
+    }
+
+    static T from_bytes(bytes_view v) {
+        data_input in(v);
+        return read(in);
+    }
 private:
     const T& _item;
     size_t _size;
