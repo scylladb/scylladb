@@ -126,12 +126,12 @@ private:
     response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
-    future<> response_wait(response_id_type id);
+    future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
-    void send_to_live_endpoints(response_id_type response_id);
+    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);

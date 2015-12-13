@@ -288,10 +288,10 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     }
 }
 
-future<> storage_proxy::response_wait(storage_proxy::response_id_type id) {
+future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& e = _response_handlers.find(id)->second;
 
-    e.expire_timer.arm(std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
+    e.expire_timer.arm(timeout);
 
     return e.handler->wait();
 }
@@ -896,9 +896,10 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // frozen_mutation copy, or manage handler live time differently.
         hint_to_dead_endpoints(response_id, cl);
 
+        auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
         // call before send_to_live_endpoints() for the same reason as above
-        auto f = response_wait(response_id);
-        send_to_live_endpoints(protected_response.release()); // response is now running and it will either complete or timeout
+        auto f = response_wait(response_id, timeout);
+        send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
         return std::move(f);
     });
 }
@@ -1085,7 +1086,7 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
  * @throws OverloadedException if the hints cannot be written/enqueued
  */
  // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
-void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id)
+void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, clock_type::time_point timeout)
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
@@ -1117,10 +1118,10 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // lambda for applying mutation remotely
-    auto rmutate = [this, &m, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
+    auto rmutate = [this, &m, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
         auto& ms = net::get_local_messaging_service();
         _stats.queued_write_bytes += m.representation().size();
-        return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
+        return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, timeout, m,
                 std::move(forward), my_address, engine().cpu_id(), response_id).finally([this, p = shared_from_this(), msize = m.representation().size()] {
             _stats.queued_write_bytes -= msize;
             unthrottle();
@@ -2676,9 +2677,10 @@ void storage_proxy::init_messaging_service() {
                 }).handle_exception([] (std::exception_ptr eptr) {
                     logger.warn("MUTATION verb handler: {}", eptr);
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
-                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                    auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
+                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                 })
