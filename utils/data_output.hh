@@ -137,6 +137,9 @@ public:
         }
         return *this;
     }
+    data_output& write_view(bytes_view v) {
+        return write(v.begin(), v.end());
+    }
 private:
     char * _ptr;
     char * _end;
