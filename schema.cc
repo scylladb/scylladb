@@ -480,25 +480,30 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    return make_lw_shared<schema>(schema(_raw));
+schema_builder& schema_builder::with(compact_storage cs) {
+    _compact_storage = cs;
+    return *this;
 }
 
-schema_ptr schema_builder::build(compact_storage cp) {
+schema_ptr schema_builder::build() {
+    if (!_compact_storage) {
+        return make_lw_shared<schema>(schema(_raw));
+    }
+
     schema s(_raw);
 
     // Dense means that no part of the comparator stores a CQL column name. This means
     // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
-    s._raw._is_dense = (cp == compact_storage::yes) && (s.clustering_key_size() > 0);
+    s._raw._is_dense = (*_compact_storage == compact_storage::yes) && (s.clustering_key_size() > 0);
 
     if (s.clustering_key_size() == 0) {
-        if (cp == compact_storage::yes) {
+        if (*_compact_storage == compact_storage::yes) {
             s._raw._is_compound = false;
         } else {
             s._raw._is_compound = true;
         }
     } else {
-        if ((cp == compact_storage::yes) && s.clustering_key_size() == 1) {
+        if ((*_compact_storage == compact_storage::yes) && s.clustering_key_size() == 1) {
             s._raw._is_compound = false;
         } else {
             s._raw._is_compound = true;
@@ -515,11 +520,14 @@ schema_ptr schema_builder::build(compact_storage cp) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", s.regular_columns_count()));
         }
         s._raw._columns.at(s.column_offset(column_kind::regular_column)).kind = column_kind::compact_column;
-
-        // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
-        // from the constructor
     }
+    // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
+    // from the constructor
     return make_lw_shared<schema>(schema(s._raw));
+}
+
+schema_ptr schema_builder::build(compact_storage cp) {
+    return with(cp).build();
 }
 
 // Useful functions to manipulate the schema's comparator field

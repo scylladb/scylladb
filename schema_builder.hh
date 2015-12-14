@@ -25,7 +25,11 @@
 #include "database_fwd.hh"
 
 struct schema_builder {
+public:
+    enum class compact_storage { no, yes };
+private:
     schema::raw_schema _raw;
+    std::experimental::optional<compact_storage> _compact_storage;
 
     schema_builder(const schema::raw_schema&);
 public:
@@ -176,10 +180,12 @@ public:
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index);
+    schema_builder& with(compact_storage);
 
     void add_default_index_names(database&);
 
-    enum class compact_storage { no, yes };
+    // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
+
     schema_ptr build();
 };
