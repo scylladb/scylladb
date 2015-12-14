@@ -131,9 +131,9 @@ private:
     distributed<core_local_state> _core_local;
 private:
     auto make_query_state() {
-        try {
+        if (_db->local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(*_db, ks_name);
-        } catch (exceptions::invalid_request_exception&) { }
+        }
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
