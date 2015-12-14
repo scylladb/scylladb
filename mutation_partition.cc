@@ -116,6 +116,15 @@ mutation_partition::operator=(const mutation_partition& x) {
     return *this;
 }
 
+mutation_partition&
+mutation_partition::operator=(mutation_partition&& x) noexcept {
+    if (this != &x) {
+        this->~mutation_partition();
+        new (this) mutation_partition(std::move(x));
+    }
+    return *this;
+}
+
 void
 mutation_partition::apply(const schema& schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);

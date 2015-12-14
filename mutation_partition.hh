@@ -559,7 +559,7 @@ public:
     mutation_partition(const mutation_partition&);
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
-    mutation_partition& operator=(mutation_partition&& x) = default;
+    mutation_partition& operator=(mutation_partition&& x) noexcept;
     bool equal(const schema& s, const mutation_partition&) const;
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
