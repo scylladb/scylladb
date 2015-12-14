@@ -2621,3 +2621,13 @@ date_type_impl::from_string(sstring_view s) const {
     serialize(&n, iter);
     return ret;
 }
+
+std::ostream& operator<<(std::ostream& out, const data_value& v) {
+    if (v.is_null()) {
+        return out << "null";
+    }
+    bytes b(bytes::initialized_later(), v.serialized_size());
+    auto i = b.begin();
+    v.serialize(i);
+    return out << v.type()->to_string(b);
+}
