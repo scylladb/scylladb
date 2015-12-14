@@ -975,8 +975,6 @@ database::database(const db::config& cfg)
     if (!_memtable_total_space) {
         _memtable_total_space = memory::stats().total_memory() / 2;
     }
-    bool durable = cfg.data_file_directories().size() > 0;
-    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
     setup_collectd();
@@ -1119,6 +1117,9 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_system_keyspace() {
+    bool durable = _cfg->data_file_directories().size() > 0;
+    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
+
     // FIXME support multiple directories
     return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
