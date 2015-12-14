@@ -2275,8 +2275,10 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
  */
 std::vector<query::partition_range>
 storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range) {
+    dht::ring_position_comparator cmp(s);
+
     // special case for bounds containing exactly 1 token
-    if (start_token(range) == end_token(range) && !range.is_wrap_around(dht::ring_position_comparator(s))) {
+    if (start_token(range) == end_token(range) && !range.is_wrap_around(cmp)) {
         if (start_token(range).is_minimum()) {
             return {};
         }
@@ -2287,8 +2289,18 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
 
     std::vector<query::partition_range> ranges;
 
-    // divide the queryRange into pieces delimited by the ring and minimum tokens
-    auto ring_iter = tm.ring_range(range.start(), true);
+    auto add_range = [&ranges, &cmp] (query::partition_range&& r) {
+        if (r.is_wrap_around(cmp)) {
+            auto unwrapped = r.unwrap();
+            ranges.emplace_back(std::move(unwrapped.second)); // Append in split order
+            ranges.emplace_back(std::move(unwrapped.first));
+        } else {
+            ranges.emplace_back(std::move(r));
+        }
+    };
+
+    // divide the queryRange into pieces delimited by the ring
+    auto ring_iter = tm.ring_range(range.start(), false);
     query::partition_range remainder = std::move(range);
     for (const dht::token& upper_bound_token : ring_iter)
     {
@@ -2304,14 +2316,11 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
          */
 
         dht::ring_position split_point(upper_bound_token, dht::ring_position::token_bound::end);
-        if (!remainder.contains(split_point, dht::ring_position_comparator(s))) {
+        if (!remainder.contains(split_point, cmp)) {
             break; // no more splits
         }
 
-        if (upper_bound_token.is_minimum()) {
-            ranges.emplace_back(query::partition_range(remainder.start(), {}));
-            remainder = query::partition_range({}, remainder.end());
-        } else {
+        {
             // We shouldn't attempt to split on upper bound, because it may result in
             // an ambiguous range of the form (x; x]
             if (end_token(remainder) == upper_bound_token) {
@@ -2319,13 +2328,13 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
             }
 
             std::pair<query::partition_range, query::partition_range> splits =
-                remainder.split(split_point, dht::ring_position_comparator(s));
+                remainder.split(split_point, cmp);
 
-            ranges.emplace_back(std::move(splits.first));
+            add_range(std::move(splits.first));
             remainder = std::move(splits.second);
         }
     }
-    ranges.emplace_back(std::move(remainder));
+    add_range(std::move(remainder));
 
     return ranges;
 }
