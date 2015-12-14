@@ -334,6 +334,9 @@ query_options query_processor::make_internal_options(
 future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
         const std::experimental::string_view& query_string,
         const std::initializer_list<data_value>& values) {
+    if (log.is_enabled(logging::log_level::trace)) {
+        log.trace("execute_internal: \"{}\" ({})", query_string, ::join(", ", values));
+    }
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values);
     return do_with(std::move(opts),
