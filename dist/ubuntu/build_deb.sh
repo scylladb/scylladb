@@ -38,7 +38,7 @@ sudo apt-get -y update
 
 ./dist/ubuntu/dep/build_dependency.sh
 
-DEP="libyaml-cpp-dev liblz4-dev libsnappy-dev libcrypto++-dev libjsoncpp-dev libaio-dev ragel ninja-build git liblz4-1 libaio1 hugepages software-properties-common"
+DEP="libyaml-cpp-dev liblz4-dev libsnappy-dev libcrypto++-dev libjsoncpp-dev libaio-dev ragel ninja-build git liblz4-1 libaio1 hugepages software-properties-common libgnutls28-dev"
 
 if [ "$RELEASE" = "14.04" ]; then
     DEP="$DEP libboost1.55-dev libboost-program-options1.55.0 libboost-program-options1.55-dev libboost-system1.55.0 libboost-system1.55-dev libboost-thread1.55.0 libboost-thread1.55-dev libboost-test1.55.0 libboost-test1.55-dev libboost-filesystem1.55-dev libboost-filesystem1.55.0 libsnappy1"
