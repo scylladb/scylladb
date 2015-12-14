@@ -856,8 +856,7 @@ mutation_partition::live_row_count(const schema& s, gc_clock::time_point query_t
 }
 
 rows_entry::rows_entry(rows_entry&& o) noexcept
-    : _link(std::move(o._link))
-    , _key(std::move(o._key))
+    : _key(std::move(o._key))
     , _row(std::move(o._row))
 {
     using container_type = mutation_partition::rows_type;
