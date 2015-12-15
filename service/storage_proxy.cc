@@ -2275,6 +2275,12 @@ float storage_proxy::estimate_result_rows_per_range(lw_shared_ptr<query::read_co
  */
 std::vector<query::partition_range>
 storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range) {
+    locator::token_metadata& tm = get_local_storage_service().get_token_metadata();
+    return service::get_restricted_ranges(tm, s, std::move(range));
+}
+
+std::vector<query::partition_range>
+get_restricted_ranges(locator::token_metadata& tm, const schema& s, query::partition_range range) {
     dht::ring_position_comparator cmp(s);
 
     // special case for bounds containing exactly 1 token
@@ -2284,8 +2290,6 @@ storage_proxy::get_restricted_ranges(keyspace& ks, const schema& s, query::parti
         }
         return std::vector<query::partition_range>({std::move(range)});
     }
-
-    locator::token_metadata& tm = get_local_storage_service().get_token_metadata();
 
     std::vector<query::partition_range> ranges;
 
