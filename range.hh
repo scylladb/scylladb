@@ -45,6 +45,10 @@ public:
         bool operator==(const bound& other) const {
             return (_value == other._value) && (_inclusive == other._inclusive);
         }
+        template<typename Comparator>
+        bool equal(const bound& other, Comparator&& cmp) const {
+            return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
+        }
     };
 private:
     optional<bound> _start;
@@ -334,7 +338,14 @@ public:
         };
         return range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
     }
-
+    template<typename Comparator>
+    bool equal(const range& other, Comparator&& cmp) const {
+        return bool(_start) == bool(other._start)
+               && bool(_end) == bool(other._end)
+               && (!_start || _start->equal(*other._start, cmp))
+               && (!_end || _end->equal(*other._end, cmp))
+               && _singular == other._singular;
+    }
 private:
     template<typename U>
     static auto serialized_size(U& t) -> decltype(t.serialized_size()) {
