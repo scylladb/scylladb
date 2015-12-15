@@ -353,6 +353,39 @@ struct serializer {
     template <typename Input, typename T>
     query::range<T> read(Input& input, rpc::type<query::range<T>>) const;
 
+    // Default implementation for any type which knows how to serialize itself
+    // with methods serialize(), deserialize() and serialized_size() with the
+    // following signatures:
+    //     void serialize(bytes::iterator& out) const;
+    //     size_t serialized_size() const;
+    //     static T deserialize(bytes_view& in);
+    //
+    // One inefficiency inherent in this API is that deserialize() expects
+    // the serialized data to have been already read into a contiguous buffer,
+    // and to do this, the reader needs to know in advance how much to read,
+    // so we are forced to precede the serialized data by its length - even
+    // though the deserialize() function should already know where to stop.
+    // Even a fixed-length object will end up preceeded by its length.
+    // This waste can be avoided by implementing special read()/write()
+    // functions for this type, above.
+    template <typename T, typename Output>
+    void write(Output& out, const T& v) const {
+        uint32_t sz = v.serialized_size();
+        write(out, sz);
+        bytes b(bytes::initialized_later(), sz);
+        auto _out = b.begin();
+        v.serialize(_out);
+        out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+    }
+    template <typename T, typename Input>
+    T read(Input& in, rpc::type<T>) const {
+        auto sz = read(in, rpc::type<uint32_t>());
+        bytes b(bytes::initialized_later(), sz);
+        in.read(reinterpret_cast<char*>(b.begin()), sz);
+        bytes_view bv(b);
+        return T::deserialize(bv);
+    }
+
     template <typename Output, typename T>
     void write(Output& out, const foreign_ptr<T>& v) const {
         return write(out, *v);
