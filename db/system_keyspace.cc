@@ -1010,5 +1010,55 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const 
     });
 }
 
+static map_type_impl::native_type prepare_rows_merged(std::unordered_map<int32_t, int64_t>& rows_merged) {
+    map_type_impl::native_type tmp;
+    for (auto& r: rows_merged) {
+        int32_t first = r.first;
+        int64_t second = r.second;
+        auto map_element = std::make_pair<data_value, data_value>(data_value(first), data_value(second));
+        tmp.push_back(std::move(map_element));
+    }
+    return tmp;
+}
+
+future<> update_compaction_history(sstring ksname, sstring cfname, int64_t compacted_at, int64_t bytes_in, int64_t bytes_out,
+                                   std::unordered_map<int32_t, int64_t> rows_merged)
+{
+    // don't write anything when the history table itself is compacted, since that would in turn cause new compactions
+    if (ksname == "system" && cfname == COMPACTION_HISTORY) {
+        return make_ready_future<>();
+    }
+
+    auto map_type = map_type_impl::get_instance(int32_type, long_type, true);
+
+    sstring req = "INSERT INTO system.%s (id, keyspace_name, columnfamily_name, compacted_at, bytes_in, bytes_out, rows_merged) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+    return execute_cql(req, COMPACTION_HISTORY, utils::UUID_gen::get_time_UUID(), ksname, cfname, compacted_at, bytes_in, bytes_out,
+                       make_map_value(map_type, prepare_rows_merged(rows_merged))).discard_result();
+}
+
+future<std::vector<compaction_history_entry>> get_compaction_history()
+{
+    sstring req = "SELECT * from system.%s";
+    return execute_cql(req, COMPACTION_HISTORY).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        std::vector<compaction_history_entry> history;
+
+        for (auto& row : *msg) {
+            compaction_history_entry entry;
+            entry.id = row.get_as<utils::UUID>("id");
+            entry.ks = row.get_as<sstring>("keyspace_name");
+            entry.cf = row.get_as<sstring>("columnfamily_name");
+            entry.compacted_at = row.get_as<int64_t>("compacted_at");
+            entry.bytes_in = row.get_as<int64_t>("bytes_in");
+            entry.bytes_out = row.get_as<int64_t>("bytes_out");
+            if (row.has("rows_merged")) {
+                entry.rows_merged = row.get_map<int32_t, int64_t>("rows_merged");
+            }
+            history.push_back(std::move(entry));
+        }
+        return std::move(history);
+    });
+}
+
 } // namespace system_keyspace
 } // namespace db

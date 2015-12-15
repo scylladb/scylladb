@@ -21,6 +21,7 @@
 
 #include "compaction_manager.hh"
 #include "api/api-doc/compaction_manager.json.hh"
+#include "db/system_keyspace.hh"
 
 namespace api {
 
@@ -83,11 +84,29 @@ void set_compaction_manager(http_context& ctx, routes& r) {
     });
 
     cm::get_compaction_history.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        warn(unimplemented::cause::API);
-        std::vector<cm::history> res;
-        return make_ready_future<json::json_return_type>(res);
+        return db::system_keyspace::get_compaction_history().then([] (std::vector<db::system_keyspace::compaction_history_entry> history) {
+            std::vector<cm::history> res;
+            res.reserve(history.size());
+
+            for (auto& entry : history) {
+                cm::history h;
+                h.id = entry.id.to_sstring();
+                h.ks = std::move(entry.ks);
+                h.cf = std::move(entry.cf);
+                h.compacted_at = entry.compacted_at;
+                h.bytes_in = entry.bytes_in;
+                h.bytes_out =  entry.bytes_out;
+                for (auto it : entry.rows_merged) {
+                    httpd::compaction_manager_json::row_merged e;
+                    e.key = it.first;
+                    e.value = it.second;
+                    h.rows_merged.push(std::move(e));
+                }
+                res.push_back(std::move(h));
+            }
+
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
     cm::get_compaction_info.set(r, [] (std::unique_ptr<request> req) {
