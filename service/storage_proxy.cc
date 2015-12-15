@@ -1039,7 +1039,7 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
  * @throws OverloadedException if the hints cannot be written/enqueued
  */
  // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
-future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id)
+void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id)
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
@@ -1059,41 +1059,51 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
     auto mptr = get_write_response_handler(response_id).get_mutation();
     auto& m = *mptr;
     auto all = boost::range::join(local, dc_groups);
+    auto my_address = utils::fb_utilities::get_broadcast_address();
+
+    // lambda for applying mutation locally
+    auto lmutate = [&m, mptr = std::move(mptr), response_id, this, my_address] {
+        return mutate_locally(m).then([response_id, this, my_address, mptr = std::move(mptr), p = shared_from_this()] {
+            // make mutation alive until it is processed locally, otherwise it
+            // may disappear if write timeouts before this future is ready
+            got_response(response_id, my_address);
+        });
+    };
+
+    // lambda for applying mutation remotely
+    auto rmutate = [this, &m, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
+        auto& ms = net::get_local_messaging_service();
+        return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
+                std::move(forward), my_address, engine().cpu_id(), response_id);
+    };
 
     // OK, now send and/or apply locally
-    return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) {
-        auto my_address = utils::fb_utilities::get_broadcast_address();
+    for (typename decltype(dc_groups)::value_type& dc_targets : all) {
         auto& forward = dc_targets.second;
-
         // last one in forward list is a coordinator
         auto coordinator = forward.back();
         forward.pop_back();
 
+        future<> f = make_ready_future<>();
+
         if (coordinator == my_address) {
-            return mutate_locally(m).then([response_id, this, my_address] {
-                got_response(response_id, my_address);
-            });
+            f = futurize<void>::apply(lmutate);
         } else {
-            auto& ms = net::get_local_messaging_service();
-            return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id);
-        }
-    }).handle_exception([mptr] (std::exception_ptr eptr) {
-        // make mutation alive until it is sent or processed locally, otherwise it
-        // may disappear if write timeouts before this future is ready
-        try {
-            std::rethrow_exception(eptr);
-        } catch(rpc::closed_error&) {
-            // ignore, disconnect will be logged by gossiper
-        } catch(seastar::gate_closed_exception&) {
-            // may happen during shutdown, ignore it
-        } catch(std::exception& e) {
-            logger.error("exception during write: {}", e.what());
-        } catch(...) {
-            logger.error("unknown exception during write");
+            f = futurize<void>::apply(rmutate, coordinator, std::move(forward));
         }
 
-    });
+        f.handle_exception([coordinator] (std::exception_ptr eptr) {
+            try {
+                std::rethrow_exception(eptr);
+            } catch(rpc::closed_error&) {
+                // ignore, disconnect will be logged by gossiper
+            } catch(seastar::gate_closed_exception&) {
+                // may happen during shutdown, ignore it
+            } catch(...) {
+                logger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+            }
+        });
+    }
 }
 
 // returns number of hints stored
