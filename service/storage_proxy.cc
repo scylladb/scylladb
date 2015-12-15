@@ -105,6 +105,7 @@ sstring get_local_dc() {
 
 class abstract_write_response_handler {
 protected:
+    storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
     db::consistency_level _cl;
@@ -119,6 +120,7 @@ protected:
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
+    bool _throttled = false;
 protected:
     size_t total_block_for() {
         // original comment from cassandra:
@@ -133,20 +135,36 @@ public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
-            : _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
+            : _id(p->_next_response_id++), _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
     virtual ~abstract_write_response_handler() {
         if (_cl_achieved) {
-            _proxy->_stats.background_writes--;
+            if (_throttled) {
+                _ready.set_value();
+            } else {
+                _proxy->_stats.background_writes--;
+                _proxy->_stats.background_write_bytes -= _mutation->representation().size();
+                _proxy->unthrottle();
+            }
         }
     };
+    void unthrottle() {
+        _proxy->_stats.background_writes++;
+        _proxy->_stats.background_write_bytes += _mutation->representation().size();
+        _throttled = false;
+        _ready.set_value();
+    }
     void signal(size_t nr = 1) {
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= total_block_for()) {
-             _ready.set_value();
              _cl_achieved = true;
-             _proxy->_stats.background_writes++;
+             if (_proxy->need_throttle_writes()) {
+                 _throttled = true;
+                 _proxy->_throttled_writes.push_back(_id);
+             } else {
+                 unthrottle();
+             }
          }
     }
     // return true on last ack
@@ -168,6 +186,9 @@ public:
     }
     lw_shared_ptr<const frozen_mutation> get_mutation() {
         return _mutation;
+    }
+    storage_proxy::response_id_type id() const {
+      return _id;
     }
     friend storage_proxy;
 };
@@ -216,8 +237,23 @@ public:
     }
 };
 
+bool storage_proxy::need_throttle_writes() const {
+    return _stats.background_write_bytes > memory::stats().total_memory() / 10 || _stats.queued_write_bytes > 6*1024*1024;
+}
+
+void storage_proxy::unthrottle() {
+   while(!need_throttle_writes() && !_throttled_writes.empty()) {
+       auto id = _throttled_writes.front();
+       _throttled_writes.pop_front();
+       auto it = _response_handlers.find(id);
+       if (it != _response_handlers.end()) {
+           it->second.handler->unthrottle();
+       }
+   }
+}
+
 storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
-    auto id = _next_response_id++;
+    auto id = h->id();
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
         if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
@@ -297,6 +333,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "background writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "queued write bytes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.queued_write_bytes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "background write bytes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_write_bytes)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
@@ -1073,8 +1119,12 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     // lambda for applying mutation remotely
     auto rmutate = [this, &m, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
         auto& ms = net::get_local_messaging_service();
+        _stats.queued_write_bytes += m.representation().size();
         return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id);
+                std::move(forward), my_address, engine().cpu_id(), response_id).finally([this, p = shared_from_this(), msize = m.representation().size()] {
+            _stats.queued_write_bytes -= msize;
+            unthrottle();
+        });
     };
 
     // OK, now send and/or apply locally
