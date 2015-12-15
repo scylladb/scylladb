@@ -113,7 +113,7 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
-schema_ptr create_table_from_mutations(schema_mutations);
+schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
 

@@ -23,6 +23,7 @@
 #include "cql3/column_identifier.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "md5_hasher.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "version.hh"
@@ -216,6 +217,9 @@ schema::schema(const schema& o)
     rebuild();
 }
 
+schema::~schema() {
+}
+
 sstring schema::thrift_key_validator() const {
     if (partition_key_size() == 1) {
         return partition_key_columns().begin()->type->name();
@@ -355,6 +359,7 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",droppedColumns={}";
     os << ",triggers=[]";
     os << ",isDense=" << std::boolalpha << s._raw._is_dense;
+    os << ",version=" << s.version();
     os << "]";
     return os;
 }
@@ -485,7 +490,18 @@ schema_builder& schema_builder::with(compact_storage cs) {
     return *this;
 }
 
+schema_builder& schema_builder::with_version(table_schema_version v) {
+    _version = v;
+    return *this;
+}
+
 schema_ptr schema_builder::build() {
+    if (_version) {
+        _raw._version = *_version;
+    } else {
+        _raw._version = utils::UUID_gen::get_time_UUID();
+    }
+
     if (!_compact_storage) {
         return make_lw_shared<schema>(schema(_raw));
     }

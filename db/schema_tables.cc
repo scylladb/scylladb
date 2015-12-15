@@ -57,6 +57,7 @@
 
 #include "db/marshal/type_parser.hh"
 #include "db/config.hh"
+#include "md5_hasher.hh"
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -96,7 +97,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "keyspace definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::yes);
+        builder.with(schema_builder::compact_storage::yes);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return keyspaces;
 }
@@ -148,7 +151,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "table definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return columnfamilies;
 }
@@ -177,7 +182,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "column definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return columns;
 }
@@ -201,7 +208,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "trigger definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return triggers;
 }
@@ -226,7 +235,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return usertypes;
 }
@@ -255,7 +266,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined type definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return functions;
 }
@@ -284,7 +297,9 @@ using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
         "user defined aggregate definitions"
         )));
         builder.set_gc_grace_seconds(std::chrono::duration_cast<std::chrono::seconds>(days(7)).count());
-        return builder.build(schema_builder::compact_storage::no);
+        builder.with(schema_builder::compact_storage::no);
+        builder.with_version(generate_schema_version(builder.uuid()));
+        return builder.build();
     }();
     return aggregates;
 }
@@ -296,10 +311,11 @@ future<> save_system_keyspace_schema() {
 
     // delete old, possibly obsolete entries in schema tables
     return parallel_for_each(ALL, [ksm] (sstring cf) {
-        return db::execute_cql("DELETE FROM system.%s WHERE keyspace_name = ?", cf, ksm->name()).discard_result();
+        auto deletion_timestamp = schema_creation_timestamp() - 1;
+        return db::execute_cql(sprint("DELETE FROM system.%%s USING TIMESTAMP %s WHERE keyspace_name = ?",
+            deletion_timestamp), cf, ksm->name()).discard_result();
     }).then([ksm] {
-        // (+1 to timestamp to make sure we don't get shadowed by the tombstones we just added)
-        auto mvec  = make_create_keyspace_mutations(ksm, qctx->next_timestamp(), true);
+        auto mvec  = make_create_keyspace_mutations(ksm, schema_creation_timestamp(), true);
         return qctx->proxy().mutate_locally(std::move(mvec));
     });
 }
@@ -1028,6 +1044,9 @@ std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadat
 
 schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers)
 {
+    // When adding new schema properties, don't set cells for default values so that
+    // both old and new nodes will see the same version during rolling upgrades.
+
     // For property that can be null (and can be changed), we insert tombstones, to make sure
     // we don't keep a property the user has removed
     schema_ptr s = columnfamilies();
@@ -1252,7 +1271,7 @@ future<schema_ptr> create_table_from_table_row(distributed<service::storage_prox
     return create_table_from_name(proxy, ks_name, cf_name);
 }
 
-schema_ptr create_table_from_mutations(schema_mutations sm)
+schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::optional<table_schema_version> version)
 {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
     query::result_set_row table_row = table_rs.row(0);
@@ -1393,6 +1412,11 @@ schema_ptr create_table_from_mutations(schema_mutations sm)
 #endif
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
+    }
+    if (version) {
+        builder.with_version(*version);
+    } else {
+        builder.with_version(sm.digest());
     }
     return builder.build();
 }

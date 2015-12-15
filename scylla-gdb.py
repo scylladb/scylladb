@@ -95,7 +95,8 @@ class scylla_column_families(gdb.Command):
                 value = value['_p']['_value']  # it's a lw_shared_ptr
                 schema = value['_schema']['_p']['_value']
                 name = str(schema['_raw']['_ks_name']) + '/' + str(schema['_raw']['_cf_name'])
-                gdb.write('{:5} {} {:45} (column_family*){}\n'.format(shard, key, name, value.address))
+                schema_version = str(schema['_raw']['_version'])
+                gdb.write('{:5} {} v={} {:45} (column_family*){}\n'.format(shard, key, schema_version, name, value.address))
 
 class scylla_memory(gdb.Command):
     def __init__(self):

@@ -30,7 +30,7 @@ public:
 private:
     schema::raw_schema _raw;
     std::experimental::optional<compact_storage> _compact_storage;
-
+    std::experimental::optional<table_schema_version> _version;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -181,6 +181,7 @@ public:
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index);
     schema_builder& with(compact_storage);
+    schema_builder& with_version(table_schema_version);
 
     void add_default_index_names(database&);
 

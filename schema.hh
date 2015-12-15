@@ -41,6 +41,17 @@
 // Column ID, unique within column_kind
 using column_id = uint32_t;
 
+// Cluster-wide identifier of schema version of particular table.
+//
+// The version changes the value not only on structural changes but also
+// temporal. For example, schemas with the same set of columns but created at
+// different times should have different versions. This allows nodes to detect
+// if the version they see was already synchronized with or not even if it has
+// the same structure as the past versions.
+//
+// Schema changes merged in any order should result in the same final version.
+using table_schema_version = utils::UUID;
+
 class schema;
 
 // Useful functions to manipulate the schema's comparator field
@@ -294,6 +305,7 @@ private:
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
         caching_options _caching_options;
+        table_schema_version _version;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -333,6 +345,7 @@ private:
     void rebuild();
     schema(const raw_schema&);
 public:
+    // deprecated, use schema_builder.
     schema(std::experimental::optional<utils::UUID> id,
         sstring ks_name,
         sstring cf_name,
@@ -343,6 +356,10 @@ public:
         data_type regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
+    ~schema();
+    table_schema_version version() const {
+        return _raw._version;
+    }
     double bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
