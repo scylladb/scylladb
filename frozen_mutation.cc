@@ -49,6 +49,11 @@ frozen_mutation::key(const schema& s) const {
     return partition_key_view_serializer::read(in);
 }
 
+dht::decorated_key
+frozen_mutation::decorated_key(const schema& s) const {
+    return dht::global_partitioner().decorate_key(s, key(s));
+}
+
 frozen_mutation::frozen_mutation(bytes&& b)
     : _bytes(std::move(b))
 { }

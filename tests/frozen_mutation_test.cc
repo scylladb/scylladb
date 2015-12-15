@@ -97,6 +97,12 @@ BOOST_AUTO_TEST_CASE(test_writing_and_reading) {
     m.set_static_cell("static_col_2", data_value(bytes("static_col_value")), new_timestamp());
 
     test_freezing(m);
+
+    {
+        auto fm = freeze(m);
+        auto dk = fm.decorated_key(*s);
+        BOOST_REQUIRE(dk.equal(*s, m.decorated_key()));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {

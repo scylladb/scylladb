@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "dht/i_partitioner.hh"
 #include "atomic_cell.hh"
 #include "keys.hh"
 #include "mutation_partition_view.hh"
@@ -51,6 +52,7 @@ public:
     bytes_view representation() const { return _bytes; }
     utils::UUID column_family_id() const;
     partition_key_view key(const schema& s) const;
+    dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
     mutation unfreeze(schema_ptr s) const;
 };
