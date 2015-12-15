@@ -1,0 +1,17 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+. /etc/os-release
+
+if [ "$NAME" = "Ubuntu" ]; then
+    apt-get remove -y apport-noui
+else
+    if [ -f /etc/systemd/coredump.conf ]; then
+        mv /etc/systemd/coredump.conf /etc/systemd/coredump.conf.save
+        systemctl daemon-reload
+    fi
+    yum remove -y abrt
+fi
+
+sysctl -p /etc/sysctl.d/99-scylla.conf

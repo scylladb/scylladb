@@ -92,6 +92,7 @@ EOS
     systemctl enable scylla-server.service
     systemctl enable scylla-jmx.service
 fi
+/usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
     /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
 fi

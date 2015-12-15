@@ -1,0 +1,9 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+FILE=$1
+TIME=$2
+PID=$3
+
+/usr/bin/gzip -c > /var/lib/scylla/coredump/core.$FILE-$TIME-$PID.gz

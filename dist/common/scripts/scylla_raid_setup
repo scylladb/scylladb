@@ -56,5 +56,6 @@ mount -t xfs -o noatime $RAID /var/lib/scylla
 
 mkdir -p /var/lib/scylla/data
 mkdir -p /var/lib/scylla/commitlog
+mkdir -p /var/lib/scylla/coredump
 chown scylla:scylla /var/lib/scylla/*
 chown scylla:scylla /var/lib/scylla/
