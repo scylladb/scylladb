@@ -46,6 +46,17 @@ namespace sstables {
             : sstables(std::move(sstables)) {}
     };
 
+    struct compaction_stats {
+        sstring ks;
+        sstring cf;
+        size_t sstables = 0;
+        uint64_t start_size = 0;
+        uint64_t end_size = 0;
+        uint64_t total_partitions = 0;
+        uint64_t total_keys_written = 0;
+        std::vector<shared_sstable> new_sstables;
+    };
+
     // Compact a list of N sstables into M sstables.
     // creator is used to get a sstable object for a new sstable that will be written.
     // max_sstable_size is a relaxed limit size for a sstable to be generated.

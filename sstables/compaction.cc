@@ -64,15 +64,6 @@ namespace sstables {
 
 logging::logger logger("compaction");
 
-struct compaction_stats {
-    size_t sstables = 0;
-    uint64_t start_size = 0;
-    uint64_t end_size = 0;
-    uint64_t total_partitions = 0;
-    uint64_t total_keys_written = 0;
-    std::vector<shared_sstable> new_sstables;
-};
-
 class sstable_reader final : public ::mutation_reader::impl {
     shared_sstable _sst;
     mutation_reader _reader;
@@ -105,7 +96,11 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     uint64_t estimated_partitions = 0;
     auto ancestors = make_lw_shared<std::vector<unsigned long>>();
     auto stats = make_lw_shared<compaction_stats>();
+    auto& cm = cf.get_compaction_manager();
     sstring sstable_logger_msg = "[";
+
+    // register compaction_stats of starting compaction into compaction manager
+    cm.register_compaction(stats);
 
     assert(sstables.size() > 0);
 
@@ -149,6 +144,8 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 
     sstable_logger_msg += "]";
     stats->sstables = sstables.size();
+    stats->ks = schema->ks_name();
+    stats->cf = schema->cf_name();
     logger.info("Compacting {}", sstable_logger_msg);
 
     class compacting_reader final : public ::mutation_reader::impl {
@@ -251,7 +248,10 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     }).then([output_reader] {});
 
     // Wait for both read_done and write_done fibers to finish.
-    return when_all(std::move(read_done), std::move(write_done)).then([] (std::tuple<future<>, future<>> t) {
+    return when_all(std::move(read_done), std::move(write_done)).then([&cm, stats] (std::tuple<future<>, future<>> t) {
+        // deregister compaction_stats of finished compaction from compaction manager.
+        cm.deregister_compaction(stats);
+
         sstring ex;
         try {
             std::get<0>(t).get();
@@ -268,7 +268,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         if (ex.size()) {
             throw std::runtime_error(ex);
         }
-    }).then([start_time, stats, schema] {
+    }).then([start_time, stats] {
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::high_resolution_clock::now();
         // time taken by compaction in seconds.
@@ -303,7 +303,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // shows how many sstables each row is merged from. This information
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
-        return db::system_keyspace::update_compaction_history(schema->ks_name(), schema->cf_name(), compacted_at,
+        return db::system_keyspace::update_compaction_history(stats->ks, stats->cf, compacted_at,
                 stats->start_size, stats->end_size, {});
     });
 }

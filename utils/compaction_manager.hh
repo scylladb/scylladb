@@ -30,6 +30,7 @@
 #include <deque>
 #include <vector>
 #include <functional>
+#include "sstables/compaction.hh"
 
 class column_family;
 
@@ -66,6 +67,8 @@ private:
 
     stats _stats;
     std::vector<scollectd::registration> _registrations;
+
+    std::list<lw_shared_ptr<sstables::compaction_stats>> _compactions;
 private:
     void task_start(lw_shared_ptr<task>& task);
     future<> task_stop(lw_shared_ptr<task>& task);
@@ -93,6 +96,18 @@ public:
 
     const stats& get_stats() const {
         return _stats;
+    }
+
+    void register_compaction(lw_shared_ptr<sstables::compaction_stats> c) {
+        _compactions.push_back(c);
+    }
+
+    void deregister_compaction(lw_shared_ptr<sstables::compaction_stats> c) {
+        _compactions.remove(c);
+    }
+
+    const std::list<lw_shared_ptr<sstables::compaction_stats>>& get_compactions() const {
+        return _compactions;
     }
 };
 
