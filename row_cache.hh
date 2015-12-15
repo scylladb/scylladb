@@ -219,6 +219,12 @@ public:
     // Moves given partition to the front of LRU if present in cache.
     void touch(const dht::decorated_key&);
 
+    // Removes given partition from cache.
+    void invalidate(const dht::decorated_key&);
+
+    // Removes given range of partitions from cache.
+    void invalidate(const query::partition_range&);
+
     auto num_entries() const {
         return _partitions.size();
     }

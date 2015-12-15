@@ -473,6 +473,41 @@ void row_cache::touch(const dht::decorated_key& dk) {
     }
 }
 
+void row_cache::invalidate(const dht::decorated_key& dk) {
+    with_allocator(_tracker.allocator(), [this, &dk] {
+        _partitions.erase_and_dispose(dk, cache_entry::compare(_schema), [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
+        });
+    });
+}
+
+void row_cache::invalidate(const query::partition_range& range) {
+    auto cmp = cache_entry::compare(_schema);
+    auto begin = _partitions.begin();
+    if (range.start()) {
+        if (range.start()->is_inclusive()) {
+            begin = _partitions.lower_bound(range.start()->value(), cmp);
+        } else {
+            begin = _partitions.upper_bound(range.start()->value(), cmp);
+        }
+    }
+    auto end = _partitions.end();
+    if (range.end()) {
+        if (range.end()->is_inclusive()) {
+            end = _partitions.upper_bound(range.end()->value(), cmp);
+        } else {
+            end = _partitions.lower_bound(range.end()->value(), cmp);
+        }
+    }
+    with_allocator(_tracker.allocator(), [this, begin, end] {
+        _partitions.erase_and_dispose(begin, end, [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
+        });
+    });
+}
+
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
     cache_tracker& tracker)
     : _tracker(tracker)

@@ -534,3 +534,61 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
                 .produces_end_of_stream();
     });
 }
+
+SEASTAR_TEST_CASE(test_invalidate) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+
+        int partition_count = 1000;
+
+        // populate cache with some partitions
+        std::vector<dht::decorated_key> keys_in_cache;
+        for (int i = 0; i < partition_count; i++) {
+            auto m = make_new_mutation(s);
+            keys_in_cache.push_back(m.decorated_key());
+            cache.populate(m);
+        }
+
+        for (auto&& key : keys_in_cache) {
+            verify_has(cache, key);
+        }
+
+        // remove a single element from cache
+        auto some_element = keys_in_cache.begin() + 547;
+        std::vector<dht::decorated_key> keys_not_in_cache;
+        keys_not_in_cache.push_back(*some_element);
+        cache.invalidate(*some_element);
+        keys_in_cache.erase(some_element);
+
+        for (auto&& key : keys_in_cache) {
+            verify_has(cache, key);
+        }
+        for (auto&& key : keys_not_in_cache) {
+            verify_does_not_have(cache, key);
+        }
+
+        // remove a range of elements
+        std::sort(keys_in_cache.begin(), keys_in_cache.end(), [s] (auto& dk1, auto& dk2) {
+            return dk1.less_compare(*s, dk2);
+        });
+        auto some_range_begin = keys_in_cache.begin() + 123;
+        auto some_range_end = keys_in_cache.begin() + 423;
+        auto range = query::partition_range::make(
+            { *some_range_begin, true }, { *some_range_end, false }
+        );
+        keys_not_in_cache.insert(keys_not_in_cache.end(), some_range_begin, some_range_end);
+        cache.invalidate(range);
+        keys_in_cache.erase(some_range_begin, some_range_end);
+
+        for (auto&& key : keys_in_cache) {
+            verify_has(cache, key);
+        }
+        for (auto&& key : keys_not_in_cache) {
+            verify_does_not_have(cache, key);
+        }
+    });
+}
