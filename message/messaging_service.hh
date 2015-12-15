@@ -278,80 +278,11 @@ struct serializer {
         return read_serializable<reconcilable_result>(in);
     }
 
-    // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2
-    template <typename T, typename Output>
-    void write_gms(Output& out, const T& v) const {
-        uint32_t sz = v.serialized_size();
-        write(out, sz);
-        bytes b(bytes::initialized_later(), sz);
-        auto _out = b.begin();
-        v.serialize(_out);
-        out.write(reinterpret_cast<const char*>(b.c_str()), sz);
-    }
-    template <typename T, typename Input>
-    T read_gms(Input& in) const {
-        auto sz = read(in, rpc::type<uint32_t>());
-        bytes b(bytes::initialized_later(), sz);
-        in.read(reinterpret_cast<char*>(b.begin()), sz);
-        bytes_view bv(b);
-        return T::deserialize(bv);
-    }
-
-    template <typename Output>
-    void write(Output& out, const gms::gossip_digest_syn& v) const;
-    template <typename Input>
-    gms::gossip_digest_syn read(Input& in, rpc::type<gms::gossip_digest_syn>) const;
-
-    template <typename Output>
-    void write(Output& out, const gms::gossip_digest_ack2& v) const;
-    template <typename Input>
-    gms::gossip_digest_ack2 read(Input& in, rpc::type<gms::gossip_digest_ack2>) const;
-
-    template <typename Output>
-    void write(Output& out, const streaming::messages::stream_init_message& v) const;
-    template <typename Input>
-    streaming::messages::stream_init_message read(Input& in, rpc::type<streaming::messages::stream_init_message>) const;
-
-    template <typename Output>
-    void write(Output& out, const streaming::messages::prepare_message& v) const;
-    template <typename Input>
-    streaming::messages::prepare_message read(Input& in, rpc::type<streaming::messages::prepare_message>) const;
-
-    template <typename Output>
-    void write(Output& out, const gms::inet_address& v) const;
-    template <typename Input>
-    gms::inet_address read(Input& in, rpc::type<gms::inet_address>) const;
-
-    template <typename Output>
-    void write(Output& out, const gms::gossip_digest_ack& v) const;
-    template <typename Input>
-    gms::gossip_digest_ack read(Input& in, rpc::type<gms::gossip_digest_ack>) const;
-
-    template <typename Output>
-    void write(Output& out, const query::read_command& v) const;
-    template <typename Input>
-    query::read_command read(Input& in, rpc::type<query::read_command>) const;
-
     template <typename Output>
     void write(Output& out, const query::result& v) const;
     template <typename Input>
     query::result read(Input& in, rpc::type<query::result>) const;
 
-    template <typename Output>
-    void write(Output& out, const query::result_digest& v) const;
-    template <typename Input>
-    query::result_digest read(Input& in, rpc::type<query::result_digest>) const;
-
-    template <typename Output>
-    void write(Output& out, const utils::UUID& v) const;
-    template <typename Input>
-    utils::UUID read(Input& in, rpc::type<utils::UUID>) const;
-
-    // for query::range<T>
-    template <typename Output, typename T>
-    void write(Output& out, const query::range<T>& v) const;
-    template <typename Input, typename T>
-    query::range<T> read(Input& input, rpc::type<query::range<T>>) const;
 
     // Default implementation for any type which knows how to serialize itself
     // with methods serialize(), deserialize() and serialized_size() with the

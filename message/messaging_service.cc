@@ -44,70 +44,6 @@ using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 using namespace std::chrono_literals;
-
-template <typename Output>
-void net::serializer::write(Output& out, const gms::gossip_digest_syn& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-gms::gossip_digest_syn net::serializer::read(Input& in, rpc::type<gms::gossip_digest_syn>) const {
-    return read_gms<gms::gossip_digest_syn>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const gms::gossip_digest_ack2& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-gms::gossip_digest_ack2 net::serializer::read(Input& in, rpc::type<gms::gossip_digest_ack2>) const {
-    return read_gms<gms::gossip_digest_ack2>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const streaming::messages::stream_init_message& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-streaming::messages::stream_init_message net::serializer::read(Input& in, rpc::type<streaming::messages::stream_init_message>) const {
-    return read_gms<streaming::messages::stream_init_message>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const streaming::messages::prepare_message& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-streaming::messages::prepare_message net::serializer::read(Input& in, rpc::type<streaming::messages::prepare_message>) const {
-    return read_gms<streaming::messages::prepare_message>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const gms::inet_address& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-gms::inet_address net::serializer::read(Input& in, rpc::type<gms::inet_address>) const {
-    return read_gms<gms::inet_address>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const gms::gossip_digest_ack& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-gms::gossip_digest_ack net::serializer::read(Input& in, rpc::type<gms::gossip_digest_ack>) const {
-    return read_gms<gms::gossip_digest_ack>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const query::read_command& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-query::read_command net::serializer::read(Input& in, rpc::type<query::read_command>) const {
-    return read_gms<query::read_command>(in);
-}
-
 template <typename Output>
 void net::serializer::write(Output& out, const query::result& v) const {
     write_serializable(out, v);
@@ -117,33 +53,6 @@ query::result net::serializer::read(Input& in, rpc::type<query::result>) const {
     return read_serializable<query::result>(in);
 }
 
-template <typename Output>
-void net::serializer::write(Output& out, const query::result_digest& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-query::result_digest net::serializer::read(Input& in, rpc::type<query::result_digest>) const {
-    return read_gms<query::result_digest>(in);
-}
-
-template <typename Output>
-void net::serializer::write(Output& out, const utils::UUID& v) const {
-    return write_gms(out, v);
-}
-template <typename Input>
-utils::UUID net::serializer::read(Input& in, rpc::type<utils::UUID>) const {
-    return read_gms<utils::UUID>(in);
-}
-
-// for query::range<T>
-template <typename Output, typename T>
-void net::serializer::write(Output& out, const query::range<T>& v) const {
-    write_gms(out, v);
-}
-template <typename Input, typename T>
-query::range<T> net::serializer::read(Input& in, rpc::type<query::range<T>>) const {
-    return read_gms<query::range<T>>(in);
-}
 
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
 
