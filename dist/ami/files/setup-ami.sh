@@ -6,7 +6,6 @@ mv /tmp/selinux /etc/sysconfig/
 dnf update -y
 mv /home/fedora/scylla.repo /etc/yum.repos.d/
 dnf install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
-dnf install -y mdadm xfsprogs
 cp /home/fedora/coredump.conf /etc/systemd/coredump.conf
 mv /home/fedora/scylla-setup.service /usr/lib/systemd/system
 mv /home/fedora/scylla-setup.sh /usr/lib/scylla

@@ -8,7 +8,7 @@ Build-Depends: debhelper (>= 9), libyaml-cpp-dev, liblz4-dev, libsnappy-dev, lib
 
 Package: scylla-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, hugepages, adduser
+Depends: ${shlibs:Depends}, ${misc:Depends}, hugepages, adduser, mdadm, xfsprogs
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
