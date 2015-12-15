@@ -115,7 +115,7 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
 mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto schema = _qp.db().local().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
     auto key = partition_key::from_singular(*schema, id);
-    auto timestamp = db_clock::now_in_usecs();
+    auto timestamp = api::new_timestamp();
     auto data = [this, &mutations] {
         std::vector<frozen_mutation> fm(mutations.begin(), mutations.end());
         const auto size = std::accumulate(fm.begin(), fm.end(), size_t(0), [](size_t s, auto& m) {

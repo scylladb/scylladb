@@ -749,7 +749,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         mutation m(key, s);
 
-        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
         set_type_impl::mutation set_mut{{ tomb }, {
             { to_bytes("1"), make_atomic_cell({}) },
             { to_bytes("2"), make_atomic_cell({}) },
@@ -839,7 +839,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
 
         mutation m(key, s);
 
-        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
         mt->apply(std::move(m));
 
@@ -874,7 +874,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
 
         mutation m(key, s);
 
-        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
         mtp->apply(std::move(m));
 
@@ -1491,7 +1491,7 @@ SEASTAR_TEST_CASE(datafile_generation_41) {
         auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
         mutation m(key, s);
 
-        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        tombstone tomb(api::new_timestamp(), gc_clock::now());
         m.partition().apply_delete(*s, std::move(c_key), tomb);
         mt->apply(std::move(m));
 

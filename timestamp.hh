@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <limits>
+#include "db_clock.hh"
 
 namespace api {
 
@@ -31,7 +32,9 @@ timestamp_type constexpr missing_timestamp = std::numeric_limits<timestamp_type>
 timestamp_type constexpr min_timestamp = std::numeric_limits<timestamp_type>::min() + 1;
 timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::max();
 
+static inline
+timestamp_type new_timestamp() {
+    return db_clock::now_in_usecs();
 }
 
-
-
+}

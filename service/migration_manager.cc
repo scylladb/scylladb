@@ -285,7 +285,7 @@ public void notifyDropAggregate(UDAggregate udf)
 
 future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
 {
-    return announce_new_keyspace(ksm, db_clock::now_in_usecs(), announce_locally);
+    return announce_new_keyspace(ksm, api::new_timestamp(), announce_locally);
 }
 
 future<> migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
@@ -311,7 +311,7 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
         }
         logger.info("Create new ColumnFamily: {}", cfm);
-        auto mutations = db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
+        auto mutations = db::schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
@@ -408,7 +408,7 @@ future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool 
 #if 0
         logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
 #endif
-        auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), db_clock::now_in_usecs());
+        auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_keyspace& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
@@ -424,7 +424,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         auto&& old_cfm = db.find_schema(ks_name, cf_name);
         auto&& keyspace = db.find_keyspace(ks_name);
         logger.info("Drop table '{}/{}'", old_cfm->ks_name(), old_cfm->cf_name());
-        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, db_clock::now_in_usecs());
+        auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing table '%s' in keyspace '%s'.", cf_name, ks_name));

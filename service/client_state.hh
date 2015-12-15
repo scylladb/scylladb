@@ -133,7 +133,7 @@ public:
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
     api::timestamp_type get_timestamp() {
-        auto current = db_clock::now().time_since_epoch().count() * 1000;
+        auto current = api::new_timestamp();
         auto last = _last_timestamp_micros;
         auto result = last >= current ? last + 1 : current;
         _last_timestamp_micros = result;
