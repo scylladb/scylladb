@@ -63,7 +63,9 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
 
         file = file_path.string();
     }
-    return cfg.read_from_file(file).handle_exception([file](auto ep) {
+    return check_direct_io_support(file).then([file, &cfg] {
+        return cfg.read_from_file(file);
+    }).handle_exception([file](auto ep) {
         startlog.error("Could not read configuration file {}: {}", file, ep);
         return make_exception_future<>(ep);
     });
