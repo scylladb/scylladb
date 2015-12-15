@@ -105,15 +105,6 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-// Less-comparator on partition_key yielding the ring order.
-struct decorated_key_order {
-    schema_ptr s;
-    bool operator() (partition_key& k1, partition_key& k2) const {
-        return dht::global_partitioner().decorate_key(*s, k1)
-            .less_compare(*s, dht::global_partitioner().decorate_key(*s, k2));
-    }
-};
-
 static std::vector<mutation> make_ring(schema_ptr s, int n_mutations) {
     std::vector<mutation> mutations;
     for (int i = 0; i < n_mutations; ++i) {
