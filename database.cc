@@ -1637,9 +1637,9 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     // initied from datadir.
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
-    if (cf.schema()->version() != s->version()) {
-        // TODO: When conversion is lossy, force schema sync and retry
-        fail(unimplemented::cause::SCHEMA_CHANGE);
+    if (!s->is_synced()) {
+        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
+                                 s->ks_name(), s->cf_name(), s->version()));
     }
     if (cf.commitlog() != nullptr) {
         bytes_view repr = m.representation();
