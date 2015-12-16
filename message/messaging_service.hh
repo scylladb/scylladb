@@ -477,7 +477,7 @@ public:
     void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation();
-    future<> send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+    future<> send_mutation(shard_id id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id);
 
     // Wrapper for MUTATION_DONE

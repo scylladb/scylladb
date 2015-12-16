@@ -93,6 +93,8 @@ public:
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_range;
         uint64_t background_writes = 0; // client no longer waits for the write
+        uint64_t background_write_bytes = 0;
+        uint64_t queued_write_bytes = 0;
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
     };
@@ -100,6 +102,14 @@ private:
     distributed<database>& _db;
     response_id_type _next_response_id = 1; // 0 is reserved for unique_response_handler
     std::unordered_map<response_id_type, rh_entry> _response_handlers;
+    // This buffer hold ids of throttled writes in case resource consumption goes
+    // below the threshold and we want to unthrottle some of them. Without this throttled
+    // request with dead or slow replica may wait for up to timeout ms before replying
+    // even if resource consumption will go to zero. Note that some requests here may
+    // be already completed by the point they tried to be unthrottled (request completion does
+    // not remove request from the buffer), but this is fine since request ids are unique, so we
+    // just skip an entry if request no longer exists.
+    circular_buffer<response_id_type> _throttled_writes;
     constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
     size_t _total_hints_in_progress = 0;
     std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
@@ -116,12 +126,12 @@ private:
     response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
-    future<> response_wait(response_id_type id);
+    future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
-    future<> send_to_live_endpoints(response_id_type response_id);
+    void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
@@ -152,6 +162,8 @@ private:
     future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl);
     future<> mutate_end(future<> mutate_result, utils::latency_counter);
     future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
+    bool need_throttle_writes() const;
+    void unthrottle();
 
 public:
     storage_proxy(distributed<database>& db);

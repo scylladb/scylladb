@@ -323,8 +323,8 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
 }
 
 // TODO: Remove duplicated code in send_message
-template <typename MsgIn, typename... MsgOut>
-auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id id, std::chrono::milliseconds timeout, MsgOut&&... msg) {
+template <typename MsgIn, typename Timeout, typename... MsgOut>
+auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id id, Timeout timeout, MsgOut&&... msg) {
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
@@ -382,6 +382,12 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
 template <typename... MsgOut>
 auto send_message_oneway(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
     return send_message<rpc::no_wait_type>(ms, std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
+}
+
+// Send one way message for verb
+template <typename Timeout, typename... MsgOut>
+auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messaging_verb verb, shard_id id, MsgOut&&... msg) {
+    return send_message_timeout<rpc::no_wait_type>(ms, std::move(verb), std::move(id), timeout, std::forward<MsgOut>(msg)...);
 }
 
 // Wrappers for verbs
@@ -519,9 +525,9 @@ void messaging_service::register_mutation(std::function<rpc::no_wait_type (froze
 void messaging_service::unregister_mutation() {
     _rpc->unregister_handler(net::messaging_verb::MUTATION);
 }
-future<> messaging_service::send_mutation(shard_id id, const frozen_mutation& fm, std::vector<inet_address> forward,
+future<> messaging_service::send_mutation(shard_id id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id) {
-    return send_message_oneway(this, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
+    return send_message_oneway_timeout(this, timeout, messaging_verb::MUTATION, std::move(id), fm, std::move(forward),
         std::move(reply_to), std::move(shard), std::move(response_id));
 }
 

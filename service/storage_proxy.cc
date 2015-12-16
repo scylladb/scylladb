@@ -105,6 +105,7 @@ sstring get_local_dc() {
 
 class abstract_write_response_handler {
 protected:
+    storage_proxy::response_id_type _id;
     promise<> _ready; // available when cl is achieved
     shared_ptr<storage_proxy> _proxy;
     db::consistency_level _cl;
@@ -119,6 +120,7 @@ protected:
     std::vector<gms::inet_address> _dead_endpoints;
     size_t _cl_acks = 0;
     bool _cl_achieved = false;
+    bool _throttled = false;
 protected:
     size_t total_block_for() {
         // original comment from cassandra:
@@ -133,20 +135,36 @@ public:
     abstract_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
             size_t pending_endpoints = 0, std::vector<gms::inet_address> dead_endpoints = {})
-            : _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
+            : _id(p->_next_response_id++), _proxy(std::move(p)), _cl(cl), _ks(ks), _type(type), _mutation(std::move(mutation)), _targets(std::move(targets)),
               _pending_endpoints(pending_endpoints), _dead_endpoints(std::move(dead_endpoints)) {
     }
     virtual ~abstract_write_response_handler() {
         if (_cl_achieved) {
-            _proxy->_stats.background_writes--;
+            if (_throttled) {
+                _ready.set_value();
+            } else {
+                _proxy->_stats.background_writes--;
+                _proxy->_stats.background_write_bytes -= _mutation->representation().size();
+                _proxy->unthrottle();
+            }
         }
     };
+    void unthrottle() {
+        _proxy->_stats.background_writes++;
+        _proxy->_stats.background_write_bytes += _mutation->representation().size();
+        _throttled = false;
+        _ready.set_value();
+    }
     void signal(size_t nr = 1) {
         _cl_acks += nr;
         if (!_cl_achieved && _cl_acks >= total_block_for()) {
-             _ready.set_value();
              _cl_achieved = true;
-             _proxy->_stats.background_writes++;
+             if (_proxy->need_throttle_writes()) {
+                 _throttled = true;
+                 _proxy->_throttled_writes.push_back(_id);
+             } else {
+                 unthrottle();
+             }
          }
     }
     // return true on last ack
@@ -168,6 +186,9 @@ public:
     }
     lw_shared_ptr<const frozen_mutation> get_mutation() {
         return _mutation;
+    }
+    storage_proxy::response_id_type id() const {
+      return _id;
     }
     friend storage_proxy;
 };
@@ -216,8 +237,23 @@ public:
     }
 };
 
+bool storage_proxy::need_throttle_writes() const {
+    return _stats.background_write_bytes > memory::stats().total_memory() / 10 || _stats.queued_write_bytes > 6*1024*1024;
+}
+
+void storage_proxy::unthrottle() {
+   while(!need_throttle_writes() && !_throttled_writes.empty()) {
+       auto id = _throttled_writes.front();
+       _throttled_writes.pop_front();
+       auto it = _response_handlers.find(id);
+       if (it != _response_handlers.end()) {
+           it->second.handler->unthrottle();
+       }
+   }
+}
+
 storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
-    auto id = _next_response_id++;
+    auto id = h->id();
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
         if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
@@ -252,10 +288,10 @@ void storage_proxy::got_response(storage_proxy::response_id_type id, gms::inet_a
     }
 }
 
-future<> storage_proxy::response_wait(storage_proxy::response_id_type id) {
+future<> storage_proxy::response_wait(storage_proxy::response_id_type id, clock_type::time_point timeout) {
     auto& e = _response_handlers.find(id)->second;
 
-    e.expire_timer.arm(std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
+    e.expire_timer.arm(timeout);
 
     return e.handler->wait();
 }
@@ -297,6 +333,16 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                 , scollectd::per_cpu_plugin_instance
                 , "queue_length", "background writes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_writes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "queued write bytes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.queued_write_bytes)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "bytes", "background write bytes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, _stats.background_write_bytes)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
@@ -850,9 +896,10 @@ future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, d
         // frozen_mutation copy, or manage handler live time differently.
         hint_to_dead_endpoints(response_id, cl);
 
+        auto timeout = clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms());
         // call before send_to_live_endpoints() for the same reason as above
-        auto f = response_wait(response_id);
-        send_to_live_endpoints(protected_response.release()); // response is now running and it will either complete or timeout
+        auto f = response_wait(response_id, timeout);
+        send_to_live_endpoints(protected_response.release(), timeout); // response is now running and it will either complete or timeout
         return std::move(f);
     });
 }
@@ -1039,7 +1086,7 @@ bool storage_proxy::cannot_hint(gms::inet_address target) {
  * @throws OverloadedException if the hints cannot be written/enqueued
  */
  // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
-future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id)
+void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, clock_type::time_point timeout)
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
@@ -1059,41 +1106,55 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
     auto mptr = get_write_response_handler(response_id).get_mutation();
     auto& m = *mptr;
     auto all = boost::range::join(local, dc_groups);
+    auto my_address = utils::fb_utilities::get_broadcast_address();
+
+    // lambda for applying mutation locally
+    auto lmutate = [&m, mptr = std::move(mptr), response_id, this, my_address] {
+        return mutate_locally(m).then([response_id, this, my_address, mptr = std::move(mptr), p = shared_from_this()] {
+            // make mutation alive until it is processed locally, otherwise it
+            // may disappear if write timeouts before this future is ready
+            got_response(response_id, my_address);
+        });
+    };
+
+    // lambda for applying mutation remotely
+    auto rmutate = [this, &m, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
+        auto& ms = net::get_local_messaging_service();
+        _stats.queued_write_bytes += m.representation().size();
+        return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, timeout, m,
+                std::move(forward), my_address, engine().cpu_id(), response_id).finally([this, p = shared_from_this(), msize = m.representation().size()] {
+            _stats.queued_write_bytes -= msize;
+            unthrottle();
+        });
+    };
 
     // OK, now send and/or apply locally
-    return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) {
-        auto my_address = utils::fb_utilities::get_broadcast_address();
+    for (typename decltype(dc_groups)::value_type& dc_targets : all) {
         auto& forward = dc_targets.second;
-
         // last one in forward list is a coordinator
         auto coordinator = forward.back();
         forward.pop_back();
 
+        future<> f = make_ready_future<>();
+
         if (coordinator == my_address) {
-            return mutate_locally(m).then([response_id, this, my_address] {
-                got_response(response_id, my_address);
-            });
+            f = futurize<void>::apply(lmutate);
         } else {
-            auto& ms = net::get_local_messaging_service();
-            return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, m,
-                std::move(forward), my_address, engine().cpu_id(), response_id);
-        }
-    }).handle_exception([mptr] (std::exception_ptr eptr) {
-        // make mutation alive until it is sent or processed locally, otherwise it
-        // may disappear if write timeouts before this future is ready
-        try {
-            std::rethrow_exception(eptr);
-        } catch(rpc::closed_error&) {
-            // ignore, disconnect will be logged by gossiper
-        } catch(seastar::gate_closed_exception&) {
-            // may happen during shutdown, ignore it
-        } catch(std::exception& e) {
-            logger.error("exception during write: {}", e.what());
-        } catch(...) {
-            logger.error("unknown exception during write");
+            f = futurize<void>::apply(rmutate, coordinator, std::move(forward));
         }
 
-    });
+        f.handle_exception([coordinator] (std::exception_ptr eptr) {
+            try {
+                std::rethrow_exception(eptr);
+            } catch(rpc::closed_error&) {
+                // ignore, disconnect will be logged by gossiper
+            } catch(seastar::gate_closed_exception&) {
+                // may happen during shutdown, ignore it
+            } catch(...) {
+                logger.error("exception during mutation write to {}: {}", coordinator, std::current_exception());
+            }
+        });
+    }
 }
 
 // returns number of hints stored
@@ -2616,9 +2677,10 @@ void storage_proxy::init_messaging_service() {
                 }).handle_exception([] (std::exception_ptr eptr) {
                     logger.warn("MUTATION verb handler: {}", eptr);
                 }),
-                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
+                parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
-                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                    auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
+                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                 })
