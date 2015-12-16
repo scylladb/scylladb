@@ -42,6 +42,8 @@
 #include "mutation_reader.hh"
 #include "utils/UUID.hh"
 #include <vector>
+#include "range.hh"
+#include "dht/i_partitioner.hh"
 
 namespace streaming {
 

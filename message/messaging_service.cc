@@ -33,6 +33,8 @@
 #include "query-result.hh"
 #include "rpc/rpc.hh"
 #include "db/config.hh"
+#include "dht/i_partitioner.hh"
+#include "range.hh"
 
 namespace net {
 
@@ -447,13 +449,13 @@ future<> messaging_service::send_stream_mutation(shard_id id, UUID plan_id, froz
 }
 
 // STREAM_MUTATION_DONE
-void messaging_service::register_stream_mutation_done(std::function<future<> (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation_done(std::function<future<> (UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE, std::move(func));
 }
-future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, cf_id, from, connecting, dst_cpu_id);
+        plan_id, std::move(ranges), cf_id, from, connecting, dst_cpu_id);
 }
 
 // COMPLETE_MESSAGE

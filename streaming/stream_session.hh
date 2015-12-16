@@ -254,7 +254,7 @@ public:
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
-    void add_transfer_files(std::vector<stream_detail> sstable_details);
+    void add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details);
 
 private:
     void close_session(stream_session_state final_state);

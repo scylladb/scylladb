@@ -61,6 +61,7 @@
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_exception.hh"
 #include "service/storage_proxy.hh"
+#include "query-request.hh"
 
 namespace streaming {
 
@@ -133,8 +134,8 @@ void stream_session::init_messaging_service_handler() {
             return service::get_storage_proxy().local().mutate_locally(fm);
         });
     });
-    ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
-        return smp::submit_to(dst_cpu_id, [plan_id, cf_id, from, connecting] () mutable {
+    ms().register_stream_mutation_done([] (UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
+        return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from, connecting] () mutable {
             sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE: cf_id={}, from={}, connecting={}", plan_id, cf_id, from, connecting);
             auto f = get_stream_result_future(plan_id);
             if (f) {
@@ -143,7 +144,12 @@ void stream_session::init_messaging_service_handler() {
                 auto session = coordinator->get_or_create_next_session(from, from);
                 assert(session);
                 session->receive_task_completed(cf_id);
-                return make_ready_future<>();
+                return session->get_db().invoke_on_all([ranges = std::move(ranges), cf_id] (database& db) {
+                    auto& cf = db.find_column_family(cf_id);
+                    for (auto& range : ranges) {
+                        cf.get_row_cache().invalidate(query::to_partition_range(range));
+                    }
+                });
             } else {
                 auto err = sprint("[Stream #%s] GOT STREAM_MUTATION_DONE: Can not find stream_manager", plan_id);
                 sslog.warn(err.c_str());
@@ -616,11 +622,11 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys, repaired_at);
     }
     if (!stream_details.empty()) {
-        add_transfer_files(std::move(stream_details));
+        add_transfer_files(std::move(ranges), std::move(stream_details));
     }
 }
 
-void stream_session::add_transfer_files(std::vector<stream_detail> stream_details) {
+void stream_session::add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details) {
     for (auto& detail : stream_details) {
 #if 0
         if (details.sections.empty()) {
@@ -633,7 +639,7 @@ void stream_session::add_transfer_files(std::vector<stream_detail> stream_detail
         UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {
-            it = _transfers.emplace(cf_id, stream_transfer_task(shared_from_this(), cf_id)).first;
+            it = _transfers.emplace(cf_id, stream_transfer_task(shared_from_this(), cf_id, ranges)).first;
         }
         it->second.add_transfer_file(std::move(detail));
     }
