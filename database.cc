@@ -731,21 +731,22 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
             std::unordered_set<sstables::shared_sstable> s(
                     sstables_to_compact->begin(), sstables_to_compact->end());
             for (const auto& oldtab : *current_sstables) {
+                // Checks if oldtab is a sstable not being compacted.
                 if (!s.count(oldtab.second)) {
                     update_stats_for_new_sstable(oldtab.second->data_size());
                     _sstables->emplace(oldtab.first, oldtab.second);
                 }
+            }
 
-                for (const auto& newtab : *new_tables) {
-                    // FIXME: rename the new sstable(s). Verify a rename doesn't cause
-                    // problems for the sstable object.
-                    update_stats_for_new_sstable(newtab.second->data_size());
-                    _sstables->emplace(newtab.first, newtab.second);
-                }
+            for (const auto& newtab : *new_tables) {
+                // FIXME: rename the new sstable(s). Verify a rename doesn't cause
+                // problems for the sstable object.
+                update_stats_for_new_sstable(newtab.second->data_size());
+                _sstables->emplace(newtab.first, newtab.second);
+            }
 
-                for (const auto& oldtab : *sstables_to_compact) {
-                    oldtab->mark_for_deletion();
-                }
+            for (const auto& oldtab : *sstables_to_compact) {
+                oldtab->mark_for_deletion();
             }
         });
     });
