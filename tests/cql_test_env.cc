@@ -34,6 +34,7 @@
 #include "db/batchlog_manager.hh"
 #include "schema_builder.hh"
 #include "tmpdir.hh"
+#include "db/query_context.hh"
 
 // TODO: remove (#293)
 #include "message/messaging_service.hh"
@@ -337,6 +338,7 @@ public:
             _core_local.stop().get();
             db::get_batchlog_manager().stop().get();
             _qp->stop().get();
+            db::qctx = {};
             service::get_migration_manager().stop().get();
             service::get_storage_proxy().stop().get();
             _db->stop().get();
