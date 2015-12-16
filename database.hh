@@ -591,7 +591,7 @@ public:
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
-    future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
+    future<> update_column_family(schema_ptr new_schema);
     future<> drop_column_family(db_clock::time_point changed_at, const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */

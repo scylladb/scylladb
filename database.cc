@@ -1212,15 +1212,10 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
-    auto& proxy = service::get_storage_proxy();
-    auto old_cfm = find_schema(ks_name, cf_name);
-    return db::schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
-        if (old_cfm->id() != new_cfm->id()) {
-            return make_exception_future<>(exceptions::configuration_exception(sprint("Column family ID mismatch (found %s; expected %s)", new_cfm->id(), old_cfm->id())));
-        }
-        return make_exception_future<>(std::runtime_error("update column family not implemented"));
-    });
+future<> database::update_column_family(schema_ptr new_schema) {
+    column_family& old_cfm = find_column_family(new_schema->id());
+    old_cfm.set_schema(local_schema_registry().learn(new_schema));
+    return make_ready_future<>();
 }
 
 future<> database::drop_column_family(db_clock::time_point dropped_at, const sstring& ks_name, const sstring& cf_name) {

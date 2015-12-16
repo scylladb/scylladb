@@ -704,7 +704,8 @@ future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&
                     db.add_column_family(cfm, cfg);
                 }
                 parallel_for_each(altered.begin(), altered.end(), [&db] (auto&& cfm) {
-                    return db.update_column_family(cfm->ks_name(), cfm->cf_name());
+                    // FIXME: Send out notifications
+                    return db.update_column_family(cfm);
                 }).get();
                 parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db] (auto&& cfm) {
                     return db.drop_column_family(changed_at, cfm->ks_name(), cfm->cf_name());
