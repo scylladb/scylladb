@@ -270,6 +270,7 @@ cql_server::do_accepts(int which) {
     return _listeners[which].accept().then_wrapped([this, which] (future<connected_socket, socket_address> f_cs_sa) mutable {
         --_connections_being_accepted;
         if (_stopping) {
+            f_cs_sa.ignore_ready_future();
             maybe_idle();
             return;
         }
