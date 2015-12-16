@@ -304,7 +304,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // cannot be accessed until we make combined_reader more generic,
         // for example, by adding a reducer method.
         return db::system_keyspace::update_compaction_history(stats->ks, stats->cf, compacted_at,
-                stats->start_size, stats->end_size, {});
+                stats->start_size, stats->end_size, std::unordered_map<int32_t, int64_t>{});
     });
 }
 
