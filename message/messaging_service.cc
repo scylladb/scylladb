@@ -508,14 +508,14 @@ future<> messaging_service::send_definitions_update(shard_id id, std::vector<fro
     return send_message_oneway(this, messaging_verb::DEFINITIONS_UPDATE, std::move(id), std::move(fm));
 }
 
-void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> (gms::inet_address reply_to, unsigned shard)>&& func) {
+void messaging_service::register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func) {
     register_handler(this, net::messaging_verb::MIGRATION_REQUEST, std::move(func));
 }
 void messaging_service::unregister_migration_request() {
     _rpc->unregister_handler(net::messaging_verb::MIGRATION_REQUEST);
 }
-future<std::vector<frozen_mutation>> messaging_service::send_migration_request(shard_id id, gms::inet_address reply_to, unsigned shard) {
-    return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id), std::move(reply_to), std::move(shard));
+future<std::vector<frozen_mutation>> messaging_service::send_migration_request(shard_id id) {
+    return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id));
 }
 
 void messaging_service::register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,

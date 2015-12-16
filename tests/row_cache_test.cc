@@ -276,10 +276,10 @@ void verify_has(row_cache& cache, const mutation& m) {
 SEASTAR_TEST_CASE(test_update) {
     return seastar::async([] {
         auto s = make_schema();
-        auto mt = make_lw_shared<memtable>(s);
+        auto cache_mt = make_lw_shared<memtable>(s);
 
         cache_tracker tracker;
-        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), tracker);
 
         BOOST_MESSAGE("Check cache miss with populate");
 
@@ -294,6 +294,7 @@ SEASTAR_TEST_CASE(test_update) {
         }
 
         // populate memtable with partitions not in cache
+        auto mt = make_lw_shared<memtable>(s);
         std::vector<dht::decorated_key> keys_not_in_cache;
         for (int i = 0; i < partition_count; i++) {
             auto m = make_new_mutation(s);

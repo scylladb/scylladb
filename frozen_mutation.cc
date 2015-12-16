@@ -27,6 +27,7 @@
 #include "mutation_partition_serializer.hh"
 #include "utils/UUID.hh"
 #include "utils/data_input.hh"
+#include "query-result-set.hh"
 
 //
 // Representation layout:
@@ -92,4 +93,12 @@ mutation_partition_view frozen_mutation::partition() const {
     uuid_serializer::skip(in);
     partition_key_view_serializer::skip(in);
     return mutation_partition_view::from_bytes(in.read_view(in.avail()));
+}
+
+std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) {
+    return out << pr.self.unfreeze(pr.schema);
+}
+
+frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
+    return { *this, std::move(s) };
 }

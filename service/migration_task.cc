@@ -58,7 +58,7 @@ future<> migration_task::run_may_throw(distributed<service::storage_proxy>& prox
     }
     net::messaging_service::shard_id id{endpoint, 0};
     auto& ms = net::get_local_messaging_service();
-    return ms.send_migration_request(std::move(id), endpoint, engine().cpu_id()).then([&proxy](const std::vector<frozen_mutation>& mutations) {
+    return ms.send_migration_request(std::move(id)).then([&proxy](const std::vector<frozen_mutation>& mutations) {
         try {
             std::vector<mutation> schema;
             for (auto& m : mutations) {

@@ -38,7 +38,7 @@ def build_pretty_printer():
     pp.add_printer('uuid', r'^utils::UUID$', uuid_printer)
     return pp
 
-gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer())
+gdb.printing.register_pretty_printer(gdb.current_objfile(), build_pretty_printer(), replace=True)
 
 def cpus():
     return int(gdb.parse_and_eval('smp::count'))

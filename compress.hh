@@ -114,6 +114,14 @@ public:
         }
         return opts;
     }
+    bool operator==(const compression_parameters& other) const {
+        return _compressor == other._compressor
+               && _chunk_length == other._chunk_length
+               && _crc_check_chance == other._crc_check_chance;
+    }
+    bool operator!=(const compression_parameters& other) const {
+        return !(*this == other);
+    }
 private:
     void validate_options(const std::map<sstring, sstring>& options) {
         // currently, there are no options specific to a particular compressor

@@ -344,6 +344,7 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
+    friend std::ostream& operator<<(std::ostream&, const data_value&);
     friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
@@ -441,7 +442,7 @@ public:
         serialize(value._value, i);
         return b;
     }
-    sstring name() const {
+    const sstring& name() const {
         return _name;
     }
     virtual bool is_byte_order_comparable() const {

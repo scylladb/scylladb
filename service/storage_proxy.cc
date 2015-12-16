@@ -2657,7 +2657,7 @@ void storage_proxy::init_messaging_service() {
         }).discard_result();
         return net::messaging_service::no_wait();
     });
-    ms.register_migration_request([] (gms::inet_address reply_to, unsigned shard) {
+    ms.register_migration_request([] () {
         return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
             // keep local proxy alive
         });

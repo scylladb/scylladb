@@ -127,6 +127,10 @@ public:
 
     result() {}
     result(bytes_ostream&& w) : _w(std::move(w)) {}
+    result(result&&) = default;
+    result(const result&) = default;
+    result& operator=(result&&) = default;
+    result& operator=(const result&) = default;
 
     const bytes_ostream& buf() const {
         return _w;

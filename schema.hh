@@ -147,6 +147,12 @@ public:
     double get_value() const {
         return _v;
     }
+    bool operator==(const speculative_retry& other) const {
+        return _t == other._t && _v == other._v;
+    }
+    bool operator!=(const speculative_retry& other) const {
+        return !(*this == other);
+    }
 };
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
@@ -163,12 +169,6 @@ struct index_info {
 
 class column_definition final {
 public:
-    template<typename ColumnRange>
-    static std::vector<const column_definition*> vectorize(ColumnRange&& columns) {
-        std::vector<const column_definition*> r;
-        boost::transform(std::forward<ColumnRange>(columns), std::back_inserter(r), [] (auto& def) { return &def; });
-        return r;
-    }
 private:
     bytes _name;
 

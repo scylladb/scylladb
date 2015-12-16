@@ -167,3 +167,23 @@ mutation_query(const mutation_source& source,
         });
     });
 }
+
+std::ostream& operator<<(std::ostream& out, const reconcilable_result::printer& pr) {
+    out << "{rows=" << pr.self.row_count() << ", [";
+    bool first = true;
+    for (const partition& p : pr.self.partitions()) {
+        if (!first) {
+            out << ", ";
+        }
+        first = false;
+        out << "{rows=" << p.row_count() << ", ";
+        out << p._m.pretty_printer(pr.schema);
+        out << "}";
+    }
+    out << "]}";
+    return out;
+}
+
+reconcilable_result::printer reconcilable_result::pretty_printer(schema_ptr s) const {
+    return { *this, std::move(s) };
+}

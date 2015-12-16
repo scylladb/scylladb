@@ -467,9 +467,9 @@ public:
     future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
 
     // Wrapper for MIGRATION_REQUEST
-    void register_migration_request(std::function<future<std::vector<frozen_mutation>> (gms::inet_address reply_to, unsigned shard)>&& func);
+    void register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func);
     void unregister_migration_request();
-    future<std::vector<frozen_mutation>> send_migration_request(shard_id id, gms::inet_address reply_to, unsigned shard);
+    future<std::vector<frozen_mutation>> send_migration_request(shard_id id);
 
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;

@@ -24,22 +24,33 @@
 #include "mutation.hh"
 
 class mutation_assertion {
-    const mutation& _m;
+    mutation _m;
 public:
-    mutation_assertion(const mutation& m)
-        : _m(m)
+    mutation_assertion(mutation m)
+        : _m(std::move(m))
     { }
 
-    void is_equal_to(const mutation& other) {
+    mutation_assertion& is_equal_to(const mutation& other) {
         if (_m != other) {
             BOOST_FAIL(sprint("Mutations differ, expected %s\n ...but got: %s", other, _m));
         }
+        if (other != _m) {
+            BOOST_FAIL(sprint("Mutation inequality is not symmetric for %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
+    mutation_assertion& has_schema(schema_ptr s) {
+        if (_m.schema() != s) {
+            BOOST_FAIL(sprint("Expected mutation of schema %s, but got %s", *s, *_m.schema()));
+        }
+        return *this;
     }
 };
 
 static inline
-mutation_assertion assert_that(const mutation& m) {
-    return { m };
+mutation_assertion assert_that(mutation m) {
+    return { std::move(m) };
 }
 
 class mutation_opt_assertions {
