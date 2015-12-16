@@ -106,9 +106,6 @@ public:
 
     std::vector<session_info> get_all_session_info();
 
-public:
-    void transfer_files(inet_address to, std::vector<stream_detail> sstable_details);
-
 private:
 #if 0
     private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails)
