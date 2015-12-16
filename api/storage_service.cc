@@ -415,9 +415,12 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_drain_progress.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>("");
+        return service::get_storage_service().map_reduce(adder<service::storage_service::drain_progress>(), [] (auto& ss) {
+            return ss.get_drain_progress();
+        }).then([] (auto&& progress) {
+            auto progress_str = sprint("Drained %s/%s ColumnFamilies", progress.remaining_cfs, progress.total_cfs);
+            return make_ready_future<json::json_return_type>(std::move(progress_str));
+        });
     });
 
     ss::drain.set(r, [](std::unique_ptr<request> req) {
