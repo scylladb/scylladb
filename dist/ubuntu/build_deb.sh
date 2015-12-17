@@ -55,6 +55,6 @@ if [ "$RELEASE" != "15.10" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
 fi
-sudo apt-get -y install g++-5
+sudo apt-get -y install g++-4.9
 
 debuild -r fakeroot -us -uc
