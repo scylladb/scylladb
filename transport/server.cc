@@ -461,6 +461,14 @@ future<> cql_server::connection::process()
     });
 }
 
+future<> cql_server::connection::shutdown()
+{
+    _fd.shutdown_input();
+    return _pending_requests_gate.close().then([this] {
+        _fd.shutdown_output();
+    });
+}
+
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
         auto maybe_frame = std::get<0>(v.get());
