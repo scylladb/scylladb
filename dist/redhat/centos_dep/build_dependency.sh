@@ -21,7 +21,7 @@ if [ ! -f isl-0.14-3.fc22.src.rpm ]; then
 fi
 
 if [ ! -f gcc-5.1.1-4.fc22.src.rpm ]; then
-    wget http://download.fedoraproject.org/pub/fedora/linux/updates/22/SRPMS/g/gcc-5.1.1-4.fc22.src.rpm
+    wget https://s3.amazonaws.com/scylla-centos-dep/gcc-5.1.1-4.fc22.src.rpm
 fi
 
 if [ ! -f boost-1.57.0-6.fc22.src.rpm ]; then
