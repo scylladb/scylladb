@@ -145,6 +145,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup
+%{_prefix}/lib/scylla/scylla_extlinux_setup
 %{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc

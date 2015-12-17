@@ -86,6 +86,7 @@ EOS
         else
             SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
         fi
+        /usr/lib/scylla/scylla_extlinux_setup
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
     fi

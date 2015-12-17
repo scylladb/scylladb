@@ -1,0 +1,6 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+sed -e "s#append #append clocksource=tsc tsc=reliable #" /boot/extlinux/extlinux.conf > /tmp/extlinux.conf
+mv /tmp/extlinux.conf /boot/extlinux/extlinux.conf
