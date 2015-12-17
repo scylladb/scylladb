@@ -56,6 +56,15 @@ boost_tests = [
     'logalloc_test',
     'crc_test',
     'flush_queue_test',
+    'config_test',
+    'dynamic_bitset_test',
+    'gossip_test',
+    'key_reader_test',
+    'managed_vector_test',
+    'map_difference_test',
+    'memtable_test',
+    'mutation_query_test',
+    'snitch_reset_test',
 ]
 
 other_tests = [
