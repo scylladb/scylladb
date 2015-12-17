@@ -424,9 +424,9 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::drain.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().drain().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
     ss::truncate.set(r, [&ctx](std::unique_ptr<request> req) {
         //TBD
