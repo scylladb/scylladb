@@ -253,4 +253,7 @@ inline shared_ptr<storage_proxy> get_local_shared_storage_proxy() {
     return _the_storage_proxy.local_shared();
 }
 
+std::vector<query::partition_range> get_restricted_ranges(locator::token_metadata&,
+    const schema&, query::partition_range);
+
 }

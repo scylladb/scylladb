@@ -386,10 +386,20 @@ public:
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 
+// Trichotomic comparator for ring_position
 struct ring_position_comparator {
     const schema& s;
     ring_position_comparator(const schema& s_) : s(s_) {}
     int operator()(const ring_position& lh, const ring_position& rh) const;
+};
+
+// "less" comparator for ring_position
+struct ring_position_less_comparator {
+    const schema& s;
+    ring_position_less_comparator(const schema& s_) : s(s_) {}
+    bool operator()(const ring_position& lh, const ring_position& rh) const {
+        return lh.less_compare(s, rh);
+    }
 };
 
 struct token_comparator {
