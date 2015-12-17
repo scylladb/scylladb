@@ -38,6 +38,8 @@
 #include "mutation_query.hh"
 #include <seastar/core/gate.hh>
 
+#include <seastar/net/tls.hh>
+
 // forward declarations
 namespace streaming { namespace messages {
     class stream_init_message;
@@ -396,13 +398,24 @@ public:
 
     bool knows_version(const gms::inet_address& endpoint) const;
 
+    enum class encrypt_what {
+        none,
+        rack,
+        dc,
+        all,
+    };
+
 private:
     gms::inet_address _listen_address;
     uint16_t _port;
+    uint16_t _ssl_port;
+    encrypt_what _encrypt_what;
     // map: Node broadcast address -> Node internal IP for communication within the same data center
     std::unordered_map<gms::inet_address, gms::inet_address> _preferred_ip_cache;
     std::unique_ptr<rpc_protocol_wrapper> _rpc;
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
+    ::shared_ptr<seastar::tls::server_credentials> _credentials;
+    std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
     std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     seastar::gate _in_flight_requests;
@@ -410,6 +423,8 @@ public:
     using clock_type = std::chrono::steady_clock;
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
+    messaging_service(gms::inet_address ip, uint16_t port, encrypt_what,
+            uint16_t ssl_port, ::shared_ptr<seastar::tls::server_credentials>);
     ~messaging_service();
 public:
     uint16_t port();

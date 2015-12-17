@@ -67,6 +67,9 @@ public:
     rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr())
             : _p(std::make_unique<rpc_protocol::client>(proto, addr, local)) {
     }
+    rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local, ::shared_ptr<seastar::tls::server_credentials> c)
+            : _p(std::make_unique<rpc_protocol::client>(proto, addr, seastar::tls::connect(c, addr, local)))
+    {}
     auto get_stats() const { return _p->get_stats(); }
     future<> stop() { return _p->stop(); }
     bool error() {
@@ -155,10 +158,35 @@ void register_handler(messaging_service* ms, messaging_verb verb, Func&& func) {
 }
 
 messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
+    : messaging_service(std::move(ip), port, encrypt_what::none, 0, nullptr)
+{}
+
+messaging_service::messaging_service(gms::inet_address ip
+        , uint16_t port
+        , encrypt_what ew
+        , uint16_t ssl_port
+        , ::shared_ptr<seastar::tls::server_credentials> credentials
+        )
     : _listen_address(ip)
     , _port(port)
-    , _rpc(new rpc_protocol_wrapper(serializer{}))
-    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr{_listen_address.raw_addr(), _port})) {
+    , _ssl_port(ssl_port)
+    , _encrypt_what(ew)
+    , _rpc(new rpc_protocol_wrapper(serializer { }))
+    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr { _listen_address.raw_addr(), _port }))
+    , _credentials(std::move(credentials))
+    , _server_tls([this]() -> std::unique_ptr<rpc_protocol_server_wrapper>{
+        if (_encrypt_what == encrypt_what::none) {
+            return nullptr;
+        }
+        listen_options lo;
+        lo.reuse_address = true;
+        return std::make_unique<rpc_protocol_server_wrapper>(*_rpc,
+                        seastar::tls::listen(_credentials
+                                        , make_ipv4_address(ipv4_addr {_listen_address.raw_addr(), _ssl_port})
+                                        , lo)
+        );
+    }())
+{
     register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address) {
         ci.attach_auxiliary("baddr", broadcast_address);
         return rpc::no_wait;
@@ -263,8 +291,33 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         remove_error_rpc_client(verb, id);
     }
 
-    auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), _port);
-    auto client = ::make_shared<rpc_protocol_client_wrapper>(*_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
+    auto must_encrypt = [&id, this] {
+        if (_encrypt_what == encrypt_what::none) {
+            return false;
+        }
+        if (_encrypt_what == encrypt_what::all) {
+            return true;
+        }
+
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+
+        if (_encrypt_what == encrypt_what::dc) {
+            return snitch_ptr->get_datacenter(id.addr)
+                            == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+        }
+        return snitch_ptr->get_rack(id.addr)
+                        == snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address());
+    }();
+
+    auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
+    auto local_addr = ipv4_addr{_listen_address.raw_addr(), 0};
+
+    auto client = must_encrypt ?
+                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc,
+                                    remote_addr, local_addr, _credentials) :
+                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc,
+                                    remote_addr, local_addr);
+
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
     _rpc->make_client<rpc::no_wait_type(gms::inet_address)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address());
     return it->second.rpc_client;
