@@ -782,34 +782,19 @@ commitlog_total_space_in_mb: -1
 # the request scheduling. Currently the only valid option is keyspace.
 # request_scheduler_id: keyspace
 
-# Enable or disable inter-node encryption
-# Default settings are TLS v1, RSA 1024-bit keys (it is imperative that
-# users generate their own keys) TLS_RSA_WITH_AES_128_CBC_SHA as the cipher
-# suite for authentication, key exchange and encryption of the actual data transfers.
-# Use the DHE/ECDHE ciphers if running in FIPS 140 compliant mode.
-# NOTE: No custom encryption options are enabled at the moment
+# Enable or disable inter-node encryption. 
+# You must also generate keys and provide the appropriate key and trust store locations and passwords. 
+# No custom encryption options are currently enabled. The available options are:
+#
 # The available internode options are : all, none, dc, rack
-#
-# If set to dc cassandra will encrypt the traffic between the DCs
-# If set to rack cassandra will encrypt the traffic between the racks
-#
-# The passwords used in these options must match the passwords used when generating
-# the keystore and truststore.  For instructions on generating these files, see:
-# http://download.oracle.com/javase/6/docs/technotes/guides/security/jsse/JSSERefGuide.html#CreateKeystore
+# If set to dc scylla  will encrypt the traffic between the DCs
+# If set to rack scylla  will encrypt the traffic between the racks
 #
 # server_encryption_options:
 #    internode_encryption: none
-#    keystore: conf/.keystore
-#    keystore_password: cassandra
-#    truststore: conf/.truststore
-#    truststore_password: cassandra
-
-    # More advanced defaults below:
-    # protocol: TLS
-    # algorithm: SunX509
-    # store_type: JKS
-    # cipher_suites: [TLS_RSA_WITH_AES_128_CBC_SHA,TLS_RSA_WITH_AES_256_CBC_SHA,TLS_DHE_RSA_WITH_AES_128_CBC_SHA,TLS_DHE_RSA_WITH_AES_256_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA]
-    # require_client_auth: false
+#    certificate: conf/scylla.crt
+#    keyfile: conf/scylla.key
+#    truststore: <none, use system trust>
 
 # enable or disable client/server encryption.
 # client_encryption_options:
