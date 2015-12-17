@@ -1,0 +1,100 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+print_usage() {
+    echo "scylla-sysconfig-setup -n eth0 -m posix -p 64 -u scylla -g scylla -d /var/lib/scylla -c /etc/scylla -N -a -k"
+    echo "  -n  specify NIC"
+    echo "  -m  network mode (posix, dpdk)"
+    echo "  -p  number of hugepages"
+    echo "  -u  user (dpdk requires root)"
+    echo "  -g  group (dpdk requires root)"
+    echo "  -d  scylla home directory"
+    echo "  -c  scylla config directory"
+    echo "  -N  setup NIC's interrupts, RPS, XPS"
+    echo "  -a  AMI instance mode"
+    echo "  -k  keep package version on AMI"
+    exit 1
+}
+
+. /etc/os-release
+if [ "$NAME" = "Ubuntu" ]; then
+    SYSCONFIG=/etc/default
+else
+    SYSCONFIG=/etc/sysconfig
+fi
+
+NIC=eth0
+NETWORK_MODE=posix
+NR_HUGEPAGES=64
+USER=scylla
+GROUP=scylla
+SCYLLA_HOME=/var/lib/scylla
+SCYLLA_CONF=/etc/scylla
+SETUP_NIC=0
+SET_NIC="no"
+AMI=no
+AMI_KEEP_VERSION=no
+SCYLLA_ARGS=
+while getopts n:m:p:u:g:d:c:Nakh OPT; do
+    case "$OPT" in
+        "n")
+            NIC=$OPTARG
+            ;;
+        "m")
+            NETWORK_MODE=$OPTARG
+            ;;
+        "p")
+            NR_HUGEPAGES=$OPTARG
+            ;;
+        "u")
+            USER=$OPTARG
+            ;;
+        "g")
+            GROUP=$OPTARG
+            ;;
+        "d")
+            SCYLLA_HOME=$OPTARG
+            ;;
+        "c")
+            SCYLLA_CONF=$OPTARG
+            ;;
+        "N")
+            SETUP_NIC=1
+            ;;
+        "a")
+            AMI=yes
+            ;;
+        "k")
+            AMI_KEEP_VERSION=yes
+            ;;
+        "h")
+            print_usage
+            ;;
+    esac
+done
+
+echo Setting parameters on $SYSCONFIG/scylla-server
+
+ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
+ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
+NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
+if [ $NR_CPU -ge 8 ]; then
+    NR=$((NR_CPU - 1))
+    SET_NIC="yes"
+    SCYLLA_ARGS="--cpuset 1-$NR  --smp $NR"
+fi
+sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
+    -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
+    -e s#^ETHPCIID=.*#ETHPCIID=$ETHPCIID# \
+    -e s#^NR_HUGEPAGES=.*#NR_HUGEPAGES=$NR_HUGEPAGES# \
+    -e s#^USER=.*#USER=$USER# \
+    -e s#^GROUP=.*#GROUP=$GROUP# \
+    -e s#^SCYLLA_HOME=.*#SCYLLA_HOME=$SCYLLA_HOME# \
+    -e s#^SCYLLA_CONF=.*#SCYLLA_CONF=$SCYLLA_CONF# \
+    -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
+    -e s#^SCYLLA_ARGS=.*#SCYLLA_ARGS="$SCYLLA_ARGS"# \
+    -e s#^AMI=.*#AMI="$AMI"# \
+    -e s#^AMI_KEEP_VERSION=.*#AMI_KEEP_VERSION="$AMI_KEEP_VERSION"# \
+    $SYSCONFIG/scylla-server > /tmp/scylla-server
+mv /tmp/scylla-server $SYSCONFIG/scylla-server

@@ -85,13 +85,18 @@ if [ -f /etc/sysconfig/scylla-server ] && [ `grep IFNAME -r /etc/sysconfig/scyll
     echo "# ethernet device name" >> /etc/sysconfig/scylla-server
     echo "IFNAME=eth0" >> /etc/sysconfig/scylla-server
 fi
+if [ -d /usr/lib/scylla/scylla-ami ]; then
+    echo "# setup as AMI instance" >> /etc/sysconfig/scylla-server
+    echo "AMI=no" >> /etc/sysconfig/scylla-server
+    echo "# do not upgrade Scylla packages on AMI startup" >> /etc/sysconfig/scylla-server
+    echo "AMI_KEEP_VERSION=no" >> /etc/sysconfig/scylla-server
+fi
 
 %post
 grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
 echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
 echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
 mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
-
 %systemd_post scylla-server.service
 
 %preun
@@ -128,6 +133,8 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_run
 %{_prefix}/lib/scylla/scylla_stop
+%{_prefix}/lib/scylla/scylla_raid_setup
+%{_prefix}/lib/scylla/scylla_sysconfig_setup
 %{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc

@@ -36,3 +36,9 @@ SCYLLA_CONF=/etc/scylla
 
 # additional arguments
 SCYLLA_ARGS=""
+
+# setup as AMI instance
+AMI=no
+
+# do not upgrade Scylla packages on AMI startup
+AMI_KEEP_VERSION=no

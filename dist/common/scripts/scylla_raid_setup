@@ -1,0 +1,60 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+print_usage() {
+    echo "scylla-raid-setup -d /dev/hda,/dev/hdb... -r /dev/md0 -u"
+    echo "  -d  specify disks for RAID"
+    echo "  -r  MD device name for RAID"
+    echo "  -u  update /etc/fstab for RAID"
+    exit 1
+}
+
+RAID=/dev/md0
+FSTAB=0
+while getopts d:r:uh OPT; do
+    case "$OPT" in
+        "d")
+            DISKS=`echo $OPTARG|tr -s ',' ' '`
+            NR_DISK=$((`echo $OPTARG|grep , -o|wc -w` + 1))
+            ;;
+        "r")
+            RAID=$OPTARG
+            ;;
+        "u")
+            FSTAB=1
+            ;;
+        "h")
+            print_usage
+            ;;
+    esac
+done
+
+if [ "$DISKS" = "" ]; then
+    print_usage
+fi
+
+echo Creating RAID0 for scylla using $NR_DISK disk\(s\): $DISKS
+if [ -e $RAID ]; then
+    echo "$RAID is already using"
+    exit 1
+fi
+if [ "`mount|grep /var/lib/scylla`" != "" ]; then
+    echo "/var/lib/scylla is already mounted"
+    exit 1
+fi
+mdadm --create --verbose --force --run $RAID --level=0 -c256 --raid-devices=$NR_DISK $DISKS
+blockdev --setra 65536 $RAID
+mkfs.xfs $RAID -f
+echo "DEVICE $DISKS" > /etc/mdadm.conf
+mdadm --detail --scan >> /etc/mdadm.conf
+if [ $FSTAB -ne 0 ]; then
+    UUID=`blkid $RAID | awk '{print $2}'`
+    echo "$UUID /var/lib/scylla xfs noatime 0 0" >> /etc/fstab
+fi
+mount -t xfs -o noatime $RAID /var/lib/scylla
+
+mkdir -p /var/lib/scylla/data
+mkdir -p /var/lib/scylla/commitlog
+chown scylla:scylla /var/lib/scylla/*
+chown scylla:scylla /var/lib/scylla/

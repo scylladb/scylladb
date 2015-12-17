@@ -1,0 +1,98 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+if [ "`id -u`" -ne 0 ]; then
+    echo "Requires root permission."
+    exit 1
+fi
+
+print_usage() {
+    echo "scylla-install -d /dev/hda,/dev/hdb... -n eth0 -a -l /home/scylla/rpms"
+    echo "  -d  specify disks for RAID"
+    echo "  -n  specify NIC"
+    echo "  -a  setup AMI instance"
+    echo "  -l	install locally built .rpm/.deb on specified directory"
+    exit 1
+}
+
+NIC=eth0
+RAID=/dev/md0
+AMI=0
+LOCAL_PKG=
+while getopts d:n:al:h OPT; do
+    case "$OPT" in
+        "n")
+            NIC=$OPTARG
+            ;;
+        "d")
+            DISKS=$OPTARG
+            ;;
+        "a")
+            AMI=1
+            ;;
+        "l")
+            LOCAL_PKG=$OPTARG
+            ;;
+        "h")
+            print_usage
+            ;;
+    esac
+done
+
+if [ $AMI -eq 0 ] && [ "$DISKS" = "" ]; then
+    print_usage
+    exit 1
+fi
+
+SYSCONFIG_SETUP_ARGS="-n $NIC"
+. /etc/os-release
+
+if [ "$NAME" = "Ubuntu" ]; then
+    if [ "$LOCAL_PKG" = "" ]; then
+        echo "deb http://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
+        apt-get update
+        apt-get install -y --force-yes scylla-server scylla-jmx scylla-tools
+    else
+        apt-get install -y --force-yes gdebi-core
+        gdebi $LOCAL_PKG/scylla-server*.deb $LOCAL_PKG/scylla-jmx*.deb $LOCAL_PKG/scylla-tools*.deb
+    fi
+else
+    setenforce 0
+    sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
+    mv /tmp/selinux /etc/sysconfig/
+    if [ "$LOCAL_PKG" = "" ]; then
+        cat << EOS > /etc/yum.repos.d/scylla.repo
+[scylla]
+name=Scylla for Fedora \$releasever - \$basearch
+baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/\$releasever/\$basearch/
+enabled=1
+gpgcheck=0
+
+[scylla-generic]
+name=Scylla for Fedora \$releasever
+baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/\$releasever/noarch/
+enabled=1
+gpgcheck=0
+EOS
+        yum install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
+    else
+        yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
+    fi
+    if [ $AMI -eq 1 ]; then
+        SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -N -a"
+        if [ "$LOCAL_PKG" = "" ]; then
+            yum update -y
+        else
+            SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
+        fi
+        grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
+        mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
+    fi
+    systemctl enable scylla-server.service
+    systemctl enable scylla-jmx.service
+fi
+if [ $AMI -eq 0 ]; then
+    /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+fi
+/usr/lib/scylla/scylla_sysconfig_setup $SYSCONFIG_SETUP_ARGS
