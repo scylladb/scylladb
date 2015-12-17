@@ -666,7 +666,7 @@ public:
     val(permissions_update_interval_in_ms, uint32_t, 2000, Unused,     \
             "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. On next access, an async reload is scheduled and the old value is returned until it completes. If permissions_validity_in_ms , then this property must benon-zero."   \
     )   \
-    val(server_encryption_options, string_map, /*none*/, Unused,     \
+    val(server_encryption_options, string_map, /*none*/, Used,     \
             "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \
             "\n"    \
             "internode_encryption : (Default: none ) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"  \
@@ -674,20 +674,9 @@ public:
             "\tnone : No encryption.\n" \
             "\tdc : Encrypt the traffic between the data centers (server only).\n"  \
             "\track : Encrypt the traffic between the racks(server only).\n"    \
-            "\tkeystore : (Default: conf/.keystore ) The location of a Java keystore (JKS) suitable for use with Java Secure Socket Extension (JSSE), which is the Java version of the Secure Sockets Layer (SSL), and Transport Layer Security (TLS) protocols. The keystore contains the private key used to encrypt outgoing messages.\n"    \
-            "\tkeystore_password : (Default: cassandra ) Password for the keystore.\n"  \
-            "\ttruststore : (Default: conf/.truststore ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
-            "\ttruststore_password : (Default: cassandra ) Password for the truststore.\n"  \
-            "\n"    \
-            "The passwords used in these options must match the passwords used when generating the keystore and truststore. For instructions on generating these files, see Creating a Keystore to Use with JSSE.\n"   \
-            "\n"    \
-            "The advanced settings are:\n"  \
-            "\n"    \
-            "\tprotocol : (Default: TLS )\n"    \
-            "\talgorithm : (Default: SunX509 )\n"   \
-            "\tstore_type : (Default: JKS )\n"  \
-            "\tcipher_suites : (Default: TLS_RSA_WITH_AES_128_CBC_SHA , TLS_RSA_WITH_AES_256_CBC_SHA )\n"   \
-            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n" \
+            "certificate : (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the internode communication.\n"    \
+            "keyfile : (Default: conf/scylla.key) PEM Key file associated with certificate.\n"  \
+            "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
             "Related information: Node-to-node encryption"  \
     )   \
     val(client_encryption_options, string_map, /*none*/, Unused,     \
