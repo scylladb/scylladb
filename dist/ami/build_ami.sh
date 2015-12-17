@@ -5,6 +5,16 @@ if [ ! -e dist/ami/build_ami.sh ]; then
     exit 1
 fi
 
+TARGET_JSON=scylla.json
+if [ "$1" != "" ]; then
+    TARGET_JSON=$1
+fi
+
+if [ ! -f dist/ami/$TARGET_JSON ]; then
+    echo "dist/ami/$TARGET_JSON does not found"
+    exit 1
+fi
+
 cd dist/ami
 
 if [ ! -f variables.json ]; then
@@ -20,4 +30,4 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-packer/packer build -var-file=variables.json scylla.json
+packer/packer build -var-file=variables.json $TARGET_JSON

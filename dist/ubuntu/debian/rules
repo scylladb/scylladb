@@ -4,6 +4,7 @@ DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
 SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
 SWAGGER = $(SCRIPTS)/swagger-ui
 API = $(SCRIPTS)/api
+SYSCTL = $(CURDIR)/debian/scylla-server/etc/sysctl.d
 LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
 LIBS = $(CURDIR)/debian/scylla-server/usr/lib
 CONF = $(CURDIR)/debian/scylla-server/etc/scylla
@@ -20,6 +21,9 @@ override_dh_auto_clean:
 override_dh_auto_install:
 	mkdir -p $(LIMITS) && \
 	cp $(CURDIR)/dist/common/limits.d/scylla.conf  $(LIMITS)
+
+	mkdir -p $(SYSCTL) && \
+	cp $(CURDIR)/dist/common/sysctl.d/99-scylla.conf $(SYSCTL)
 
 	mkdir -p $(CONF) && \
 	cp $(CURDIR)/conf/scylla.yaml $(CONF)
@@ -47,6 +51,7 @@ override_dh_auto_install:
 
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog
+	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/coredump
 
 override_dh_strip:
 	dh_strip --dbg-package=scylla-server-dbg

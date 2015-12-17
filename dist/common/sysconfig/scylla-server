@@ -7,6 +7,12 @@ TAP=tap0
 # bridge device name (virtio)
 BRIDGE=virbr0
 
+# ethernet device name
+IFNAME=eth0
+
+# setup NIC's interrupts, RPS, XPS (posix)
+SET_NIC=no
+
 # ethernet device driver (dpdk)
 ETHDRV=
 
@@ -30,3 +36,9 @@ SCYLLA_CONF=/etc/scylla
 
 # additional arguments
 SCYLLA_ARGS=""
+
+# setup as AMI instance
+AMI=no
+
+# do not upgrade Scylla packages on AMI startup
+AMI_KEEP_VERSION=no

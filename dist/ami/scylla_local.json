@@ -27,9 +27,26 @@
       "destination": "/home/fedora/scylla_install"
     },
     {
+      "type": "file",
+      "source": "scylla-server.x86_64.rpm",
+      "destination": "/home/fedora/scylla-server.x86_64.rpm"
+    },
+    {
+      "type": "file",
+      "source": "scylla-jmx.noarch.rpm",
+      "destination": "/home/fedora/scylla-jmx.noarch.rpm"
+    },
+    {
+      "type": "file",
+      "source": "scylla-tools.noarch.rpm",
+      "destination": "/home/fedora/scylla-tools.noarch.rpm"
+    },
+    {
       "type": "shell",
       "inline": [
-          "sudo sh -x -e /home/fedora/scylla_install -a"
+          "sudo yum install -y /home/fedora/scylla-server.x86_64.rpm /home/fedora/scylla-jmx.noarch.rpm /home/fedora/scylla-tools.noarch.rpm",
+          "sudo mv /home/fedora/scylla-ami /usr/lib/scylla/scylla-ami",
+          "sudo sh -x -e /home/fedora/scylla_install -a -l /home/fedora"
       ]
     }
   ],
