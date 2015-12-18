@@ -54,6 +54,31 @@ namespace statements {
 
 thread_local const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
 
+select_statement::parameters::parameters()
+    : _is_distinct{false}
+    , _allow_filtering{false}
+{ }
+
+select_statement::parameters::parameters(orderings_type orderings,
+    bool is_distinct,
+    bool allow_filtering)
+    : _orderings{std::move(orderings)}
+    , _is_distinct{is_distinct}
+    , _allow_filtering{allow_filtering}
+{ }
+
+bool select_statement::parameters::is_distinct() {
+    return _is_distinct;
+}
+
+bool select_statement::parameters::allow_filtering() {
+    return _allow_filtering;
+}
+
+select_statement::parameters::orderings_type const& select_statement::parameters::orderings() {
+    return _orderings;
+}
+
 select_statement::select_statement(schema_ptr schema,
     uint32_t bound_terms,
     ::shared_ptr<parameters> parameters,
@@ -113,6 +138,14 @@ bool select_statement::depends_on_keyspace(const sstring& ks_name) const {
 
 bool select_statement::depends_on_column_family(const sstring& cf_name) const {
     return column_family() == cf_name;
+}
+
+const sstring& select_statement::keyspace() const {
+    return _schema->ks_name();
+}
+
+const sstring& select_statement::column_family() const {
+    return _schema->cf_name();
 }
 
 query::partition_slice
@@ -317,6 +350,18 @@ shared_ptr<transport::messages::result_message> select_statement::process_result
     rs->trim(cmd->row_limit);
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
 }
+
+select_statement::raw_statement::raw_statement(::shared_ptr<cf_name> cf_name,
+                                               ::shared_ptr<parameters> parameters,
+                                               std::vector<::shared_ptr<selection::raw_selector>> select_clause,
+                                               std::vector<::shared_ptr<relation>> where_clause,
+                                               ::shared_ptr<term::raw> limit)
+    : cf_statement(std::move(cf_name))
+    , _parameters(std::move(parameters))
+    , _select_clause(std::move(select_clause))
+    , _where_clause(std::move(where_clause))
+    , _limit(std::move(limit))
+{ }
 
 ::shared_ptr<parsed_statement::prepared>
 select_statement::raw_statement::prepare(database& db) {
