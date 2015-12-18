@@ -88,14 +88,6 @@ public:
         }
         _specs[bind_index] = spec;
     }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        return Arrays.toString(specs);
-    }
-#endif
 };
 
 }
