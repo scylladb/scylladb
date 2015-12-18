@@ -45,6 +45,14 @@ namespace cql3 {
 
 namespace statements {
 
+delete_statement::delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+        : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
+{ }
+
+bool delete_statement::require_full_clustering_key() const {
+    return false;
+}
+
 void delete_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (_column_operations.empty()) {
         m.partition().apply_delete(*s, prefix, params.make_tombstone());
@@ -96,5 +104,17 @@ delete_statement::parsed::prepare_internal(database& db, schema_ptr schema, ::sh
     return stmt;
 }
 
+delete_statement::parsed::parsed(::shared_ptr<cf_name> name,
+                                 ::shared_ptr<attributes::raw> attrs,
+                                 std::vector<::shared_ptr<operation::raw_deletion>> deletions,
+                                 std::vector<::shared_ptr<relation>> where_clause,
+                                 conditions_vector conditions,
+                                 bool if_exists)
+    : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
+    , _deletions(std::move(deletions))
+    , _where_clause(std::move(where_clause))
+{ }
+
 }
+
 }
