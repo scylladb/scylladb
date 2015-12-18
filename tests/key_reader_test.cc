@@ -91,7 +91,7 @@ SEASTAR_TEST_CASE(test_combined) {
         BOOST_REQUIRE(dk);
         BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(3));
         return (*reader)();
-    }).then([] (dht::decorated_key_opt dk) {
+    }).then([reader] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(!dk);
     });
 }
@@ -120,7 +120,7 @@ SEASTAR_TEST_CASE(test_filtering) {
         BOOST_REQUIRE(dk);
         BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(3));
         return (*reader)();
-    }).then([] (dht::decorated_key_opt dk) {
+    }).then([reader] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(!dk);
     });
 }
