@@ -107,84 +107,29 @@ private:
         };
 
 public:
-    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
-        : type{type_}
-        , _bound_terms{bound_terms}
-        , s{schema_}
-        , attrs{std::move(attrs_)}
-        , _column_operations{}
-    { }
+    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_);
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-        if (attrs->uses_function(ks_name, function_name)) {
-            return true;
-        }
-        for (auto&& e : _processed_keys) {
-            auto r = e.second;
-            if (r && r->uses_function(ks_name, function_name)) {
-                return true;
-            }
-        }
-        for (auto&& operation : _column_operations) {
-            if (operation && operation->uses_function(ks_name, function_name)) {
-                return true;
-            }
-        }
-        for (auto&& condition : _column_conditions) {
-            if (condition && condition->uses_function(ks_name, function_name)) {
-                return true;
-            }
-        }
-        for (auto&& condition : _static_conditions) {
-            if (condition && condition->uses_function(ks_name, function_name)) {
-                return true;
-            }
-        }
-        return false;
-    }
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
     virtual bool require_full_clustering_key() const = 0;
 
     virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) = 0;
 
-    virtual uint32_t get_bound_terms() override {
-        return _bound_terms;
-    }
+    virtual uint32_t get_bound_terms() override;
 
-    virtual sstring keyspace() const {
-        return s->ks_name();
-    }
+    virtual sstring keyspace() const;
 
-    virtual sstring column_family() const {
-        return s->cf_name();
-    }
+    virtual sstring column_family() const;
 
-    virtual bool is_counter() const {
-        return s->is_counter();
-    }
+    virtual bool is_counter() const;
 
-    int64_t get_timestamp(int64_t now, const query_options& options) const {
-        return attrs->get_timestamp(now, options);
-    }
+    int64_t get_timestamp(int64_t now, const query_options& options) const;
 
-    bool is_timestamp_set() const {
-        return attrs->is_timestamp_set();
-    }
+    bool is_timestamp_set() const;
 
-    gc_clock::duration get_time_to_live(const query_options& options) const {
-        return gc_clock::duration(attrs->get_time_to_live(options));
-    }
+    gc_clock::duration get_time_to_live(const query_options& options) const;
 
-    virtual void check_access(const service::client_state& state) override {
-        warn(unimplemented::cause::PERMISSIONS);
-#if 0
-        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
-
-        // CAS updates can be used to simulate a SELECT query, so should require Permission.SELECT as well.
-        if (hasConditions())
-            state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
-#endif
-    }
+    virtual void check_access(const service::client_state& state) override;
 
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
@@ -192,14 +137,7 @@ public:
 
     virtual bool depends_on_column_family(const sstring& cf_name) const override;
 
-    void add_operation(::shared_ptr<operation> op) {
-        if (op->column.is_static()) {
-            _sets_static_columns = true;
-        } else {
-            _sets_regular_columns = true;
-        }
-        _column_operations.push_back(std::move(op));
-    }
+    void add_operation(::shared_ptr<operation> op);
 
 #if 0
     public Iterable<ColumnDefinition> getColumnsWithConditions()
@@ -212,31 +150,15 @@ public:
     }
 #endif
 public:
-    void add_condition(::shared_ptr<column_condition> cond) {
-        if (cond->column.is_static()) {
-            _sets_static_columns = true;
-            _static_conditions.emplace_back(std::move(cond));
-        } else {
-            _sets_regular_columns = true;
-            _column_conditions.emplace_back(std::move(cond));
-        }
-    }
+    void add_condition(::shared_ptr<column_condition> cond);
 
-    void set_if_not_exist_condition() {
-        _if_not_exists = true;
-    }
+    void set_if_not_exist_condition();
 
-    bool has_if_not_exist_condition() const {
-        return _if_not_exists;
-    }
+    bool has_if_not_exist_condition() const;
 
-    void set_if_exist_condition() {
-        _if_exists = true;
-    }
+    void set_if_exist_condition();
 
-    bool has_if_exist_condition() const {
-        return _if_exists;
-    }
+    bool has_if_exist_condition() const;
 
 private:
     void add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values);
@@ -254,11 +176,7 @@ protected:
     const column_definition* get_first_empty_key();
 
 public:
-    bool requires_read() {
-        return std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
-            return op->requires_read();
-        });
-    }
+    bool requires_read();
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
@@ -269,9 +187,7 @@ protected:
                 db::consistency_level cl);
 
 public:
-    bool has_conditions() {
-        return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
-    }
+    bool has_conditions();
 
     virtual future<::shared_ptr<transport::messages::result_message>>
     execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
@@ -428,9 +344,7 @@ protected:
      * processed to check that they are compatible.
      * @throws InvalidRequestException
      */
-    virtual void validate_where_clause_for_conditions() {
-        //  no-op by default
-    }
+    virtual void validate_where_clause_for_conditions();
 
 public:
     class parsed : public cf_statement {
@@ -443,13 +357,7 @@ public:
         const bool _if_not_exists;
         const bool _if_exists;
     protected:
-        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
-            : cf_statement{std::move(name)}
-            , _attrs{std::move(attrs)}
-            , _conditions{std::move(conditions)}
-            , _if_not_exists{if_not_exists}
-            , _if_exists{if_exists}
-        { }
+        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists);
 
     public:
         virtual ::shared_ptr<parsed_statement::prepared> prepare(database& db) override;
