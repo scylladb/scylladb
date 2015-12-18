@@ -650,11 +650,19 @@ public:
         : _s(s), _sst(std::move(sst)), _range(range)
     {
         auto& summary = _sst->_summary;
+        using summary_entries_type = std::decay_t<decltype(summary.entries)>;
 
         _begin_bucket_id = 0;
         if (range.start()) {
-            auto pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
-                range.start()->value(), index_comparator(*s));
+            summary_entries_type::iterator pos;
+            if (range.start()->is_inclusive()) {
+                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
+                    range.start()->value(), index_comparator(*s));
+
+            } else {
+                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
+                    range.start()->value(), index_comparator(*s));
+            }
             _begin_bucket_id = std::distance(summary.entries.begin(), pos);
             if (_begin_bucket_id) {
                 _begin_bucket_id--;
@@ -664,8 +672,14 @@ public:
 
         _end_bucket_id = summary.header.size;
         if (range.end()) {
-            auto pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
-                range.end()->value(), index_comparator(*s));
+            summary_entries_type::iterator pos;
+            if (range.end()->is_inclusive()) {
+                pos = std::upper_bound(summary.entries.begin(), summary.entries.end(),
+                    range.end()->value(), index_comparator(*s));
+            } else {
+                pos = std::lower_bound(summary.entries.begin(), summary.entries.end(),
+                    range.end()->value(), index_comparator(*s));
+            }
             _end_bucket_id = std::distance(summary.entries.begin(), pos);
             if (_end_bucket_id) {
                 _end_bucket_id--;
