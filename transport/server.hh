@@ -29,6 +29,7 @@
 #include "core/distributed.hh"
 #include <memory>
 #include <boost/intrusive/list.hpp>
+#include <seastar/net/tls.hh>
 
 namespace scollectd {
 
@@ -102,7 +103,7 @@ private:
     cql_load_balance _lb;
 public:
     cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb);
-    future<> listen(ipv4_addr addr);
+    future<> listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials> = {});
     future<> do_accepts(int which);
     future<> stop();
 public:
