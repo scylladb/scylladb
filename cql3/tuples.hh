@@ -224,14 +224,6 @@ public:
             // We don't "need" that override but it saves us the allocation of a Value object if used
             return options.make_temporary(_type->build_value(bind_internal(options)));
         }
-
-#if 0
-        @Override
-        public String toString()
-        {
-            return tupleToString(elements);
-        }
-#endif
     };
 
     /**
