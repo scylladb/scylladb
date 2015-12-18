@@ -67,6 +67,7 @@
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include <seastar/net/tls.hh>
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1568,15 +1569,28 @@ future<> storage_service::start_native_transport() {
         auto& cfg = ss._db.local().get_config();
         auto port = cfg.native_transport_port();
         auto addr = cfg.rpc_address();
+        auto ceo = cfg.client_encryption_options();
         transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
-        return dns::gethostbyname(addr).then([cserver, addr, port, lb] (dns::hostent e) {
+        return dns::gethostbyname(addr).then([cserver, addr, port, lb, ceo = std::move(ceo)] (dns::hostent e) {
             auto ip = e.addresses[0].in.s_addr;
-            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip] {
+            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
                 //    return cserver->stop();
                 //});
-                return cserver->invoke_on_all(&transport::cql_server::listen, ipv4_addr{ip, port});
+
+                ::shared_ptr<seastar::tls::server_credentials> cred;
+                auto addr = ipv4_addr{ip, port};
+                auto f = make_ready_future();
+
+                // main should have made sure values are clean and neatish
+                if (ceo.at("enabled") == "true") {
+                    cred = ::make_shared<seastar::tls::server_credentials>(::make_shared<seastar::tls::dh_params>(seastar::tls::dh_params::level::MEDIUM));
+                    f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
+                }
+                return f.then([cserver, addr, cred] {
+                    return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred);
+                });
             });
         }).then([addr, port] {
             print("Starting listening for CQL clients on %s:%s...\n", addr, port);
