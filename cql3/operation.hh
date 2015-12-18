@@ -199,13 +199,7 @@ public:
         }
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver);
-#if 0
-        protected String toString(ColumnSpecification column)
-        {
-            return String.format("%s[%s] = %s", column.name, selector, value);
-        }
 
-#endif
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
@@ -217,13 +211,6 @@ public:
         }
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
-
-#if 0
-        protected String toString(ColumnSpecification column)
-        {
-            return String.format("%s = %s + %s", column.name, column.name, value);
-        }
-#endif
 
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
@@ -237,13 +224,6 @@ public:
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
 
-#if 0
-        protected String toString(ColumnSpecification column)
-        {
-            return String.format("%s = %s - %s", column.name, column.name, value);
-        }
-#endif
-
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
@@ -256,12 +236,6 @@ public:
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
 
-#if 0
-        protected String toString(ColumnSpecification column)
-        {
-            return String.format("%s = %s - %s", column.name, value, column.name);
-        }
-#endif
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 

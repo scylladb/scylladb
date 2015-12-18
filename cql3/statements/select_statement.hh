@@ -72,20 +72,13 @@ public:
         const bool _is_distinct;
         const bool _allow_filtering;
     public:
-        parameters()
-            : _is_distinct{false}
-            , _allow_filtering{false}
-        { }
+        parameters();
         parameters(orderings_type orderings,
             bool is_distinct,
-            bool allow_filtering)
-            : _orderings{std::move(orderings)}
-            , _is_distinct{is_distinct}
-            , _allow_filtering{allow_filtering}
-        { }
-        bool is_distinct() { return _is_distinct; }
-        bool allow_filtering() { return _allow_filtering; }
-        orderings_type const& orderings() { return _orderings; }
+            bool allow_filtering);
+        bool is_distinct();
+        bool allow_filtering();
+        orderings_type const& orderings();
     };
 private:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
@@ -195,13 +188,9 @@ public:
     }
 #endif
 
-    const sstring& keyspace() const {
-        return _schema->ks_name();
-    }
+    const sstring& keyspace() const;
 
-    const sstring& column_family() const {
-        return _schema->cf_name();
-    }
+    const sstring& column_family() const;
 
     query::partition_slice make_partition_slice(const query_options& options);
 
@@ -457,13 +446,7 @@ public:
             ::shared_ptr<parameters> parameters,
             std::vector<::shared_ptr<selection::raw_selector>> select_clause,
             std::vector<::shared_ptr<relation>> where_clause,
-            ::shared_ptr<term::raw> limit)
-        : cf_statement(std::move(cf_name))
-        , _parameters(std::move(parameters))
-        , _select_clause(std::move(select_clause))
-        , _where_clause(std::move(where_clause))
-        , _limit(std::move(limit))
-    { }
+            ::shared_ptr<term::raw> limit);
 
     virtual ::shared_ptr<prepared> prepare(database& db) override;
 private:

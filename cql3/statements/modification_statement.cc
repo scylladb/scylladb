@@ -71,6 +71,81 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
     return out;
 }
 
+modification_statement::modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
+    : type{type_}
+    , _bound_terms{bound_terms}
+    , s{schema_}
+    , attrs{std::move(attrs_)}
+    , _column_operations{}
+{ }
+
+bool modification_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
+    if (attrs->uses_function(ks_name, function_name)) {
+        return true;
+    }
+    for (auto&& e : _processed_keys) {
+        auto r = e.second;
+        if (r && r->uses_function(ks_name, function_name)) {
+            return true;
+        }
+    }
+    for (auto&& operation : _column_operations) {
+        if (operation && operation->uses_function(ks_name, function_name)) {
+            return true;
+        }
+    }
+    for (auto&& condition : _column_conditions) {
+        if (condition && condition->uses_function(ks_name, function_name)) {
+            return true;
+        }
+    }
+    for (auto&& condition : _static_conditions) {
+        if (condition && condition->uses_function(ks_name, function_name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t modification_statement::get_bound_terms() {
+    return _bound_terms;
+}
+
+sstring modification_statement::keyspace() const {
+    return s->ks_name();
+}
+
+sstring modification_statement::column_family() const {
+    return s->cf_name();
+}
+
+bool modification_statement::is_counter() const {
+    return s->is_counter();
+}
+
+int64_t modification_statement::get_timestamp(int64_t now, const query_options& options) const {
+    return attrs->get_timestamp(now, options);
+}
+
+bool modification_statement::is_timestamp_set() const {
+    return attrs->is_timestamp_set();
+}
+
+gc_clock::duration modification_statement::get_time_to_live(const query_options& options) const {
+    return gc_clock::duration(attrs->get_time_to_live(options));
+}
+
+void modification_statement::check_access(const service::client_state& state) {
+    warn(unimplemented::cause::PERMISSIONS);
+#if 0
+    state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
+
+    // CAS updates can be used to simulate a SELECT query, so should require Permission.SELECT as well.
+    if (hasConditions())
+        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
+#endif
+}
+
 future<std::vector<mutation>>
 modification_statement::get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now) {
     auto keys = make_lw_shared(build_partition_keys(options));
@@ -548,6 +623,63 @@ bool modification_statement::depends_on_keyspace(const sstring& ks_name) const {
 bool modification_statement::depends_on_column_family(const sstring& cf_name) const {
     return column_family() == cf_name;
 }
+
+void modification_statement::add_operation(::shared_ptr<operation> op) {
+    if (op->column.is_static()) {
+        _sets_static_columns = true;
+    } else {
+        _sets_regular_columns = true;
+    }
+    _column_operations.push_back(std::move(op));
+}
+
+void modification_statement::add_condition(::shared_ptr<column_condition> cond) {
+    if (cond->column.is_static()) {
+        _sets_static_columns = true;
+        _static_conditions.emplace_back(std::move(cond));
+    } else {
+        _sets_regular_columns = true;
+        _column_conditions.emplace_back(std::move(cond));
+    }
+}
+
+void modification_statement::set_if_not_exist_condition() {
+    _if_not_exists = true;
+}
+
+bool modification_statement::has_if_not_exist_condition() const {
+    return _if_not_exists;
+}
+
+void modification_statement::set_if_exist_condition() {
+    _if_exists = true;
+}
+
+bool modification_statement::has_if_exist_condition() const {
+    return _if_exists;
+}
+
+bool modification_statement::requires_read() {
+    return std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
+        return op->requires_read();
+    });
+}
+
+bool modification_statement::has_conditions() {
+    return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
+}
+
+void modification_statement::validate_where_clause_for_conditions() {
+    //  no-op by default
+}
+
+modification_statement::parsed::parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
+    : cf_statement{std::move(name)}
+    , _attrs{std::move(attrs)}
+    , _conditions{std::move(conditions)}
+    , _if_not_exists{if_not_exists}
+    , _if_exists{if_exists}
+{ }
 
 }
 
