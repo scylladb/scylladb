@@ -223,12 +223,26 @@ private:
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
     private double traceProbability = 0.0;
-
+#endif
     /* Used for tracking drain progress */
-    private volatile int totalCFs, remainingCFs;
+public:
+    struct drain_progress {
+        int32_t total_cfs;
+        int32_t remaining_cfs;
+
+        drain_progress& operator+=(const drain_progress& other) {
+            total_cfs += other.total_cfs;
+            remaining_cfs += other.remaining_cfs;
+            return *this;
+        }
+    };
+private:
+    drain_progress _drain_progress{};
+#if 0
 
     private static final AtomicInteger nextRepairCommand = new AtomicInteger();
 #endif
+
 
     std::vector<endpoint_lifecycle_subscriber*> _lifecycle_subscribers;
 
@@ -1897,12 +1911,10 @@ public:
     future<sstring> get_operation_mode();
 
     future<bool> is_starting();
-#if 0
-    public String getDrainProgress()
-    {
-        return String.format("Drained %s/%s ColumnFamilies", remainingCFs, totalCFs);
+
+    drain_progress get_drain_progress() const {
+        return _drain_progress;
     }
-#endif
 
     /**
      * Shuts node off to writes, empties memtables and the commit log.

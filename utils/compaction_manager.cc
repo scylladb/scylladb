@@ -167,11 +167,14 @@ void compaction_manager::start(int task_nr) {
 }
 
 future<> compaction_manager::stop() {
+    if (_stopped) {
+        return make_ready_future<>();
+    }
+    _stopped = true;
     _registrations.clear();
     return do_for_each(_tasks, [this] (auto& task) {
         return this->task_stop(task);
     }).then([this] {
-        _stopped = true;
         for (auto& cf : _cfs_to_compact) {
             cf->set_compaction_manager_queued(false);
         }
@@ -181,7 +184,7 @@ future<> compaction_manager::stop() {
 }
 
 void compaction_manager::submit(column_family* cf) {
-    if (_tasks.empty()) {
+    if (_stopped || _tasks.empty()) {
         return;
     }
     // To avoid having two or more entries of the same cf stored in the queue.

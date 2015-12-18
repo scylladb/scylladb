@@ -566,6 +566,9 @@ public:
         return _commitlog.get();
     }
 
+    compaction_manager& get_compaction_manager() {
+        return _compaction_manager;
+    }
     const compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }

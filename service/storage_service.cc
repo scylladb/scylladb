@@ -65,6 +65,8 @@
 #include "transport/server.hh"
 #include "dns.hh"
 #include <seastar/core/rwlock.hh>
+#include "db/batchlog_manager.hh"
+#include "db/commitlog/commitlog.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -1749,80 +1751,83 @@ future<> storage_service::remove_node(sstring host_id_string) {
 }
 
 future<> storage_service::drain() {
-    fail(unimplemented::cause::STORAGE_SERVICE);
+    return run_with_write_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            if (ss._operation_mode == mode::DRAINED) {
+                logger.warn("Cannot drain node (did it already happen?)");
+                return;
+            }
+
+            ss.set_mode(mode::DRAINING, "starting drain process", true);
+            ss.shutdown_client_servers().get();
+            gms::get_local_gossiper().stop_gossiping().get();
+
+            ss.set_mode(mode::DRAINING, "shutting down MessageService", false);
+            net::get_messaging_service().invoke_on_all([] (auto& ms) {
+                return ms.stop();
+            }).get();
+
 #if 0
-    ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-    ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-    if (mutationStage.isTerminated() && counterMutationStage.isTerminated())
-    {
-        logger.warn("Cannot drain node (did it already happen?)");
-        return;
-    }
-    setMode(Mode.DRAINING, "starting drain process", true);
-    shutdownClientServers();
-    ScheduledExecutors.optionalTasks.shutdown();
-    Gossiper.instance.stop();
-
-    setMode(Mode.DRAINING, "shutting down MessageService", false);
-    MessagingService.instance().shutdown();
-
-    setMode(Mode.DRAINING, "clearing mutation stage", false);
-    counterMutationStage.shutdown();
-    mutationStage.shutdown();
-    counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-    mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-
     StorageProxy.instance.verifyNoHintsInProgress();
+#endif
 
-    setMode(Mode.DRAINING, "flushing column families", false);
-    // count CFs first, since forceFlush could block for the flushWriter to get a queue slot empty
-    totalCFs = 0;
-    for (Keyspace keyspace : Keyspace.nonSystem())
-        totalCFs += keyspace.getColumnFamilyStores().size();
-    remainingCFs = totalCFs;
-    // flush
-    List<Future<?>> flushes = new ArrayList<>();
-    for (Keyspace keyspace : Keyspace.nonSystem())
-    {
-        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-            flushes.add(cfs.forceFlush());
-    }
-    // wait for the flushes.
-    // TODO this is a godawful way to track progress, since they flush in parallel.  a long one could
-    // thus make several short ones "instant" if we wait for them later.
-    for (Future f : flushes)
-    {
-        FBUtilities.waitOnFuture(f);
-        remainingCFs--;
-    }
-    // flush the system ones after all the rest are done, just in case flushing modifies any system state
-    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-    flushes.clear();
-    for (Keyspace keyspace : Keyspace.system())
-    {
-        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-            flushes.add(cfs.forceFlush());
-    }
-    FBUtilities.waitOnFutures(flushes);
+            ss.set_mode(mode::DRAINING, "flushing column families", false);
+            service::get_storage_service().invoke_on_all([] (auto& ss) {
+                auto& local_db = ss.db().local();
+                auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+                    auto cf = uuid_and_cf.second;
+                    return cf->schema()->ks_name() != db::system_keyspace::NAME;
+                });
+                // count CFs first
+                auto total_cfs = boost::distance(non_system_cfs);
+                ss._drain_progress.total_cfs = total_cfs;
+                ss._drain_progress.remaining_cfs = total_cfs;
+                // flush
+                return parallel_for_each(non_system_cfs, [&ss] (auto&& uuid_and_cf) {
+                    auto cf = uuid_and_cf.second;
+                    return cf->flush().then([&ss] {
+                        ss._drain_progress.remaining_cfs--;
+                    });
+                });
+            }).get();
+            // flush the system ones after all the rest are done, just in case flushing modifies any system state
+            // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
+            service::get_storage_service().invoke_on_all([] (auto& ss) {
+                auto& local_db = ss.db().local();
+                auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+                    auto cf = uuid_and_cf.second;
+                    return cf->schema()->ks_name() == db::system_keyspace::NAME;
+                });
+                return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
+                    auto cf = uuid_and_cf.second;
+                    return cf->flush();
+                });
+            }).get();
 
-    BatchlogManager.shutdown();
+            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+                return bm.stop();
+            }).get();
 
+            // Interrupt on going compaction and shutdown to prevent further compaction
+            ss.db().invoke_on_all([] (auto& db) {
+                // FIXME: ongoing compaction tasks should be interrupted, not
+                // waited for which is what compaction_manager::stop() does now.
+                return db.get_compaction_manager().stop();
+            }).get();
+
+#if 0
     // whilst we've flushed all the CFs, which will have recycled all completed segments, we want to ensure
     // there are no segments to replay, so we force the recycling of any remaining (should be at most one)
     CommitLog.instance.forceRecycleAllSegments();
-
-    ColumnFamilyStore.shutdownPostFlushExecutor();
-
-    CommitLog.instance.shutdownBlocking();
-
-    // wait for miscellaneous tasks like sstable and commitlog segment deletion
-    ScheduledExecutors.nonPeriodicTasks.shutdown();
-    if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-        logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
-
-    setMode(Mode.DRAINED, true);
 #endif
-    return make_ready_future<>();
+
+            ss.db().invoke_on_all([] (auto& db) {
+                return db.commitlog()->shutdown();
+            }).get();
+
+            ss.set_mode(mode::DRAINED, true);
+        });
+    });
 }
 
 double storage_service::get_load() {

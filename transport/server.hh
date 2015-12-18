@@ -127,10 +127,7 @@ private:
         ~connection();
         future<> process();
         future<> process_request();
-        void shutdown() {
-            _fd.shutdown_input();
-            _fd.shutdown_output();
-        }
+        future<> shutdown();
     private:
         future<response_type> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state);
         unsigned frame_size() const;

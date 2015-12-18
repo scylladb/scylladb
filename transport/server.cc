@@ -270,6 +270,7 @@ cql_server::do_accepts(int which) {
     return _listeners[which].accept().then_wrapped([this, which] (future<connected_socket, socket_address> f_cs_sa) mutable {
         --_connections_being_accepted;
         if (_stopping) {
+            f_cs_sa.ignore_ready_future();
             maybe_idle();
             return;
         }
@@ -457,6 +458,14 @@ future<> cql_server::connection::process()
                 return _write_buf.close();
             });
         });
+    });
+}
+
+future<> cql_server::connection::shutdown()
+{
+    _fd.shutdown_input();
+    return _pending_requests_gate.close().then([this] {
+        _fd.shutdown_output();
     });
 }
 

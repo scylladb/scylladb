@@ -36,6 +36,7 @@
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
+#include <seastar/core/gate.hh>
 
 // forward declarations
 namespace streaming { namespace messages {
@@ -404,6 +405,7 @@ private:
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
     std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
+    seastar::gate _in_flight_requests;
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
     ~messaging_service();
@@ -412,6 +414,7 @@ public:
     gms::inet_address listen_address();
     future<> stop();
     static rpc::no_wait_type no_wait();
+    seastar::gate& requests_gate() { return _in_flight_requests; }
 public:
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();
