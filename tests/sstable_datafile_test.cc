@@ -1994,6 +1994,47 @@ SEASTAR_TEST_CASE(check_sstable_key_reader) {
     });
 }
 
+SEASTAR_TEST_CASE(check_sstable_single_key_reader) {
+    // CREATE TABLE key_reader_test (
+    //        a int PRIMARY KEY
+    //) WITH min_index_interval = 64;
+    auto builder = schema_builder("tests", "key_reader_test")
+    .with_column("a", int32_type, column_kind::partition_key);
+    builder.set_min_index_interval(64);
+    auto s = builder.build();
+
+    auto get_dk = [s] (int value) {
+        auto pk = partition_key::from_exploded(*s, { int32_type->decompose(value) });
+        return dht::global_partitioner().decorate_key(*s, std::move(pk));
+    };
+
+    return open_sstables("tests/sstables/key_reader", {1}).then([get_dk, s = std::move(s)] (auto ssts) {
+        int idx = 0;
+        std::vector<int> sst_a(300);
+        std::generate(sst_a.begin(), sst_a.end(), [&] { return idx += 2; });
+
+        std::sort(sst_a.begin(), sst_a.end(), [&] (int a, int b) {
+            return get_dk(a).less_compare(*s, get_dk(b));
+        });
+        auto keys = make_lw_shared<std::vector<int>>(std::move(sst_a));
+
+        auto reader = prepare_key_reader(s, ssts, query::full_partition_range);
+        return compare_keys(std::move(reader), keys->begin(), keys->end()).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 64;
+            auto end = keys->begin() + 128;
+            key_range = query::partition_range::make({ get_dk(*start), false }, { get_dk(*end), false });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), ++start, end);
+        }).then([get_dk, s, keys, ssts] {
+            auto start = keys->begin() + 64;
+            auto end = keys->begin() + 128;
+            key_range = query::partition_range::make({ get_dk(*start), true }, { get_dk(*end), true });
+            auto reader = prepare_key_reader(s, ssts, key_range);
+            return compare_keys(std::move(reader), start, ++end);
+        }).then([get_dk, s, keys, ssts] { });
+    });
+}
+
 SEASTAR_TEST_CASE(check_read_indexes) {
     auto builder = schema_builder("test", "summary_test")
         .with_column("a", int32_type, column_kind::partition_key);
