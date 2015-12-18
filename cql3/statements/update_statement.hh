@@ -64,14 +64,9 @@ public:
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
-        : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
-    { }
-
+    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs);
 private:
-    virtual bool require_full_clustering_key() const override {
-        return true;
-    }
+    virtual bool require_full_clustering_key() const override;
 
     virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
 public:
@@ -92,11 +87,7 @@ public:
                       ::shared_ptr<attributes::raw> attrs,
                       std::vector<::shared_ptr<column_identifier::raw>> column_names,
                       std::vector<::shared_ptr<term::raw>> column_values,
-                      bool if_not_exists)
-            : modification_statement::parsed{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
-            , _column_names{std::move(column_names)}
-            , _column_values{std::move(column_values)}
-        { }
+                      bool if_not_exists);
 
         virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
                     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) override;
@@ -122,11 +113,7 @@ public:
             ::shared_ptr<attributes::raw> attrs,
             std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
             std::vector<relation_ptr> where_clause,
-            conditions_vector conditions)
-                : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, false)
-                , _updates(std::move(updates))
-                , _where_clause(std::move(where_clause))
-        { }
+            conditions_vector conditions);
     protected:
         virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
                     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);

@@ -48,6 +48,14 @@ namespace cql3 {
 
 namespace statements {
 
+update_statement::update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+    : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
+{ }
+
+bool update_statement::require_full_clustering_key() const {
+    return true;
+}
+
 void update_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (s->is_dense()) {
         if (!prefix || (prefix.size() == 1 && prefix.components().front().empty())) {
@@ -100,6 +108,16 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
 #endif
 }
 
+update_statement::parsed_insert::parsed_insert(::shared_ptr<cf_name> name,
+                                               ::shared_ptr<attributes::raw> attrs,
+                                               std::vector<::shared_ptr<column_identifier::raw>> column_names,
+                                               std::vector<::shared_ptr<term::raw>> column_values,
+                                               bool if_not_exists)
+    : modification_statement::parsed{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
+    , _column_names{std::move(column_names)}
+    , _column_values{std::move(column_values)}
+{ }
+
 ::shared_ptr<modification_statement>
 update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
@@ -147,6 +165,16 @@ update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schem
     }
     return stmt;
 }
+
+update_statement::parsed_update::parsed_update(::shared_ptr<cf_name> name,
+                                               ::shared_ptr<attributes::raw> attrs,
+                                               std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
+                                               std::vector<relation_ptr> where_clause,
+                                               conditions_vector conditions)
+    : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, false)
+    , _updates(std::move(updates))
+    , _where_clause(std::move(where_clause))
+{ }
 
 ::shared_ptr<modification_statement>
 update_statement::parsed_update::prepare_internal(database& db, schema_ptr schema,
