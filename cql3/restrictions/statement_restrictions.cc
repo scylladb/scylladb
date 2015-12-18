@@ -41,13 +41,13 @@ public:
 
     ::shared_ptr<primary_key_restrictions<T>> do_merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) const {
         if (restriction->is_multi_column()) {
-            throw std::runtime_error("not implemented");
+            throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
         }
         return ::make_shared<single_column_primary_key_restrictions<T>>(schema)->merge_to(schema, restriction);
     }
     ::shared_ptr<primary_key_restrictions<T>> merge_to(schema_ptr schema, ::shared_ptr<restriction> restriction) override {
         if (restriction->is_multi_column()) {
-            throw std::runtime_error("not implemented");
+            throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
         }
         if (restriction->is_on_token()) {
             return static_pointer_cast<token_restriction>(restriction);

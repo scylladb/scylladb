@@ -278,10 +278,10 @@ public:
             });
     }
     bytes from_string(sstring_view s) {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
     sstring to_string(const bytes& b) {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
     // Retruns true iff given prefix has no missing components
     bool is_full(bytes_view v) const {

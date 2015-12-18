@@ -178,7 +178,7 @@ query_processor::prepare(const std::experimental::string_view& query_string, con
 query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift)
 {
     if (for_thrift) {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 #if 0
         Integer thriftStatementId = computeThriftId(queryString, keyspace);
         ParsedStatement.Prepared existing = thriftPreparedStatements.get(thriftStatementId);
@@ -209,7 +209,7 @@ query_processor::store_prepared_statement(const std::experimental::string_view& 
                                                         MAX_CACHE_PREPARED_MEMORY));
 #endif
     if (for_thrift) {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 #if 0
         Integer statementId = computeThriftId(queryString, keyspace);
         thriftPreparedStatements.put(statementId, prepared);

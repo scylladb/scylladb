@@ -159,7 +159,7 @@ protected:
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
                                                  ::shared_ptr<variable_specifications> bound_names,
                                                  bool is_key) override {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 #if 0
         ColumnDefinition columnDef = toColumnDefinition(schema, entity);
         Term term = toTerm(toReceivers(schema, columnDef), value, schema.ksName, bound_names);

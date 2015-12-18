@@ -1144,7 +1144,7 @@ void database::add_keyspace(sstring name, keyspace k) {
 }
 
 void database::update_keyspace(const sstring& name) {
-    throw std::runtime_error("not implemented");
+    throw std::runtime_error("update keyspace not implemented");
 }
 
 void database::drop_keyspace(const sstring& name) {

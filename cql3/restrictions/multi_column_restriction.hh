@@ -374,7 +374,7 @@ public:
     }
 
     virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 #if 0
         return Composites.toByteBuffers(boundsAsComposites(b, options));
 #endif

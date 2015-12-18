@@ -322,7 +322,7 @@ public:
     virtual future<shared_ptr<transport::messages::result_message>> execute_internal(
             distributed<service::storage_proxy>& proxy,
             service::query_state& query_state, const query_options& options) override {
-        throw "not implemented";
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 #if 0
         assert !hasConditions;
         for (IMutation mutation : getMutations(BatchQueryOptions.withoutPerStatementVariables(options), true, queryState.getTimestamp()))

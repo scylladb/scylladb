@@ -1269,7 +1269,7 @@ void create_table_from_table_row_and_column_rows(schema_builder& builder, const 
     } else {
         // FIXME:
         // is_dense = CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
 
     bool is_compound = cell_comparator::check_compound(table_row.get_nonnull<sstring>("comparator"));

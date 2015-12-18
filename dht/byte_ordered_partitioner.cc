@@ -34,12 +34,12 @@ token byte_ordered_partitioner::get_random_token()
 
 std::map<token, float> byte_ordered_partitioner::describe_ownership(const std::vector<token>& sorted_tokens)
 {
-    throw std::runtime_error("not implemented");
+    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 }
 
 token byte_ordered_partitioner::midpoint(const token& t1, const token& t2) const
 {
-    throw std::runtime_error("not implemented");
+    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 }
 
 unsigned

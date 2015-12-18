@@ -408,7 +408,7 @@ struct date_type_impl : public concrete_type<db_clock::time_point> {
     }
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
@@ -641,7 +641,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         return b;
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
@@ -2361,12 +2361,12 @@ tuple_type_impl::split(bytes_view v) const {
 
 bytes
 tuple_type_impl::from_string(sstring_view s) const {
-    throw std::runtime_error("not implemented");
+    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 }
 
 sstring
 tuple_type_impl::to_string(const bytes& b) const {
-    throw std::runtime_error("not implemented");
+    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
 }
 
 bool
