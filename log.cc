@@ -98,7 +98,12 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
         if (*p == '{' && *(p+1) == '}') {
             p += 2;
             if (n > 0) {
-                (*s++)->append(out);
+                try {
+                    (*s)->append(out);
+                } catch (...) {
+                    out << '<' << std::current_exception() << '>';
+                }
+                ++s;
                 --n;
             } else {
                 out << "???";
