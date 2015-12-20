@@ -527,8 +527,8 @@ bool stream_session::maybe_completed() {
             // notify peer that this session is completed
             send_complete_message().then([this] {
                 _complete_sent = true;
-                set_state(stream_session_state::WAIT_COMPLETE);
                 sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE", plan_id(), _state);
+                set_state(stream_session_state::WAIT_COMPLETE);
             });
         }
     }
