@@ -588,6 +588,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         throw marshal_exception();
     }
     static int64_t timestamp_from_string(sstring_view s) {
+        try {
         std::string str;
         str.resize(s.size());
         std::transform(s.begin(), s.end(), str.begin(), ::tolower);
@@ -625,17 +626,15 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
             throw marshal_exception();
         }
         return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
+        } catch (...) {
+            throw marshal_exception(sprint("unable to parse date '%s'", s));
+        }
     }
     virtual bytes from_string(sstring_view s) const override {
         if (s.empty()) {
             return bytes();
         }
-        int64_t ts;
-        try {
-            ts = timestamp_from_string(s);
-        } catch (...) {
-            throw marshal_exception(sprint("unable to parse date '%s'", s));
-        }
+        int64_t ts = timestamp_from_string(s);
         bytes b(bytes::initialized_later(), sizeof(int64_t));
         *unaligned_cast<int64_t*>(b.begin()) = net::hton(ts);
         return b;
