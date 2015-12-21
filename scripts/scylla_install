@@ -62,19 +62,14 @@ else
     sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
     mv /tmp/selinux /etc/sysconfig/
     if [ "$LOCAL_PKG" = "" ]; then
-        cat << EOS > /etc/yum.repos.d/scylla.repo
-[scylla]
-name=Scylla for Fedora \$releasever - \$basearch
-baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/\$releasever/\$basearch/
-enabled=1
-gpgcheck=0
-
-[scylla-generic]
-name=Scylla for Fedora \$releasever
-baseurl=https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/\$releasever/noarch/
-enabled=1
-gpgcheck=0
-EOS
+        if [ "$NAME" = "Fedora" ]; then
+            curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
+        elif [ "$NAME" = "CentOS Linux" ]; then
+            curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
+        else
+            echo "Unsupported distribution"
+            exit 1
+        fi
         yum install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
     else
         yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
