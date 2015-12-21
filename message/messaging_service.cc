@@ -399,10 +399,10 @@ auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messagi
 // Wrappers for verbs
 
 // Retransmission parameters for streaming verbs
-// A stream plan gives up retrying in 5 minutes
-static constexpr int streaming_nr_retry = 20;
-static constexpr std::chrono::seconds streaming_timeout{10};
-static constexpr std::chrono::seconds streaming_wait_before_retry{5};
+// A stream plan gives up retrying in 10 minutes at most, 5 minutes at least
+static constexpr int streaming_nr_retry = 10;
+static constexpr std::chrono::seconds streaming_timeout{30};
+static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
 // STREAM_INIT_MESSAGE
 void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
