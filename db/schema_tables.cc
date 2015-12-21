@@ -1136,39 +1136,53 @@ void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestam
     make_table_mutations(table, timestamp, with_columns_and_triggers).copy_to(mutations);
 }
 
-#if 0
-    public static Mutation makeUpdateTableMutation(KSMetaData keyspace,
-                                                   CFMetaData oldTable,
-                                                   CFMetaData newTable,
-                                                   long timestamp,
-                                                   boolean fromThrift)
-    {
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
+std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace,
+    schema_ptr old_table,
+    schema_ptr new_table,
+    api::timestamp_type timestamp,
+    bool from_thrift)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
 
-        addTableToSchemaMutation(newTable, timestamp, false, mutation);
+    add_table_to_schema_mutation(new_table, timestamp, false, mutations);
 
-        MapDifference<ByteBuffer, ColumnDefinition> columnDiff = Maps.difference(oldTable.getColumnMetadata(),
-                                                                                 newTable.getColumnMetadata());
+    auto make_column_map = [] (auto&& column_defs) {
+        std::map<bytes, const column_definition*> result;
+        for (const column_definition& col : column_defs) {
+            result.emplace(col.name(), &col);
+        }
+        return result;
+    };
 
-        // columns that are no longer needed
-        for (ColumnDefinition column : columnDiff.entriesOnlyOnLeft().values())
-        {
-            // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
-            // are being deleted just because they are not here.
-            if (fromThrift && column.kind != ColumnDefinition.Kind.REGULAR)
-                continue;
+    mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
 
-            dropColumnFromSchemaMutation(oldTable, column, timestamp, mutation);
+    auto old_columns = make_column_map(old_table->all_columns_in_select_order());
+    auto new_columns = make_column_map(new_table->all_columns_in_select_order());
+    auto diff = difference(old_columns, new_columns);
+
+    // columns that are no longer needed
+    for (auto&& name : diff.entries_only_on_left) {
+        // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
+        // are being deleted just because they are not here.
+        const column_definition& column = *old_columns.at(name);
+        if (from_thrift && !column.is_regular()) {
+            continue;
         }
 
-        // newly added columns
-        for (ColumnDefinition column : columnDiff.entriesOnlyOnRight().values())
-            addColumnToSchemaMutation(newTable, column, timestamp, mutation);
+        drop_column_from_schema_mutation(old_table, column, timestamp, mutations);
+    }
 
-        // old columns with updated attributes
-        for (ByteBuffer name : columnDiff.entriesDiffering().keySet())
-            addColumnToSchemaMutation(newTable, newTable.getColumnDefinition(name), timestamp, mutation);
+    // newly added columns and old columns with updated attributes
+    for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
+        const column_definition& column = *new_columns.at(name);
+        add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
+    }
 
+    mutations.emplace_back(std::move(columns_mutation));
+
+    warn(unimplemented::cause::TRIGGERS);
+#if 0
         MapDifference<String, TriggerDefinition> triggerDiff = Maps.difference(oldTable.getTriggers(), newTable.getTriggers());
 
         // dropped triggers
@@ -1179,9 +1193,9 @@ void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestam
         for (TriggerDefinition trigger : triggerDiff.entriesOnlyOnRight().values())
             addTriggerToSchemaMutation(newTable, trigger, timestamp, mutation);
 
-        return mutation;
-    }
 #endif
+    return mutations;
+}
 
 std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
 {

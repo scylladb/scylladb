@@ -371,21 +371,24 @@ future<> migration_manager::announce_new_column_family(schema_ptr cfm, bool anno
 }
 
 future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool from_thrift, bool announce_locally) {
-    warn(unimplemented::cause::MIGRATIONS);
-    return make_ready_future<>();
+    warn(unimplemented::cause::VALIDATION);
 #if 0
     cfm.validate();
-
-    CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
-    if (oldCfm == null)
-        throw new ConfigurationException(String.format("Cannot update non existing table '%s' in keyspace '%s'.", cfm.cfName, cfm.ksName));
-    KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
-
-    oldCfm.validateCompatility(cfm);
-
-    logger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
-    announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
 #endif
+    try {
+        auto& db = get_local_storage_proxy().get_db().local();
+        auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
+#if 0
+        oldCfm.validateCompatility(cfm);
+#endif
+        logger.info("Update table '{}/{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
+        auto&& keyspace = db.find_keyspace(cfm->ks_name());
+        auto mutations = db::schema_tables::make_update_table_mutations(keyspace.metadata(), old_schema, cfm, api::new_timestamp(), from_thrift);
+        return announce(std::move(mutations), announce_locally);
+    } catch (const no_such_column_family& e) {
+        throw exceptions::configuration_exception(sprint("Cannot update non existing table '%s' in keyspace '%s'.",
+                                                         cfm->cf_name(), cfm->ks_name()));
+    }
 }
 
 #if 0
