@@ -437,7 +437,7 @@ future<> messaging_service::send_prepare_done_message(shard_id id, UUID plan_id,
 }
 
 // STREAM_MUTATION
-void messaging_service::register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
 }
 future<> messaging_service::send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {

@@ -124,13 +124,25 @@ void stream_session::init_messaging_service_handler() {
             }
         });
     });
-    ms().register_stream_mutation([] (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
-        return smp::submit_to(dst_cpu_id, [plan_id, fm = std::move(fm)] () mutable {
+    ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
+        auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return smp::submit_to(dst_cpu_id, [plan_id, from, fm = std::move(fm)] () mutable {
             if (sslog.is_enabled(logging::log_level::debug)) {
                 auto cf_id = fm.column_family_id();
-                sslog.debug("[Stream #{}] GOT STREAM_MUTATION: cf_id={}", plan_id, cf_id);
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION: cf_id={}, from={}", plan_id, cf_id, from);
             }
-            return service::get_storage_proxy().local().mutate_locally(fm);
+            auto f = get_stream_result_future(plan_id);
+            if (f) {
+                auto coordinator = f->get_coordinator();
+                assert(coordinator);
+                auto session = coordinator->get_or_create_next_session(from, from);
+                assert(session);
+                return service::get_storage_proxy().local().mutate_locally(fm);
+            } else {
+                auto err = sprint("[Stream #%s] GOT STREAM_MUTATION: Can not find stream_manager", plan_id);
+                sslog.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
         });
     });
     ms().register_stream_mutation_done([] (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
