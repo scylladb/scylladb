@@ -160,7 +160,7 @@ void stream_session::init_messaging_service_handler() {
     });
 #endif
     ms().register_complete_message([] (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
-        smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
+        return smp::submit_to(dst_cpu_id, [plan_id, from, connecting, dst_cpu_id] () mutable {
             sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE, from={}, connecting={}, dst_cpu_id={}", plan_id, from, connecting, dst_cpu_id);
             auto f = get_stream_result_future(plan_id);
             if (f) {
@@ -175,7 +175,6 @@ void stream_session::init_messaging_service_handler() {
                 throw std::runtime_error(err);
             }
         });
-        return messaging_service::no_wait();
     });
 #if 0
     ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
