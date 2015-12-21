@@ -555,19 +555,34 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
             throw marshal_exception();
         }
     }
-    static boost::posix_time::ptime get_time(const std::string& s) {
-        // Apparently, the code below doesn't leak the input facet.
-        // std::locale::facet has some internal, custom reference counting
-        // and deletes the object when it's no longer used.
-        auto tif = new boost::posix_time::time_input_facet("%Y-%m-%d %H:%M:%S%F");
-        std::istringstream ss(s);
-        ss.imbue(std::locale(ss.getloc(), tif));
-        boost::posix_time::ptime t;
-        ss >> t;
-        if (ss.fail() || ss.peek() != std::istringstream::traits_type::eof()) {
-            throw marshal_exception();
+    static boost::posix_time::ptime get_time(const std::smatch& sm) {
+        // Unfortunately boost::date_time  parsers are more strict with regards
+        // to the expected date format than we need to be.
+        auto year = boost::lexical_cast<int>(sm[1]);
+        auto month =  boost::lexical_cast<int>(sm[2]);
+        auto day =  boost::lexical_cast<int>(sm[3]);
+        boost::gregorian::date date(year, month, day);
+
+        auto hour = sm[5].length() ? boost::lexical_cast<int>(sm[5]) : 0;
+        auto minute = sm[6].length() ? boost::lexical_cast<int>(sm[6]) : 0;
+        auto second = sm[8].length() ? boost::lexical_cast<int>(sm[8]) : 0;
+        boost::posix_time::time_duration time(hour, minute, second);
+
+        if (sm[10].length()) {
+            static constexpr auto milliseconds_string_length = 3;
+            auto length = sm[10].length();
+            if (length > milliseconds_string_length) {
+                throw marshal_exception();
+            }
+            auto value = boost::lexical_cast<int>(sm[10]);
+            while (length < milliseconds_string_length) {
+                value *= 10;
+                length++;
+            }
+            time += boost::posix_time::milliseconds(value);
         }
-        return t;
+
+        return boost::posix_time::ptime(date, time);
     }
     static boost::posix_time::time_duration get_utc_offset(const std::string& s) {
         static constexpr const char* formats[] = {
@@ -602,12 +617,12 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
                 return v;
             }
 
-            std::regex date_re("^\\d{4}-\\d{2}-\\d{2}([ t]\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?)?");
+            std::regex date_re("^(\\d{4})-(\\d+)-(\\d+)([ t](\\d+):(\\d+)(:(\\d+)(\\.(\\d+))?)?)?");
             std::smatch dsm;
             if (!std::regex_search(str, dsm, date_re)) {
                 throw marshal_exception();
             }
-            auto t = get_time(dsm.str());
+            auto t = get_time(dsm);
 
             auto tz = dsm.suffix().str();
             std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
