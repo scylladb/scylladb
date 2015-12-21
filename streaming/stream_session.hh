@@ -186,6 +186,14 @@ private:
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
+
+    std::chrono::seconds _keep_alive_timeout{600};
+    timer<lowres_clock> _keep_alive;
+public:
+    void start_keep_alive_timer() {
+        _keep_alive.rearm(lowres_clock::now() + _keep_alive_timeout);
+    }
+
 public:
     stream_session();
     /**
