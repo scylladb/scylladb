@@ -35,6 +35,7 @@ boost_tests = [
     'mutation_reader_test',
     'cql_query_test',
     'storage_proxy_test',
+    'schema_change_test',
     'sstable_test',
     'sstable_mutation_test',
     'commitlog_test',

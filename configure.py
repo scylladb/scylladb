@@ -152,6 +152,7 @@ scylla_tests = [
     'tests/perf/perf_sstable',
     'tests/cql_query_test',
     'tests/storage_proxy_test',
+    'tests/schema_change_test',
     'tests/mutation_reader_test',
     'tests/key_reader_test',
     'tests/mutation_query_test',
