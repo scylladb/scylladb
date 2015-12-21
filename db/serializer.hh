@@ -22,6 +22,8 @@
 #ifndef DB_SERIALIZER_HH_
 #define DB_SERIALIZER_HH_
 
+#include <experimental/optional>
+
 #include "utils/data_input.hh"
 #include "utils/data_output.hh"
 #include "bytes_ostream.hh"
@@ -57,9 +59,9 @@ public:
         return *this;
     }
 
-    static void write(output&, const T&);
-    static void read(T&, input&);
-    static T read(input&);
+    static void write(output&, const type&);
+    static void read(type&, input&);
+    static type read(input&);
     static void skip(input& in);
 
     size_t size() const {
@@ -83,14 +85,91 @@ public:
         return b;
     }
 
-    static T from_bytes(bytes_view v) {
+    static type from_bytes(bytes_view v) {
         data_input in(v);
         return read(in);
     }
 private:
-    const T& _item;
+    const type& _item;
     size_t _size;
 };
+
+template<typename T>
+class serializer<std::experimental::optional<T>> {
+public:
+    typedef std::experimental::optional<T> type;
+    typedef data_output output;
+    typedef data_input input;
+    typedef serializer<T> _MyType;
+
+    serializer(const type& t)
+        : _item(t)
+        , _size(output::serialized_size<bool>() + (t ? serializer<T>(*t).size() : 0))
+    {}
+
+    // apply to memory, must be at least size() large.
+    const _MyType& operator()(output& out) const {
+        write(out, _item);
+        return *this;
+    }
+
+    static void write(output& out, const type& v) {
+        bool en = v;
+        out.write<bool>(en);
+        if (en) {
+            serializer<T>::write(out, *v);
+        }
+    }
+    static void read(type& dst, input& in) {
+        auto en = in.read<bool>();
+        if (en) {
+            dst = serializer<T>::read(in);
+        } else {
+            dst = {};
+        }
+    }
+    static type read(input& in) {
+        type t;
+        read(t, in);
+        return t;
+    }
+    static void skip(input& in) {
+        auto en = in.read<bool>();
+        if (en) {
+            serializer<T>::skip(in);
+        }
+    }
+
+    size_t size() const {
+        return _size;
+    }
+
+    void write(bytes_ostream& out) const {
+        auto buf = out.write_place_holder(_size);
+        data_output data_out((char*)buf, _size);
+        write(data_out, _item);
+    }
+
+    void write(data_output& out) const {
+        write(out, _item);
+    }
+
+    bytes to_bytes() const {
+        bytes b(bytes::initialized_later(), _size);
+        data_output out(b);
+        write(out);
+        return b;
+    }
+
+    static type from_bytes(bytes_view v) {
+        data_input in(v);
+        return read(in);
+    }
+private:
+    const std::experimental::optional<T> _item;
+    size_t _size;
+};
+
 
 template<> serializer<utils::UUID>::serializer(const utils::UUID &);
 template<> void serializer<utils::UUID>::write(output&, const type&);
