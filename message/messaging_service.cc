@@ -205,16 +205,14 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop() {
-    return _in_flight_requests.close().then([this] {
-        return when_all(
-            _server->stop(),
-            parallel_for_each(_clients, [] (auto& m) {
-                return parallel_for_each(m, [] (std::pair<const shard_id, shard_info>& c) {
-                    return c.second.rpc_client->stop();
-                });
-            })
-        ).discard_result();
-    });
+    return when_all(
+        _server->stop(),
+        parallel_for_each(_clients, [] (auto& m) {
+            return parallel_for_each(m, [] (std::pair<const shard_id, shard_info>& c) {
+                return c.second.rpc_client->stop();
+            });
+        })
+    ).discard_result();
 }
 
 rpc::no_wait_type messaging_service::no_wait() {
@@ -358,7 +356,6 @@ std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOut&&... msg) {
-    return seastar::with_gate(ms->requests_gate(), [&] {
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
@@ -379,13 +376,11 @@ auto send_message(messaging_service* ms, messaging_verb verb, shard_id id, MsgOu
             throw;
         }
     });
-    });
 }
 
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id id, Timeout timeout, MsgOut&&... msg) {
-    return seastar::with_gate(ms->requests_gate(), [&] {
     auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
     auto& rpc_client = *rpc_client_ptr;
@@ -405,7 +400,6 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, shard_id i
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             throw;
         }
-    });
     });
 }
 

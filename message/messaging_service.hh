@@ -36,7 +36,6 @@
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
-#include <seastar/core/gate.hh>
 
 #include <seastar/net/tls.hh>
 
@@ -382,7 +381,6 @@ private:
     std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
     std::array<clients_map, 2> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
-    seastar::gate _in_flight_requests;
 public:
     using clock_type = std::chrono::steady_clock;
 public:
@@ -395,7 +393,6 @@ public:
     gms::inet_address listen_address();
     future<> stop();
     static rpc::no_wait_type no_wait();
-    seastar::gate& requests_gate() { return _in_flight_requests; }
 public:
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();
