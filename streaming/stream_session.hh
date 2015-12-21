@@ -414,7 +414,7 @@ public:
     virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
 
 private:
-    future<> send_complete_message();
+    void send_complete_message();
     bool maybe_completed();
 #if 0
 

@@ -473,14 +473,13 @@ void stream_session::retry(UUID cf_id, int sequence_number) {
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
         if (!_complete_sent) {
-            send_complete_message().then([this] {
-                _complete_sent = true;
-            });
+            _complete_sent = true;
+            send_complete_message();
         }
-        sslog.debug("[Stream #{}] complete: WAIT_COMPLETE -> COMPLETE", plan_id());
+        sslog.debug("[Stream #{}] complete: WAIT_COMPLETE -> COMPLETE: session={}", plan_id(), this);
         close_session(stream_session_state::COMPLETE);
     } else {
-        sslog.debug("[Stream #{}] complete: {} -> WAIT_COMPLETE", plan_id(), _state);
+        sslog.debug("[Stream #{}] complete: {} -> WAIT_COMPLETE: session={}", plan_id(), _state, this);
         set_state(stream_session_state::WAIT_COMPLETE);
     }
 }
@@ -515,21 +514,15 @@ void stream_session::transfer_task_completed(UUID cf_id) {
     maybe_completed();
 }
 
-future<> stream_session::send_complete_message() {
+void stream_session::send_complete_message() {
     auto from = utils::fb_utilities::get_broadcast_address();
     auto id = shard_id{this->peer, this->dst_cpu_id};
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
-    return this->ms().send_complete_message(id, plan_id, from, this->connecting, this->dst_cpu_id).then_wrapped([this, plan_id] (auto&& f) {
-        try {
-            f.get();
-            this->start_keep_alive_timer();
-            sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply", plan_id);
-            return make_ready_future<>();
-        } catch (...) {
-            sslog.warn("[Stream #{}] ERROR COMPLETE_MESSAGE Reply: {}", plan_id, std::current_exception());
-            return make_ready_future<>();
-        }
+    this->ms().send_complete_message(id, plan_id, from, this->connecting, this->dst_cpu_id).then([session = shared_from_this(), plan_id] {
+        sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply", plan_id);
+    }).handle_exception([plan_id] (auto ep) {
+        sslog.warn("[Stream #{}] ERROR COMPLETE_MESSAGE Reply: {}", plan_id, ep);
     });
 }
 
@@ -538,19 +531,17 @@ bool stream_session::maybe_completed() {
     if (completed) {
         if (_state == stream_session_state::WAIT_COMPLETE) {
             if (!_complete_sent) {
-                send_complete_message().then([this] {
-                    _complete_sent = true;
-                });
+                _complete_sent = true;
+                send_complete_message();
             }
-            sslog.debug("[Stream #{}] maybe_completed: WAIT_COMPLETE -> COMPLETE", plan_id());
+            sslog.debug("[Stream #{}] maybe_completed: WAIT_COMPLETE -> COMPLETE: session={}", plan_id(), this);
             close_session(stream_session_state::COMPLETE);
         } else {
             // notify peer that this session is completed
-            send_complete_message().then([this] {
-                _complete_sent = true;
-                sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE", plan_id(), _state);
-                set_state(stream_session_state::WAIT_COMPLETE);
-            });
+            _complete_sent = true;
+            sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE: session={}", plan_id(), _state, this);
+            set_state(stream_session_state::WAIT_COMPLETE);
+            send_complete_message();
         }
     }
     return completed;
