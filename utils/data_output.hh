@@ -57,13 +57,10 @@ public:
     }
 
     template<typename T>
-    static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size(const T&) {
-        return sizeof(T);
-    }
+    static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size(const T&);
     template<typename T>
-    static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size() {
-        return sizeof(T);
-    }
+    static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size();
+
     template<typename SizeType = uint16_t>
     static inline size_t serialized_size(const sstring& s) {
         if (s.size() > std::numeric_limits<SizeType>::max()) {
@@ -144,6 +141,21 @@ private:
     char * _ptr;
     char * _end;
 };
+
+template<>
+inline size_t data_output::serialized_size<bool>() {
+    return sizeof(uint8_t);
+}
+
+template<typename T>
+inline std::enable_if_t<std::is_fundamental<T>::value, size_t> data_output::serialized_size() {
+    return sizeof(T);
+}
+
+template<typename T>
+inline std::enable_if_t<std::is_fundamental<T>::value, size_t> data_output::serialized_size(const T&) {
+    return serialized_size<T>();
+}
 
 template<>
 inline data_output& data_output::write(bool b) {
