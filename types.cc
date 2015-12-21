@@ -589,43 +589,43 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     }
     static int64_t timestamp_from_string(sstring_view s) {
         try {
-        std::string str;
-        str.resize(s.size());
-        std::transform(s.begin(), s.end(), str.begin(), ::tolower);
-        if (str == "now") {
-            return db_clock::now().time_since_epoch().count();
-        }
+            std::string str;
+            str.resize(s.size());
+            std::transform(s.begin(), s.end(), str.begin(), ::tolower);
+            if (str == "now") {
+                return db_clock::now().time_since_epoch().count();
+            }
 
-        char* end;
-        auto v = std::strtoll(s.begin(), &end, 10);
-        if (end == s.begin() + s.size()) {
-            return v;
-        }
+            char* end;
+            auto v = std::strtoll(s.begin(), &end, 10);
+            if (end == s.begin() + s.size()) {
+                return v;
+            }
 
-        std::regex date_re("^\\d{4}-\\d{2}-\\d{2}([ t]\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?)?");
-        std::smatch dsm;
-        if (!std::regex_search(str, dsm, date_re)) {
-            throw marshal_exception();
-        }
-        auto t = get_time(dsm.str());
+            std::regex date_re("^\\d{4}-\\d{2}-\\d{2}([ t]\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?)?");
+            std::smatch dsm;
+            if (!std::regex_search(str, dsm, date_re)) {
+                throw marshal_exception();
+            }
+            auto t = get_time(dsm.str());
 
-        auto tz = dsm.suffix().str();
-        std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
-        std::smatch tsm;
-        if (std::regex_match(tz, tsm, tz_re)) {
-            t -= get_utc_offset(tsm.str());
-        } else if (tz.empty()) {
-            typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
-            // local_tz::local_to_utc(), where are you?
-            auto t1 = local_tz::utc_to_local(t);
-            auto tz_offset = t1 - t;
-            auto t2 = local_tz::utc_to_local(t - tz_offset);
-            auto dst_offset = t2 - t;
-            t -= tz_offset + dst_offset;
-        } else {
-            throw marshal_exception();
-        }
-        return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
+            auto tz = dsm.suffix().str();
+            std::regex tz_re("([\\+-]\\d{2}:?(\\d{2})?)");
+            std::smatch tsm;
+            if (std::regex_match(tz, tsm, tz_re)) {
+                t -= get_utc_offset(tsm.str());
+            } else if (tz.empty()) {
+                typedef boost::date_time::c_local_adjustor<boost::posix_time::ptime> local_tz;
+                // local_tz::local_to_utc(), where are you?
+                auto t1 = local_tz::utc_to_local(t);
+                auto tz_offset = t1 - t;
+                auto t2 = local_tz::utc_to_local(t - tz_offset);
+                auto dst_offset = t2 - t;
+                t -= tz_offset + dst_offset;
+            } else {
+                throw marshal_exception();
+            }
+            return (t - boost::posix_time::from_time_t(0)).total_milliseconds();
         } catch (...) {
             throw marshal_exception(sprint("unable to parse date '%s'", s));
         }
