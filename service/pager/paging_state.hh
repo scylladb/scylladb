@@ -41,6 +41,8 @@
 
 #pragma once
 
+#include <experimental/optional>
+
 #include "bytes.hh"
 #include "keys.hh"
 
@@ -50,11 +52,11 @@ namespace pager {
 
 class paging_state final {
     partition_key _partition_key;
-    clustering_key _clustering_key;
+    std::experimental::optional<clustering_key> _clustering_key;
     uint32_t _remaining;
 
 public:
-    paging_state(partition_key pk, clustering_key ck, uint32_t rem);
+    paging_state(partition_key pk, std::experimental::optional<clustering_key> ck, uint32_t rem);
 
     /**
      * Last processed key, i.e. where to start from in next paging round
@@ -65,7 +67,7 @@ public:
     /**
      * Clustering key in last partition. I.e. first, next, row
      */
-    const clustering_key& get_clustering_key() const {
+    const std::experimental::optional<clustering_key>& get_clustering_key() const {
         return _clustering_key;
     }
     /**
