@@ -6,7 +6,9 @@ if [ "$AMI" = "yes" ]; then
 
     if [ $RAIDCNT -ge 1 ]; then
         echo "RAID already constructed."
-        mount -o noatime /dev/$RAIDDEV /var/lib/scylla
+        if [ "`mount|grep /var/lib/scylla`" = "" ]; then
+            mount -o noatime /dev/$RAIDDEV /var/lib/scylla
+        fi
     else
         echo "RAID does not constructed, going to initialize..."
 
