@@ -57,6 +57,6 @@ else # NETWORK_MODE = posix
     fi
 fi
 . /etc/os-release
-if [ "$NAME" = "Ubuntu" ]; then
+if [ "$ID" = "ubuntu" ]; then
     hugeadm --create-mounts
 fi

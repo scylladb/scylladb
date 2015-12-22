@@ -48,7 +48,7 @@ fi
 SYSCONFIG_SETUP_ARGS="-n $NIC"
 . /etc/os-release
 
-if [ "$NAME" = "Ubuntu" ]; then
+if [ "$ID" = "ubuntu" ]; then
     if [ "$LOCAL_PKG" = "" ]; then
         echo "deb http://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
         apt-get update
@@ -62,9 +62,9 @@ else
     sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
     mv /tmp/selinux /etc/sysconfig/
     if [ "$LOCAL_PKG" = "" ]; then
-        if [ "$NAME" = "Fedora" ]; then
+        if [ "$ID" = "fedora" ]; then
             curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
-        elif [ "$NAME" = "CentOS Linux" ]; then
+        elif [ "$ID" = "centos" ]; then
             curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
         else
             echo "Unsupported distribution"
