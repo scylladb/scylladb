@@ -441,19 +441,22 @@ mutation_partition::query(query::result::partition_writer& pw,
     // To avoid retraction of the partition entry in case of limit == 0.
     assert(limit > 0);
 
-    bool any_live = has_any_live_data(s, column_kind::static_column, static_row(), _tombstone, now);
-
     if (!slice.static_columns.empty()) {
         auto row_builder = pw.add_static_row();
         get_row_slice(s, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(), now, row_builder);
         row_builder.finish();
     }
 
+    // Like PK range, an empty row range, should be considered an "exclude all" restriction
+    bool has_ck_selector = pw.ranges().empty();
+
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     for (auto&& row_range : pw.ranges()) {
         if (limit == 0) {
             break;
         }
+
+        has_ck_selector |= !row_range.is_full();
 
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
@@ -463,7 +466,6 @@ mutation_partition::query(query::result::partition_writer& pw,
             auto row_tombstone = tombstone_for_row(s, e);
 
             if (row.is_live(s, row_tombstone, now)) {
-                any_live = true;
                 auto row_builder = pw.add_row(e.key());
                 get_row_slice(s, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone, now, row_builder);
                 row_builder.finish();
@@ -475,11 +477,19 @@ mutation_partition::query(query::result::partition_writer& pw,
         });
     }
 
-    if (!any_live) {
-        pw.retract();
-    } else {
-        pw.finish();
-    }
+    // If we got no rows, but have live static columns, we should only
+    // give them back IFF we did not have any CK restrictions.
+    // #589
+    // If ck:s exist, and we do a restriction on them, we either have maching
+    // rows, or return nothing, since cql does not allow "is null".
+    if (pw.row_count() == 0
+			&& (has_ck_selector
+					|| !has_any_live_data(s, column_kind::static_column,
+							static_row(), _tombstone, now))) {
+		pw.retract();
+	} else {
+		pw.finish();
+	}
 }
 
 std::ostream&
@@ -766,7 +776,12 @@ uint32_t mutation_partition::do_compact(const schema& s,
         trim_rows<false>(s, row_ranges, row_callback);
     }
 
-    if (row_count == 0 && static_row_live) {
+    // #589 - Do not add extra row for statics unless we did a CK range-less query.
+    // See comment in query
+    if (row_count == 0 && static_row_live
+            && std::any_of(row_ranges.begin(), row_ranges.end(), [](auto& r) {
+                return r.is_full();
+            })) {
         ++row_count;
     }
 

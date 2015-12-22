@@ -46,7 +46,7 @@
 #include "db/serializer.hh"
 #include "paging_state.hh"
 
-service::pager::paging_state::paging_state(partition_key pk, clustering_key ck,
+service::pager::paging_state::paging_state(partition_key pk, std::experimental::optional<clustering_key> ck,
         uint32_t rem)
         : _partition_key(std::move(pk)), _clustering_key(std::move(ck)), _remaining(rem) {
 }
@@ -61,9 +61,13 @@ service::pager::paging_state::paging_state(partition_key pk, clustering_key ck,
 
     try {
         auto pk = db::serializer<partition_key_view>::read(in);
-        auto ck = db::serializer<clustering_key_view>::read(in);
+        auto ckv = db::serializer<std::experimental::optional<clustering_key_view>>::read(in);
         auto rem(in.read<uint32_t>());
 
+        std::experimental::optional<clustering_key> ck;
+        if (ckv) {
+            ck = clustering_key(*ckv);
+        }
         return ::make_shared<paging_state>(std::move(pk), std::move(ck), rem);
     } catch (...) {
         std::throw_with_nested(
@@ -74,10 +78,13 @@ service::pager::paging_state::paging_state(partition_key pk, clustering_key ck,
 
 bytes_opt service::pager::paging_state::serialize() const {
     auto pkv = _partition_key.view();
-    auto ckv = _clustering_key.view();
+    auto ckv = _clustering_key ?
+                    std::experimental::optional<clustering_key_view>(
+                                    _clustering_key->view()) :
+                    std::experimental::optional<clustering_key_view> { };
 
     db::serializer<partition_key_view> pks(pkv);
-    db::serializer<clustering_key_view> cks(ckv);
+    db::serializer<std::experimental::optional<clustering_key_view>> cks(ckv);
 
     auto size = pks.size() + cks.size() + sizeof(uint32_t);
 
