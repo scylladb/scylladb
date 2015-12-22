@@ -587,23 +587,10 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto&& value = after[key];
-        if (!value->empty()) {
-            created.emplace_back(schema_result_value_type{key, std::move(value)});
-        }
+        created.emplace_back(schema_result_value_type{key, std::move(value)});
     }
     for (auto&& key : diff.entries_differing) {
-        sstring keyspace_name = key;
-
-        auto&& pre  = before[key];
-        auto&& post = after[key];
-
-        if (!pre->empty() && !post->empty()) {
-            altered.emplace_back(keyspace_name);
-        } else if (!pre->empty()) {
-            dropped.emplace(keyspace_name);
-        } else if (!post->empty()) { // a (re)created keyspace
-            created.emplace_back(schema_result_value_type{key, std::move(post)});
-        }
+        altered.emplace_back(key);
     }
     return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
         return proxy.local().get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
@@ -659,38 +646,26 @@ future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&
                 }
                 for (auto&& key : diff.entries_only_on_right) {
                     auto&& value = after[key];
-                    if (!value->empty()) {
-                        auto&& tables = create_tables_from_tables_partition(proxy, value).get0();
-                        boost::copy(tables | boost::adaptors::map_values, std::back_inserter(created));
-                    }
+                    auto&& tables = create_tables_from_tables_partition(proxy, value).get0();
+                    boost::copy(tables | boost::adaptors::map_values, std::back_inserter(created));
                 }
                 for (auto&& key : diff.entries_differing) {
                     sstring keyspace_name = key;
 
-                    auto&& pre  = before[key];
                     auto&& post = after[key];
-
-                    if (!pre->empty() && !post->empty()) {
-                        auto before = db.find_keyspace(keyspace_name).metadata()->cf_meta_data();
-                        auto after = create_tables_from_tables_partition(proxy, post).get0();
-                        auto delta = difference(std::map<sstring, schema_ptr>{before.begin(), before.end()}, after, [](const schema_ptr& x, const schema_ptr& y) -> bool {
-                            return *x == *y;
-                        });
-                        for (auto&& key : delta.entries_only_on_left) {
-                            dropped.emplace_back(before[key]);
-                        }
-                        for (auto&& key : delta.entries_only_on_right) {
-                            created.emplace_back(after[key]);
-                        }
-                        for (auto&& key : delta.entries_differing) {
-                            altered.emplace_back(after[key]);
-                        }
-                    } else if (!pre->empty()) {
-                        auto before = db.find_keyspace(keyspace_name).metadata()->cf_meta_data();
-                        boost::copy(before | boost::adaptors::map_values, std::back_inserter(dropped));
-                    } else if (!post->empty()) {
-                        auto tables = create_tables_from_tables_partition(proxy, post).get0();
-                        boost::copy(tables | boost::adaptors::map_values, std::back_inserter(created));
+                    auto before = db.find_keyspace(keyspace_name).metadata()->cf_meta_data();
+                    auto after = create_tables_from_tables_partition(proxy, post).get0();
+                    auto delta = difference(std::map<sstring, schema_ptr>{before.begin(), before.end()}, after, [](const schema_ptr& x, const schema_ptr& y) -> bool {
+                        return *x == *y;
+                    });
+                    for (auto&& key : delta.entries_only_on_left) {
+                        dropped.emplace_back(before[key]);
+                    }
+                    for (auto&& key : delta.entries_only_on_right) {
+                        created.emplace_back(after[key]);
+                    }
+                    for (auto&& key : delta.entries_differing) {
+                        altered.emplace_back(after[key]);
                     }
                 }
                 for (auto&& cfm : created) {
