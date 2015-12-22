@@ -55,7 +55,7 @@ inline
 map_difference<Key>
 difference(const std::map<Key, Tp, Compare, Alloc>& left,
            const std::map<Key, Tp, Compare, Alloc>& right,
-           Compare key_comp,
+           Compare key_comp = Compare(),
            Eq equals = Eq(),
            Alloc alloc = Alloc())
 {
