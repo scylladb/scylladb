@@ -164,12 +164,13 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
         throw exceptions::invalid_request_exception(
                 sprint(
                         "Cannot create secondary index on partition key column %s",
-                        target->column->name()));
+                        *target->column));
     }
 }
 
 future<bool>
 cql3::statements::create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+    throw std::runtime_error("Indexes are not supported yet");
     auto schema = proxy.local().get_db().local().find_schema(keyspace(), column_family());
     auto target = _raw_target->prepare(schema);
 
