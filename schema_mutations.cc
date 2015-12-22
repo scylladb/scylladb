@@ -57,8 +57,8 @@ void schema_mutations::copy_to(std::vector<mutation>& dst) const {
 
 table_schema_version schema_mutations::digest() const {
     md5_hasher h;
-    feed_hash(h, _columnfamilies);
-    feed_hash(h, _columns);
+    db::schema_tables::feed_hash_for_schema_digest(h, _columnfamilies);
+    db::schema_tables::feed_hash_for_schema_digest(h, _columns);
     return utils::UUID_gen::get_name_UUID(h.finalize());
 }
 

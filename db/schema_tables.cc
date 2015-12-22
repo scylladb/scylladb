@@ -61,6 +61,7 @@
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include "md5_hasher.hh"
 
 #include "compaction_strategy.hh"
 
@@ -343,36 +344,30 @@ future<utils::UUID> calculate_schema_digest(distributed<service::storage_proxy>&
     auto map = [&proxy] (sstring table) {
         return db::system_keyspace::query_mutations(proxy, table).then([&proxy, table] (auto rs) {
             auto s = proxy.local().get_db().local().find_schema(system_keyspace::NAME, table);
-            std::vector<query::result> results;
+            std::vector<mutation> mutations;
             for (auto&& p : rs->partitions()) {
                 auto mut = p.mut().unfreeze(s);
                 auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
                 if (partition_key == system_keyspace::NAME) {
                     continue;
                 }
-                auto slice = partition_slice_builder(*s).build();
-                results.emplace_back(mut.query(slice));
+                mutations.emplace_back(std::move(mut));
             }
-            return results;
+            return mutations;
         });
     };
-    auto reduce = [] (auto& hash, auto&& results) {
-        for (auto&& rs : results) {
-            for (auto&& f : rs.buf().fragments()) {
-                hash.Update(reinterpret_cast<const unsigned char*>(f.begin()), f.size());
-            }
+    auto reduce = [] (auto& hash, auto&& mutations) {
+        for (const mutation& m : mutations) {
+            feed_hash_for_schema_digest(hash, m);
         }
-        return make_ready_future<>();
     };
-    return do_with(CryptoPP::Weak::MD5{}, [map, reduce] (auto& hash) {
+    return do_with(md5_hasher(), [map, reduce] (auto& hash) {
         return do_for_each(ALL.begin(), ALL.end(), [&hash, map, reduce] (auto& table) {
-            return map(table).then([&hash, reduce] (auto&& results) {
-                return reduce(hash, results);
+            return map(table).then([&hash, reduce] (auto&& mutations) {
+                reduce(hash, mutations);
             });
         }).then([&hash] {
-            bytes digest{bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE};
-            hash.Final(reinterpret_cast<unsigned char*>(digest.begin()));
-            return make_ready_future<utils::UUID>(utils::UUID_gen::get_name_UUID(digest));
+            return make_ready_future<utils::UUID>(utils::UUID_gen::get_name_UUID(hash.finalize()));
         });
     });
 }

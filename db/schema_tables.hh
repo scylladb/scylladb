@@ -43,6 +43,7 @@
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "schema.hh"
+#include "hashing.hh"
 #include "schema_mutations.hh"
 
 #include <vector>
@@ -145,6 +146,17 @@ data_type parse_type(sstring str);
 
 schema_ptr columns();
 schema_ptr columnfamilies();
+
+template<typename Hasher>
+void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {
+    // Cassandra is skipping tombstones from digest calculation
+    // to avoid disagreements due to tombstone GC.
+    // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
+    // We achieve similar effect with compact_for_compaction().
+    mutation m_compacted(m);
+    m_compacted.partition().compact_for_compaction(*m.schema(), api::max_timestamp, gc_clock::time_point::max());
+    feed_hash(h, m_compacted);
+}
 
 } // namespace schema_tables
 } // namespace db
