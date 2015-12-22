@@ -64,7 +64,7 @@ else
     if [ "$LOCAL_PKG" = "" ]; then
         if [ "$ID" = "fedora" ]; then
             curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
-        elif [ "$ID" = "centos" ]; then
+        elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
             curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
         else
             echo "Unsupported distribution"
