@@ -617,6 +617,18 @@ schema_builder& schema_builder::without_column(sstring name, api::timestamp_type
     return *this;
 }
 
+schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
+{
+    auto it = std::find_if(_raw._columns.begin(), _raw._columns.end(), [&] (auto& col) {
+        return col.name() == from;
+    });
+    assert(it != _raw._columns.end());
+    auto& def = *it;
+    column_definition new_def(to, def.type, def.kind, def.component_index(), def.idx_info);
+    _raw._columns.erase(it);
+    return with_column(new_def);
+}
+
 schema_builder& schema_builder::with(compact_storage cs) {
     _compact_storage = cs;
     return *this;
