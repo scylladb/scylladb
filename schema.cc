@@ -29,6 +29,7 @@
 #include "db/marshal/type_parser.hh"
 #include "version.hh"
 #include "schema_registry.hh"
+#include <boost/range/algorithm.hpp>
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -354,9 +355,9 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._speculative_retry == y._raw._speculative_retry
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
-        && x._raw._caching_options == y._raw._caching_options;
+        && x._raw._caching_options == y._raw._caching_options
+        && x._raw._dropped_columns == y._raw._dropped_columns;
 #if 0
-        && Objects.equal(droppedColumns, other.droppedColumns)
         && Objects.equal(triggers, other.triggers)
 #endif
 }
@@ -451,6 +452,15 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",triggers=[]";
     os << ",isDense=" << std::boolalpha << s._raw._is_dense;
     os << ",version=" << s.version();
+    os << ",droppedColumns={";
+    n = 0;
+    for (auto& dc : s._raw._dropped_columns) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << dc.first << " : " << dc.second;
+    }
+    os << "}";
     os << "]";
     return os;
 }
@@ -573,6 +583,30 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
     _raw._columns.emplace_back(name, type, kind, component_index, info);
+    return *this;
+}
+
+schema_builder& schema_builder::without_column(bytes name)
+{
+    auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
+        return column.name() == name;
+    });
+    assert(it != _raw._columns.end());
+    auto now = api::new_timestamp();
+    auto ret = _raw._dropped_columns.emplace(it->name_as_text(), now);
+    if (!ret.second) {
+        ret.first->second = std::max(ret.first->second, now);
+    }
+    _raw._columns.erase(it);
+    return *this;
+}
+
+schema_builder& schema_builder::without_column(sstring name, api::timestamp_type timestamp)
+{
+    auto ret = _raw._dropped_columns.emplace(name, timestamp);
+    if (!ret.second) {
+        ret.first->second = std::max(ret.first->second, timestamp);
+    }
     return *this;
 }
 

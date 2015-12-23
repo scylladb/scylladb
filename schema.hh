@@ -363,6 +363,7 @@ private:
         std::map<sstring, sstring> _compaction_strategy_options;
         caching_options _caching_options;
         table_schema_version _version;
+        std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -542,6 +543,12 @@ public:
     // Returns a range of column definitions
     const columns_type& all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;
+
+    const auto& all_columns() const { return _columns_by_name; }
+
+    const auto& dropped_columns() const {
+        return _raw._dropped_columns;
+    }
 
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
