@@ -468,7 +468,7 @@ public:
         if (endpoint != get_broadcast_address()) {
             auto v = gms::get_local_gossiper().get_endpoint_state_for_endpoint(endpoint)->get_application_state(gms::application_state::RPC_ADDRESS);
             if (v) {
-                return boost::lexical_cast<std::string>(v.value());
+                return v.value().value;
             }
         }
         return boost::lexical_cast<std::string>(endpoint);
@@ -597,6 +597,12 @@ public:
             auto range = entry.first;
             auto addresses = entry.second;
             token_range tr;
+            if (range.start()) {
+                tr._start_token = boost::lexical_cast<std::string>(range.start()->value());
+            }
+            if (range.end()) {
+                tr._end_token = boost::lexical_cast<std::string>(range.end()->value());
+            }
             for (auto endpoint : addresses) {
                 endpoint_details details;
                 details._host = boost::lexical_cast<std::string>(endpoint);
