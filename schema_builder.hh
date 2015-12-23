@@ -183,6 +183,7 @@ public:
     schema_builder& without_column(bytes name);
     schema_builder& without_column(sstring name, api::timestamp_type timestamp);
     schema_builder& with_column_rename(bytes from, bytes to);
+    schema_builder& with_altered_column_type(bytes name, data_type new_type);
 
     schema_builder& with(compact_storage);
     schema_builder& with_version(table_schema_version);

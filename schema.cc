@@ -629,6 +629,14 @@ schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
     return with_column(new_def);
 }
 
+schema_builder& schema_builder::with_altered_column_type(bytes name, data_type new_type)
+{
+    auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
+    assert(it != _raw._columns.end());
+    it->type = new_type;
+    return *this;
+}
+
 schema_builder& schema_builder::with(compact_storage cs) {
     _compact_storage = cs;
     return *this;
