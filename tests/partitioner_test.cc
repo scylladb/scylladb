@@ -58,7 +58,12 @@ BOOST_AUTO_TEST_CASE(test_token_wraparound_1) {
     auto t2 = token_from_long(0xa000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
-    BOOST_REQUIRE_EQUAL(partitioner.midpoint(t1, t2), token_from_long(0x0800'0000'0000'0000));
+    // Even without knowing what the midpoint is, it needs to be inside the
+    // wrapped range, i.e., between t1 and inf, OR between -inf and t2
+    auto midpoint = partitioner.midpoint(t1, t2);
+    BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
+    // We can also calculate the actual value the midpoint should have:
+    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x8800'0000'0000'0000));
 }
 
 BOOST_AUTO_TEST_CASE(test_token_wraparound_2) {
@@ -66,7 +71,9 @@ BOOST_AUTO_TEST_CASE(test_token_wraparound_2) {
     auto t2 = token_from_long(0x9000'0000'0000'0000);
     dht::murmur3_partitioner partitioner;
     BOOST_REQUIRE(t1 > t2);
-    BOOST_REQUIRE_EQUAL(partitioner.midpoint(t1, t2), token_from_long(0xf800'0000'0000'0000));
+    auto midpoint = partitioner.midpoint(t1, t2);
+    BOOST_REQUIRE(midpoint > t1 || midpoint < t2);
+    BOOST_REQUIRE_EQUAL(midpoint, token_from_long(0x7800'0000'0000'0000));
 }
 
 BOOST_AUTO_TEST_CASE(test_ring_position_is_comparable_with_decorated_key) {
