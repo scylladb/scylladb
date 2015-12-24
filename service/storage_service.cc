@@ -1951,9 +1951,9 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
             const range<token>& range_ = it->first;
             std::vector<inet_address>& current_eps = it->second;
             logger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
-            auto beg = new_replica_endpoints.begin();
-            auto end = new_replica_endpoints.end();
             for (auto ep : it->second) {
+                auto beg = new_replica_endpoints.begin();
+                auto end = new_replica_endpoints.end();
                 new_replica_endpoints.erase(std::remove(beg, end, ep), end);
             }
         }
