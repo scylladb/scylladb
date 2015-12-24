@@ -147,7 +147,9 @@ static class {
 private:
     // Each repair_start() call returns a unique int which the user can later
     // use to follow the status of this repair with repair_status().
-    int _next_repair_command = 0;
+    // We can't use the number 0 - if repair_start() returns 0, it means it
+    // decide quickly that there is nothing to repair.
+    int _next_repair_command = 1;
     // Note that there are no "SUCCESSFUL" entries in the "status" map:
     // Successfully-finished repairs are those with id < _next_repair_command
     // but aren't listed as running or failed the status map.
@@ -325,6 +327,10 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
 
     repair_options options(options_map);
 
+    // Note: Cassandra can, in some cases, decide immediately that there is
+    // nothing to repair, and return 0. "nodetool repair" prints in this case
+    // that "Nothing to repair for keyspace '...'". We don't have such a case
+    // yet. Real ids returned by next_repair_command() will be >= 1.
     int id = repair_tracker.next_repair_command();
     logger.info("starting user-requested repair for keyspace {}, repair id {}", keyspace, id);
 
