@@ -125,6 +125,9 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 00:00+0000"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:00:00+0000"), timestamp_type->decompose(tp + 1h)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 01:02:03.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-7-3 1:2:3.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.123+0000"), timestamp_type->decompose(tp + 123ms + 1h + 2min + 3s)));
+    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-007-003 001:002:003.1+0000"), timestamp_type->decompose(tp + 100ms + 1h + 2min + 3s)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+1230"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:00:00+12"), timestamp_type->decompose(tp)));
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string("2015-07-03 12:30:00+12:30"), timestamp_type->decompose(tp)));
@@ -165,6 +168,7 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     test_parsing_fails(timestamp_type, "something");
     test_parsing_fails(timestamp_type, "2001-99-01");
     test_parsing_fails(timestamp_type, "2001-01-01 12:00:00.0a");
+    test_parsing_fails(timestamp_type, "2001-01-01 12:00:00.1234");
     test_parsing_fails(timestamp_type, "2001-01-01 12:00p0000");
     test_parsing_fails(timestamp_type, "2001-01-01 12:00+1200a");
 }
