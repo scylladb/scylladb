@@ -81,7 +81,6 @@ else
         else
             SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
         fi
-        /usr/lib/scylla/scylla_extlinux_setup
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
     fi
@@ -89,6 +88,7 @@ else
     systemctl enable scylla-jmx.service
     /usr/lib/scylla/scylla_ntp_setup -a
 fi
+/usr/lib/scylla/scylla_bootparam_setup
 /usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
     /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
