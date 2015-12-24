@@ -87,6 +87,7 @@ else
     fi
     systemctl enable scylla-server.service
     systemctl enable scylla-jmx.service
+    /usr/lib/scylla/scylla_ntp_setup -a
 fi
 /usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
