@@ -1644,11 +1644,15 @@ future<> storage_service::decommission() {
             ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
             sleep(std::chrono::milliseconds(timeout)).get();
 
+            logger.debug("DECOMMISSIONING: unbootstrap starts");
             ss.unbootstrap();
+            logger.debug("DECOMMISSIONING: unbootstrap done");
 
             // FIXME: proper shutdown
             ss.shutdown_client_servers().get();
+            logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
+            logger.debug("DECOMMISSIONING: stop_gossiping done");
             try {
                 // MessagingService.instance().shutdown();
             } catch (...) {
@@ -1656,6 +1660,7 @@ future<> storage_service::decommission() {
             }
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
+            logger.debug("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED, true);
             // let op be responsible for killing the process
         });
