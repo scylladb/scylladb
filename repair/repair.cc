@@ -229,8 +229,8 @@ static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
         // request ranges from all of them and only later transfer ranges to
         // all of them? Otherwise, we won't necessarily fully repair the
         // other ndoes, just this one? What does Cassandra do here?
-        sp->transfer_ranges(peer, peer, keyspace, {range}, cfs);
-        sp->request_ranges(peer, peer, keyspace, {range}, cfs);
+        sp->transfer_ranges(peer, keyspace, {range}, cfs);
+        sp->request_ranges(peer, keyspace, {range}, cfs);
     }
     return sp->execute().discard_result().then([sp, id] {
         logger.info("repair session #{} successful", id);

@@ -117,11 +117,11 @@ bool stream_coordinator::host_streaming_data::has_active_sessions() {
     return false;
 }
 
-shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_next_session(inet_address peer, inet_address connecting) {
+shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_next_session(inet_address peer) {
     // create
     int size = _stream_sessions.size();
     if (size < _connections_per_host) {
-        auto session = make_shared<stream_session>(peer, connecting, size, _keep_ss_table_level);
+        auto session = make_shared<stream_session>(peer, size, _keep_ss_table_level);
         _stream_sessions.emplace(++_last_returned, session);
         return _stream_sessions[_last_returned];
     // get
@@ -142,10 +142,10 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::host_streaming_data:
 }
 
 shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_session_by_id(inet_address peer,
-    int id, inet_address connecting) {
+    int id) {
     auto it = _stream_sessions.find(id);
     if (it == _stream_sessions.end()) {
-        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer, connecting, id, _keep_ss_table_level)).first;
+        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer, id, _keep_ss_table_level)).first;
     }
     return it->second;
 }

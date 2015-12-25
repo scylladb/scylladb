@@ -2065,9 +2065,8 @@ future<> storage_service::restore_replica_count(inet_address endpoint, inet_addr
         for (auto& m : maps) {
             auto source = m.first;
             auto ranges = m.second;
-            auto preferred = net::get_local_messaging_service().get_preferred_ip(source);
             logger.debug("Requesting from {} ranges {}", source, ranges);
-            sp->request_ranges(source, preferred, keyspace_name, ranges);
+            sp->request_ranges(source, keyspace_name, ranges);
         }
     }
     return sp->execute().then_wrapped([this, sp, notify_endpoint] (auto&& f) {
@@ -2185,10 +2184,8 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
         for (auto& ranges_entry : ranges_per_endpoint) {
             auto& ranges = ranges_entry.second;
             auto new_endpoint = ranges_entry.first;
-            auto preferred = net::get_local_messaging_service().get_preferred_ip(new_endpoint);
-
             // TODO each call to transferRanges re-flushes, this is potentially a lot of waste
-            sp->transfer_ranges(new_endpoint, preferred, keyspace_name, ranges);
+            sp->transfer_ranges(new_endpoint, keyspace_name, ranges);
         }
     }
     return sp->execute().discard_result().then([sp] {
@@ -2225,7 +2222,6 @@ future<> storage_service::stream_hints() {
 
         snitch->sort_by_proximity(get_broadcast_address(), candidates);
         auto hints_destination_host = candidates.front();
-        auto preferred = net::get_local_messaging_service().get_preferred_ip(hints_destination_host);
 
         // stream all hints -- range list will be a singleton of "the entire ring"
         std::vector<range<token>> ranges = {range<token>::make_open_ended_both_sides()};
@@ -2234,7 +2230,7 @@ future<> storage_service::stream_hints() {
         auto sp = make_lw_shared<streaming::stream_plan>("Hints");
         std::vector<sstring> column_families = { db::system_keyspace::HINTS };
         auto keyspace = db::system_keyspace::NAME;
-        sp->transfer_ranges(hints_destination_host, preferred, keyspace, ranges, column_families);
+        sp->transfer_ranges(hints_destination_host, keyspace, ranges, column_families);
         return sp->execute().discard_result().then([sp] {
             logger.info("stream_hints successful");
         }).handle_exception([] (auto ep) {
@@ -2553,8 +2549,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                 auto& address = x.first;
                 auto& ranges = x.second;
                 logger.debug("Will stream range {} of keyspace {} to endpoint {}", ranges , keyspace, address);
-                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
-                _stream_plan.transfer_ranges(address, preferred, keyspace, ranges);
+                _stream_plan.transfer_ranges(address, keyspace, ranges);
             }
 
             // stream requests
@@ -2569,8 +2564,7 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                 auto& address = x.first;
                 auto& ranges = x.second;
                 logger.debug("Will request range {} of keyspace {} from endpoint {}", ranges, keyspace, address);
-                auto preferred = net::get_local_messaging_service().get_preferred_ip(address);
-                _stream_plan.request_ranges(address, preferred, keyspace, ranges);
+                _stream_plan.request_ranges(address, keyspace, ranges);
             }
             if (logger.is_enabled(logging::log_level::debug)) {
                 for (auto& x : work) {

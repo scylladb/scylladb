@@ -90,12 +90,12 @@ public:
     std::set<inet_address> get_peers();
 
 public:
-    shared_ptr<stream_session> get_or_create_next_session(inet_address peer, inet_address connecting) {
-        return get_or_create_host_data(peer).get_or_create_next_session(peer, connecting);
+    shared_ptr<stream_session> get_or_create_next_session(inet_address peer) {
+        return get_or_create_host_data(peer).get_or_create_next_session(peer);
     }
 
-    shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
-        return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id, connecting);
+    shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id) {
+        return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id);
     }
 
     void update_progress(progress_info info) {
@@ -159,13 +159,13 @@ private:
 
         bool has_active_sessions();
 
-        shared_ptr<stream_session> get_or_create_next_session(inet_address peer, inet_address connecting);
+        shared_ptr<stream_session> get_or_create_next_session(inet_address peer);
 
         void connect_all_stream_sessions();
 
         std::vector<shared_ptr<stream_session>> get_all_stream_sessions();
 
-        shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id, inet_address connecting);
+        shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id);
 
         void update_progress(progress_info info);
 
