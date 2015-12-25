@@ -149,10 +149,9 @@ void stream_transfer_task::complete(int sequence_number) {
     // all file sent, notify session this task is complete.
     if (signal_complete) {
         using shard_id = net::messaging_service::shard_id;
-        auto from = utils::fb_utilities::get_broadcast_address();
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", plan_id, id, sequence_number);
-        session->ms().send_stream_mutation_done(id, plan_id, std::move(_ranges), this->cf_id, from, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
+        session->ms().send_stream_mutation_done(id, plan_id, std::move(_ranges), this->cf_id, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
             try {
                 f.get();
                 session->start_keep_alive_timer();

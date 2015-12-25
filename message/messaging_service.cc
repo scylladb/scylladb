@@ -469,25 +469,26 @@ future<unsigned> messaging_service::send_stream_init_message(shard_id id, stream
 }
 
 // PREPARE_MESSAGE
-void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
-    inet_address from, unsigned src_cpu_id, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
+        streaming::messages::prepare_message msg, UUID plan_id,
+        unsigned src_cpu_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
 }
 future<streaming::messages::prepare_message> messaging_service::send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
-    inet_address from, unsigned src_cpu_id, unsigned dst_cpu_id) {
+    unsigned src_cpu_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<streaming::messages::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        std::move(msg), plan_id, from, src_cpu_id, dst_cpu_id);
+        std::move(msg), plan_id, src_cpu_id, dst_cpu_id);
 }
 
 // PREPARE_DONE_MESSAGE
-void messaging_service::register_prepare_done_message(std::function<future<> (UUID plan_id, inet_address from, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::PREPARE_DONE_MESSAGE, std::move(func));
 }
-future<> messaging_service::send_prepare_done_message(shard_id id, UUID plan_id, inet_address from, unsigned dst_cpu_id) {
+future<> messaging_service::send_prepare_done_message(shard_id id, UUID plan_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::PREPARE_DONE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, from, dst_cpu_id);
+        plan_id, dst_cpu_id);
 }
 
 // STREAM_MUTATION
@@ -501,23 +502,24 @@ future<> messaging_service::send_stream_mutation(shard_id id, UUID plan_id, froz
 }
 
 // STREAM_MUTATION_DONE
-void messaging_service::register_stream_mutation_done(std::function<future<> (UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo,
+        UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE, std::move(func));
 }
-future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, unsigned dst_cpu_id) {
+future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::STREAM_MUTATION_DONE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, std::move(ranges), cf_id, from, dst_cpu_id);
+        plan_id, std::move(ranges), cf_id, dst_cpu_id);
 }
 
 // COMPLETE_MESSAGE
-void messaging_service::register_complete_message(std::function<future<> (UUID plan_id, inet_address from, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::COMPLETE_MESSAGE, std::move(func));
 }
-future<> messaging_service::send_complete_message(shard_id id, UUID plan_id, inet_address from, unsigned dst_cpu_id) {
+future<> messaging_service::send_complete_message(shard_id id, UUID plan_id, unsigned dst_cpu_id) {
     return send_message_timeout_and_retry<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        plan_id, from, dst_cpu_id);
+        plan_id, dst_cpu_id);
 }
 
 void messaging_service::register_echo(std::function<future<> ()>&& func) {
