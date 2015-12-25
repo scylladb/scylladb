@@ -91,11 +91,8 @@ void gossiper::set_seeds(std::set<inet_address> _seeds) {
 }
 
 std::chrono::milliseconds gossiper::quarantine_delay() {
-    return std::chrono::milliseconds(service::storage_service::RING_DELAY * 2);
-}
-
-static auto storage_service_ring_delay() {
-    return std::chrono::milliseconds(service::storage_service::RING_DELAY);
+    auto& ss = service::get_local_storage_service();
+    return ss.get_ring_delay() * 2;
 }
 
 auto& storage_service_value_factory() {
@@ -762,8 +759,9 @@ future<> gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id
         // remember this node's generation
         int generation = state.get_heart_beat_state().get_generation();
         logger.info("Removing host: {}", host_id);
-        logger.info("Sleeping for {}ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
-        sleep(storage_service_ring_delay()).get();
+        auto ring_delay = service::get_local_storage_service().get_ring_delay();
+        logger.info("Sleeping for {}ms to ensure {} does not change", ring_delay.count(), endpoint);
+        sleep(ring_delay).get();
         // make sure it did not change
         auto& eps = endpoint_state_map.at(endpoint);
         if (eps.get_heart_beat_state().get_generation() != generation) {
@@ -823,9 +821,9 @@ future<> gossiper::assassinate_endpoint(sstring address) {
 
                 int generation = ep_state.get_heart_beat_state().get_generation();
                 int heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-                logger.info("Sleeping for {} ms to ensure {} does not change", service::storage_service::RING_DELAY, endpoint);
+                logger.info("Sleeping for {} ms to ensure {} does not change", ss.get_ring_delay().count(), endpoint);
                 // make sure it did not change
-                sleep(storage_service_ring_delay()).get();
+                sleep(ss.get_ring_delay()).get();
 
                 auto it = endpoint_state_map.find(endpoint);
                 if (it == endpoint_state_map.end()) {
@@ -1335,7 +1333,8 @@ future<> gossiper::do_shadow_round() {
                     return make_ready_future<>();
                 }).get();
             }
-            if (clk::now() > t + storage_service_ring_delay() * 60) {
+            auto& ss = service::get_local_storage_service();
+            if (clk::now() > t + ss.get_ring_delay() * 60) {
                 throw std::runtime_error(sprint("Unable to gossip with any seeds (ShadowRound)"));
             }
             if (this->_in_shadow_round) {

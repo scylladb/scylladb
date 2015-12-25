@@ -123,7 +123,6 @@ public:
     storage_service(distributed<database>& db)
         : _db(db) {
     }
-    static int RING_DELAY; // delay after which we assume ring has stablized
 
     // Needed by distributed<>
     future<> stop();
@@ -153,21 +152,10 @@ private:
     inet_address get_broadcast_address() const {
         return utils::fb_utilities::get_broadcast_address();
     }
-    static int get_ring_delay() {
-#if 0
-        String newdelay = System.getProperty("cassandra.ring_delay_ms");
-        if (newdelay != null)
-        {
-            logger.info("Overriding RING_DELAY to {}ms", newdelay);
-            return Integer.parseInt(newdelay);
-        }
-        else
-#endif
-            return 30 * 1000;
-    }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
 public:
+    std::chrono::milliseconds get_ring_delay();
     gms::versioned_value::factory value_factory;
 #if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
@@ -363,7 +351,7 @@ public:
 #endif
 public:
     future<> init_server() {
-        return init_server(RING_DELAY);
+        return init_server(get_ring_delay().count());
     }
 
     future<> init_server(int delay);
