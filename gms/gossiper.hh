@@ -78,7 +78,7 @@ class i_failure_detector;
  */
 class gossiper : public i_failure_detection_event_listener, public seastar::async_sharded_service<gossiper> {
 public:
-    using clk = std::chrono::high_resolution_clock;
+    using clk = std::chrono::steady_clock;
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;

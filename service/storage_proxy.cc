@@ -1391,7 +1391,7 @@ protected:
     virtual void on_timeout() {}
     virtual size_t response_count() const = 0;
 public:
-    abstract_read_resolver(db::consistency_level cl, size_t target_count, std::chrono::high_resolution_clock::time_point timeout)
+    abstract_read_resolver(db::consistency_level cl, size_t target_count, std::chrono::steady_clock::time_point timeout)
         : _cl(cl)
         , _targets_count(target_count)
     {
@@ -1451,7 +1451,7 @@ class digest_read_resolver : public abstract_read_resolver {
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
 public:
-    digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
+    digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
@@ -1530,7 +1530,7 @@ private:
     }
 
 public:
-    data_read_resolver(db::consistency_level cl, size_t targets_count, std::chrono::high_resolution_clock::time_point timeout) : abstract_read_resolver(cl, targets_count, timeout) {
+    data_read_resolver(db::consistency_level cl, size_t targets_count, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(cl, targets_count, timeout) {
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
@@ -1725,7 +1725,7 @@ protected:
     uint32_t original_row_limit() const {
         return _cmd->row_limit;
     }
-    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
+    void reconcile(db::consistency_level cl, std::chrono::steady_clock::time_point timeout, lw_shared_ptr<query::read_command> cmd) {
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
@@ -1771,12 +1771,12 @@ protected:
             }
         });
     }
-    void reconcile(db::consistency_level cl, std::chrono::high_resolution_clock::time_point timeout) {
+    void reconcile(db::consistency_level cl, std::chrono::steady_clock::time_point timeout) {
         reconcile(cl, timeout, _cmd);
     }
 
 public:
-    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) {
+    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::steady_clock::time_point timeout) {
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, timeout);
         auto exec = shared_from_this();
 
@@ -1856,7 +1856,7 @@ public:
             }
         });
         // FIXME: the timeout should come from previous latency statistics for a partition
-        auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2);
+        auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2);
         _speculate_timer.arm(timeout);
 
         // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
@@ -1884,7 +1884,7 @@ class range_slice_read_executor : public abstract_read_executor {
 public:
     range_slice_read_executor(shared_ptr<storage_proxy> proxy, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
                                     abstract_read_executor(std::move(proxy), std::move(cmd), std::move(pr), cl, targets.size(), std::move(targets)) {}
-    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::high_resolution_clock::time_point timeout) override {
+    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute(std::chrono::steady_clock::time_point timeout) override {
         reconcile(_cl, timeout);
         return _result_promise.get_future();
     }
@@ -1978,7 +1978,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     std::vector<::shared_ptr<abstract_read_executor>> exec;
     exec.reserve(partition_ranges.size());
-    auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
+    auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
 
     for (auto&& pr: partition_ranges) {
         if (!pr.is_singular()) {
@@ -2000,7 +2000,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
 }
 
 future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>
-storage_proxy::query_partition_key_range_concurrent(std::chrono::high_resolution_clock::time_point timeout, std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
+storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::time_point timeout, std::vector<foreign_ptr<lw_shared_ptr<query::result>>>&& results,
         lw_shared_ptr<query::read_command> cmd, db::consistency_level cl, std::vector<query::partition_range>::iterator&& i,
         std::vector<query::partition_range>&& ranges, int concurrency_factor) {
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
@@ -2082,7 +2082,7 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
     schema_ptr schema = _db.local().find_schema(cmd->cf_id);
     keyspace& ks = _db.local().find_keyspace(schema->ks_name());
     std::vector<query::partition_range> ranges;
-    auto timeout = std::chrono::high_resolution_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
+    auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_db.local().get_config().read_request_timeout_in_ms());
 
     // when dealing with LocalStrategy keyspaces, we can skip the range splitting and merging (which can be
     // expensive in clusters with vnodes)

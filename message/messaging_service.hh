@@ -407,6 +407,8 @@ private:
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     seastar::gate _in_flight_requests;
 public:
+    using clock_type = std::chrono::steady_clock;
+public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
     ~messaging_service();
 public:

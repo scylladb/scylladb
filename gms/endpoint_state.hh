@@ -54,7 +54,7 @@ namespace gms {
  */
 class endpoint_state {
 public:
-    using clk = std::chrono::high_resolution_clock;
+    using clk = std::chrono::steady_clock;
 private:
     heart_beat_state _heart_beat_state;
     std::map<application_state, versioned_value> _application_state;

@@ -194,8 +194,7 @@ private:
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
-    // We will use highres because hopefully it won't take more than a few usecs
-    std::chrono::high_resolution_clock::time_point _sstable_writes_disabled_at;
+    std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -247,7 +246,7 @@ public:
     // to call this separately in all shards first, to guarantee that none of them are writing
     // new data before you can safely assume that the whole node is disabled.
     future<int64_t> disable_sstable_write() {
-        _sstable_writes_disabled_at = std::chrono::high_resolution_clock::now();
+        _sstable_writes_disabled_at = std::chrono::steady_clock::now();
         return _sstables_lock.write_lock().then([this] {
             return make_ready_future<int64_t>((*_sstables->end()).first);
         });
@@ -255,10 +254,10 @@ public:
 
     // SSTable writes are now allowed again, and generation is updated to new_generation
     // returns the amount of microseconds elapsed since we disabled writes.
-    std::chrono::high_resolution_clock::duration enable_sstable_write(int64_t new_generation) {
+    std::chrono::steady_clock::duration enable_sstable_write(int64_t new_generation) {
         update_sstables_known_generation(new_generation);
         _sstables_lock.write_unlock();
-        return std::chrono::high_resolution_clock::now() - _sstable_writes_disabled_at;
+        return std::chrono::steady_clock::now() - _sstable_writes_disabled_at;
     }
 
     // Make sure the generation numbers are sequential, starting from "start".
