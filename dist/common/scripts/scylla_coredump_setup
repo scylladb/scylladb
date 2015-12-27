@@ -4,7 +4,7 @@
 
 . /etc/os-release
 
-if [ "$NAME" = "Ubuntu" ]; then
+if [ "$ID" = "ubuntu" ]; then
     apt-get remove -y apport-noui
 else
     if [ -f /etc/systemd/coredump.conf ]; then
