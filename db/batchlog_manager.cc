@@ -56,6 +56,7 @@
 #include "unimplemented.hh"
 #include "db/config.hh"
 #include "gms/failure_detector.hh"
+#include "service/storage_service.hh"
 
 static logging::logger logger("batchlog_manager");
 
@@ -87,10 +88,8 @@ future<> db::batchlog_manager::start() {
                                 );
                             });
                 });
-        _timer.arm(
-                lowres_clock::now()
-                        + std::chrono::milliseconds(
-                                service::storage_service::RING_DELAY));
+        auto ring_delay = service::get_local_storage_service().get_ring_delay();
+        _timer.arm(lowres_clock::now() + ring_delay);
     }
     return make_ready_future<>();
 }

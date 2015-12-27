@@ -76,8 +76,6 @@ namespace service {
 
 static logging::logger logger("storage_service");
 
-int storage_service::RING_DELAY = storage_service::get_ring_delay();
-
 distributed<storage_service> _the_storage_service;
 
 static int get_generation_number() {
@@ -325,7 +323,7 @@ void storage_service::join_token_ring(int delay) {
                     }
                 }
             } else {
-                sleep(std::chrono::milliseconds(RING_DELAY)).get();
+                sleep(get_ring_delay()).get();
             }
             std::stringstream ss;
             ss << _bootstrap_tokens;
@@ -420,8 +418,8 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
         // if not an existing token then bootstrap
         gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens)).get();
         gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens)).get();
-        set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", RING_DELAY), true);
-        sleep(std::chrono::milliseconds(RING_DELAY)).get();
+        set_mode(mode::JOINING, sprint("sleeping %s ms for pending range setup", get_ring_delay().count()), true);
+        sleep(get_ring_delay()).get();
     } else {
         // Dont set any state for the node which is bootstrapping the existing token...
         _token_metadata.update_normal_tokens(tokens, get_broadcast_address());
@@ -1640,15 +1638,19 @@ future<> storage_service::decommission() {
             logger.debug("DECOMMISSIONING");
             ss.start_leaving().get();
             // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
-            long timeout = ss.get_ring_delay();
-            ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout), true);
-            sleep(std::chrono::milliseconds(timeout)).get();
+            auto timeout = ss.get_ring_delay();
+            ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout.count()), true);
+            sleep(timeout).get();
 
+            logger.debug("DECOMMISSIONING: unbootstrap starts");
             ss.unbootstrap();
+            logger.debug("DECOMMISSIONING: unbootstrap done");
 
             // FIXME: proper shutdown
             ss.shutdown_client_servers().get();
+            logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
+            logger.debug("DECOMMISSIONING: stop_gossiping done");
             try {
                 // MessagingService.instance().shutdown();
             } catch (...) {
@@ -1656,6 +1658,7 @@ future<> storage_service::decommission() {
             }
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
+            logger.debug("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED, true);
             // let op be responsible for killing the process
         });
@@ -1946,9 +1949,9 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
             const range<token>& range_ = it->first;
             std::vector<inet_address>& current_eps = it->second;
             logger.debug("range={}, current_replica_endpoints={}, new_replica_endpoints={}", range_, current_eps, new_replica_endpoints);
-            auto beg = new_replica_endpoints.begin();
-            auto end = new_replica_endpoints.end();
             for (auto ep : it->second) {
+                auto beg = new_replica_endpoints.begin();
+                auto end = new_replica_endpoints.end();
                 new_replica_endpoints.erase(std::remove(beg, end, ep), end);
             }
         }
@@ -2134,7 +2137,7 @@ void storage_service::leave_ring() {
     auto& gossiper = gms::get_local_gossiper();
     auto expire_time = gossiper.compute_expire_time().time_since_epoch().count();
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.left(get_local_tokens(), expire_time)).get();
-    auto delay = std::max(std::chrono::milliseconds(RING_DELAY), gms::gossiper::INTERVAL);
+    auto delay = std::max(get_ring_delay(), gms::gossiper::INTERVAL);
     logger.info("Announcing that I have left the ring for {}ms", delay.count());
     sleep(delay).get();
 }
@@ -2595,8 +2598,8 @@ future<> storage_service::move(token new_token) {
             gms::get_local_gossiper().add_local_application_state(application_state::STATUS, ss.value_factory.moving(new_token)).get();
             ss.set_mode(mode::MOVING, sprint("Moving %s from %s to %s.", local_address, *(ss.get_local_tokens().begin()), new_token), true);
 
-            ss.set_mode(mode::MOVING, sprint("Sleeping %d ms before start streaming/fetching ranges", RING_DELAY), true);
-            sleep(std::chrono::milliseconds(RING_DELAY)).get();
+            ss.set_mode(mode::MOVING, sprint("Sleeping %d ms before start streaming/fetching ranges", ss.get_ring_delay().count()), true);
+            sleep(ss.get_ring_delay()).get();
 
             storage_service::range_relocator relocator(std::unordered_set<token>{new_token}, keyspaces_to_process);
 
@@ -2620,6 +2623,12 @@ future<> storage_service::move(token new_token) {
 
 std::map<token, inet_address> storage_service::get_token_to_endpoint_map() {
     return _token_metadata.get_normal_and_bootstrapping_token_to_endpoint_map();
+}
+
+std::chrono::milliseconds storage_service::get_ring_delay() {
+    auto ring_delay = _db.local().get_config().ring_delay_ms();
+    logger.trace("Set RING_DELAY to {}ms", ring_delay);
+    return std::chrono::milliseconds(ring_delay);
 }
 
 } // namespace service
