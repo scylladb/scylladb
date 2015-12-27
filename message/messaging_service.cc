@@ -399,10 +399,10 @@ auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messagi
 // Wrappers for verbs
 
 // Retransmission parameters for streaming verbs
-// A stream plan gives up retrying in 5 minutes
-static constexpr int streaming_nr_retry = 20;
-static constexpr std::chrono::seconds streaming_timeout{10};
-static constexpr std::chrono::seconds streaming_wait_before_retry{5};
+// A stream plan gives up retrying in 10 minutes at most, 5 minutes at least
+static constexpr int streaming_nr_retry = 10;
+static constexpr std::chrono::seconds streaming_timeout{30};
+static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
 // STREAM_INIT_MESSAGE
 void messaging_service::register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func) {
@@ -437,7 +437,7 @@ future<> messaging_service::send_prepare_done_message(shard_id id, UUID plan_id,
 }
 
 // STREAM_MUTATION
-void messaging_service::register_stream_mutation(std::function<future<> (UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION, std::move(func));
 }
 future<> messaging_service::send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
@@ -457,11 +457,13 @@ future<> messaging_service::send_stream_mutation_done(shard_id id, UUID plan_id,
 }
 
 // COMPLETE_MESSAGE
-void messaging_service::register_complete_message(std::function<rpc::no_wait_type (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
+void messaging_service::register_complete_message(std::function<future<> (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::COMPLETE_MESSAGE, std::move(func));
 }
 future<> messaging_service::send_complete_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id) {
-    return send_message_oneway(this, messaging_verb::COMPLETE_MESSAGE, std::move(id), std::move(plan_id), std::move(from), std::move(connecting), std::move(dst_cpu_id));
+    return send_message_timeout_and_retry<void>(this, messaging_verb::COMPLETE_MESSAGE, id,
+        streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
+        plan_id, from, connecting, dst_cpu_id);
 }
 
 void messaging_service::register_echo(std::function<future<> ()>&& func) {

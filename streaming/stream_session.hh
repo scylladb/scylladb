@@ -186,6 +186,14 @@ private:
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
+
+    std::chrono::seconds _keep_alive_timeout{600};
+    timer<lowres_clock> _keep_alive;
+public:
+    void start_keep_alive_timer() {
+        _keep_alive.rearm(lowres_clock::now() + _keep_alive_timeout);
+    }
+
 public:
     stream_session();
     /**
@@ -406,7 +414,7 @@ public:
     virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
 
 private:
-    future<> send_complete_message();
+    void send_complete_message();
     bool maybe_completed();
 #if 0
 

@@ -96,6 +96,7 @@ void stream_transfer_task::start() {
                 session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, cf_id, plan_id, id, fm] (auto&& f) {
                     try {
                         f.get();
+                        session->start_keep_alive_timer();
                         sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply", plan_id);
                         msg.mutations_done.signal();
                     } catch (std::exception& e) {
@@ -151,6 +152,7 @@ void stream_transfer_task::complete(int sequence_number) {
         session->ms().send_stream_mutation_done(id, plan_id, this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
             try {
                 f.get();
+                session->start_keep_alive_timer();
                 sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply", plan_id);
                 session->transfer_task_completed(this->cf_id);
             } catch (...) {
