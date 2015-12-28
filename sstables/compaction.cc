@@ -178,7 +178,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     };
     auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables));
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
 
     // We use a fixed-sized pipe between the producer fiber (which reads the
     // individual sstables and merges them) and the consumer fiber (which
@@ -270,7 +270,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         }
     }).then([start_time, stats] {
         double ratio = double(stats->end_size) / double(stats->start_size);
-        auto end_time = std::chrono::high_resolution_clock::now();
+        auto end_time = std::chrono::steady_clock::now();
         // time taken by compaction in seconds.
         auto duration = std::chrono::duration<float>(end_time - start_time);
         auto throughput = (double(stats->end_size) / (1024*1024)) / duration.count();

@@ -117,7 +117,7 @@ public:
         return _sst.back()->load();
     }
 
-    using clk = std::chrono::high_resolution_clock;
+    using clk = std::chrono::steady_clock;
     static auto now() {
         return clk::now();
     }
