@@ -45,10 +45,49 @@ future<> init_storage_service(distributed<database>& db) {
     });
 }
 
-future<> init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_provider_type seed_provider, sstring cluster_name, double phi) {
+future<> init_ms_fd_gossiper(sstring listen_address
+                , uint16_t storage_port
+                , uint16_t ssl_storage_port
+                , sstring ms_encrypt_what
+                , sstring ms_trust_store
+                , sstring ms_cert
+                , sstring ms_key
+                , db::seed_provider_type seed_provider
+                , sstring cluster_name
+                , double phi)
+{
     const gms::inet_address listen(listen_address);
+
+    using encrypt_what = net::messaging_service::encrypt_what;
+    using namespace seastar::tls;
+
+    encrypt_what ew = encrypt_what::none;
+    if (ms_encrypt_what == "all") {
+        ew = encrypt_what::all;
+    } else if (ms_encrypt_what == "dc") {
+        ew = encrypt_what::dc;
+    } else if (ms_encrypt_what == "rack") {
+        ew = encrypt_what::rack;
+    }
+
+    future<> f = make_ready_future<>();
+    ::shared_ptr<server_credentials> creds;
+
+    if (ew != encrypt_what::none) {
+        // note: credentials are immutable after this, and ok to share across shards
+        creds = ::make_shared<server_credentials>(::make_shared<dh_params>(dh_params::level::MEDIUM));
+        f = creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).then([creds, ms_trust_store] {
+            return ms_trust_store.empty()
+                            ? creds->set_system_trust()
+                                            : creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM)
+                                              ;
+
+        });
+    }
+
     // Init messaging_service
-    return net::get_messaging_service().start(listen, std::move(port)).then([] {
+    return f.then([listen, storage_port, creds, ssl_storage_port, ew] {
+        return net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds);
         // #293 - do not stop anything
         //engine().at_exit([] { return net::get_messaging_service().stop(); });
     }).then([phi] {

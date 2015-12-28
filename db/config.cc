@@ -117,8 +117,9 @@ template<typename K, typename V>
 struct convert<std::unordered_map<K, V>> {
     static Node encode(const std::unordered_map<K, V>& rhs) {
         Node node(NodeType::Map);
-        for(typename std::map<K, V>::const_iterator it=rhs.begin();it!=rhs.end();++it)
-            node.force_insert(it->first, it->second);
+        for (auto& p : rhs) {
+            node.force_insert(p.first, p.second);
+        }
         return node;
     }
     static bool decode(const Node& node, std::unordered_map<K, V>& rhs) {
@@ -412,4 +413,22 @@ future<> db::config::read_from_file(const sstring& filename) {
     return engine().open_file_dma(filename, open_flags::ro).then([this](file f) {
        return read_from_file(std::move(f));
     });
+}
+
+boost::filesystem::path db::config::get_conf_dir() {
+    using namespace boost::filesystem;
+
+    path confdir;
+    auto* cd = std::getenv("SCYLLA_CONF");
+    if (cd != nullptr) {
+        confdir = path(cd);
+    } else {
+        auto* p = std::getenv("SCYLLA_HOME");
+        if (p != nullptr) {
+            confdir = path(p);
+        }
+        confdir /= "conf";
+    }
+
+    return confdir;
 }

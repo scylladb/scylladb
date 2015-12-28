@@ -50,6 +50,23 @@ logging::logger startlog("init");
 
 namespace bpo = boost::program_options;
 
+static boost::filesystem::path relative_conf_dir(boost::filesystem::path path) {
+    static auto conf_dir = db::config::get_conf_dir(); // this is not gonna change in our life time
+    return conf_dir / path;
+}
+
+// Note: would be neat if something like this was in config::string_map directly
+// but that cruds up the YAML/boost integration so until I want to spend hairpulling
+// time with that, this is an acceptable helper
+template<typename K, typename V, typename KK, typename VV = V>
+static V get_or_default(const std::unordered_map<K, V>& src, const KK& key, const VV& def = V()) {
+    auto i = src.find(key);
+    if (i != src.end()) {
+        return i->second;
+    }
+    return def;
+}
+
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     using namespace boost::filesystem;
@@ -58,10 +75,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     if (opts.count("options-file") > 0) {
         file = opts["options-file"].as<sstring>();
     } else {
-        auto file_path = db::config::get_conf_dir();
-        file_path /= path("scylla.yaml");
-
-        file = file_path.string();
+        file = relative_conf_dir("scylla.yaml").string();
     }
     return check_direct_io_support(file).then([file, &cfg] {
         return cfg.read_from_file(file);
@@ -193,21 +207,17 @@ int main(int ac, char** av) {
         apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                 cfg->log_to_stdout(), cfg->log_to_syslog());
 
-        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
+        return read_config(opts, *cfg).then([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
             dht::set_global_partitioner(cfg->partitioner());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
-            uint16_t storage_port = cfg->storage_port();
             ctx.api_dir = cfg->api_ui_dir();
             ctx.api_doc = cfg->api_doc_dir();
-            double phi = cfg->phi_convict_threshold();
-            sstring cluster_name = cfg->cluster_name();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             sstring api_address = cfg->api_address() != "" ? cfg->api_address() : rpc_address;
-            auto seed_provider= cfg->seed_provider();
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
 
@@ -237,7 +247,8 @@ int main(int ac, char** av) {
             }).then([&db] {
                 return init_storage_service(db);
             }).then([&db, cfg] {
-                return db.start(std::move(*cfg)).then([&db] {
+                // Note: changed from using a move here, because we want the config object intact.
+                return db.start(std::ref(*cfg)).then([&db] {
                     engine().at_exit([&db] {
 
                         // #293 - do not stop anything - not even db (for real)
@@ -250,8 +261,31 @@ int main(int ac, char** av) {
                         });
                     });
                 });
-            }).then([listen_address, storage_port, seed_provider, cluster_name, phi] {
-                return init_ms_fd_gossiper(listen_address, storage_port, seed_provider, cluster_name, phi);
+            }).then([cfg, listen_address] {
+                // Moved local parameters here, esp since with the
+                // ssl stuff it gets to be a lot.
+                uint16_t storage_port = cfg->storage_port();
+                uint16_t ssl_storage_port = cfg->ssl_storage_port();
+                double phi = cfg->phi_convict_threshold();
+                auto seed_provider= cfg->seed_provider();
+                sstring cluster_name = cfg->cluster_name();
+
+                const auto& ssl_opts = cfg->server_encryption_options();
+                auto encrypt_what = get_or_default(ssl_opts, "internode_encryption", "none");
+                auto trust_store = get_or_default(ssl_opts, "truststore");
+                auto cert = get_or_default(ssl_opts, "certificate", relative_conf_dir("scylla.crt").string());
+                auto key = get_or_default(ssl_opts, "keyfile", relative_conf_dir("scylla.key").string());
+
+                return init_ms_fd_gossiper(listen_address
+                                , storage_port
+                                , ssl_storage_port
+                                , encrypt_what
+                                , trust_store
+                                , cert
+                                , key
+                                , seed_provider
+                                , cluster_name
+                                , phi);
             }).then([&db] {
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&proxy, &db] {
