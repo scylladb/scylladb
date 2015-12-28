@@ -189,6 +189,10 @@ private:
     uint64_t calculate_generation_for_new_table() {
         return _sstable_generation++ * smp::count + engine().cpu_id();
     }
+
+    // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
+    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                              const std::vector<sstables::shared_sstable>& sstables_to_remove);
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
