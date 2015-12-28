@@ -799,8 +799,8 @@ commitlog_total_space_in_mb: -1
 # enable or disable client/server encryption.
 # client_encryption_options:
 #    enabled: false
-#    keystore: conf/.keystore
-#    keystore_password: cassandra
+#    certificate: conf/scylla.crt
+#    keyfile: conf/scylla.key
 
     # require_client_auth: false
     # Set trustore and truststore_password if require_client_auth is true

@@ -253,13 +253,17 @@ future<> cql_server::stop() {
 }
 
 future<>
-cql_server::listen(ipv4_addr addr) {
+cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials> creds) {
     _notifier = std::make_unique<event_notifier>(addr.port);
     service::get_local_migration_manager().register_listener(_notifier.get());
     service::get_local_storage_service().register_subscriber(_notifier.get());
+
     listen_options lo;
     lo.reuse_address = true;
-    _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));
+    server_socket ss = creds
+                    ? seastar::tls::listen(creds, make_ipv4_address(addr), lo)
+                    : engine().listen(make_ipv4_address(addr), lo);
+    _listeners.emplace_back(std::move(ss));
     _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1)).discard_result();
     return make_ready_future<>();
 }

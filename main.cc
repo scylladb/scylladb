@@ -240,6 +240,23 @@ int main(int ac, char** av) {
                 utils::fb_utilities::set_broadcast_rpc_address(rpc_address);
             }
 
+            // TODO: lib.
+            auto is_true = [](sstring val) {
+                std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+                return val == "true" || val == "1";
+            };
+
+            // The start_native_transport method is invoked by API as well, and uses the config object
+            // (through db) directly. Lets fixup default valued right here instead then, so it in turn can be
+            // kept simple
+            // TODO: make intrinsic part of config defaults instead
+            if (is_true(get_or_default(cfg->client_encryption_options(), "enabled", "false"))) {
+                auto& ceo = cfg->client_encryption_options();
+                ceo["enabled"] = "true";
+                ceo["certificate"] = get_or_default(ceo, "certificate", relative_conf_dir("scylla.crt").string());
+                ceo["keyfile"] = get_or_default(ceo, "keyfile", relative_conf_dir("scylla.key").string());
+            }
+
             using namespace locator;
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 // #293 - do not stop anything
