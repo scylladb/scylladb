@@ -23,6 +23,11 @@
     },
     {
       "type": "file",
+      "source": "files/.bash_profile",
+      "destination": "/home/fedora/.bash_profile"
+    },
+    {
+      "type": "file",
       "source": "../../scripts/scylla_install",
       "destination": "/home/fedora/scylla_install"
     },
