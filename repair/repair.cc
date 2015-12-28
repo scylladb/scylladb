@@ -31,6 +31,23 @@
 
 static logging::logger logger("repair");
 
+template <typename T1, typename T2>
+inline
+static std::ostream& operator<<(std::ostream& os, const std::unordered_map<T1, T2>& v) {
+    bool first = true;
+    os << "{";
+    for (auto&& elem : v) {
+        if (!first) {
+            os << ", ";
+        } else {
+            first = false;
+        }
+        os << elem.first << "=" << elem.second;
+    }
+    os << "}";
+    return os;
+}
+
 static std::vector<sstring> list_column_families(const database& db, const sstring& keyspace) {
     std::vector<sstring> ret;
     for (auto &&e : db.get_column_families_mapping()) {
@@ -264,7 +281,8 @@ struct repair_options {
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
-            throw std::runtime_error("unsupported repair option");
+            throw std::runtime_error(sprint("unsupported repair options: %s",
+                    options));
         }
     }
 
@@ -332,7 +350,7 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     // that "Nothing to repair for keyspace '...'". We don't have such a case
     // yet. Real ids returned by next_repair_command() will be >= 1.
     int id = repair_tracker.next_repair_command();
-    logger.info("starting user-requested repair for keyspace {}, repair id {}", keyspace, id);
+    logger.info("starting user-requested repair for keyspace {}, repair id {}, options {}", keyspace, id, options_map);
 
     repair_tracker.start(id);
 
