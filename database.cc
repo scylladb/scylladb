@@ -723,8 +723,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
         auto new_tables = make_lw_shared<std::vector<
                 std::pair<unsigned, sstables::shared_sstable>>>();
         auto create_sstable = [this, new_tables] {
-                // FIXME: this generation calculation should be in a function.
-                auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+                auto gen = this->calculate_generation_for_new_table();
                 // FIXME: use "tmp" marker in names of incomplete sstable
                 auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, gen,
                         sstables::sstable::version_types::ka,

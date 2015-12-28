@@ -185,6 +185,10 @@ private:
     void update_sstables_known_generation(unsigned generation) {
         _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
     }
+
+    uint64_t calculate_generation_for_new_table() {
+        return _sstable_generation++ * smp::count + engine().cpu_id();
+    }
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
