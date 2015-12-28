@@ -113,7 +113,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     std::vector<shared_sstable> not_compacted_sstables;
     boost::set_difference(*all_sstables | boost::adaptors::map_values, sstables,
         std::back_inserter(not_compacted_sstables), [] (const shared_sstable& x, const shared_sstable& y) {
-            return x->generation() == y->generation();
+            return x->generation() < y->generation();
         });
 
     auto schema = cf.schema();
