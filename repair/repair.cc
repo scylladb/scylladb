@@ -278,6 +278,23 @@ struct repair_options {
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
+        // We currently do not support incremental repair. We could probably
+        // ignore this option as it is just an optimization, but for now,
+        // let's make it an error.
+        bool incremental;
+        bool_opt(incremental, options, INCREMENTAL_KEY);
+        if (incremental) {
+            throw std::runtime_error("unsupported incremental repair");
+        }
+        // We do not currently support the distinction between "parallel" and
+        // "sequential" repair, and operate the same for both.
+        // We don't currently support "dc parallel" parallelism.
+        int parallelism;
+        int_opt(parallelism, options, PARALLELISM_KEY);
+        if (parallelism != PARALLEL && parallelism != SEQUENTIAL) {
+            throw std::runtime_error(sprint(
+                    "unsupported repair parallelism: %d", parallelism));
+        }
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
@@ -296,6 +313,12 @@ struct repair_options {
     static constexpr const char* HOSTS_KEY = "hosts"; // TODO
     static constexpr const char* TRACE_KEY = "trace"; // TODO
 
+    // Settings of "parallelism" option. Numbers must match Cassandra's
+    // RepairParallelism enum, which is used by the caller.
+    enum repair_parallelism {
+        SEQUENTIAL=0, PARALLEL=1, DATACENTER_AWARE=2
+    };
+
 private:
     static void bool_opt(bool& var,
             std::unordered_map<sstring, sstring>& options,
@@ -307,6 +330,20 @@ private:
                 var = true;
             } else {
                 var = false;
+            }
+            options.erase(it);
+        }
+    }
+
+    static void int_opt(int& var,
+            std::unordered_map<sstring, sstring>& options,
+            const sstring& key) {
+        auto it = options.find(key);
+        if (it != options.end()) {
+            errno = 0;
+            var = strtol(it->second.c_str(), nullptr, 10);
+            if (errno) {
+                throw(std::runtime_error(sprint("cannot parse integer: '%s'", it->second)));
             }
             options.erase(it);
         }
