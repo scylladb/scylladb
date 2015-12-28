@@ -148,15 +148,6 @@ public:
      */
     stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
-    /**
-     * Add transfer task to send given SSTable files.
-     *
-     * @param to endpoint address of receiver
-     * @param sstableDetails sstables with file positions and estimated key count.
-     *                       this collection will be modified to remove those files that are successfully handed off
-     * @return this object for chaining
-     */
-    stream_plan& transfer_files(inet_address to, std::vector<stream_detail> sstable_details);
     stream_plan& listeners(std::vector<stream_event_handler*> handlers);
 #if 0
     /**

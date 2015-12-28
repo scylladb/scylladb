@@ -70,12 +70,6 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
     return *this;
 }
 
-stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
-    _range_added = true;
-    _coordinator->transfer_files(to, std::move(sstable_details));
-    return *this;
-}
-
 future<stream_state> stream_plan::execute() {
     sslog.debug("[Stream #{}] Executing stream_plan description={} range_added={}", _plan_id, _description, _range_added);
     if (!_range_added) {

@@ -46,13 +46,16 @@
 #include "frozen_mutation.hh"
 #include "mutation.hh"
 #include "message/messaging_service.hh"
+#include "range.hh"
+#include "dht/i_partitioner.hh"
 
 namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id)
-    : stream_task(session, cf_id) {
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges)
+    : stream_task(session, cf_id)
+    , _ranges(std::move(ranges)) {
 }
 
 stream_transfer_task::~stream_transfer_task() = default;
@@ -149,7 +152,7 @@ void stream_transfer_task::complete(int sequence_number) {
         auto from = utils::fb_utilities::get_broadcast_address();
         auto id = shard_id{session->peer, session->dst_cpu_id};
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", plan_id, id, sequence_number);
-        session->ms().send_stream_mutation_done(id, plan_id, this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
+        session->ms().send_stream_mutation_done(id, plan_id, std::move(_ranges), this->cf_id, from, session->connecting, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
             try {
                 f.get();
                 session->start_keep_alive_timer();

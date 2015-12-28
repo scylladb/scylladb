@@ -91,25 +91,6 @@ std::vector<session_info> stream_coordinator::get_all_session_info() {
     return result;
 }
 
-void stream_coordinator::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
-    host_streaming_data& session_list = get_or_create_host_data(to);
-    if (_connections_per_host > 1) {
-        abort();
-#if 0
-        List<List<StreamSession.SSTableStreamingSections>> buckets = sliceSSTableDetails(sstableDetails);
-
-        for (List<StreamSession.SSTableStreamingSections> subList : buckets)
-        {
-            StreamSession session = sessionList.get_or_create_next_session(to, to);
-            session.addTransferFiles(subList);
-        }
-#endif
-    } else {
-        auto session = session_list.get_or_create_next_session(to, to);
-        session->add_transfer_files(sstable_details);
-    }
-}
-
 stream_coordinator::host_streaming_data& stream_coordinator::get_host_data(inet_address peer) {
     auto it = _peer_sessions.find(peer);
     if (it == _peer_sessions.end()) {

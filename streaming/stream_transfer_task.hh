@@ -57,6 +57,8 @@ private:
     int32_t sequence_number = 0;
     bool aborted = false;
 
+    // A stream_transfer_task always contains the same range to stream
+    std::vector<range<dht::token>> _ranges;
     std::map<int32_t, messages::outgoing_file_message> files;
     //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
 
@@ -64,7 +66,7 @@ private:
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
-    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id);
+    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges);
     ~stream_transfer_task();
 
     void add_transfer_file(stream_detail detail);

@@ -152,6 +152,7 @@ public:
         return net::get_local_messaging_service();
     }
     static database& get_local_db() { return _db->local(); }
+    static distributed<database>& get_db() { return *_db; };
     static future<> init_streaming_service(distributed<database>& db);
     static future<> test(distributed<cql3::query_processor>& qp);
 public:
@@ -261,7 +262,7 @@ public:
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
-    void add_transfer_files(std::vector<stream_detail> sstable_details);
+    void add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details);
 
 private:
     void close_session(stream_session_state final_state);

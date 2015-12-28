@@ -440,8 +440,8 @@ public:
     void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
     future<> send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
 
-    void register_stream_mutation_done(std::function<future<> (UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(shard_id id, UUID plan_id, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
+    void register_stream_mutation_done(std::function<future<> (UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
 
     void register_complete_message(std::function<future<> (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
     future<> send_complete_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);

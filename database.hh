@@ -215,6 +215,10 @@ public:
         return _cache;
     }
 
+    row_cache& get_row_cache() {
+        return _cache;
+    }
+
     logalloc::occupancy_stats occupancy() const;
 public:
     column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager&);
