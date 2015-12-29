@@ -312,18 +312,14 @@ void set_storage_service(http_context& ctx, routes& r) {
 
 
     ss::repair_async.set(r, [&ctx](std::unique_ptr<request> req) {
-        // Currently, we get all the repair options encoded in a single
-        // "options" option, and split it to a map using the "," and ":"
-        // delimiters. TODO: consider if it doesn't make more sense to just
-        // take all the query parameters as this map and pass it to the repair
-        // function.
+        static std::vector<sstring> options = {"primaryRange", "parallelism", "incremental",
+                "jobThreads", "ranges", "columnFamilies", "dataCenters", "hosts", "trace"};
         std::unordered_map<sstring, sstring> options_map;
-        for (auto s : split(req->get_query_param("options"), ",")) {
-            auto kv = split(s, ":");
-            if (kv.size() != 2) {
-                throw httpd::bad_param_exception("malformed async repair options");
+        for (auto o : options) {
+            auto s = req->get_query_param(o);
+            if (s != "") {
+                options_map[o] = s;
             }
-            options_map.emplace(std::move(kv[0]), std::move(kv[1]));
         }
 
         // The repair process is asynchronous: repair_start only starts it and

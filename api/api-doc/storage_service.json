@@ -797,8 +797,72 @@
                      "paramType":"path"
                   },
                   {
-                     "name":"options",
-                     "description":"Options for the repair",
+                     "name":"primaryRange",
+                     "description":"If the value is the string 'true' with any capitalization, repair only the first range returned by the partitioner.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"parallelism",
+                     "description":"Repair parallelism, can be 0 (sequential), 1 (parallel) or 2 (datacenter-aware).",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"incremental",
+                     "description":"If the value is the string 'true' with any capitalization, perform incremental repair.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"jobThreads",
+                     "description":"An integer specifying the parallelism on each node.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"ranges",
+                     "description":"An explicit list of ranges to repair, overriding the default choice. Each range is expressed as token1:token2, and multiple ranges can be given as a comma separated list.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"columnFamilies",
+                     "description":"Which column families to repair in the given keyspace. Multiple columns families can be named separated by commas. If this option is missing, all column families in the keyspace are repaired.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dataCenters",
+                     "description":"Which data centers are to participate in this repair. Multiple data centers can be listed separated by commas.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"hosts",
+                     "description":"Which hosts are to participate in this repair. Multiple hosts can be listed separated by commas.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"trace",
+                     "description":"If the value is the string 'true' with any capitalization, enable tracing of the repair.",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
