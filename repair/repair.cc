@@ -356,7 +356,7 @@ private:
 
     // A range is expressed as start_token:end token and multiple ranges can
     // be given as comma separated ranges(e.g. aaa:bbb,ccc:ddd).
-    static void ranges_opt(std::vector<query::range<dht::token>> var,
+    static void ranges_opt(std::vector<query::range<dht::token>>& var,
             std::unordered_map<sstring, sstring>& options,
                         const sstring& key) {
         auto it = options.find(key);
