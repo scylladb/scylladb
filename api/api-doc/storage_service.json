@@ -425,7 +425,7 @@
                "summary":"load value. Keys are IP addresses",
                "type":"array",
                "items":{
-                  "type":"mapper"
+                  "type":"double_mapper"
                },
                "nickname":"get_load_map",
                "produces":[
@@ -1960,6 +1960,20 @@
             },
             "value":{
                "type":"string",
+               "description":"The value"
+            }
+         }
+      },
+      "double_mapper":{
+         "id":"double_mapper",
+         "description":"A key value mapping between a string and a double",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"double",
                "description":"The value"
             }
          }

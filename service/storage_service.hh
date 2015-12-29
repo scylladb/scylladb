@@ -802,7 +802,7 @@ public:
 
     sstring get_load_string();
 
-    future<std::map<sstring, sstring>> get_load_map();
+    future<std::map<sstring, double>> get_load_map();
 
 #if 0
     public final void deliverHints(String host) throws UnknownHostException
