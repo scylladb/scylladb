@@ -158,7 +158,9 @@ thread_local T* prepared_buffers_allocator<T>::_prepared_buffer;
 // Consider using an intrusive container leveraging segment_descriptor objects.
 using segment_heap = boost::heap::binomial_heap<
     segment*, boost::heap::compare<segment_occupancy_descending_less_compare>,
-    boost::heap::allocator<prepared_buffers_allocator<segment*>>>;
+    boost::heap::allocator<prepared_buffers_allocator<segment*>>,
+    // constant_time_size<true> causes corruption with boost < 1.60
+    boost::heap::constant_time_size<false>>;
 using segment_heap_allocator = segment_heap::allocator_type;
 
 struct segment {
