@@ -274,10 +274,15 @@ struct repair_options {
     // for determining the list of ranges to repair. In particular, "ranges"
     // overrides the setting of "primary_range".
     std::vector<query::range<dht::token>> ranges;
+    // column_families is the list of column families to repair in the given
+    // keyspace. If this list is empty (the default), all the column families
+    // in this keyspace are repaired
+    std::vector<sstring> column_families;
 
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
+        list_opt(column_families, options, COLUMNFAMILIES_KEY);
         // We currently do not support incremental repair. We could probably
         // ignore this option as it is just an optimization, but for now,
         // let's make it an error.
@@ -375,6 +380,19 @@ private:
         }
         options.erase(it);
     }
+
+    // A comma-separate list of strings
+    static void list_opt(std::vector<sstring>& var,
+            std::unordered_map<sstring, sstring>& options,
+                        const sstring& key) {
+        auto it = options.find(key);
+        if (it == options.end()) {
+            return;
+        }
+        std::vector<sstring> range_strings;
+        boost::split(var, it->second, boost::algorithm::is_any_of(","));
+        options.erase(it);
+    }
 };
 
 static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
@@ -421,8 +439,12 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         ranges = get_local_ranges(db.local(), keyspace);
     }
 
-    // FIXME: let the cfs be overriden by an option
-    std::vector<sstring> cfs = list_column_families(db.local(), keyspace);
+    std::vector<sstring> cfs;
+    if (options.column_families.size()) {
+        cfs = options.column_families;
+    } else {
+        cfs = list_column_families(db.local(), keyspace);
+    }
 
     do_with(std::move(ranges), [&db, keyspace, cfs, id] (auto& ranges) {
 #if 1
