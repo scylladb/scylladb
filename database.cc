@@ -470,7 +470,8 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
             dblog.error("malformed sstable {}: {}. Refusing to boot", fname, e.what());
             throw;
         } catch(...) {
-            dblog.error("Unrecognized error while processing {}: Refusing to boot", fname);
+            dblog.error("Unrecognized error while processing {}: {}. Refusing to boot",
+                    fname, std::current_exception());
             throw;
         }
         return make_ready_future<entry_descriptor>(std::move(comps));
