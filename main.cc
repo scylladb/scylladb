@@ -263,6 +263,17 @@ int main(int ac, char** av) {
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            }).then([api_address] {
+                return dns::gethostbyname(api_address);
+            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                auto ip = e.addresses[0].in.s_addr;
+                ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
+                    return set_server(ctx);
+                }).then([api_address, api_port, ip, &ctx] {
+                    ctx.http_server.listen(ipv4_addr{ip, api_port});
+                }).then([api_address, api_port] {
+                    print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
+                });
             }).then([&db] {
                 return init_storage_service(db);
             }).then([&db, cfg] {
@@ -400,17 +411,6 @@ int main(int ac, char** av) {
                         return service::get_local_storage_service().start_rpc_server();
                     }
                     return make_ready_future<>();
-                });
-            }).then([api_address] {
-                return dns::gethostbyname(api_address);
-            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
-                auto ip = e.addresses[0].in.s_addr;
-                ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
-                    return set_server(ctx);
-                }).then([api_address, api_port, ip, &ctx] {
-                    ctx.http_server.listen(ipv4_addr{ip, api_port});
-                }).then([api_address, api_port] {
-                    print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
                 });
             });
         }).or_terminate();
