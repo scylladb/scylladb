@@ -38,8 +38,10 @@
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
 
+using column_count_type = uint32_t;
+
 // Column ID, unique within column_kind
-using column_id = uint32_t;
+using column_id = column_count_type;
 
 // Cluster-wide identifier of schema version of particular table.
 //
@@ -310,10 +312,10 @@ private:
     raw_schema _raw;
     thrift_schema _thrift;
 
-    const std::array<size_t, 4> _offsets;
+    const std::array<column_count_type, 4> _offsets;
 
-    inline size_t column_offset(column_kind k) const {
-        return k == column_kind::partition_key ? 0 : _offsets[size_t(k) - 1];
+    inline column_count_type column_offset(column_kind k) const {
+        return k == column_kind::partition_key ? 0 : _offsets[column_count_type(k) - 1];
     }
 
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
@@ -464,11 +466,11 @@ public:
     bool is_last_partition_key(const column_definition& def) const;
     bool has_multi_cell_collections() const;
     bool has_static_columns() const;
-    size_t partition_key_size() const;
-    size_t clustering_key_size() const;
-    size_t static_columns_count() const;
-    size_t compact_columns_count() const;
-    size_t regular_columns_count() const;
+    column_count_type partition_key_size() const;
+    column_count_type clustering_key_size() const;
+    column_count_type static_columns_count() const;
+    column_count_type compact_columns_count() const;
+    column_count_type regular_columns_count() const;
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
     // Returns a range of column definitions

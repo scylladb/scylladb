@@ -100,18 +100,28 @@ schema::raw_schema::raw_schema(utils::UUID id)
 schema::schema(const raw_schema& raw)
     : _raw(raw)
     , _offsets([this] {
+        if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
+            throw std::runtime_error(sprint("Column count limit (%d) overflowed: %d",
+                                            std::numeric_limits<column_count_type>::max(), _raw._columns.size()));
+        }
+
         auto& cols = _raw._columns;
-        std::array<size_t, 5> count = { 0, 0, 0, 0, 0 };
+        std::array<column_count_type, 5> count = { 0, 0, 0, 0, 0 };
         auto i = cols.begin();
         auto e = cols.end();
         for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column, column_kind::compact_column }) {
             auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
-            count[size_t(k)] = std::distance(i, j);
+            count[column_count_type(k)] = std::distance(i, j);
             i = j;
         }
-        return std::array<size_t, 4> { count[0], count[0] + count[1], count[0] + count[1] + count[2], count[0] + count[1] + count[2] + count[3] };
+        return std::array<column_count_type, 4> {
+                count[0],
+                count[0] + count[1],
+                count[0] + count[1] + count[2],
+                count[0] + count[1] + count[2] + count[3]
+        };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
@@ -664,27 +674,27 @@ schema::has_static_columns() const {
     return !static_columns().empty();
 }
 
-size_t
+column_count_type
 schema::partition_key_size() const {
     return column_offset(column_kind::clustering_key);
 }
 
-size_t
+column_count_type
 schema::clustering_key_size() const {
     return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
 }
 
-size_t
+column_count_type
 schema::static_columns_count() const {
     return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
 }
 
-size_t
+column_count_type
 schema::compact_columns_count() const {
     return _raw._columns.size() - column_offset(column_kind::compact_column);
 }
 
-size_t
+column_count_type
 schema::regular_columns_count() const {
     return _raw._columns.size() - column_offset(column_kind::regular_column);
 }
