@@ -281,7 +281,7 @@ struct repair_options {
         // We currently do not support incremental repair. We could probably
         // ignore this option as it is just an optimization, but for now,
         // let's make it an error.
-        bool incremental;
+        bool incremental = false;
         bool_opt(incremental, options, INCREMENTAL_KEY);
         if (incremental) {
             throw std::runtime_error("unsupported incremental repair");
@@ -289,7 +289,7 @@ struct repair_options {
         // We do not currently support the distinction between "parallel" and
         // "sequential" repair, and operate the same for both.
         // We don't currently support "dc parallel" parallelism.
-        int parallelism;
+        int parallelism = PARALLEL;
         int_opt(parallelism, options, PARALLELISM_KEY);
         if (parallelism != PARALLEL && parallelism != SEQUENTIAL) {
             throw std::runtime_error(sprint(
