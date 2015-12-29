@@ -219,7 +219,7 @@ public:
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
-    bool is_atomic() const { return !type->is_multi_cell(); }
+    bool is_atomic() const { return type->is_atomic(); }
     bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;

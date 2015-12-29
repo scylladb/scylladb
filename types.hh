@@ -469,6 +469,7 @@ public:
     virtual bool is_counter() const { return false; }
     virtual bool is_collection() const { return false; }
     virtual bool is_multi_cell() const { return false; }
+    virtual bool is_atomic() const { return !is_multi_cell(); }
     virtual bool is_reversed() const { return false; }
     virtual bool is_tuple() const { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
