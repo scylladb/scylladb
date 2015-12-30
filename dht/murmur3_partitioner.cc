@@ -88,18 +88,8 @@ inline int64_t long_token(const token& t) {
     return net::ntoh(*lp);
 }
 
-// XXX: Technically, this should be inside long token. However, long_token is
-// used quite a lot in hot paths, so it is better to keep the branches of, if
-// we can. Most our comparators will check for _kind separately,
-// so this should be fine.
 sstring murmur3_partitioner::to_sstring(const token& t) const {
-    int64_t lt;
-    if (t._kind == dht::token::kind::before_all_keys) {
-        lt = std::numeric_limits<long>::min();
-    } else {
-        lt = long_token(t);
-    }
-    return ::to_sstring(lt);
+    return ::to_sstring(long_token(t));
 }
 
 dht::token murmur3_partitioner::from_sstring(const sstring& t) const {
