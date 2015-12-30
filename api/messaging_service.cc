@@ -34,7 +34,7 @@ namespace api {
 using shard_info = messaging_service::shard_info;
 using shard_id = messaging_service::shard_id;
 
-static const int32_t num_verb = static_cast<int32_t>(messaging_verb::UNUSED_3) + 1;
+static const int32_t num_verb = static_cast<int32_t>(messaging_verb::LAST) + 1;
 
 std::vector<message_counter> map_to_message_counters(
         const std::unordered_map<gms::inet_address, unsigned long>& map) {

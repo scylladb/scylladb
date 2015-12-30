@@ -66,65 +66,29 @@ namespace net {
 
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
-    MUTATION,
-    MUTATION_DONE,
-    BINARY, // Deprecated
-    READ_REPAIR,
-    READ,
-    READ_DATA,
-    READ_MUTATION_DATA, // scylla-only
-    READ_DIGEST,
-    REQUEST_RESPONSE, // client-initiated reads and writes
-    STREAM_INITIATE, // Deprecated
-    STREAM_INITIATE_DONE, // Deprecated
-    STREAM_REPLY, // Deprecated
-    STREAM_REQUEST, // Deprecated
-    RANGE_SLICE,
-    BOOTSTRAP_TOKEN, // Deprecated
-    TREE_REQUEST, // Deprecated
-    TREE_RESPONSE, // Deprecated
-    JOIN, // Deprecated
-    GOSSIP_DIGEST_SYN,
-    GOSSIP_DIGEST_ACK,
-    GOSSIP_DIGEST_ACK2,
-    DEFINITIONS_ANNOUNCE, // Deprecated
-    DEFINITIONS_UPDATE,
-    TRUNCATE,
-    SCHEMA_CHECK,
-    INDEX_SCAN, // Deprecated
-    REPLICATION_FINISHED,
-    INTERNAL_RESPONSE, // responses to internal calls
-    COUNTER_MUTATION,
-    STREAMING_REPAIR_REQUEST, // Deprecated
-    STREAMING_REPAIR_RESPONSE, // Deprecated
-    SNAPSHOT, // Similar to nt snapshot
-    MIGRATION_REQUEST,
-    GOSSIP_SHUTDOWN,
-    _TRACE,
-    ECHO,
-    REPAIR_MESSAGE,
-    PAXOS_PREPARE,
-    PAXOS_PROPOSE,
-    PAXOS_COMMIT,
-    PAGED_RANGE,
-    UNUSED_1,
-    UNUSED_2,
-    UNUSED_3,
+    CLIENT_ID = 0,
+    ECHO = 1,
+    MUTATION = 2,
+    MUTATION_DONE = 3,
+    READ_DATA = 4,
+    READ_MUTATION_DATA = 5,
+    READ_DIGEST = 6,
+    GOSSIP_DIGEST_SYN = 7,
+    GOSSIP_DIGEST_ACK2 = 8,
+    GOSSIP_SHUTDOWN = 9,
+    DEFINITIONS_UPDATE = 10,
+    TRUNCATE = 11,
+    REPLICATION_FINISHED = 12,
+    MIGRATION_REQUEST = 13,
     // Used by streaming
-    STREAM_INIT_MESSAGE,
-    PREPARE_MESSAGE,
-    PREPARE_DONE_MESSAGE,
-    STREAM_MUTATION,
-    STREAM_MUTATION_DONE,
-    INCOMING_FILE_MESSAGE,
-    OUTGOING_FILE_MESSAGE,
-    RECEIVED_MESSAGE,
-    RETRY_MESSAGE,
-    COMPLETE_MESSAGE,
-    SESSION_FAILED_MESSAGE,
+    STREAM_INIT_MESSAGE = 14,
+    PREPARE_MESSAGE = 15,
+    PREPARE_DONE_MESSAGE = 16,
+    STREAM_MUTATION = 17,
+    STREAM_MUTATION_DONE = 18,
+    COMPLETE_MESSAGE = 19,
     // end of streaming verbs
-    CLIENT_ID,
-    LAST,
+    LAST = 20,
 };
 
 } // namespace net

@@ -223,7 +223,6 @@ rpc::no_wait_type messaging_service::no_wait() {
 static unsigned get_rpc_client_idx(messaging_verb verb) {
     unsigned idx = 0;
     if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
-        verb == messaging_verb::GOSSIP_DIGEST_ACK ||
         verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
         verb == messaging_verb::GOSSIP_SHUTDOWN ||
         verb == messaging_verb::ECHO) {
