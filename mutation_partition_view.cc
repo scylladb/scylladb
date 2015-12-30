@@ -34,7 +34,12 @@
 using namespace db;
 
 void
-mutation_partition_view::accept(const schema& schema, mutation_partition_visitor& visitor) const {
+mutation_partition_view::accept(const schema& s, mutation_partition_visitor& visitor) const {
+    accept(s.get_column_mapping(), visitor);
+}
+
+void
+mutation_partition_view::accept(const column_mapping& cm, mutation_partition_visitor& visitor) const {
     data_input in(_bytes);
 
     visitor.accept_partition_tombstone(tombstone_serializer::read(in));
@@ -44,7 +49,7 @@ mutation_partition_view::accept(const schema& schema, mutation_partition_visitor
     while (n_columns-- > 0) {
         auto id = in.read<column_id>();
 
-        if (schema.static_column_at(id).is_atomic()) {
+        if (cm.static_column_at(id).type()->is_atomic()) {
             auto&& v = atomic_cell_view_serializer::read(in);
             visitor.accept_static_cell(id, v);
         } else {
@@ -80,7 +85,7 @@ mutation_partition_view::accept(const schema& schema, mutation_partition_visitor
         while (n_columns-- > 0) {
             auto id = in.read<column_id>();
 
-            if (schema.regular_column_at(id).is_atomic()) {
+            if (cm.regular_column_at(id).type()->is_atomic()) {
                 auto&& v = atomic_cell_view_serializer::read(in);
                 visitor.accept_row_cell(id, v);
             } else {
