@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=development
+VERSION=0.14
 
 if test -f version
 then
