@@ -586,6 +586,12 @@ public:
     static clustering_key_prefix_view from_bytes(bytes_view v) {
         return { v };
     }
+
+    using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
+
+    static const compound& get_compound_type(const schema& s) {
+        return s.clustering_key_prefix_type();
+    }
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
