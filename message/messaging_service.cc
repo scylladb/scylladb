@@ -187,8 +187,9 @@ messaging_service::messaging_service(gms::inet_address ip
         );
     }())
 {
-    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address) {
+    register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id) {
         ci.attach_auxiliary("baddr", broadcast_address);
+        ci.attach_auxiliary("src_cpu_id", src_cpu_id);
         return rpc::no_wait;
     });
 }
@@ -318,7 +319,8 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
                                     remote_addr, local_addr);
 
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
-    _rpc->make_client<rpc::no_wait_type(gms::inet_address)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address());
+    uint32_t src_cpu_id = engine().cpu_id();
+    _rpc->make_client<rpc::no_wait_type(gms::inet_address, uint32_t)>(messaging_verb::CLIENT_ID)(*it->second.rpc_client, utils::fb_utilities::get_broadcast_address(), src_cpu_id);
     return it->second.rpc_client;
 }
 
