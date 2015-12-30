@@ -824,3 +824,17 @@ commitlog_total_space_in_mb: -1
 # reducing overhead from the TCP protocol itself, at the cost of increasing
 # latency if you block for cross-datacenter responses.
 # inter_dc_tcp_nodelay: false
+
+# Relaxation of environment checks.
+#
+# Scylla places certain requirements on its environment.  If these requirements are
+# not met, performance and reliability can be degraded.
+#
+# These requirements include:
+#    - A filesystem with good support for aysnchronous I/O (AIO). Currently,
+#      this means XFS.
+#
+# false: strict environment checks are in place; do not start if they are not met.
+# true: relaxed environment checks; performance and reliability may degraade.
+#
+# developer_mode: false
