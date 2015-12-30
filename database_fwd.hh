@@ -31,6 +31,7 @@ class mutation_partition;
 // schema.hh
 class schema;
 class column_definition;
+class column_mapping;
 
 // schema_mutations.hh
 class schema_mutations;

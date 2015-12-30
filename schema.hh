@@ -37,6 +37,7 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
+#include "db/serializer.hh"
 
 using column_count_type = uint32_t;
 
@@ -268,6 +269,55 @@ bool operator==(const column_definition&, const column_definition&);
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 
+// Encapsulates information needed for converting mutations between different schema versions.
+class column_mapping {
+public:
+    struct column {
+        bytes _name;
+        data_type _type;
+        const bytes& name() const { return _name; }
+        const data_type& type() const { return _type; }
+    };
+private:
+    // Contains _n_static definitions for static columns followed by definitions for regular columns,
+    // both ordered by consecutive column_ids.
+    // Primary key column sets are not mutable so we don't need to map them.
+    std::vector<column> _columns;
+    column_count_type _n_static = 0;
+public:
+    column_mapping() {}
+    column_mapping(std::vector<column> columns, column_count_type n_static)
+            : _columns(std::move(columns))
+            , _n_static(n_static)
+    { }
+    const column& static_column_at(column_id id) const {
+        if (id >= _n_static) {
+            throw std::out_of_range(sprint("static column id %d >= %d", id, _n_static));
+        }
+        return _columns[id];
+    }
+    const column& regular_column_at(column_id id) const {
+        auto n_regular = _columns.size() - _n_static;
+        if (id >= n_regular) {
+            throw std::out_of_range(sprint("regular column id %d >= %d", id, n_regular));
+        }
+        return _columns[id + _n_static];
+    }
+    friend class db::serializer<column_mapping>;
+};
+
+namespace db {
+
+template<> serializer<column_mapping>::serializer(const column_mapping&);
+template<> void serializer<column_mapping>::write(output&, const column_mapping&);
+template<> void serializer<column_mapping>::write(bytes_ostream&) const;
+template<> column_mapping serializer<column_mapping>::read(input&);
+template<> void serializer<column_mapping>::skip(input&);
+
+extern template class serializer<column_mapping>;
+
+}
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -322,7 +372,7 @@ private:
     std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
-
+    column_mapping _column_mapping;
     friend class schema_builder;
 public:
     using row_column_ids_are_ordered_by_name = std::true_type;
@@ -513,6 +563,7 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
+    const column_mapping& get_column_mapping() const;
 };
 
 bool operator==(const schema&, const schema&);
