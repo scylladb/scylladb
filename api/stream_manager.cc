@@ -77,6 +77,7 @@ static hs::stream_state get_state(
         set_summaries(info.sending_summaries, si.sending_summaries);
         set_files(info.receiving_files, si.receiving_files);
         set_files(info.sending_files, si.sending_files);
+        state.sessions.push(si);
     }
     return state;
 }
