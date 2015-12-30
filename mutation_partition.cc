@@ -1194,3 +1194,30 @@ mutation_partition mutation_partition::difference(schema_ptr s, const mutation_p
     }
     return mp;
 }
+
+void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) const {
+    v.accept_partition_tombstone(_tombstone);
+    _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        const column_definition& def = s.static_column_at(id);
+        if (def.is_atomic()) {
+            v.accept_static_cell(id, cell.as_atomic_cell());
+        } else {
+            v.accept_static_cell(id, cell.as_collection_mutation());
+        }
+    });
+    for (const row_tombstones_entry& e : _row_tombstones) {
+        v.accept_row_tombstone(e.prefix(), e.t());
+    }
+    for (const rows_entry& e : _rows) {
+        const deletable_row& dr = e.row();
+        v.accept_row(e.key(), dr.deleted_at(), dr.marker());
+        dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            const column_definition& def = s.regular_column_at(id);
+            if (def.is_atomic()) {
+                v.accept_row_cell(id, cell.as_atomic_cell());
+            } else {
+                v.accept_row_cell(id, cell.as_collection_mutation());
+            }
+        });
+    }
+}
