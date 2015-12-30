@@ -169,9 +169,9 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::get_load_map.set(r, [] (std::unique_ptr<request> req) {
         return service::get_local_storage_service().get_load_map().then([] (auto&& load_map) {
-            std::vector<ss::double_mapper> res;
+            std::vector<ss::map_string_double> res;
             for (auto i : load_map) {
-                ss::double_mapper val;
+                ss::map_string_double val;
                 val.key = i.first;
                 val.value = i.second;
                 res.push_back(val);
