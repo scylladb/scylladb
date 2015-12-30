@@ -178,6 +178,7 @@ template<> utils::UUID serializer<utils::UUID>::read(input&);
 template<> serializer<bytes>::serializer(const bytes &);
 template<> void serializer<bytes>::write(output&, const type&);
 template<> void serializer<bytes>::read(bytes&, input&);
+template<> void serializer<bytes>::skip(input&);
 
 template<> serializer<bytes_view>::serializer(const bytes_view&);
 template<> void serializer<bytes_view>::write(output&, const type&);
@@ -187,6 +188,7 @@ template<> bytes_view serializer<bytes_view>::read(input&);
 template<> serializer<sstring>::serializer(const sstring&);
 template<> void serializer<sstring>::write(output&, const type&);
 template<> void serializer<sstring>::read(sstring&, input&);
+template<> void serializer<sstring>::skip(input&);
 
 template<> serializer<tombstone>::serializer(const tombstone &);
 template<> void serializer<tombstone>::write(output&, const type&);

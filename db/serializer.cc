@@ -70,6 +70,11 @@ void db::serializer<bytes>::read(bytes& b, input& in) {
 }
 
 template<>
+void db::serializer<bytes>::skip(input& in) {
+    in.read<bytes>(); // FIXME: Avoid reading
+}
+
+template<>
 db::serializer<bytes_view>::serializer(const bytes_view& v)
         : _item(v), _size(output::serialized_size(v)) {
 }
@@ -102,6 +107,11 @@ void db::serializer<sstring>::write(output& out, const type& t) {
 template<>
 void db::serializer<sstring>::read(sstring& s, input& in) {
     s = in.read<sstring>();
+}
+
+template<>
+void db::serializer<sstring>::skip(input& in) {
+    in.read<sstring>(); // FIXME: avoid reading
 }
 
 template<>
