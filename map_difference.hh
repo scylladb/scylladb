@@ -46,15 +46,16 @@ struct map_difference {
     { }
 };
 
-template<typename Key,
+template<template<typename...> class Map,
+         typename Key,
          typename Tp,
          typename Compare = std::less<Key>,
          typename Eq = std::equal_to<Tp>,
          typename Alloc>
 inline
 map_difference<Key>
-difference(const std::map<Key, Tp, Compare, Alloc>& left,
-           const std::map<Key, Tp, Compare, Alloc>& right,
+difference(const Map<Key, Tp, Compare, Alloc>& left,
+           const Map<Key, Tp, Compare, Alloc>& right,
            Compare key_comp = Compare(),
            Eq equals = Eq(),
            Alloc alloc = Alloc())
