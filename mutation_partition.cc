@@ -725,7 +725,12 @@ void mutation_partition::trim_rows(const schema& s,
                 stop = true;
                 break;
             }
-            ++last;
+
+            if (e.empty()) {
+                last = reversal_traits<reversed>::erase_and_dispose(_rows, last, std::next(last, 1), deleter);
+            } else {
+                ++last;
+            }
         }
     }
 

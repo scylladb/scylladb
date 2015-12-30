@@ -847,3 +847,27 @@ SEASTAR_TEST_CASE(test_large_blobs) {
     });
 
 }
+
+SEASTAR_TEST_CASE(test_tombstone_purge) {
+    auto builder = schema_builder("tests", "tombstone_purge")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type);
+    builder.set_gc_grace_seconds(0);
+    auto s = builder.build();
+
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    const column_definition& col = *s->get_column_definition("value");
+
+    mutation m(key, s);
+    m.set_clustered_cell(clustering_key::make_empty(*s), col, make_atomic_cell(int32_type->decompose(1)));
+    tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
+    m.partition().apply(tomb);
+    BOOST_REQUIRE(!m.partition().empty());
+    m.partition().compact_for_compaction(*s, api::max_timestamp, gc_clock::now());
+    // Check that row was covered by tombstone.
+    BOOST_REQUIRE(m.partition().empty());
+    // Check that tombstone was purged after compact_for_compaction().
+    BOOST_REQUIRE(!m.partition().partition_tombstone());
+
+    return make_ready_future<>();
+}
