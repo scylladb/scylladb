@@ -586,6 +586,7 @@ private:
     template<typename T>
     friend class db::serializer;
     friend class mutation_partition_applier;
+    friend class converting_mutation_partition_applier;
 public:
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
