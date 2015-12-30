@@ -92,22 +92,6 @@ static future<> tst_init_ms_fd_gossiper(sstring listen_address, uint16_t port, d
 }
 // END TODO
 
-future<> init_once(shared_ptr<distributed<database>> db) {
-    static bool done = false;
-    if (!done) {
-        done = true;
-        // FIXME: we leak db, since we're initializing the global storage_service with it.
-        new shared_ptr<distributed<database>>(db);
-        return tst_init_storage_service(*db).then([] {
-            return tst_init_ms_fd_gossiper("127.0.0.1", 7000, db::config::seed_provider_type());
-        }).then([] {
-            return db::system_keyspace::init_local_cache();
-        });
-    } else {
-        return make_ready_future();
-    }
-}
-
 class single_node_cql_env : public cql_test_env {
 public:
     static auto constexpr ks_name = "ks";
@@ -287,42 +271,48 @@ public:
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             auto db = ::make_shared<distributed<database>>();
-            init_once(db).get();
             auto cfg = make_lw_shared<db::config>();
             _data_dir = make_lw_shared<tmpdir>();
             cfg->data_file_directories() = { _data_dir->path };
             cfg->commitlog_directory() = _data_dir->path + "/commitlog.dir";
+            cfg->num_tokens() = 256;
+            cfg->ring_delay_ms() = 500;
             boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
+            tst_init_storage_service(*db).get();
+
             db->start(std::move(*cfg)).get();
-            db->invoke_on_all([this] (database& db) {
-                return db.init_system_keyspace();
-            }).get();
-            auto& ks = db->local().find_keyspace(db::system_keyspace::NAME);
-            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-                auto cfm = pair.second;
-                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
-             }).get();
+
+            tst_init_ms_fd_gossiper("127.0.0.1", 7000, db::config::seed_provider_type()).get();
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
 
-            auto qp = ::make_shared<distributed<cql3::query_processor>>();
             proxy.start(std::ref(*db)).get();
             mm.start().get();
+
+            auto qp = ::make_shared<distributed<cql3::query_processor>>();
             qp->start(std::ref(proxy), std::ref(*db)).get();
 
-            db::system_keyspace::minimal_setup(*db, *qp);
-
-            auto& ss = service::get_local_storage_service();
-            static bool storage_service_started = false;
-            if (!storage_service_started) {
-                storage_service_started = true;
-                ss.init_server().get();
-            }
-
             bm.start(std::ref(*qp)).get();
+
+            db->invoke_on_all([this] (database& db) {
+                return db.init_system_keyspace();
+            }).get();
+
+            auto& ks = db->local().find_keyspace(db::system_keyspace::NAME);
+            parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+                auto cfm = pair.second;
+                return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
+            }).get();
+
+            // In main.cc we call db::system_keyspace::setup which calls
+            // minimal_setup and init_local_cache
+            db::system_keyspace::minimal_setup(*db, *qp);
+            db::system_keyspace::init_local_cache().get();
+
+            service::get_local_storage_service().init_server().get();
 
             _core_local.start().get();
             _db = std::move(db);
@@ -336,12 +326,23 @@ public:
     virtual future<> stop() override {
         return seastar::async([this] {
             _core_local.stop().get();
+            db::system_keyspace::deinit_local_cache().get();
+
             db::get_batchlog_manager().stop().get();
             _qp->stop().get();
             db::qctx = {};
             service::get_migration_manager().stop().get();
             service::get_storage_proxy().stop().get();
+
+            gms::get_gossiper().stop().get();
+            gms::get_failure_detector().stop().get();
+            net::get_messaging_service().stop().get();
+
             _db->stop().get();
+
+            service::get_storage_service().stop().get();
+            service::get_pending_range_calculator_service().stop().get();
+
             locator::i_endpoint_snitch::stop_snitch().get();
             bool old_active = true;
             assert(active.compare_exchange_strong(old_active, false));
