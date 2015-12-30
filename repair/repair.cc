@@ -442,6 +442,14 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
     std::vector<sstring> cfs;
     if (options.column_families.size()) {
         cfs = options.column_families;
+        for (auto& cf : cfs) {
+            try {
+                db.local().find_column_family(keyspace, cf);
+            } catch(...) {
+                throw std::runtime_error(sprint(
+                    "No column family '%s' in keyspace '%s'", cf, keyspace));
+            }
+        }
     } else {
         cfs = list_column_families(db.local(), keyspace);
     }
