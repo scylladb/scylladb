@@ -509,17 +509,17 @@ public:
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
     void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_data();
-    future<query::result> send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+    future<query::result> send_read_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_mutation_data();
-    future<reconcilable_result> send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr);
+    future<reconcilable_result> send_read_mutation_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_DIGEST
     void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_digest();
-    future<query::result_digest> send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr);
+    future<query::result_digest> send_read_digest(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for TRUNCATE
     void register_truncate(std::function<future<>(sstring, sstring)>&& func);

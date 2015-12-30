@@ -610,7 +610,7 @@ void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_s
 void messaging_service::unregister_read_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_DATA);
 }
-future<query::result> messaging_service::send_read_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+future<query::result> messaging_service::send_read_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr) {
     return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
 }
 
@@ -620,7 +620,7 @@ void messaging_service::register_read_mutation_data(std::function<future<foreign
 void messaging_service::unregister_read_mutation_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_MUTATION_DATA);
 }
-future<reconcilable_result> messaging_service::send_read_mutation_data(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+future<reconcilable_result> messaging_service::send_read_mutation_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr) {
     return send_message<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
 }
 
@@ -630,7 +630,7 @@ void messaging_service::register_read_digest(std::function<future<query::result_
 void messaging_service::unregister_read_digest() {
     _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
 }
-future<query::result_digest> messaging_service::send_read_digest(shard_id id, query::read_command& cmd, query::partition_range& pr) {
+future<query::result_digest> messaging_service::send_read_digest(shard_id id, const query::read_command& cmd, const query::partition_range& pr) {
     return send_message<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
 }
 
