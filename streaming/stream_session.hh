@@ -162,7 +162,6 @@ public:
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
     inet_address peer;
-    unsigned src_cpu_id;
     unsigned dst_cpu_id;
 private:
     int _index;
