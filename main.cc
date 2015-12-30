@@ -100,12 +100,19 @@ static logging::log_level to_loglevel(sstring level) {
     }
 }
 
-static future<> disk_sanity(sstring path) {
-    return check_direct_io_support(path).then([path] {
-        return file_system_at(path).then([path] (auto fs) {
+static future<> disk_sanity(sstring path, bool developer_mode) {
+    return check_direct_io_support(path).then([path, developer_mode] {
+        return file_system_at(path).then([path, developer_mode] (auto fs) {
             if (fs != fs_type::xfs) {
-                startlog.warn("{} is not on XFS. This is a non-supported setup, and performance is expected to be very bad.\n"
-                    "For better performance, placing your data on XFS-formatted directories is strongly recommended", path);
+                if (!developer_mode) {
+                    startlog.error("{} is not on XFS. This is a non-supported setup, and performance is expected to be very bad.\n"
+                            "For better performance, placing your data on XFS-formatted directories is required."
+                            " To override this error, see the developer_mode configuration option.", path);
+                    throw std::runtime_error(sprint("invalid configuration: path \"%s\" on unsupported filesystem", path));
+                } else {
+                    startlog.warn("{} is not on XFS. This is a non-supported setup, and performance is expected to be very bad.\n"
+                            "For better performance, placing your data on XFS-formatted directories is strongly recommended", path);
+                }
             }
         });
     });
@@ -347,9 +354,9 @@ int main(int ac, char** av) {
                 directories.insert(db.local().get_config().data_file_directories().cbegin(),
                         db.local().get_config().data_file_directories().cend());
                 directories.insert(db.local().get_config().commitlog_directory());
-                return do_with(std::move(directories), [] (auto& directories) {
-                    return parallel_for_each(directories, [] (sstring pathname) {
-                        return disk_sanity(pathname);
+                return do_with(std::move(directories), [&db] (auto& directories) {
+                    return parallel_for_each(directories, [&db] (sstring pathname) {
+                        return disk_sanity(pathname, db.local().get_config().developer_mode());
                     });
                 });
             }).then([&db] {
