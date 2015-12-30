@@ -45,6 +45,8 @@
 #include "release.hh"
 #include <cstdio>
 #include <core/file.hh>
+#include <sys/time.h>
+#include <sys/resource.h>
 
 logging::logger startlog("init");
 
@@ -178,6 +180,28 @@ private:
 
 class bad_configuration_error : public std::exception {};
 
+static
+void
+verify_rlimit(bool developer_mode) {
+    struct rlimit lim;
+    int r = getrlimit(RLIMIT_NOFILE, &lim);
+    if (r == -1) {
+        throw std::system_error(errno, std::system_category());
+    }
+    auto recommended = 200'000U;
+    auto min = 10'000U;
+    if (lim.rlim_cur < min) {
+        if (developer_mode) {
+            startlog.warn("NOFILE rlimit too low (recommended setting {}, minimum setting {};"
+                          " you may run out of file descriptors.", recommended, min);
+        } else {
+            startlog.error("NOFILE rlimit too low (recommended setting {}, minimum setting {};"
+                          " refusing to start.", recommended, min);
+            throw std::runtime_error("NOFILE rlimit too low");
+        }
+    }
+}
+
 int main(int ac, char** av) {
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
@@ -217,6 +241,7 @@ int main(int ac, char** av) {
         return read_config(opts, *cfg).then([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
+            verify_rlimit(cfg->developer_mode());
             dht::set_global_partitioner(cfg->partitioner());
             auto start_thrift = cfg->start_rpc();
             uint16_t api_port = cfg->api_port();
