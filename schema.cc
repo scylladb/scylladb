@@ -519,7 +519,14 @@ schema_builder::schema_builder(const schema_ptr s)
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
     : _raw(raw)
-{}
+{
+    static_assert(schema::row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
+    // Schema builder may add or remove columns and their ids need to be
+    // recomputed in build().
+    for (auto& def : _raw._columns | boost::adaptors::filtered([] (auto& def) { return !def.is_primary_key(); })) {
+            def.id = 0;
+    }
+}
 
 column_definition& schema_builder::find_column(const cql3::column_identifier& c) {
     auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [c](auto& p) {
