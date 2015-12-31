@@ -351,6 +351,10 @@ public:
         return _raw._is_compound;
     }
 
+    bool is_cql3_table() const {
+        return !is_super() && !is_dense() && is_compound();
+    }
+
     thrift_schema& thrift() {
         return _thrift;
     }
