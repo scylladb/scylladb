@@ -139,6 +139,11 @@ std::map<sstring, sstring> cf_prop_defs::get_compression_options() const {
     return std::map<sstring, sstring>{};
 }
 
+int32_t cf_prop_defs::get_default_time_to_live() const
+{
+    return get_int(KW_DEFAULT_TIME_TO_LIVE, 0);
+}
+
 void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));
