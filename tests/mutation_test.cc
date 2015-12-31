@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include "md5_hasher.hh"
 
 #include "core/sstring.hh"
 #include "core/do_with.hh"
@@ -43,6 +44,7 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
+#include "mutation_source_test.hh"
 
 using namespace std::chrono_literals;
 
@@ -844,6 +846,53 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         auto cell2 = i2->as_atomic_cell();
         BOOST_REQUIRE(cell2.is_live());
         BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_equality) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            if (eq) {
+                assert_that(m1).is_equal_to(m2);
+            } else {
+                assert_that(m1).is_not_equal_to(m2);
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_hash) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto get_hash = [] (const mutation& m) {
+                md5_hasher h;
+                feed_hash(h, m);
+                return h.finalize();
+            };
+            auto h1 = get_hash(m1);
+            auto h2 = get_hash(m2);
+            if (eq) {
+                if (h1 != h2) {
+                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                }
+            } else {
+                // We're using a strong hasher, collision should be unlikely
+                if (h1 == h2) {
+                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                }
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
+    return seastar::async([] {
+        for_each_mutation_pair([](auto&& m1, auto&& m2, are_equal eq) {
+            if (eq == are_equal::yes) {
+                assert_that(m1).is_upgrade_equivalent(m2.schema());
+                assert_that(m2).is_upgrade_equivalent(m1.schema());
+            }
+        });
     });
 }
 
