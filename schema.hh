@@ -226,6 +226,9 @@ public:
     bool is_indexed() const {
         return idx_info.index_type != index_type::none;
     }
+    bool is_part_of_cell_name() const {
+        return is_regular() || is_static();
+    }
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
