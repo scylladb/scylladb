@@ -402,28 +402,29 @@ public:
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
     // Wrapper for STREAM_INIT_MESSAGE verb
-    void register_stream_init_message(std::function<future<unsigned> (streaming::messages::stream_init_message msg, unsigned src_cpu_id)>&& func);
-    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg, unsigned src_cpu_id);
+    void register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo, streaming::messages::stream_init_message msg)>&& func);
+    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg);
 
     // Wrapper for PREPARE_MESSAGE verb
-    void register_prepare_message(std::function<future<streaming::messages::prepare_message> (streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id)>&& func);
+    void register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
+            streaming::messages::prepare_message msg, UUID plan_id,
+            unsigned dst_cpu_id)>&& func);
     future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
-        inet_address from, inet_address connecting, unsigned src_cpu_id, unsigned dst_cpu_id);
+            unsigned dst_cpu_id);
 
     // Wrapper for PREPARE_DONE_MESSAGE verb
-    void register_prepare_done_message(std::function<future<> (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
-    future<> send_prepare_done_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
+    void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
+    future<> send_prepare_done_message(shard_id id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for STREAM_MUTATION verb
     void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
     future<> send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
 
-    void register_stream_mutation_done(std::function<future<> (UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
+    void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
+    future<> send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id);
 
-    void register_complete_message(std::function<future<> (UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id)>&& func);
-    future<> send_complete_message(shard_id id, UUID plan_id, inet_address from, inet_address connecting, unsigned dst_cpu_id);
+    void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
+    future<> send_complete_message(shard_id id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);

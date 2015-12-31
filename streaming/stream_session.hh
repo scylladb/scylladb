@@ -162,9 +162,6 @@ public:
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
     inet_address peer;
-    /** Actual connecting address. Can be the same as {@linkplain #peer}. */
-    inet_address connecting;
-    unsigned src_cpu_id;
     unsigned dst_cpu_id;
 private:
     int _index;
@@ -204,7 +201,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_);
+    stream_session(inet_address peer_, int index_, bool keep_ss_table_level_);
     ~stream_session();
 
     UUID plan_id();

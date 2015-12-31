@@ -72,7 +72,7 @@ static hs::stream_state get_state(
         si.peer = boost::lexical_cast<std::string>(info.peer);
         si.session_index = info.session_index;
         si.state = info.state;
-        si.connecting = boost::lexical_cast<std::string>(info.connecting);
+        si.connecting = si.peer;
         set_summaries(info.receiving_summaries, si.receiving_summaries);
         set_summaries(info.sending_summaries, si.sending_summaries);
         set_files(info.receiving_files, si.receiving_files);
