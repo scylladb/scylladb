@@ -223,6 +223,9 @@ public:
         return 0;
     }
     bool is_on_all_components() const;
+    bool is_indexed() const {
+        return idx_info.index_type != index_type::none;
+    }
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
