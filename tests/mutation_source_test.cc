@@ -168,3 +168,176 @@ static void test_range_queries(populate_fn populate) {
 void run_mutation_source_tests(populate_fn populate) {
     test_range_queries(populate);
 }
+
+struct mutation_sets {
+    std::vector<std::vector<mutation>> equal;
+    std::vector<std::vector<mutation>> unequal;
+    mutation_sets(){}
+};
+
+static tombstone new_tombstone() {
+    return { api::new_timestamp(), gc_clock::now() };
+}
+
+static mutation_sets generate_mutation_sets() {
+    using mutations = std::vector<mutation>;
+    mutation_sets result;
+
+    {
+        auto common_schema = schema_builder("ks", "test")
+                .with_column("pk_col", bytes_type, column_kind::partition_key)
+                .with_column("ck_col_1", bytes_type, column_kind::clustering_key)
+                .with_column("ck_col_2", bytes_type, column_kind::clustering_key)
+                .with_column("regular_col_1", bytes_type)
+                .with_column("regular_col_2", bytes_type)
+                .with_column("static_col_1", bytes_type, column_kind::static_column)
+                .with_column("static_col_2", bytes_type, column_kind::static_column);
+
+        auto s1 = common_schema
+                .with_column("regular_col_1_s1", bytes_type) // will have id in between common columns
+                .build();
+
+        auto s2 = common_schema
+                .with_column("regular_col_1_s2", bytes_type) // will have id in between common columns
+                .build();
+
+        // Differing keys
+        result.unequal.emplace_back(mutations{
+            mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1),
+            mutation(partition_key::from_single_value(*s2, to_bytes("key2")), s2)
+        });
+
+        auto m1 = mutation(partition_key::from_single_value(*s1, to_bytes("key1")), s1);
+        auto m2 = mutation(partition_key::from_single_value(*s2, to_bytes("key1")), s2);
+
+        result.equal.emplace_back(mutations{m1, m2});
+
+        clustering_key ck1 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck1_0")), data_value(bytes("ck1_1"))});
+        clustering_key ck2 = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck2_1"))});
+        auto ttl = gc_clock::duration(1);
+
+        {
+            auto tomb = new_tombstone();
+            m1.partition().apply(tomb);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.partition().apply(tomb);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto tomb = new_tombstone();
+            m1.partition().apply_delete(*s1, ck2, tomb);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.partition().apply_delete(*s1, ck2, tomb);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto tomb = new_tombstone();
+            auto key = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0"))});
+            m1.partition().apply_row_tombstone(*s1, key, tomb);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.partition().apply_row_tombstone(*s1, key, tomb);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.partition().apply_insert(*s1, ck2, ts);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.partition().apply_insert(*s1, ck2, ts);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            auto ts = api::new_timestamp();
+            m1.set_clustered_cell(ck2, "regular_col_1_s1", data_value(bytes("x")), ts);
+            result.unequal.emplace_back(mutations{m1, m2});
+            m2.set_clustered_cell(ck2, "regular_col_1_s2", data_value(bytes("x")), ts);
+            result.unequal.emplace_back(mutations{m1, m2});
+        }
+    }
+
+    return result;
+}
+
+static const mutation_sets& get_mutation_sets() {
+    static thread_local const auto ms = generate_mutation_sets();
+    return ms;
+}
+
+void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)> callback) {
+    auto&& ms = get_mutation_sets();
+    for (auto&& mutations : ms.equal) {
+        auto i = mutations.begin();
+        assert(i != mutations.end());
+        const mutation& first = *i++;
+        while (i != mutations.end()) {
+            callback(first, *i, are_equal::yes);
+            ++i;
+        }
+    }
+    for (auto&& mutations : ms.unequal) {
+        auto i = mutations.begin();
+        assert(i != mutations.end());
+        const mutation& first = *i++;
+        while (i != mutations.end()) {
+            callback(first, *i, are_equal::no);
+            ++i;
+        }
+    }
+}
+
+void for_each_mutation(std::function<void(const mutation&)> callback) {
+    auto&& ms = get_mutation_sets();
+    for (auto&& mutations : ms.equal) {
+        for (auto&& m : mutations) {
+            callback(m);
+        }
+    }
+    for (auto&& mutations : ms.unequal) {
+        for (auto&& m : mutations) {
+            callback(m);
+        }
+    }
+}
