@@ -38,6 +38,7 @@ override_dh_auto_install:
 	mkdir -p $(SCRIPTS) && \
 	cp $(CURDIR)/seastar/dpdk/tools/dpdk_nic_bind.py $(SCRIPTS)
 	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
+	cp $(CURDIR)/dist/ubuntu/scripts/* $(SCRIPTS)
 
 	mkdir -p $(SWAGGER) && \
 	cp -r $(CURDIR)/swagger-ui/dist $(SWAGGER)
