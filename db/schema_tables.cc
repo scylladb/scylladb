@@ -1121,10 +1121,17 @@ schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type time
     if (table->compact_columns_count() == 1) {
         m.set_clustered_cell(ckey, "value_alias", table->compact_column().name_as_text(), timestamp);
     } // null if none
-#if 0
-    for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
-        adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
-#endif
+
+    map_type_impl::mutation dropped_columns;
+    auto dropped_columns_column = s->get_column_definition("dropped_columns");
+    assert(dropped_columns_column);
+    auto dropped_columns_type = static_pointer_cast<const map_type_impl>(dropped_columns_column->type);
+    for (auto&& entry : table->dropped_columns()) {
+        dropped_columns.cells.emplace_back(dropped_columns_type->get_keys_type()->decompose(data_value(entry.first)),
+            atomic_cell::make_live(timestamp, dropped_columns_type->get_values_type()->decompose(entry.second)));
+    }
+    m.set_clustered_cell(ckey, *dropped_columns_column,
+        atomic_cell_or_collection::from_collection_mutation(dropped_columns_type->serialize_mutation_form(std::move(dropped_columns))));
 
     m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
 
@@ -1442,10 +1449,13 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
         builder.set_bloom_filter_fp_chance(builder.get_bloom_filter_fp_chance());
     }
 
-#if 0
-    if (result.has("dropped_columns"))
-        cfm.droppedColumns(convertDroppedColumns(result.getMap("dropped_columns", UTF8Type.instance, LongType.instance)));
-#endif
+    if (table_row.has("dropped_columns")) {
+        auto map = table_row.get_nonnull<map_type_impl::native_type>("dropped_columns");
+        for (auto&& entry : map) {
+            builder.without_column(value_cast<sstring>(entry.first), value_cast<api::timestamp_type>(entry.second));
+        };
+    }
+
     for (auto&& cdef : column_defs) {
         builder.with_column(cdef);
     }
