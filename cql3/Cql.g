@@ -1243,6 +1243,7 @@ relationType returns [const cql3::operator_type* op = nullptr]
     ;
 
 relation[std::vector<cql3::relation_ptr>& clauses]
+    @init{ const cql3::operator_type* rt = nullptr; }
     : name=cident type=relationType t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), *type, std::move(t))); }
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
@@ -1252,11 +1253,9 @@ relation[std::vector<cql3::relation_ptr>& clauses]
         { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::operator_type::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues
         { $clauses.emplace_back(cql3::single_column_relation::create_in_relation(std::move(name), std::move(in_values))); }
-#if 0
-    | name=cident K_CONTAINS { Operator rt = Operator.CONTAINS; } (K_KEY { rt = Operator.CONTAINS_KEY; })?
-        t=term { $clauses.add(new SingleColumnRelation(name, rt, t)); }
-    | name=cident '[' key=term ']' type=relationType t=term { $clauses.add(new SingleColumnRelation(name, key, type, t)); }
-#endif
+    | name=cident K_CONTAINS { rt = &cql3::operator_type::CONTAINS; } (K_KEY { rt = &cql3::operator_type::CONTAINS_KEY; })?
+        t=term { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), *rt, std::move(t))); }
+    | name=cident '[' key=term ']' type=relationType t=term { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), std::move(key), *type, std::move(t))); }
     | ids=tupleOfIdentifiers
       ( K_IN
           ( '(' ')'
