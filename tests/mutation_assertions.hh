@@ -40,6 +40,13 @@ public:
         return *this;
     }
 
+    mutation_assertion& is_not_equal_to(const mutation& other) {
+        if (_m == other) {
+            BOOST_FAIL(sprint("Mutations equal but expected to differ: %s\n ...and: %s", other, _m));
+        }
+        return *this;
+    }
+
     mutation_assertion& has_schema(schema_ptr s) {
         if (_m.schema() != s) {
             BOOST_FAIL(sprint("Expected mutation of schema %s, but got %s", *s, *_m.schema()));
