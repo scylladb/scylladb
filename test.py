@@ -48,6 +48,7 @@ boost_tests = [
     'murmur_hash_test',
     'partitioner_test',
     'frozen_mutation_test',
+    'canonical_mutation_test',
     'gossiping_property_file_snitch_test',
     'row_cache_test',
     'network_topology_strategy_test',

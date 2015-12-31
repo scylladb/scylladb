@@ -134,6 +134,7 @@ modes = {
 
 scylla_tests = [
     'tests/mutation_test',
+    'tests/canonical_mutation_test',
     'tests/range_test',
     'tests/types_test',
     'tests/keys_test',
@@ -473,6 +474,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/partitioner_test',
     'tests/map_difference_test',
     'tests/frozen_mutation_test',
+    'tests/canonical_mutation_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
