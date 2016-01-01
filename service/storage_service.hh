@@ -2310,9 +2310,7 @@ public:
 };
 
 inline future<> init_storage_service(distributed<database>& db) {
-    return service::get_storage_service().start(std::ref(db)).then([] {
-        print("Start Storage service ...\n");
-    });
+    return service::get_storage_service().start(std::ref(db));
 }
 
 inline future<> deinit_storage_service() {
