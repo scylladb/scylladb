@@ -29,19 +29,26 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "core/reactor.hh"
+#include "service/pending_range_calculator_service.hh"
+#include "service/storage_service.hh"
+#include "core/distributed.hh"
+#include "database.hh"
 
 SEASTAR_TEST_CASE(test_boot_shutdown){
-    return net::get_messaging_service().start(gms::inet_address("127.0.0.1")).then( [] () {
-        return gms::get_failure_detector().start().then([] {
-            return gms::get_gossiper().start().then([] {
-                return gms::get_gossiper().stop().then( [] (){
-                    return gms::get_failure_detector().stop().then( [] (){
-                        return net::get_messaging_service().stop().then ( [] () {
-                            return make_ready_future<>();
-                        });
-                    });
-                });
-            });
-        });
+    return seastar::async([] {
+        distributed<database> db;
+        service::get_pending_range_calculator_service().start(std::ref(db));
+        service::get_storage_service().start(std::ref(db)).get();
+        db.start().get();
+        net::get_messaging_service().start(gms::inet_address("127.0.0.1")).get();
+        gms::get_failure_detector().start().get();
+
+        gms::get_gossiper().start().get();
+        gms::get_gossiper().stop().get();
+        gms::get_failure_detector().stop().get();
+        net::get_messaging_service().stop().get();
+        db.stop().get();
+        service::get_storage_service().stop().get();
+        service::get_pending_range_calculator_service().stop().get();
     });
 }
