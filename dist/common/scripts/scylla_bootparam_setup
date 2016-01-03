@@ -20,14 +20,14 @@ while getopts a OPT; do
     esac
 done
 
-
 . /etc/os-release
-. /etc/sysconfig/scylla-server
 
 if [ $AMI -eq 1 ]; then
+    . /etc/sysconfig/scylla-server
     sed -e "s#append #append clocksource=tsc tsc=reliable hugepagesz=2M hugepages=$NR_HUGEPAGES #" /boot/extlinux/extlinux.conf > /tmp/extlinux.conf
     mv /tmp/extlinux.conf /boot/extlinux/extlinux.conf
 else
+    . /etc/sysconfig/scylla-server
     if [ ! -f /etc/default/grub ]; then
         echo "Unsupported bootloader"
         exit 1
