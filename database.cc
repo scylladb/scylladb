@@ -1803,11 +1803,18 @@ const sstring& database::get_snitch_name() const {
 future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
     std::vector<std::reference_wrapper<keyspace>> keyspaces;
 
-    for (auto& ksname: keyspace_names) {
-        try {
-            keyspaces.push_back(std::reference_wrapper<keyspace>(find_keyspace(ksname)));
-        } catch (no_such_keyspace& e) {
-            return make_exception_future(std::current_exception());
+    if (keyspace_names.empty()) {
+        // if keyspace names are not given - apply to all existing local keyspaces
+        for (auto& ks: _keyspaces) {
+            keyspaces.push_back(std::reference_wrapper<keyspace>(ks.second));
+        }
+    } else {
+        for (auto& ksname: keyspace_names) {
+            try {
+                keyspaces.push_back(std::reference_wrapper<keyspace>(find_keyspace(ksname)));
+            } catch (no_such_keyspace& e) {
+                return make_exception_future(std::current_exception());
+            }
         }
     }
 
