@@ -1359,8 +1359,46 @@ collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cel
 
 bool
 collection_type_impl::is_compatible_with(const abstract_type& previous) const {
-    // FIXME: implement
-    abort();
+    if (this == &previous) {
+        return true;
+    }
+    if (!previous.is_collection()) {
+        return false;
+    }
+    auto& cprev = static_cast<const collection_type_impl&>(previous);
+    if (&_kind != &cprev._kind) {
+        return false;
+    }
+    if (is_multi_cell() != cprev.is_multi_cell()) {
+        return false;
+    }
+
+    if (!is_multi_cell()) {
+        return is_compatible_with_frozen(cprev);
+    }
+
+    if (!name_comparator()->is_compatible_with(*cprev.name_comparator())) {
+        return false;
+    }
+
+    // the value comparator is only used for Cell values, so sorting doesn't matter
+    return value_comparator()->is_value_compatible_with(*cprev.value_comparator());
+}
+
+bool
+collection_type_impl::is_value_compatible_with_internal(const abstract_type& previous) const {
+    // for multi-cell collections, compatibility and value-compatibility are the same
+    if (is_multi_cell() || previous.is_multi_cell()) {
+        return is_compatible_with(previous);
+    }
+    if (!previous.is_collection()) {
+        return false;
+    }
+    auto& cprev = static_cast<const collection_type_impl&>(previous);
+    if (&_kind != &cprev._kind) {
+        return false;
+    }
+    return is_value_compatible_with_frozen(cprev);
 }
 
 shared_ptr<cql3::cql3_type>

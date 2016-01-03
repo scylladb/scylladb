@@ -700,6 +700,7 @@ public:
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const = 0;
     bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const;
     virtual bool is_compatible_with(const abstract_type& previous) const override;
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override;
     virtual bool is_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;

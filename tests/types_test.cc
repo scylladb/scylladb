@@ -577,3 +577,78 @@ BOOST_AUTO_TEST_CASE(test_reversed_type_value_compatibility) {
     BOOST_REQUIRE(rb->is_value_compatible_with(*rs));
     BOOST_REQUIRE(rb->is_value_compatible_with(*utf8_type));
 }
+
+BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
+    auto m__bi = map_type_impl::get_instance(bytes_type, int32_type, true);
+    auto mf_bi = map_type_impl::get_instance(bytes_type, int32_type, false);
+    auto m__bb = map_type_impl::get_instance(bytes_type, bytes_type, true);
+    auto mf_bb = map_type_impl::get_instance(bytes_type, bytes_type, false);
+    auto m__ii = map_type_impl::get_instance(int32_type, int32_type, true);
+    auto mf_ii = map_type_impl::get_instance(int32_type, int32_type, false);
+    auto m__ib = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto mf_ib = map_type_impl::get_instance(int32_type, bytes_type, false);
+    auto s__i = set_type_impl::get_instance(int32_type, true);
+    auto sf_i = set_type_impl::get_instance(int32_type, false);
+    auto s__b = set_type_impl::get_instance(bytes_type, true);
+    auto sf_b = set_type_impl::get_instance(bytes_type, false);
+    auto l__i = list_type_impl::get_instance(int32_type, true);
+    auto lf_i = list_type_impl::get_instance(int32_type, false);
+    auto l__b = list_type_impl::get_instance(bytes_type, true);
+    auto lf_b = list_type_impl::get_instance(bytes_type, false);
+
+    static auto msg = [] (const char* m, data_type x, data_type y) -> std::string {
+        return sprint("%s(%s, %s)", m, x->name(), y->name());
+    };
+
+    // Sort order does not change
+    auto verify_compat = [] (data_type to, data_type from) {
+        BOOST_CHECK_MESSAGE(to->is_compatible_with(*from), msg("verify_compat is_compatible", to, from));
+        // value compatibility is implied by compatibility
+        BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_compat is_value_compatible", to, from));
+    };
+    // Sort order may change
+    auto verify_value_compat = [] (data_type to, data_type from) {
+        BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_value_compat !is_compatible", to, from)); // or verify_compat would be used
+        BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_value_compat is_value_compatible", to, from));
+    };
+    // Cannot be cast
+    auto verify_not_compat = [] (data_type to, data_type from) {
+        BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_not_compat !is_compatible", to, from));
+        BOOST_CHECK_MESSAGE(!to->is_value_compatible_with(*from), msg("verify_not_compat !is_value_compatible", to, from));
+    };
+    auto cc = verify_compat;
+    auto vc = verify_value_compat;
+    auto nc = verify_not_compat;
+
+    struct test_case {
+        void (*verify)(data_type to, data_type from);
+        data_type to;
+        data_type from;
+    };
+    test_case tests[] = {
+            { nc, m__bi, int32_type },  // collection vs. primitiv
+            { cc, m__bi, m__bi },       // identity
+            { nc, m__bi, m__ib },       // key not compatible
+            { nc, mf_bi, mf_ib },       //  "
+            { nc, m__bb, mf_bb },       // frozen vs. unfrozen
+            { nc, mf_ii, mf_bb },       // key not compatible
+            { nc, mf_ii, mf_ib },       // frozen, and value not compatible
+            { cc, m__ib, m__ii },       // unfrozen so values don't need to sort
+            { nc, m__ii, m__bb },       // key not compatible
+            { nc, m__ii, m__bi },       // key not compatible
+            { nc, m__ii, m__ib },       // values not compatible
+            { vc, mf_ib, mf_ii },       // values value-compatible but don't sort
+            { nc, l__i,  s__i },        // different collection kinds
+            { nc, s__b,  s__i },        // different sorts
+            { nc, sf_b,  sf_i },        // different sorts
+            { nc, sf_i,  s__i },        // different temperature
+            { nc, sf_i,  sf_b },        // elements not compatible
+            { cc, l__b,  l__i },        // unfrozen so values don't need to sort
+            { vc, lf_b,  lf_i },        // values don't sort, so only value-compatible
+            { nc, lf_i,  l__i },        // different temperature
+            { nc, lf_i,  lf_b },        // elements not compatible
+    };
+    for (auto&& tc : tests) {
+        tc.verify(tc.to, tc.from);
+    }
+}
