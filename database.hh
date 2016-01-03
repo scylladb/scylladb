@@ -621,6 +621,7 @@ public:
     future<> apply(const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
+    future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
