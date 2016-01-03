@@ -1413,8 +1413,7 @@ future<> storage_service::clear_snapshot(sstring tag, std::vector<sstring> keysp
         }
     }
 
-    auto deleted_keyspaces = make_lw_shared<std::vector<sstring>>();
-    return parallel_for_each(keyspaces, [this, tag, deleted_keyspaces] (auto& ks) {
+    return parallel_for_each(keyspaces, [this, tag] (auto& ks) {
         return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
             auto& cf = _db.local().find_column_family(pair.second);
             return cf.clear_snapshot(tag);
