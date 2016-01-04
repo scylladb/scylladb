@@ -1,11 +1,13 @@
-FROM fedora:22
+FROM centos:7
 
 MAINTAINER Avi Kivity <avi@cloudius-systems.com>
 
+RUN yum -y install epel-release
 ADD scylla.repo /etc/yum.repos.d/
-RUN dnf -y update
-RUN dnf -y install scylla-server hostname
-RUN dnf clean all
+RUN yum -y update
+RUN yum -y remove boost-thread boost-system
+RUN yum -y install scylla-server hostname
+RUN yum clean all
 ADD start-scylla /start-scylla
 RUN chown scylla /start-scylla
 
