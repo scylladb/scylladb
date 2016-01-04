@@ -588,13 +588,21 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         _token_metadata.remove_from_moving(endpoint);
         get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
-                subscriber->on_move(endpoint);
+                try {
+                    subscriber->on_move(endpoint);
+                } catch (...) {
+                    logger.warn("Move notification failed {}: {}", endpoint, std::current_exception());
+                }
             }
         }).get();
     } else {
         get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
-                subscriber->on_join_cluster(endpoint);
+                try {
+                    subscriber->on_join_cluster(endpoint);
+                } catch (...) {
+                    logger.warn("Join cluster notification failed {}: {}", endpoint, std::current_exception());
+                }
             }
         }).get();
     }
@@ -722,7 +730,11 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
 #endif
         get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
             for (auto&& subscriber : ss._lifecycle_subscribers) {
-                subscriber->on_up(endpoint);
+                try {
+                    subscriber->on_up(endpoint);
+                } catch (...) {
+                    logger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
+                }
             }
         });
     }
@@ -785,7 +797,11 @@ void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state st
     net::get_local_messaging_service().remove_rpc_client(net::shard_id{endpoint, 0});
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
-            subscriber->on_down(endpoint);
+            try {
+                subscriber->on_down(endpoint);
+            } catch (...) {
+                logger.warn("Down notification failed {}: {}", endpoint, std::current_exception());
+            }
         }
     }).get();
 }
@@ -2092,7 +2108,11 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
 
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
-            subscriber->on_leave_cluster(endpoint);
+            try {
+                subscriber->on_leave_cluster(endpoint);
+            } catch (...) {
+                logger.warn("Leave cluster notification failed {}: {}", endpoint, std::current_exception());
+            }
         }
     }).get();
 
