@@ -83,14 +83,18 @@ else
         fi
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
+        mv /home/fedora/scylla-ami /usr/lib/scylla/scylla-ami
+        chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
     fi
     systemctl enable scylla-server.service
     systemctl enable scylla-jmx.service
     /usr/lib/scylla/scylla_ntp_setup -a
 fi
-/usr/lib/scylla/scylla_bootparam_setup
 /usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
+    /usr/lib/scylla/scylla_bootparam_setup
     /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+else
+    /usr/lib/scylla/scylla_bootparam_setup -a
 fi
 /usr/lib/scylla/scylla_sysconfig_setup $SYSCONFIG_SETUP_ARGS
