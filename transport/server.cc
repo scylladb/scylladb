@@ -241,15 +241,25 @@ cql_server::setup_collectd() {
 
 future<> cql_server::stop() {
     _stopping = true;
+    size_t nr = 0;
+    size_t nr_total = _listeners.size();
+    logger.debug("cql_server: abort accept nr_total={}", nr_total);
     for (auto&& l : _listeners) {
         l.abort_accept();
+        logger.debug("cql_server: abort accept {} out of {} done", ++nr, nr_total);
     }
-    for (auto&& c : _connections_list) {
-        c.shutdown();
-    }
-    service::get_local_storage_service().unregister_subscriber(_notifier.get());
-    service::get_local_migration_manager().unregister_listener(_notifier.get());
-    return std::move(_stopped);
+    auto nr_conn = make_lw_shared<size_t>(0);
+    auto nr_conn_total = _connections_list.size();
+    logger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
+    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
+        return c.shutdown().then([nr_conn, nr_conn_total] {
+            logger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+        });
+    }).then([this] {
+        service::get_local_storage_service().unregister_subscriber(_notifier.get());
+        service::get_local_migration_manager().unregister_listener(_notifier.get());
+        return std::move(_stopped);
+    });
 }
 
 future<>
