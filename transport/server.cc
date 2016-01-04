@@ -212,6 +212,8 @@ private:
 cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb)
     : _proxy(proxy)
     , _query_processor(qp)
+    , _max_request_size(memory::stats().total_memory() / 10)
+    , _memory_available(_max_request_size)
     , _collectd_registrations(std::make_unique<scollectd::registrations>(setup_collectd()))
     , _lb(lb)
 {
@@ -236,6 +238,10 @@ cql_server::setup_collectd() {
             scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
                     "queue_length", "requests_serving"),
             scollectd::make_typed(scollectd::data_type::GAUGE, _requests_serving)),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("transport", scollectd::per_cpu_plugin_instance,
+                    "queue_length", "requests_blocked_memory"),
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _memory_available.waiters(); })),
     };
 }
 
@@ -500,8 +506,16 @@ future<> cql_server::connection::process_request() {
 
         auto op = f.opcode;
         auto stream = f.stream;
+        auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
 
-        return _read_buf.read_exactly(f.length).then([this, op, stream] (temporary_buffer<char> buf) {
+        if (mem_estimate > _server._max_request_size) {
+            throw exceptions::invalid_request_exception(sprint(
+                    "request size too large (frame size %d; estimate %d; allowed %d",
+                    f.length, mem_estimate, _server._max_request_size));
+        }
+
+        return with_semaphore(_server._memory_available, mem_estimate, [this, length = f.length, op, stream] {
+          return _read_buf.read_exactly(length).then([this, op, stream] (temporary_buffer<char> buf) {
 
             ++_server._requests_served;
             ++_server._requests_serving;
@@ -524,6 +538,7 @@ future<> cql_server::connection::process_request() {
             });
 
             return make_ready_future<>();
+          });
         });
     });
 }

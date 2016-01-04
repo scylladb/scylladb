@@ -27,6 +27,7 @@
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 #include "core/distributed.hh"
+#include <seastar/core/semaphore.hh>
 #include <memory>
 #include <boost/intrusive/list.hpp>
 #include <seastar/net/tls.hh>
@@ -92,6 +93,8 @@ private:
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
+    size_t _max_request_size;
+    semaphore _memory_available;
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
     std::unique_ptr<event_notifier> _notifier;
 private:
