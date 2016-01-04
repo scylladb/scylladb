@@ -410,7 +410,7 @@ future<> db::config::read_from_file(file f) {
 }
 
 future<> db::config::read_from_file(const sstring& filename) {
-    return engine().open_file_dma(filename, open_flags::ro).then([this](file f) {
+    return open_file_dma(filename, open_flags::ro).then([this](file f) {
        return read_from_file(std::move(f));
     });
 }

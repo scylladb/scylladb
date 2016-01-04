@@ -654,7 +654,7 @@ future<> sstable::read_toc() {
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
-    return engine().open_file_dma(file_path, open_flags::ro).then([this] (file f) {
+    return open_file_dma(file_path, open_flags::ro).then([this] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
@@ -724,7 +724,7 @@ void sstable::write_toc() {
     sstlog.debug("Writing TOC file {} ", file_path);
 
     // Writing TOC content to temporary file.
-    file f = engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
     auto out = file_writer(std::move(f), 4096);
     auto w = file_writer(std::move(out));
 
@@ -764,7 +764,7 @@ void write_crc(const sstring file_path, checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = engine().open_file_dma(file_path, oflags).get0();
+    file f = open_file_dma(file_path, oflags).get0();
     auto out = file_writer(std::move(f), 4096);
     auto w = file_writer(std::move(out));
     write(w, c);
@@ -776,7 +776,7 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = engine().open_file_dma(file_path, oflags).get0();
+    auto f = open_file_dma(file_path, oflags).get0();
     auto out = file_writer(std::move(f), 4096);
     auto w = file_writer(std::move(out));
 
@@ -821,7 +821,7 @@ future<> sstable::read_simple(T& component) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
-    return engine().open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
+    return open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
         auto r = make_lw_shared<file_random_access_reader>(std::move(f), sstable_buffer_size);
         auto fut = parse(*r, component);
         return fut.finally([r = std::move(r)] {
@@ -842,7 +842,7 @@ template <sstable::component_type Type, typename T>
 void sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
-    file f = engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
     auto out = file_writer(std::move(f), sstable_buffer_size);
     auto w = file_writer(std::move(out));
     write(w, component);
@@ -879,8 +879,8 @@ void sstable::write_statistics() {
 }
 
 future<> sstable::open_data() {
-    return when_all(engine().open_file_dma(filename(component_type::Index), open_flags::ro),
-                    engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
+    return when_all(open_file_dma(filename(component_type::Index), open_flags::ro),
+                    open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
         return _data_file.size().then([this] (auto size) {
@@ -900,8 +900,8 @@ future<> sstable::open_data() {
 
 future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    return when_all(engine().open_file_dma(filename(component_type::Index), oflags),
-                    engine().open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
+    return when_all(open_file_dma(filename(component_type::Index), oflags),
+                    open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed

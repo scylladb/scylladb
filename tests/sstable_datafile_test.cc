@@ -90,7 +90,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
 
         auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 1, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -156,7 +156,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
 
         auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 2, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -224,7 +224,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
 
         auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 3, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -295,7 +295,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
 
         auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 4, big, sstable::component_type::Data);
         return sst->write_components(*mt).then([mt, sst, s, fname] {
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -366,7 +366,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 5, big, sstable::component_type::Data);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -438,7 +438,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 6, big, sstable::component_type::Data);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -514,7 +514,7 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 7, big, sstable::component_type::Index);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -571,7 +571,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 8, big, sstable::component_type::Summary);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -680,7 +680,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 10, big, sstable::component_type::Data);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -691,7 +691,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                     f.close().finally([f]{});
 
                     auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 10, big, sstable::component_type::CRC);
-                    return engine().open_file_dma(fname, open_flags::ro).then([adler] (file f) {
+                    return open_file_dma(fname, open_flags::ro).then([adler] (file f) {
                         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                         auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -713,7 +713,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                         });
                     }).then([adler] {
                         auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 10, big, sstable::component_type::Digest);
-                        return engine().open_file_dma(fname, open_flags::ro).then([adler] (file f) {
+                        return open_file_dma(fname, open_flags::ro).then([adler] (file f) {
                             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -1456,7 +1456,7 @@ SEASTAR_TEST_CASE(datafile_generation_40) {
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/sstables/tests-temporary", "ks", "cf", la, 40, big, sstable::component_type::Data);
-            return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            return open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
                 auto fut = f.dma_read(0, bufptr.get(), 4096);

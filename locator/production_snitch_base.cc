@@ -2,7 +2,7 @@
 
 namespace locator {
 future<> production_snitch_base::load_property_file() {
-    return engine().open_file_dma(_prop_file_name, open_flags::ro)
+    return open_file_dma(_prop_file_name, open_flags::ro)
     .then([this] (file f) {
         return do_with(std::move(f), [this] (file& f) {
             return f.size().then([this, &f] (size_t s) {

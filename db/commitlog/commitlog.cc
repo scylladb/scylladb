@@ -887,7 +887,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
     descriptor d(next_id());
-    return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d, active](file f) {
+    return open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d, active](file f) {
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
             auto s = make_lw_shared<segment>(this, d, std::move(f), active);
@@ -1215,7 +1215,7 @@ const db::commitlog::config& db::commitlog::active_config() const {
 
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
 db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
-    return engine().open_file_dma(filename, open_flags::ro).then([next = std::move(next), off](file f) {
+    return open_file_dma(filename, open_flags::ro).then([next = std::move(next), off](file f) {
        return std::make_unique<subscription<temporary_buffer<char>, replay_position>>(
            read_log_file(std::move(f), std::move(next), off));
     });

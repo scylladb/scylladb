@@ -321,7 +321,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
 }
 
 static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
-    return engine().open_file_dma(seg, open_flags::rw).then([off, value](file f) {
+    return open_file_dma(seg, open_flags::rw).then([off, value](file f) {
         size_t size = align_up<size_t>(off, 4096);
         return do_with(std::move(f), [size, off, value](file& f) {
             return f.dma_read_exactly<char>(0, size).then([&f, off, value](auto buf) {

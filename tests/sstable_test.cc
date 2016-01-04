@@ -187,7 +187,7 @@ static future<> write_sst_info(sstring dir, unsigned long generation) {
 using bufptr_t = std::unique_ptr<char [], free_deleter>;
 static future<std::pair<bufptr_t, size_t>> read_file(sstring file_path)
 {
-    return engine().open_file_dma(file_path, open_flags::rw).then([] (file f) {
+    return open_file_dma(file_path, open_flags::rw).then([] (file f) {
         return f.size().then([f] (auto size) mutable {
             auto aligned_size = align_up(size, 512UL);
             auto buf = allocate_aligned_buffer<char>(aligned_size, 512UL);
@@ -803,7 +803,7 @@ SEASTAR_TEST_CASE(wrong_range) {
 static future<>
 test_sstable_exists(sstring dir, unsigned long generation, bool exists) {
     auto file_path = sstable::filename(dir, "ks", "cf", la, generation, big, sstable::component_type::Data);
-    return engine().open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
+    return open_file_dma(file_path, open_flags::ro).then_wrapped([exists] (future<file> f) {
         if (exists) {
             BOOST_CHECK_NO_THROW(f.get0());
         } else {
