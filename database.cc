@@ -687,7 +687,7 @@ column_family::reshuffle_sstables(int64_t start) {
             // Those SSTables are not known by anyone in the system. So we don't have any kind of
             // object describing them. There isn't too much of a choice.
             return work.sstables[comps.generation]->read_toc();
-        }).then([&work] {
+        }, &manifest_json_filter).then([&work] {
             // Note: cannot be parallel because we will be shuffling things around at this stage. Can't race.
             return do_for_each(work.sstables, [&work] (auto& pair) {
                 auto&& comps = std::move(work.descriptors.at(pair.first));
@@ -853,6 +853,17 @@ lw_shared_ptr<sstable_list> column_family::get_sstables() {
     return _sstables;
 }
 
+inline bool column_family::manifest_json_filter(const sstring& fname) {
+    using namespace boost::filesystem;
+
+    path entry_path(fname);
+    if (!is_directory(status(entry_path)) && entry_path.filename() == path("manifest.json")) {
+        return false;
+    }
+
+    return true;
+}
+
 future<> column_family::populate(sstring sstdir) {
     // We can catch most errors when we try to load an sstable. But if the TOC
     // file is the one missing, we won't try to load the sstable at all. This
@@ -914,7 +925,7 @@ future<> column_family::populate(sstring sstdir) {
             futures.push_back(std::move(f));
 
             return make_ready_future<>();
-        }).then([&futures] {
+        }, &manifest_json_filter).then([&futures] {
             return when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
                 try {
                     for (auto& f : ret) {
