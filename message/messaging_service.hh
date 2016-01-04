@@ -524,6 +524,7 @@ public:
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client(msg_addr id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
+    static msg_addr get_source(const rpc::client_info& client);
 };
 
 extern distributed<messaging_service> _the_messaging_service;

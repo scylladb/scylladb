@@ -195,6 +195,13 @@ messaging_service::messaging_service(gms::inet_address ip
     });
 }
 
+msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
+    return msg_addr{
+        cinfo.retrieve_auxiliary<gms::inet_address>("baddr"),
+        cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id")
+    };
+}
+
 messaging_service::~messaging_service() = default;
 
 uint16_t messaging_service::port() {
