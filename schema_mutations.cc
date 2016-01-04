@@ -24,6 +24,32 @@
 #include "db/schema_tables.hh"
 #include "md5_hasher.hh"
 
+template class db::serializer<schema_mutations>;
+
+template<>
+db::serializer<schema_mutations>::serializer(const schema_mutations& v)
+        : _item(v)
+        , _size(db::serializer<canonical_mutation>(canonical_mutation(v._columnfamilies)).size()
+                + db::serializer<canonical_mutation>(canonical_mutation(v._columns)).size())
+{ }
+
+template<>
+void
+db::serializer<schema_mutations>::write(output& out, const schema_mutations& v) {
+    db::serializer<canonical_mutation>(canonical_mutation(v._columnfamilies)).write(out);
+    db::serializer<canonical_mutation>(canonical_mutation(v._columns)).write(out);
+}
+
+template<>
+schema_mutations db::serializer<schema_mutations>::read(input& in) {
+    auto columnfamilies = db::serializer<canonical_mutation>::read(in);
+    auto columns = db::serializer<canonical_mutation>::read(in);
+    return schema_mutations(
+            columnfamilies.to_mutation(db::schema_tables::columnfamilies()),
+            columns.to_mutation(db::schema_tables::columns())
+    );
+}
+
 void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     dst.push_back(_columnfamilies);
     dst.push_back(_columns);

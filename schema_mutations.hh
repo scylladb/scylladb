@@ -57,4 +57,16 @@ public:
 
     // Returns true iff any mutations contain any live cells
     bool live() const;
+
+    friend class db::serializer<schema_mutations>;
 };
+
+namespace db {
+
+template<> serializer<schema_mutations>::serializer(const schema_mutations&);
+template<> void serializer<schema_mutations>::write(output&, const schema_mutations&);
+template<> schema_mutations serializer<schema_mutations>::read(input&);
+
+extern template class serializer<schema_mutations>;
+
+}
