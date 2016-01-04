@@ -173,7 +173,11 @@ future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_
 {
     return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_create_keyspace(name);
+            try {
+                listener->on_create_keyspace(name);
+            } catch (...) {
+                logger.warn("Create keyspace notification failed {}: {}", name, std::current_exception());
+            }
         }
     });
 }
@@ -182,7 +186,11 @@ future<> migration_manager::notify_create_column_family(schema_ptr cfm)
 {
     return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_create_column_family(ks_name, cf_name);
+            try {
+                listener->on_create_column_family(ks_name, cf_name);
+            } catch (...) {
+                logger.warn("Create column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
+            }
         }
     });
 }
@@ -211,7 +219,11 @@ future<> migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_
 {
     return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_update_keyspace(name);
+            try {
+                listener->on_update_keyspace(name);
+            } catch (...) {
+                logger.warn("Update keyspace notification failed {}: {}", name, std::current_exception());
+            }
         }
     });
 }
@@ -220,7 +232,11 @@ future<> migration_manager::notify_update_column_family(schema_ptr cfm)
 {
     return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_update_column_family(ks_name, cf_name);
+            try {
+                listener->on_update_column_family(ks_name, cf_name);
+            } catch (...) {
+                logger.warn("Update column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
+            }
         }
     });
 }
@@ -249,7 +265,11 @@ future<> migration_manager::notify_drop_keyspace(sstring ks_name)
 {
     return get_migration_manager().invoke_on_all([ks_name] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_drop_keyspace(ks_name);
+            try {
+                listener->on_drop_keyspace(ks_name);
+            } catch (...) {
+                logger.warn("Drop keyspace notification failed {}: {}", ks_name, std::current_exception());
+            }
         }
     });
 }
@@ -258,7 +278,11 @@ future<> migration_manager::notify_drop_column_family(schema_ptr cfm)
 {
     return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
         for (auto&& listener : mm._listeners) {
-            listener->on_drop_column_family(ks_name, cf_name);
+            try {
+                listener->on_drop_column_family(ks_name, cf_name);
+            } catch (...) {
+                logger.warn("Drop column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
+            }
         }
     });
 }
