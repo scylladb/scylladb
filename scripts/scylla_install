@@ -88,9 +88,11 @@ else
     systemctl enable scylla-jmx.service
     /usr/lib/scylla/scylla_ntp_setup -a
 fi
-/usr/lib/scylla/scylla_bootparam_setup
 /usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
+    /usr/lib/scylla/scylla_bootparam_setup
     /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+else
+    /usr/lib/scylla/scylla_bootparam_setup -a
 fi
 /usr/lib/scylla/scylla_sysconfig_setup $SYSCONFIG_SETUP_ARGS
