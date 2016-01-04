@@ -358,23 +358,32 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 class lister {
 public:
     using dir_entry_types = std::unordered_set<directory_entry_type, enum_hash<directory_entry_type>>;
+    using walker_type = std::function<future<> (directory_entry)>;
+    using filter_type = std::function<bool (const sstring&)>;
 private:
     file _f;
-    std::function<future<> (directory_entry de)> _walker;
+    walker_type _walker;
+    filter_type _filter;
     dir_entry_types _expected_type;
     subscription<directory_entry> _listing;
     sstring _dirname;
 
 public:
-    lister(file f, dir_entry_types type, std::function<future<> (directory_entry)> walker, sstring dirname)
+    lister(file f, dir_entry_types type, walker_type walker, sstring dirname)
             : _f(std::move(f))
             , _walker(std::move(walker))
+            , _filter([] (const sstring& fname) { return true; })
             , _expected_type(type)
             , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); }))
             , _dirname(dirname) {
     }
 
-    static future<> scan_dir(sstring name, dir_entry_types type, std::function<future<> (directory_entry)> walker);
+    lister(file f, dir_entry_types type, walker_type walker, filter_type filter, sstring dirname)
+            : lister(std::move(f), type, std::move(walker), dirname) {
+        _filter = std::move(filter);
+    }
+
+    static future<> scan_dir(sstring name, dir_entry_types type, walker_type walker, filter_type filter = [] (const sstring& fname) { return true; });
 protected:
     future<> _visit(directory_entry de) {
 
@@ -383,6 +392,12 @@ protected:
             if ((!_expected_type.count(*(de.type))) || (de.name[0] == '.')) {
                 return make_ready_future<>();
             }
+
+            // apply a filter
+            if (!_filter(_dirname + "/" + de.name)) {
+                return make_ready_future<>();
+            }
+
             return _walker(de);
         });
 
@@ -403,9 +418,9 @@ private:
 };
 
 
-future<> lister::scan_dir(sstring name, lister::dir_entry_types type, std::function<future<> (directory_entry)> walker) {
-    return engine().open_directory(name).then([type, walker = std::move(walker), name] (file f) {
-        auto l = make_lw_shared<lister>(std::move(f), type, walker, name);
+future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_type walker, filter_type filter) {
+    return engine().open_directory(name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
+        auto l = make_lw_shared<lister>(std::move(f), type, walker, filter, name);
         return l->done().then([l] { });
     });
 }
