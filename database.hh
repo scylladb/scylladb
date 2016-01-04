@@ -351,6 +351,9 @@ private:
     // one are also complete
     future<> seal_active_memtable();
 
+    // filter manifest.json files out
+    static bool manifest_json_filter(const sstring& fname);
+
     seastar::gate _in_flight_seals;
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
