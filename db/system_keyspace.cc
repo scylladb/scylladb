@@ -486,6 +486,10 @@ future<> init_local_cache() {
     });
 }
 
+future<> deinit_local_cache() {
+    return _local_cache.stop();
+}
+
 void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     qctx = std::make_unique<query_context>(db, qp);
 }

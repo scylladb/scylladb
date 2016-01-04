@@ -196,7 +196,6 @@ void storage_service::prepare_to_join() {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.register_(this->shared_from_this());
     // FIXME: SystemKeyspace.incrementAndGetGeneration()
-    print("Start gossiper service ...\n");
     gossiper.start_gossiping(get_generation_number(), app_states).then([this] {
 #if SS_DEBUG
         gms::get_local_gossiper().debug_show();
