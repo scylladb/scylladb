@@ -67,6 +67,7 @@ boost_tests = [
     'memtable_test',
     'mutation_query_test',
     'snitch_reset_test',
+    'auth_test',
 ]
 
 other_tests = [

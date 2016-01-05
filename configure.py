@@ -189,6 +189,7 @@ scylla_tests = [
     'tests/crc_test',
     'tests/flush_queue_test',
     'tests/dynamic_bitset_test',
+    'tests/auth_test',
 ]
 
 apps = [
