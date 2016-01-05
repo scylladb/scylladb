@@ -100,6 +100,8 @@ public:
         return options;
     }
 #endif
+    int32_t get_default_time_to_live() const;
+
     void apply_to_builder(schema_builder& builder);
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };

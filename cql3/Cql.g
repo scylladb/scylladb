@@ -31,6 +31,7 @@ options {
 
 @parser::includes {
 #include "cql3/selection/writetime_or_ttl.hh"
+#include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
@@ -269,7 +270,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st12=dropTableStatement          { $stmt = st12; }
 #if 0
     | st13=dropIndexStatement          { $stmt = st13; }
+#endif
     | st14=alterTableStatement         { $stmt = st14; }
+#if 0
     | st15=alterKeyspaceStatement      { $stmt = st15; }
     | st16=grantStatement              { $stmt = st16; }
     | st17=revokeStatement             { $stmt = st17; }
@@ -768,7 +771,7 @@ alterKeyspaceStatement returns [AlterKeyspaceStatement expr]
     : K_ALTER K_KEYSPACE ks=keyspaceName
         K_WITH properties[attrs] { $expr = new AlterKeyspaceStatement(ks, attrs); }
     ;
-
+#endif
 
 /**
  * ALTER COLUMN FAMILY <CF> ALTER <column> TYPE <newtype>;
@@ -777,27 +780,29 @@ alterKeyspaceStatement returns [AlterKeyspaceStatement expr]
  * ALTER COLUMN FAMILY <CF> WITH <property> = <value>;
  * ALTER COLUMN FAMILY <CF> RENAME <column> TO <column>;
  */
-alterTableStatement returns [AlterTableStatement expr]
+alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     @init {
-        AlterTableStatement.Type type = null;
-        CFPropDefs props = new CFPropDefs();
-        Map<ColumnIdentifier.Raw, ColumnIdentifier.Raw> renames = new HashMap<ColumnIdentifier.Raw, ColumnIdentifier.Raw>();
-        boolean isStatic = false;
+        alter_table_statement::type type;
+        auto props = make_shared<cql3::statements::cf_prop_defs>();;
+        std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>, shared_ptr<cql3::column_identifier::raw>>> renames;
+        bool is_static = false;
     }
     : K_ALTER K_COLUMNFAMILY cf=columnFamilyName
-          ( K_ALTER id=cident K_TYPE v=comparatorType { type = AlterTableStatement.Type.ALTER; }
-          | K_ADD   id=cident v=comparatorType ({ isStatic=true; } K_STATIC)? { type = AlterTableStatement.Type.ADD; }
-          | K_DROP  id=cident                         { type = AlterTableStatement.Type.DROP; }
-          | K_WITH  properties[props]                 { type = AlterTableStatement.Type.OPTS; }
-          | K_RENAME                                  { type = AlterTableStatement.Type.RENAME; }
-               id1=cident K_TO toId1=cident { renames.put(id1, toId1); }
-               ( K_AND idn=cident K_TO toIdn=cident { renames.put(idn, toIdn); } )*
+          ( K_ALTER id=cident K_TYPE v=comparatorType { type = alter_table_statement::type::alter; }
+          | K_ADD   id=cident v=comparatorType ({ is_static=true; } K_STATIC)? { type = alter_table_statement::type::add; }
+          | K_DROP  id=cident                         { type = alter_table_statement::type::drop; }
+          | K_WITH  properties[props]                 { type = alter_table_statement::type::opts; }
+          | K_RENAME                                  { type = alter_table_statement::type::rename; }
+               id1=cident K_TO toId1=cident { renames.emplace_back(id1, toId1); }
+               ( K_AND idn=cident K_TO toIdn=cident { renames.emplace_back(idn, toIdn); } )*
           )
     {
-        $expr = new AlterTableStatement(cf, type, id, v, props, renames, isStatic);
+        $expr = ::make_shared<alter_table_statement>(std::move(cf), type, std::move(id),
+            std::move(v), std::move(props), std::move(renames), is_static);
     }
     ;
 
+#if 0
 /**
  * ALTER TYPE <name> ALTER <field> TYPE <newtype>;
  * ALTER TYPE <name> ADD <field> <newtype>;

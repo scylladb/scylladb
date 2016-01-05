@@ -223,6 +223,12 @@ public:
         return 0;
     }
     bool is_on_all_components() const;
+    bool is_indexed() const {
+        return idx_info.index_type != index_type::none;
+    }
+    bool is_part_of_cell_name() const {
+        return is_regular() || is_static();
+    }
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
@@ -343,6 +349,10 @@ public:
 
     bool is_compound() const {
         return _raw._is_compound;
+    }
+
+    bool is_cql3_table() const {
+        return !is_super() && !is_dense() && is_compound();
     }
 
     thrift_schema& thrift() {
