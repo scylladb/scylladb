@@ -33,6 +33,33 @@ class converting_mutation_partition_applier : public mutation_partition_visitor 
     mutation_partition& _p;
     const column_mapping& _visited_column_mapping;
     deletable_row* _current_row;
+private:
+    static bool is_compatible(const column_definition& new_def, const data_type& old_type, column_kind kind) {
+        return new_def.kind == kind && new_def.type->is_value_compatible_with(*old_type);
+    }
+    void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, atomic_cell_view cell) {
+        if (is_compatible(new_def, old_type, kind) && cell.timestamp() > new_def.dropped_at()) {
+            dst.apply(new_def, atomic_cell_or_collection(cell));
+        }
+    }
+    void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const data_type& old_type, collection_mutation_view cell) {
+        if (!is_compatible(new_def, old_type, kind)) {
+            return;
+        }
+        auto&& ctype = static_pointer_cast<const collection_type_impl>(old_type);
+        auto old_view = ctype->deserialize_mutation_form(cell);
+
+        collection_type_impl::mutation_view new_view;
+        if (old_view.tomb.timestamp > new_def.dropped_at()) {
+            new_view.tomb = old_view.tomb;
+        }
+        for (auto& c : old_view.cells) {
+            if (c.second.timestamp() > new_def.dropped_at()) {
+                new_view.cells.emplace_back(std::move(c));
+            }
+        }
+        dst.apply(new_def, ctype->serialize_mutation_form(std::move(new_view)));
+    }
 public:
     converting_mutation_partition_applier(
             const column_mapping& visited_column_mapping,
@@ -50,16 +77,16 @@ public:
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
         const column_mapping::column& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
-        if (def && def->is_static() && def->type->is_value_compatible_with(*col.type())) {
-            _p._static_row.apply(*def, atomic_cell_or_collection(cell));
+        if (def) {
+            accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), cell);
         }
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
         const column_mapping::column& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
-        if (def && def->is_static() && def->type->is_value_compatible_with(*col.type())) {
-            _p._static_row.apply(*def, atomic_cell_or_collection(collection));
+        if (def) {
+            accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), collection);
         }
     }
 
@@ -77,16 +104,16 @@ public:
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
         const column_mapping::column& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
-        if (def && def->is_regular() && def->type->is_value_compatible_with(*col.type())) {
-            _current_row->cells().apply(*def, atomic_cell_or_collection(cell));
+        if (def) {
+            accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), cell);
         }
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
         const column_mapping::column& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
-        if (def && def->is_regular() && def->type->is_value_compatible_with(*col.type())) {
-            _current_row->cells().apply(*def, atomic_cell_or_collection(collection));
+        if (def) {
+            accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), collection);
         }
     }
 };
