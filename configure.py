@@ -419,6 +419,7 @@ scylla_core = (['database.cc',
                  'repair/repair.cc',
                  'exceptions/exceptions.cc',
                  'dns.cc',
+                 'auth/authenticated_user.cc',
                  'auth/data_resource.cc',
                  'auth/permission.cc',
                  ]
