@@ -1165,25 +1165,15 @@ std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadat
 
     add_table_to_schema_mutation(new_table, timestamp, false, mutations);
 
-    auto make_column_map = [] (auto&& column_defs) {
-        std::map<bytes, const column_definition*> result;
-        for (const column_definition& col : column_defs) {
-            result.emplace(col.name(), &col);
-        }
-        return result;
-    };
-
     mutation columns_mutation(partition_key::from_singular(*columns(), old_table->ks_name()), columns());
 
-    auto old_columns = make_column_map(old_table->all_columns_in_select_order());
-    auto new_columns = make_column_map(new_table->all_columns_in_select_order());
-    auto diff = difference(old_columns, new_columns);
+    auto diff = difference(old_table->all_columns(), new_table->all_columns());
 
     // columns that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
         // Thrift only knows about the REGULAR ColumnDefinition type, so don't consider other type
         // are being deleted just because they are not here.
-        const column_definition& column = *old_columns.at(name);
+        const column_definition& column = *old_table->all_columns().at(name);
         if (from_thrift && !column.is_regular()) {
             continue;
         }
@@ -1193,7 +1183,7 @@ std::vector<mutation> make_update_table_mutations(lw_shared_ptr<keyspace_metadat
 
     // newly added columns and old columns with updated attributes
     for (auto&& name : boost::range::join(diff.entries_differing, diff.entries_only_on_right)) {
-        const column_definition& column = *new_columns.at(name);
+        const column_definition& column = *new_table->all_columns().at(name);
         add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
     }
 
