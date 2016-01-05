@@ -45,6 +45,8 @@
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
 
+#include "auth/authenticator.hh"
+
 #include <cassert>
 #include <string>
 
@@ -205,6 +207,10 @@ public:
     void write_value(bytes_opt value);
     void write(const cql3::metadata& m);
     future<> output(output_stream<char>& out, uint8_t version);
+
+    cql_binary_opcode opcode() const {
+        return _opcode;
+    }
 private:
     sstring make_frame(uint8_t version, size_t length);
 };
@@ -398,8 +404,29 @@ cql_server::connection::read_frame() {
 
 future<response_type>
 cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state) {
-    return make_ready_future<>().then([this, op, stream, buf = std::move(buf), client_state] () mutable {
-        switch (static_cast<cql_binary_opcode>(op)) {
+    auto cqlop = static_cast<cql_binary_opcode>(op);
+    return make_ready_future<>().then([this, cqlop, stream, buf = std::move(buf), client_state] () mutable {
+        // When using authentication, we need to ensure we are doing proper state transitions,
+        // i.e. we cannot simply accept any query/exec ops unless auth is complete
+        switch (_state) {
+            case state::UNINITIALIZED:
+                if (cqlop != cql_binary_opcode::STARTUP && cqlop != cql_binary_opcode::OPTIONS) {
+                    throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting STARTUP or OPTIONS", int(cqlop)));
+                }
+                break;
+            case state::AUTHENTICATION:
+                // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
+                if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
+                    throw exceptions::protocol_exception(sprint("Unexpected message %d, expecting %s", int(cqlop), _version == 1 ? "CREDENTIALS" : "SASL_RESPONSE"));
+                }
+                break;
+            case state::READY: default:
+                if (cqlop == cql_binary_opcode::STARTUP) {
+                    throw exceptions::protocol_exception("Unexpected message STARTUP, the connection is already initialized");
+                }
+                break;
+        }
+        switch (cqlop) {
         case cql_binary_opcode::STARTUP:       return process_startup(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::OPTIONS:       return process_options(stream, std::move(buf), std::move(client_state));
@@ -408,12 +435,37 @@ cql_server::connection::process_request_one(bytes_view buf, uint8_t op, uint16_t
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(buf), std::move(client_state));
         case cql_binary_opcode::REGISTER:      return process_register(stream, std::move(buf), std::move(client_state));
-        default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", op));
+        default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
-    }).then_wrapped([this, stream, client_state] (future<response_type> f) {
+    }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) {
         --_server._requests_serving;
         try {
-            auto response = f.get();
+            response_type response = f.get0();
+            auto res_op = response.first->opcode();
+            // and modify state now that we've generated a response.
+            switch (_state) {
+                case state::UNINITIALIZED:
+                    if (cqlop == cql_binary_opcode::STARTUP) {
+                        if (res_op == cql_binary_opcode::AUTHENTICATE) {
+                            _state = state::AUTHENTICATION;
+                        } else if (res_op == cql_binary_opcode::READY) {
+                            _state = state::READY;
+                        }
+                    }
+                    break;
+                case state::AUTHENTICATION:
+                    // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
+                    assert(cqlop == cql_binary_opcode::AUTH_RESPONSE || cqlop == cql_binary_opcode::CREDENTIALS);
+                    if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
+                        _state = state::READY;
+                        // we won't use the authenticator again, null it
+                        _sasl_challenge = nullptr;
+                    }
+                    break;
+                default:
+                case state::READY:
+                    break;
+            }
             return make_ready_future<response_type>(response);
         } catch (const exceptions::unavailable_exception& ex) {
             return make_ready_future<response_type>(std::make_pair(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive), client_state));
@@ -554,12 +606,28 @@ unsigned cql_server::connection::pick_request_cpu()
 future<response_type> cql_server::connection::process_startup(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
     /*auto string_map =*/ read_string_map(buf);
+    auto& a = auth::authenticator::get();
+    if (a.require_authentication()) {
+        return make_ready_future<response_type>(std::make_pair(make_autheticate(stream, a.class_name()), client_state));
+    }
     return make_ready_future<response_type>(std::make_pair(make_ready(stream), client_state));
 }
 
 future<response_type> cql_server::connection::process_auth_response(uint16_t stream, bytes_view buf, service::client_state client_state)
 {
-    assert(0);
+    if (_sasl_challenge == nullptr) {
+        _sasl_challenge = auth::authenticator::get().new_sasl_challenge();
+    }
+
+    auto challenge = _sasl_challenge->evaluate_response(buf);
+    if (_sasl_challenge->is_complete()) {
+        return _sasl_challenge->get_authenticated_user().then([this, stream, client_state = std::move(client_state), challenge = std::move(challenge)](::shared_ptr<auth::authenticated_user> user) mutable {
+            return client_state.login(std::move(user)).then([this, stream, client_state = std::move(client_state), challenge = std::move(challenge)]() mutable {
+                return make_ready_future<response_type>(std::make_pair(make_auth_success(stream, std::move(challenge)), std::move(client_state)));
+            });
+        });
+    }
+    return make_ready_future<response_type>(std::make_pair(make_auth_challenge(stream, std::move(challenge)), std::move(client_state)));
 }
 
 future<response_type> cql_server::connection::process_options(uint16_t stream, bytes_view buf, service::client_state client_state)
@@ -790,6 +858,25 @@ shared_ptr<cql_server::response> cql_server::connection::make_error(int16_t stre
 shared_ptr<cql_server::response> cql_server::connection::make_ready(int16_t stream)
 {
     return make_shared<cql_server::response>(stream, cql_binary_opcode::READY);
+}
+
+shared_ptr<cql_server::response> cql_server::connection::make_autheticate(int16_t stream, const sstring& clz)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTHENTICATE);
+    response->write_string(clz);
+    return response;
+}
+
+shared_ptr<cql_server::response> cql_server::connection::make_auth_success(int16_t stream, bytes b) {
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTH_SUCCESS);
+    response->write_bytes(std::move(b));
+    return response;
+}
+
+shared_ptr<cql_server::response> cql_server::connection::make_auth_challenge(int16_t stream, bytes b) {
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::AUTH_CHALLENGE);
+    response->write_bytes(std::move(b));
+    return response;
 }
 
 shared_ptr<cql_server::response> cql_server::connection::make_supported(int16_t stream)
