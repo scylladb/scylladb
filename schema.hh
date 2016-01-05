@@ -428,7 +428,7 @@ public:
     const column_definition& regular_column_at(column_id id) const;
     const column_definition& static_column_at(column_id id) const;
     bool is_last_partition_key(const column_definition& def) const;
-    bool has_collections() const;
+    bool has_multi_cell_collections() const;
     bool has_static_columns() const;
     size_t partition_key_size() const;
     size_t clustering_key_size() const;

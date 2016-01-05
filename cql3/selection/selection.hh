@@ -134,7 +134,7 @@ public:
      * @return <code>true</code> if this selection contains a collection, <code>false</code> otherwise.
      */
     bool contains_a_collection() const {
-        if (!_schema->has_collections()) {
+        if (!_schema->has_multi_cell_collections()) {
             return false;
         }
 
