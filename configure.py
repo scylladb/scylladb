@@ -420,6 +420,7 @@ scylla_core = (['database.cc',
                  'exceptions/exceptions.cc',
                  'dns.cc',
                  'auth/data_resource.cc',
+                 'auth/permission.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
