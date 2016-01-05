@@ -99,9 +99,9 @@ query_options::query_options(query_options&& o, std::vector<std::vector<bytes_vi
     _batch_options = std::move(tmp);
 }
 
-query_options::query_options(std::vector<bytes_opt> values)
+query_options::query_options(db::consistency_level cl, std::vector<bytes_opt> values)
     : query_options(
-          db::consistency_level::ONE,
+          cl,
           {},
           std::move(values),
           {},
@@ -119,6 +119,11 @@ query_options::query_options(std::vector<bytes_opt> values)
         }
     }
 }
+
+query_options::query_options(std::vector<bytes_opt> values)
+    : query_options(
+          db::consistency_level::ONE, std::move(values))
+{}
 
 db::consistency_level query_options::get_consistency() const
 {
