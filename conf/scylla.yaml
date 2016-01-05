@@ -216,7 +216,7 @@ batch_size_warn_threshold_in_kb: 5
 # reduced proportionally to the number of nodes in the cluster.
 # batchlog_replay_throttle_in_kb: 1024
 
-# Authentication backend, implementing IAuthenticator; used to identify users
+# Authentication backend, identifying users
 # Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
 # PasswordAuthenticator}.
 #
