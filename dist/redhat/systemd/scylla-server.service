@@ -12,6 +12,7 @@ EnvironmentFile=/etc/sysconfig/scylla-server
 ExecStartPre=/usr/lib/scylla/scylla_prepare
 ExecStart=/usr/lib/scylla/scylla_run
 ExecStopPost=/usr/lib/scylla/scylla_stop
+TimeoutStartSec=900
 KillMode=process
 Restart=no
 
