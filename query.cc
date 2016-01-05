@@ -255,7 +255,7 @@ to_partition_range(query::range<dht::token> r) {
 
     auto end = r.end()
                ? bound_opt(dht::ring_position(r.end()->value(),
-            r.start()->is_inclusive()
+            r.end()->is_inclusive()
             ? dht::ring_position::token_bound::end
             : dht::ring_position::token_bound::start))
                : bound_opt();
