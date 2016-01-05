@@ -29,6 +29,8 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <cryptopp/sha.h>
+
 static logging::logger logger("repair");
 
 template <typename T1, typename T2>
@@ -238,6 +240,61 @@ static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
         logger.error("repair session #{} stream failed: {}", id, ep);
         return make_exception_future(std::runtime_error("repair_range failed"));
     });
+}
+
+partition_checksum::partition_checksum(const mutation& m) {
+    auto frozen = freeze(m);
+    auto bytes = frozen.representation();
+    CryptoPP::SHA256 hash;
+    static_assert(CryptoPP::SHA256::DIGESTSIZE == sizeof(_digest),
+            "digest size");
+    static_assert(sizeof(char) == sizeof(decltype(*bytes.data())),
+            "Assumed that chars are bytes");
+    hash.CalculateDigest(reinterpret_cast<unsigned char*>(_digest),
+            reinterpret_cast<const unsigned char*>(bytes.data()),
+            bytes.size());
+}
+
+void partition_checksum::add(const partition_checksum& other) {
+     static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
+     _digest[0] ^= other._digest[0];
+     _digest[1] ^= other._digest[1];
+     _digest[2] ^= other._digest[2];
+     _digest[3] ^= other._digest[3];
+}
+
+bool partition_checksum::operator==(const partition_checksum& other) const {
+    static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
+    return  _digest[0] == other._digest[0] &&
+            _digest[1] == other._digest[1] &&
+            _digest[2] == other._digest[2] &&
+            _digest[3] == other._digest[3];
+}
+
+void partition_checksum::serialize(bytes::iterator& out) const {
+    out = std::copy(
+            reinterpret_cast<const char*>(&_digest),
+            reinterpret_cast<const char*>(&_digest) + sizeof(_digest),
+            out);
+}
+
+partition_checksum partition_checksum::deserialize(bytes_view& in) {
+    partition_checksum ret;
+    auto v = read_simple_bytes(in, sizeof(ret._digest));
+    std::copy(v.begin(), v.end(), reinterpret_cast<char*>(ret._digest));
+    return ret;
+}
+
+size_t partition_checksum::serialized_size() const {
+    return sizeof(_digest);
+}
+
+std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
+    out << std::hex;
+    std::copy(c._digest, c._digest + sizeof(c._digest)/sizeof(c._digest[0]),
+            std::ostream_iterator<decltype(c._digest[0])>(out, "-"));
+    out << std::dec;
+    return out;
 }
 
 static std::vector<query::range<dht::token>> get_ranges_for_endpoint(

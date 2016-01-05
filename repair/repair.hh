@@ -57,3 +57,28 @@ enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 // repair_get_status() returns a future because it needs to run code on a
 // different CPU (cpu 0) and that might be a deferring operation.
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
+
+// The class partition_checksum calculates a 256-bit cryptographically-secure
+// checksum of a set of partitions fed to it. The checksum of a partition set
+// is calculated by calculating a strong hash function (SHA-256) of each
+// individual partition, and then XORing the individual hashes together.
+// XOR is good enough for merging strong checksums, and allows us to
+// independently calculate the checksums of different subsets of the original
+// set, and then combine the results into one checksum with the add() method.
+// The hash of an individual partition uses both its key and value.
+class partition_checksum {
+private:
+    uint64_t _digest[4]; // 256 bits
+public:
+    constexpr partition_checksum() : _digest{} { }
+    partition_checksum(const mutation& m);
+    void add(const partition_checksum& other);
+    bool operator==(const partition_checksum& other) const;
+    bool operator!=(const partition_checksum& other) const { return !operator==(other); }
+    friend std::ostream& operator<<(std::ostream&, const partition_checksum&);
+
+    // The following are used to send this object over messaging_service:
+    void serialize(bytes::iterator& out) const;
+    static partition_checksum deserialize(bytes_view& in);
+    size_t serialized_size() const;
+};
