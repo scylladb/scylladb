@@ -162,6 +162,22 @@ public:
     using cassandra_exception::cassandra_exception;
 };
 
+class unauthorized_exception: public request_validation_exception {
+public:
+    unauthorized_exception(sstring msg)
+                    : request_validation_exception(exception_code::UNAUTHORIZED,
+                                    std::move(msg)) {
+    }
+};
+
+class authentication_exception: public request_validation_exception {
+public:
+    authentication_exception(sstring msg)
+                    : request_validation_exception(exception_code::BAD_CREDENTIALS,
+                                    std::move(msg)) {
+    }
+};
+
 class invalid_request_exception : public request_validation_exception {
 public:
     invalid_request_exception(sstring cause)
