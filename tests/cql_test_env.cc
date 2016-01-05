@@ -98,7 +98,6 @@ public:
     static std::atomic<bool> active;
 private:
     ::shared_ptr<distributed<database>> _db;
-    ::shared_ptr<distributed<cql3::query_processor>> _qp;
     lw_shared_ptr<tmpdir> _data_dir;
 private:
     struct core_local_state {
@@ -126,7 +125,7 @@ public:
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
         auto qs = make_query_state();
-        return _qp->local().process(text, *qs, cql3::query_options::DEFAULT).finally([qs, this] {
+        return local_qp().process(text, *qs, cql3::query_options::DEFAULT).finally([qs, this] {
             _core_local.local().client_state.merge(qs->get_client_state());
         });
     }
@@ -137,17 +136,17 @@ public:
     {
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return _qp->local().process(text, *qs, lqo).finally([qs, qo = std::move(qo), this] {
+        return local_qp().process(text, *qs, lqo).finally([qs, qo = std::move(qo), this] {
             _core_local.local().client_state.merge(qs->get_client_state());
         });
     }
 
     virtual future<bytes> prepare(sstring query) override {
-        return _qp->invoke_on_all([query, this] (auto& local_qp) {
+        return qp().invoke_on_all([query, this] (auto& local_qp) {
             auto qs = this->make_query_state();
             return local_qp.prepare(query, *qs).finally([qs] {}).discard_result();
         }).then([query, this] {
-            return _qp->local().compute_id(query, ks_name);
+            return local_qp().compute_id(query, ks_name);
         });
     }
 
@@ -155,7 +154,7 @@ public:
         bytes id,
         std::vector<bytes_opt> values) override
     {
-        auto prepared = _qp->local().get_prepared(id);
+        auto prepared = local_qp().get_prepared(id);
         if (!prepared) {
             throw not_prepared_exception(id);
         }
@@ -166,7 +165,7 @@ public:
         options->prepare(prepared->bound_names);
 
         auto qs = make_query_state();
-        return _qp->local().process_statement(stmt, *qs, *options)
+        return local_qp().process_statement(stmt, *qs, *options)
             .finally([options, qs, this] {
                 _core_local.local().client_state.merge(qs->get_client_state());
             });
@@ -245,7 +244,7 @@ public:
     }
 
     cql3::query_processor& local_qp() override {
-        return _qp->local();
+        return cql3::get_local_query_processor();
     }
 
     distributed<database>& db() override {
@@ -253,21 +252,21 @@ public:
     }
 
     distributed<cql3::query_processor>& qp() override {
-        return *_qp;
+        return cql3::get_query_processor();
     }
 
-    future<> start() {
+    future<> start(const db::config& cfg_in) {
         bool old_active = false;
         if (!active.compare_exchange_strong(old_active, true)) {
             throw std::runtime_error("Starting more than one cql_test_env at a time not supported "
                                      "due to singletons.");
         }
-        return seastar::async([this] {
+        return seastar::async([this, cfg_in] {
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
             auto db = ::make_shared<distributed<database>>();
-            auto cfg = make_lw_shared<db::config>();
+            auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
             _data_dir = make_lw_shared<tmpdir>();
             cfg->data_file_directories() = { _data_dir->path };
             cfg->commitlog_directory() = _data_dir->path + "/commitlog.dir";
@@ -288,10 +287,10 @@ public:
             proxy.start(std::ref(*db)).get();
             mm.start().get();
 
-            auto qp = ::make_shared<distributed<cql3::query_processor>>();
-            qp->start(std::ref(proxy), std::ref(*db)).get();
+            auto& qp = cql3::get_query_processor();
+            qp.start(std::ref(proxy), std::ref(*db)).get();
 
-            bm.start(std::ref(*qp)).get();
+            bm.start(std::ref(qp)).get();
 
             db->invoke_on_all([this] (database& db) {
                 return db.init_system_keyspace();
@@ -305,14 +304,13 @@ public:
 
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
-            db::system_keyspace::minimal_setup(*db, *qp);
+            db::system_keyspace::minimal_setup(*db, qp);
             db::system_keyspace::init_local_cache().get();
 
             service::get_local_storage_service().init_server().get();
 
             _core_local.start().get();
             _db = std::move(db);
-            _qp = std::move(qp);
 
             auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
             execute_cql(query).get();
@@ -325,7 +323,7 @@ public:
             db::system_keyspace::deinit_local_cache().get();
 
             db::get_batchlog_manager().stop().get();
-            _qp->stop().get();
+            cql3::get_query_processor().stop().get();
             db::qctx = {};
             service::get_migration_manager().stop().get();
             service::get_storage_proxy().stop().get();
@@ -348,20 +346,28 @@ public:
 
 std::atomic<bool> single_node_cql_env::active = { false };
 
-future<::shared_ptr<cql_test_env>> make_env_for_test() {
-    return seastar::async([] {
+future<::shared_ptr<cql_test_env>> make_env_for_test(const db::config& cfg_in) {
+    return seastar::async([cfg_in] {
         auto env = ::make_shared<single_node_cql_env>();
-        env->start().get();
+        env->start(cfg_in).get();
         return dynamic_pointer_cast<cql_test_env>(env);
     });
 }
 
-future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func) {
-    return make_env_for_test().then([func = std::move(func)] (auto e) mutable {
+future<::shared_ptr<cql_test_env>> make_env_for_test() {
+    return make_env_for_test(db::config{});
+}
+
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
+    return make_env_for_test(cfg_in).then([func = std::move(func)] (auto e) mutable {
         return do_with(std::move(func), [e] (auto& f) {
             return f(*e);
         }).finally([e] {
             return e->stop().finally([e] {});
         });
     });
+}
+
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func) {
+    return do_with_cql_env(std::move(func), db::config{});
 }

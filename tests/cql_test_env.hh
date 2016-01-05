@@ -45,6 +45,10 @@ public:
     not_prepared_exception(const bytes& id) : std::runtime_error(sprint("Not prepared: %s", id)) {}
 };
 
+namespace db {
+    class config;
+}
+
 class cql_test_env {
 public:
     virtual ~cql_test_env() {};
@@ -84,5 +88,7 @@ public:
 };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test();
+future<::shared_ptr<cql_test_env>> make_env_for_test(const db::config&);
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
+future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
