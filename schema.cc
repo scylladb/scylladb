@@ -232,6 +232,11 @@ schema::schema(const raw_schema& raw)
         assert(!def.id || def.id == id - column_offset(def.kind));
         def.id = id - column_offset(def.kind);
 
+        auto dropped_at_it = _raw._dropped_columns.find(def.name_as_text());
+        if (dropped_at_it != _raw._dropped_columns.end()) {
+            def._dropped_at = std::max(def._dropped_at, dropped_at_it->second);
+        }
+
         def._thrift_bits = column_definition::thrift_bits();
 
         {
@@ -368,8 +373,8 @@ index_info::index_info(::index_type idx_type,
     : index_type(idx_type), index_name(idx_name), index_options(idx_options)
 {}
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx)
-        : _name(std::move(name)), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
+        : _name(std::move(name)), _dropped_at(dropped_at), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
 {}
 
 std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -380,6 +385,7 @@ std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
     os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
     os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
     os << ", indexType=" << to_sstring(cd.idx_info.index_type);
+    os << ", droppedAt=" << cd._dropped_at;
     os << "}";
     return os;
 }
@@ -484,7 +490,8 @@ bool operator==(const column_definition& x, const column_definition& y)
     return x._name == y._name
         && x.type->equals(y.type)
         && x.id == y.id
-        && x.kind == y.kind;
+        && x.kind == y.kind
+        && x._dropped_at == y._dropped_at;
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId

@@ -194,6 +194,7 @@ public:
     };
 private:
     bytes _name;
+    api::timestamp_type _dropped_at;
 
     struct thrift_bits {
         thrift_bits()
@@ -206,7 +207,9 @@ private:
     thrift_bits _thrift_bits;
     friend class schema;
 public:
-    column_definition(bytes name, data_type type, column_kind kind, column_id component_index = 0, index_info = index_info());
+    column_definition(bytes name, data_type type, column_kind kind,
+        column_id component_index = 0, index_info = index_info(),
+        api::timestamp_type dropped_at = api::missing_timestamp);
 
     data_type type;
 
@@ -252,6 +255,7 @@ public:
     bool is_part_of_cell_name() const {
         return is_regular() || is_static();
     }
+    api::timestamp_type dropped_at() const { return _dropped_at; }
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
