@@ -656,4 +656,21 @@ future<> messaging_service::send_replication_finished(shard_id id, inet_address 
     return send_message_timeout<void>(this, messaging_verb::REPLICATION_FINISHED, std::move(id), 10000ms, std::move(from));
 }
 
+// Wrapper for REPAIR_CHECKSUM_RANGE
+void messaging_service::register_repair_checksum_range(
+        std::function<future<partition_checksum> (sstring keyspace,
+                sstring cf, query::range<dht::token> range)>&& f) {
+    register_handler(this, messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(f));
+}
+void messaging_service::unregister_repair_checksum_range() {
+    _rpc->unregister_handler(messaging_verb::REPAIR_CHECKSUM_RANGE);
+}
+future<partition_checksum> messaging_service::send_repair_checksum_range(
+        shard_id id, sstring keyspace, sstring cf, ::range<dht::token> range)
+{
+    return send_message<partition_checksum>(this,
+            messaging_verb::REPAIR_CHECKSUM_RANGE, std::move(id),
+            std::move(keyspace), std::move(cf), std::move(range));
+}
+
 } // namespace net

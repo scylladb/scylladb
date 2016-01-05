@@ -36,6 +36,7 @@
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
+#include "repair/repair.hh"
 
 #include <seastar/net/tls.hh>
 
@@ -86,8 +87,9 @@ enum class messaging_verb : int32_t {
     STREAM_MUTATION = 17,
     STREAM_MUTATION_DONE = 18,
     COMPLETE_MESSAGE = 19,
+    REPAIR_CHECKSUM_RANGE = 20,
     // end of streaming verbs
-    LAST = 20,
+    LAST = 21,
 };
 
 } // namespace net
@@ -422,6 +424,11 @@ public:
 
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
     future<> send_complete_message(shard_id id, UUID plan_id, unsigned dst_cpu_id);
+
+    // Wrapper for REPAIR_CHECKSUM_RANGE verb
+    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, query::range<dht::token> range)>&& func);
+    void unregister_repair_checksum_range();
+    future<partition_checksum> send_repair_checksum_range(shard_id id, sstring keyspace, sstring cf, query::range<dht::token> range);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
