@@ -1076,6 +1076,12 @@ shared_ptr<const abstract_type> data_type_for<net::ipv4_address>() {
     return inet_addr_type;
 }
 
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<bool>() {
+    return boolean_type;
+}
+
 namespace std {
 
 template <>
