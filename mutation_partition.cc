@@ -753,6 +753,10 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
     uint32_t row_count = 0;
 
+    auto can_purge_tombstone = [&] (const tombstone& t) {
+        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
+    };
+
     auto row_callback = [&] (rows_entry& e) {
         deletable_row& row = e.row();
 
@@ -760,6 +764,10 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
         bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
         is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
+
+        if (can_purge_tombstone(row.deleted_at())) {
+            row.remove_tombstone();
+        }
 
         // when row_limit is reached, do not exit immediately,
         // iterate to the next live_row instead to include trailing
@@ -790,9 +798,6 @@ uint32_t mutation_partition::do_compact(const schema& s,
         ++row_count;
     }
 
-    auto can_purge_tombstone = [&] (const tombstone& t) {
-        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
-    };
     auto it = _row_tombstones.begin();
     while (it != _row_tombstones.end()) {
         auto& tomb = it->t();
