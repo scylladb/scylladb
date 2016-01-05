@@ -366,6 +366,27 @@ future<partition_checksum> checksum_range(seastar::sharded<database> &db,
         });
     });
 }
+
+static future<> sync_range(seastar::sharded<database>& db,
+        const sstring& keyspace, const sstring& cf,
+        const ::range<dht::token>& range,
+        std::vector<gms::inet_address>& neighbors) {
+    return do_with(streaming::stream_plan("repair-in"),
+                   streaming::stream_plan("repair-out"),
+            [&db, &keyspace, &cf, &range, &neighbors]
+            (auto& sp_in, auto& sp_out) {
+        for (const auto& peer : neighbors) {
+            sp_in.request_ranges(peer, keyspace, {range}, {cf});
+            sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
+        }
+        return sp_in.execute().discard_result().then([&sp_out] {
+                return sp_out.execute().discard_result();
+        }).handle_exception([] (auto ep) {
+            logger.error("repair's stream failed: {}", ep);
+            return make_exception_future(ep);
+        });
+    });
+}
 static std::vector<query::range<dht::token>> get_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
