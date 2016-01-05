@@ -542,7 +542,7 @@ static sstring compound_name(const schema& s) {
         compound += _collection_str;
         compound += "(";
         for (auto& t: s.regular_columns()) {
-            if (t.type->is_collection()) {
+            if (t.type->is_collection() && t.type->is_multi_cell()) {
                 auto ct = static_pointer_cast<const collection_type_impl>(t.type);
                 compound += "00000000:" + ct->name() + ",";
             }
