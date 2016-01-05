@@ -46,6 +46,7 @@
 #include "timestamp.hh"
 #include "db_clock.hh"
 #include "database.hh"
+#include "auth/authenticated_user.hh"
 
 namespace service {
 
@@ -77,7 +78,7 @@ private:
     private volatile AuthenticatedUser user;
     private volatile String keyspace;
 #endif
-
+    ::shared_ptr<auth::authenticated_user> _user;
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -90,6 +91,7 @@ public:
     api::timestamp_type _last_timestamp_micros = 0;
 
     bool _dirty = false;
+    bool _thrift = false; // TODO: maybe use/set?
 
     // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
     // anywhere so I didn't bother converting it.
@@ -110,8 +112,8 @@ public:
         _last_timestamp_micros = std::max(_last_timestamp_micros, other._last_timestamp_micros);
     }
 
-    virtual bool is_thrift() const {
-        return false;
+    bool is_thrift() const {
+        return _thrift;
     }
 
     /**
@@ -171,10 +173,7 @@ public:
     void set_keyspace(seastar::sharded<database>& db, sstring keyspace) {
         // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
         // call set_keyspace() before calling login(), and we have to handle that.
-#if 0
-        if (user && Schema.instance.getKSMetaData(ks) == null) {
-#endif
-        if (!db.local().has_keyspace(keyspace)) {
+        if (_user && !db.local().has_keyspace(keyspace)) {
             throw exceptions::invalid_request_exception(sprint("Keyspace '%s' does not exist", keyspace));
         }
         _keyspace = keyspace;
@@ -188,18 +187,12 @@ public:
         return _keyspace;
     }
 
-#if 0
     /**
      * Attempts to login the given user.
      */
-    public void login(AuthenticatedUser user) throws AuthenticationException
-    {
-        if (!user.isAnonymous() && !Auth.isExistingUser(user.getName()))
-           throw new AuthenticationException(String.format("User %s doesn't exist - create it with CREATE USER query first",
-                                                           user.getName()));
-        this.user = user;
-    }
+    future<> login(::shared_ptr<auth::authenticated_user>);
 
+#if 0
     public void hasAllKeyspacesAccess(Permission perm) throws UnauthorizedException
     {
         if (isInternal)
@@ -266,13 +259,7 @@ public:
 #endif
 
 public:
-    void validate_login() const {
-        warn(unimplemented::cause::AUTH);
-#if 0
-        if (user == null)
-            throw new UnauthorizedException("You have not logged in");
-#endif
-    }
+    void validate_login() const;
 
 #if 0
     public void ensureNotAnonymous() throws UnauthorizedException
@@ -293,12 +280,13 @@ public:
         if (keyspace == null)
             throw new InvalidRequestException("You have not set a keyspace for this session");
     }
+#endif
 
-    public AuthenticatedUser getUser()
-    {
-        return user;
+    ::shared_ptr<auth::authenticated_user> user() const {
+        return _user;
     }
 
+#if 0
     public static SemanticVersion[] getCQLSupportedVersion()
     {
         return new SemanticVersion[]{ QueryProcessor.CQL_VERSION };
