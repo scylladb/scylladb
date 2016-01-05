@@ -82,3 +82,12 @@ public:
     static partition_checksum deserialize(bytes_view& in);
     size_t serialized_size() const;
 };
+
+// Calculate the checksum of the data held on all shards of a column family,
+// in the given token range.
+// All parameters to this function are constant references, and the caller
+// must ensure they live as long as the future returned by this function is
+// not resolved.
+future<partition_checksum> checksum_range(seastar::sharded<database> &db,
+        const sstring& keyspace, const sstring& cf,
+        const ::range<dht::token>& range);

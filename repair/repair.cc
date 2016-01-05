@@ -297,6 +297,75 @@ std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
     return out;
 }
 
+// Calculate the checksum of the data held *on this shard* of a column family,
+// in the given token range.
+// All parameters to this function are constant references, and the caller
+// must ensure they live as long as the future returned by this function is
+// not resolved.
+// FIXME: Both master and slave will typically call this on consecutive ranges
+// so it would be useful to have this code cache its stopping point or have
+// some object live throughout the operation. Moreover, it makes sense to to
+// vary the collection of sstables used throught a long repair.
+// FIXME: cf.make_reader() puts all read partitions in the cache. This might
+// not be a good idea (see issue #382). Perhaps it is better to read the
+// sstables directly (as compaction does) - after flushing memtables first
+// (there might be old data in memtables which isn't flushed because no new
+// data is coming in).
+static future<partition_checksum> checksum_range_shard(database &db,
+        const sstring& keyspace_name, const sstring& cf_name,
+        const ::range<dht::token>& range) {
+    auto& cf = db.find_column_family(keyspace_name, cf_name);
+    return do_with(query::to_partition_range(range), [&cf] (const auto& partition_range) {
+        return do_with(cf.make_reader(partition_range), partition_checksum(),
+            [] (auto& reader, auto& checksum) {
+            return repeat([&reader, &checksum] () {
+                return reader().then([&checksum] (auto mopt) {
+                    if (mopt) {
+                        checksum.add(partition_checksum(*mopt));
+                        return stop_iteration::no;
+                    } else {
+                        return stop_iteration::yes;
+                    }
+                });
+            }).then([&checksum] {
+                return checksum;
+            });
+        });
+    });
+}
+
+// Calculate the checksum of the data held on all shards of a column family,
+// in the given token range.
+// In practice, we only need to consider one or two shards which intersect the
+// given "range". This is because the token ring has nodes*vnodes tokens,
+// dividing the token space into nodes*vnodes ranges, with "range" being one
+// of those. This number is big (vnodes = 256 by default). At the same time,
+// sharding divides the token space into relatively few large ranges, one per
+// thread.
+// Watch out: All parameters to this function are constant references, and the
+// caller must ensure they live as line as the future returned by this
+// function is not resolved.
+future<partition_checksum> checksum_range(seastar::sharded<database> &db,
+        const sstring& keyspace, const sstring& cf,
+        const ::range<dht::token>& range) {
+    unsigned shard_begin = range.start() ?
+            dht::shard_of(range.start()->value()) : 0;
+    unsigned shard_end = range.end() ?
+            dht::shard_of(range.end()->value())+1 : smp::count;
+    return do_with(partition_checksum(), [shard_begin, shard_end, &db, &keyspace, &cf, &range] (auto& result) {
+        return parallel_for_each(boost::counting_iterator<int>(shard_begin),
+                boost::counting_iterator<int>(shard_end),
+                [&db, &keyspace, &cf, &range, &result] (unsigned shard) {
+            return db.invoke_on(shard, [&keyspace, &cf, &range] (database& db) {
+                return checksum_range_shard(db, keyspace, cf, range);
+            }).then([&result] (partition_checksum sum) {
+                result.add(sum);
+            });
+        }).then([&result] {
+            return make_ready_future<partition_checksum>(result);
+        });
+    });
+}
 static std::vector<query::range<dht::token>> get_ranges_for_endpoint(
         database& db, sstring keyspace, gms::inet_address ep) {
     auto& rs = db.find_keyspace(keyspace).get_replication_strategy();
