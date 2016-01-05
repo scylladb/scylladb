@@ -481,6 +481,9 @@ public:
     void apply(tombstone t) {
         _row.apply(t);
     }
+    bool empty() const {
+        return _row.empty();
+    }
     struct compare {
         clustering_key::less_compare _c;
         compare(const schema& s) : _c(s) {}
@@ -605,6 +608,7 @@ private:
 
     // Calls func for each row entry inside row_ranges until func returns stop_iteration::yes.
     // Removes all entries for which func didn't return stop_iteration::no or wasn't called at all.
+    // Removes all entries that are empty, check rows_entry::empty().
     // If reversed is true, func will be called on entries in reverse order. In that case row_ranges
     // must be already in reverse order.
     template<bool reversed, typename Func>

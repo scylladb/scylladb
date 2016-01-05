@@ -220,9 +220,9 @@ sstring schema::thrift_key_validator() const {
 }
 
 bool
-schema::has_collections() const {
+schema::has_multi_cell_collections() const {
     return boost::algorithm::any_of(all_columns_in_select_order(), [] (const column_definition& cdef) {
-        return cdef.type->is_collection();
+        return cdef.type->is_collection() && cdef.type->is_multi_cell();
     });
 }
 
@@ -538,11 +538,11 @@ static sstring compound_name(const schema& s) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
-    if (s.has_collections()) {
+    if (s.has_multi_cell_collections()) {
         compound += _collection_str;
         compound += "(";
         for (auto& t: s.regular_columns()) {
-            if (t.type->is_collection()) {
+            if (t.type->is_collection() && t.type->is_multi_cell()) {
                 auto ct = static_pointer_cast<const collection_type_impl>(t.type);
                 compound += "00000000:" + ct->name() + ",";
             }

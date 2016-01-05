@@ -542,10 +542,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::get_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(0);
+    ss::get_compaction_throughput_mb_per_sec.set(r, [&ctx](std::unique_ptr<request> req) {
+        int value = ctx.db.local().get_config().compaction_throughput_mb_per_sec();
+        return make_ready_future<json::json_return_type>(value);
     });
 
     ss::set_compaction_throughput_mb_per_sec.set(r, [](std::unique_ptr<request> req) {

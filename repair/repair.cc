@@ -24,10 +24,14 @@
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
+#include "db/config.hh"
+#include "service/storage_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
+
+#include <cryptopp/sha.h>
 
 static logging::logger logger("repair");
 
@@ -68,21 +72,92 @@ void remove_item(Collection& c, T& item) {
 
 // Return all of the neighbors with whom we share the provided range.
 static std::vector<gms::inet_address> get_neighbors(database& db,
-        const sstring& ksname, query::range<dht::token> range
-        //Collection<String> dataCenters, Collection<String> hosts)
-        ) {
+        const sstring& ksname, query::range<dht::token> range,
+        const std::vector<sstring>& data_centers,
+        const std::vector<sstring>& hosts) {
+
     keyspace& ks = db.find_keyspace(ksname);
     auto& rs = ks.get_replication_strategy();
 
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = rs.get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
+
+    if (!data_centers.empty()) {
+        auto dc_endpoints_map = service::get_local_storage_service().get_token_metadata().get_topology().get_datacenter_endpoints();
+        std::unordered_set<gms::inet_address> dc_endpoints;
+        for (const sstring& dc : data_centers) {
+            auto it = dc_endpoints_map.find(dc);
+            if (it == dc_endpoints_map.end()) {
+                std::vector<sstring> dcs;
+                for (const auto& e : dc_endpoints_map) {
+                    dcs.push_back(e.first);
+                }
+                throw std::runtime_error(sprint("Unknown data center '%s'. "
+                        "Known data centers: %s", dc, dcs));
+            }
+            for (const auto& endpoint : it->second) {
+                dc_endpoints.insert(endpoint);
+            }
+        }
+        // The resulting list of nodes is the intersection of the nodes in the
+        // listed data centers, and the (range-dependent) list of neighbors.
+        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        ret.clear();
+        for (const auto& endpoint : dc_endpoints) {
+            if (neighbor_set.count(endpoint)) {
+                ret.push_back(endpoint);
+            }
+        }
+    } else if (!hosts.empty()) {
+        bool found_me = false;
+        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        ret.clear();
+        for (const sstring& host : hosts) {
+            gms::inet_address endpoint;
+            try {
+                endpoint = gms::inet_address(host);
+            } catch(...) {
+                throw std::runtime_error(sprint("Unknown host specified: %s", host));
+            }
+            if (endpoint == utils::fb_utilities::get_broadcast_address()) {
+                found_me = true;
+            } else if (neighbor_set.count(endpoint)) {
+                ret.push_back(endpoint);
+                // If same host is listed twice, don't add it again later
+                neighbor_set.erase(endpoint);
+            }
+            // Nodes which aren't neighbors for this range are ignored.
+            // This allows the user to give a list of "good" nodes, where
+            // for each different range, only the subset of nodes actually
+            // holding a replica of the given range is used. This,
+            // however, means the user is never warned if one of the nodes
+            // on the list isn't even part of the cluster.
+        }
+        // We require, like Cassandra does, that the current host must also
+        // be listed on the "-hosts" option - even those we don't want it in
+        // the returned list:
+        if (!found_me) {
+            throw std::runtime_error("The current host must be part of the repair");
+        }
+        if (ret.size() < 1) {
+            auto me = utils::fb_utilities::get_broadcast_address();
+            auto others = rs.get_natural_endpoints(tok);
+            remove_item(others, me);
+            throw std::runtime_error(sprint("Repair requires at least two "
+                    "endpoints that are neighbors before it can continue, "
+                    "the endpoint used for this repair is %s, other "
+                    "available neighbors are %s but these neighbors were not "
+                    "part of the supplied list of hosts to use during the "
+                    "repair (%s).", me, others, hosts));
+        }
+    }
+
     return ret;
 
 #if 0
-    // Origin's ActiveRepairService.getNeighbors() contains a lot of important
-    // stuff we need to do, like verifying the requested range fits a local
-    // range, and also taking the "datacenters" and "hosts" options.
+    // Origin's ActiveRepairService.getNeighbors() also verifies that the
+    // requested range fits into a local range
         StorageService ss = StorageService.instance;
         Map<Range<Token>, List<InetAddress>> replicaSets = ss.getRangeToAddressMap(keyspaceName);
         Range<Token> rangeSuperSet = null;
@@ -101,55 +176,6 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         if (rangeSuperSet == null || !replicaSets.containsKey(rangeSuperSet))
             return Collections.emptySet();
 
-        Set<InetAddress> neighbors = new HashSet<>(replicaSets.get(rangeSuperSet));
-        neighbors.remove(FBUtilities.getBroadcastAddress());
-
-        if (dataCenters != null && !dataCenters.isEmpty())
-        {
-            TokenMetadata.Topology topology = ss.getTokenMetadata().cloneOnlyTokenMap().getTopology();
-            Set<InetAddress> dcEndpoints = Sets.newHashSet();
-            Multimap<String,InetAddress> dcEndpointsMap = topology.getDatacenterEndpoints();
-            for (String dc : dataCenters)
-            {
-                Collection<InetAddress> c = dcEndpointsMap.get(dc);
-                if (c != null)
-                   dcEndpoints.addAll(c);
-            }
-            return Sets.intersection(neighbors, dcEndpoints);
-        }
-        else if (hosts != null && !hosts.isEmpty())
-        {
-            Set<InetAddress> specifiedHost = new HashSet<>();
-            for (final String host : hosts)
-            {
-                try
-                {
-                    final InetAddress endpoint = InetAddress.getByName(host.trim());
-                    if (endpoint.equals(FBUtilities.getBroadcastAddress()) || neighbors.contains(endpoint))
-                        specifiedHost.add(endpoint);
-                }
-                catch (UnknownHostException e)
-                {
-                    throw new IllegalArgumentException("Unknown host specified " + host, e);
-                }
-            }
-
-            if (!specifiedHost.contains(FBUtilities.getBroadcastAddress()))
-                throw new IllegalArgumentException("The current host must be part of the repair");
-
-            if (specifiedHost.size() <= 1)
-            {
-                String msg = "Repair requires at least two endpoints that are neighbours before it can continue, the endpoint used for this repair is %s, " +
-                             "other available neighbours are %s but these neighbours were not part of the supplied list of hosts to use during the repair (%s).";
-                throw new IllegalArgumentException(String.format(msg, specifiedHost, neighbors, hosts));
-            }
-
-            specifiedHost.remove(FBUtilities.getBroadcastAddress());
-            return specifiedHost;
-
-        }
-
-        return neighbors;
 #endif
 }
 
@@ -198,45 +224,296 @@ public:
     }
 } repair_tracker;
 
-// repair_start() can run on any cpu; It runs on cpu0 the function
-// do_repair_start(). The benefit of always running that function on the same
-// CPU is that it allows us to keep some state (like a list of ongoing
-// repairs). It is fine to always do this on one CPU, because the function
-// itself does very little (mainly tell other nodes and CPUs what to do).
 
-// Repair a single range. Comparable to RepairSession in Origin
-// In Origin, this is composed of several "repair jobs", each with one cf,
-// but our streaming already works for several cfs.
-static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
-        query::range<dht::token> range, std::vector<sstring> cfs) {
-    auto sp = make_lw_shared<streaming::stream_plan>("repair");
-    auto id = utils::UUID_gen::get_time_UUID();
+partition_checksum::partition_checksum(const mutation& m) {
+    auto frozen = freeze(m);
+    auto bytes = frozen.representation();
+    CryptoPP::SHA256 hash;
+    static_assert(CryptoPP::SHA256::DIGESTSIZE == sizeof(_digest),
+            "digest size");
+    static_assert(sizeof(char) == sizeof(decltype(*bytes.data())),
+            "Assumed that chars are bytes");
+    hash.CalculateDigest(reinterpret_cast<unsigned char*>(_digest),
+            reinterpret_cast<const unsigned char*>(bytes.data()),
+            bytes.size());
+}
 
-    auto neighbors = get_neighbors(db.local(), keyspace, range);
-    logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
-    for (auto peer : neighbors) {
-        // FIXME: obviously, we'll need Merkel trees or another alternative
-        // method to decide which parts of the data we need to stream instead
-        // of streaming everything like we do now. So this logging is kind of
-        // silly, and we never log the corresponding "... is consistent with"
-        // message: see SyncTask.run() in Origin for the original messages.
-        auto me = utils::fb_utilities::get_broadcast_address();
-        for (auto &&cf : cfs) {
-            logger.info("[repair #{}] Endpoints {} and {} have {} range(s) out of sync for {}", id, me, peer, 1, cf);
+void partition_checksum::add(const partition_checksum& other) {
+     static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
+     _digest[0] ^= other._digest[0];
+     _digest[1] ^= other._digest[1];
+     _digest[2] ^= other._digest[2];
+     _digest[3] ^= other._digest[3];
+}
+
+bool partition_checksum::operator==(const partition_checksum& other) const {
+    static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
+    return  _digest[0] == other._digest[0] &&
+            _digest[1] == other._digest[1] &&
+            _digest[2] == other._digest[2] &&
+            _digest[3] == other._digest[3];
+}
+
+void partition_checksum::serialize(bytes::iterator& out) const {
+    out = std::copy(
+            reinterpret_cast<const char*>(&_digest),
+            reinterpret_cast<const char*>(&_digest) + sizeof(_digest),
+            out);
+}
+
+partition_checksum partition_checksum::deserialize(bytes_view& in) {
+    partition_checksum ret;
+    auto v = read_simple_bytes(in, sizeof(ret._digest));
+    std::copy(v.begin(), v.end(), reinterpret_cast<char*>(ret._digest));
+    return ret;
+}
+
+size_t partition_checksum::serialized_size() const {
+    return sizeof(_digest);
+}
+
+std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
+    out << std::hex;
+    std::copy(c._digest, c._digest + sizeof(c._digest)/sizeof(c._digest[0]),
+            std::ostream_iterator<decltype(c._digest[0])>(out, "-"));
+    out << std::dec;
+    return out;
+}
+
+// Calculate the checksum of the data held *on this shard* of a column family,
+// in the given token range.
+// All parameters to this function are constant references, and the caller
+// must ensure they live as long as the future returned by this function is
+// not resolved.
+// FIXME: Both master and slave will typically call this on consecutive ranges
+// so it would be useful to have this code cache its stopping point or have
+// some object live throughout the operation. Moreover, it makes sense to to
+// vary the collection of sstables used throught a long repair.
+// FIXME: cf.make_reader() puts all read partitions in the cache. This might
+// not be a good idea (see issue #382). Perhaps it is better to read the
+// sstables directly (as compaction does) - after flushing memtables first
+// (there might be old data in memtables which isn't flushed because no new
+// data is coming in).
+static future<partition_checksum> checksum_range_shard(database &db,
+        const sstring& keyspace_name, const sstring& cf_name,
+        const ::range<dht::token>& range) {
+    auto& cf = db.find_column_family(keyspace_name, cf_name);
+    return do_with(query::to_partition_range(range), [&cf] (const auto& partition_range) {
+        return do_with(cf.make_reader(partition_range), partition_checksum(),
+            [] (auto& reader, auto& checksum) {
+            return repeat([&reader, &checksum] () {
+                return reader().then([&checksum] (auto mopt) {
+                    if (mopt) {
+                        checksum.add(partition_checksum(*mopt));
+                        return stop_iteration::no;
+                    } else {
+                        return stop_iteration::yes;
+                    }
+                });
+            }).then([&checksum] {
+                return checksum;
+            });
+        });
+    });
+}
+
+// Calculate the checksum of the data held on all shards of a column family,
+// in the given token range.
+// In practice, we only need to consider one or two shards which intersect the
+// given "range". This is because the token ring has nodes*vnodes tokens,
+// dividing the token space into nodes*vnodes ranges, with "range" being one
+// of those. This number is big (vnodes = 256 by default). At the same time,
+// sharding divides the token space into relatively few large ranges, one per
+// thread.
+// Watch out: All parameters to this function are constant references, and the
+// caller must ensure they live as line as the future returned by this
+// function is not resolved.
+future<partition_checksum> checksum_range(seastar::sharded<database> &db,
+        const sstring& keyspace, const sstring& cf,
+        const ::range<dht::token>& range) {
+    unsigned shard_begin = range.start() ?
+            dht::shard_of(range.start()->value()) : 0;
+    unsigned shard_end = range.end() ?
+            dht::shard_of(range.end()->value())+1 : smp::count;
+    return do_with(partition_checksum(), [shard_begin, shard_end, &db, &keyspace, &cf, &range] (auto& result) {
+        return parallel_for_each(boost::counting_iterator<int>(shard_begin),
+                boost::counting_iterator<int>(shard_end),
+                [&db, &keyspace, &cf, &range, &result] (unsigned shard) {
+            return db.invoke_on(shard, [&keyspace, &cf, &range] (database& db) {
+                return checksum_range_shard(db, keyspace, cf, range);
+            }).then([&result] (partition_checksum sum) {
+                result.add(sum);
+            });
+        }).then([&result] {
+            return make_ready_future<partition_checksum>(result);
+        });
+    });
+}
+
+static future<> sync_range(seastar::sharded<database>& db,
+        const sstring& keyspace, const sstring& cf,
+        const ::range<dht::token>& range,
+        std::vector<gms::inet_address>& neighbors) {
+    return do_with(streaming::stream_plan("repair-in"),
+                   streaming::stream_plan("repair-out"),
+            [&db, &keyspace, &cf, &range, &neighbors]
+            (auto& sp_in, auto& sp_out) {
+        for (const auto& peer : neighbors) {
+            sp_in.request_ranges(peer, keyspace, {range}, {cf});
+            sp_out.transfer_ranges(peer, keyspace, {range}, {cf});
         }
-
-        // FIXME: think: if we have several neighbors, perhaps we need to
-        // request ranges from all of them and only later transfer ranges to
-        // all of them? Otherwise, we won't necessarily fully repair the
-        // other ndoes, just this one? What does Cassandra do here?
-        sp->transfer_ranges(peer, keyspace, {range}, cfs);
-        sp->request_ranges(peer, keyspace, {range}, cfs);
+        return sp_in.execute().discard_result().then([&sp_out] {
+                return sp_out.execute().discard_result();
+        }).handle_exception([] (auto ep) {
+            logger.error("repair's stream failed: {}", ep);
+            return make_exception_future(ep);
+        });
+    });
+}
+static void split_and_add(std::vector<::range<dht::token>>& ranges,
+        const range<dht::token>& range,
+        uint64_t estimated_partitions, uint64_t target_partitions) {
+    if (estimated_partitions < target_partitions) {
+        // We're done, the range is small enough to not be split further
+        ranges.push_back(range);
+        return;
     }
-    return sp->execute().discard_result().then([sp, id] {
-        logger.info("repair session #{} successful", id);
-    }).handle_exception([id] (auto ep) {
-        logger.error("repair session #{} stream failed: {}", id, ep);
-        return make_exception_future(std::runtime_error("repair_range failed"));
+    // The use of minimum_token() here twice is not a typo - because wrap-
+    // around token ranges are supported by midpoint(), the beyond-maximum
+    // token can also be represented by minimum_token().
+    auto midpoint = dht::global_partitioner().midpoint(
+            range.start() ? range.start()->value() : dht::minimum_token(),
+            range.end() ? range.end()->value() : dht::minimum_token());
+    auto halves = range.split(midpoint, dht::token_comparator());
+    ranges.push_back(halves.first);
+    ranges.push_back(halves.second);
+}
+
+// Repair a single cf in a single local range.
+// Comparable to RepairJob in Origin.
+static future<> repair_cf_range(seastar::sharded<database>& db,
+        sstring keyspace, sstring cf, ::range<dht::token> range,
+        std::vector<gms::inet_address>& neighbors) {
+    if (neighbors.empty()) {
+        // Nothing to do in this case...
+        return make_ready_future<>();
+    }
+
+    // The partition iterating code inside checksum_range_shard does not
+    // support wrap-around ranges, so we need to break at least wrap-
+    // around ranges.
+    std::vector<::range<dht::token>> ranges;
+    if (range.is_wrap_around(dht::token_comparator())) {
+        auto unwrapped = range.unwrap();
+        ranges.push_back(unwrapped.first);
+        ranges.push_back(unwrapped.second);
+    } else {
+        ranges.push_back(range);
+    }
+    // Additionally, we want to break up large ranges so they will have
+    // (approximately) a desired number of rows each.
+    // FIXME: column_family should have a method to estimate the number of
+    // partitions (and of course it should use cardinality estimation bitmaps,
+    // not trivial sum). We shouldn't have this ugly code here...
+    auto sstables = db.local().find_column_family(keyspace, cf).get_sstables();
+    uint64_t estimated_partitions = 0;
+    for (auto sst : *sstables) {
+        estimated_partitions += sst.second->get_estimated_key_count();
+    }
+    // This node contains replicas of rf * vnodes ranges like this one, so
+    // estimate the number of partitions in just this range:
+    estimated_partitions /= db.local().get_config().num_tokens();
+    estimated_partitions /= db.local().find_keyspace(keyspace).get_replication_strategy().get_replication_factor();
+
+    // FIXME: we should have an on-the-fly iterator generator here, not
+    // fill a vector in advance.
+    std::vector<::range<dht::token>> tosplit;
+    ranges.swap(tosplit);
+    for (const auto& range : tosplit) {
+        // FIXME: this "100" needs to be a parameter.
+        split_and_add(ranges, range, estimated_partitions, 100);
+    }
+
+    // We don't need to wait for one checksum to finish before we start the
+    // next, but doing too many of these operations in parallel also doesn't
+    // make sense, so we limit the number of concurrent ongoing checksum
+    // requests with a semaphore.
+    constexpr int parallelism = 100;
+    return do_with(semaphore(parallelism), true, std::move(keyspace), std::move(cf), std::move(ranges),
+        [&db, &neighbors, parallelism] (auto& sem, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
+        return do_for_each(ranges, [&sem, &success, &db, &neighbors, &keyspace, &cf]
+                           (const auto& range) {
+            return sem.wait(1).then([&sem, &success, &db, &neighbors, &keyspace, &cf, &range] {
+                // Ask this node, and all neighbors, to calculate checksums in
+                // this range. When all are done, compare the results, and if
+                // there are any differences, sync the content of this range.
+                std::vector<future<partition_checksum>> checksums;
+                checksums.reserve(1 + neighbors.size());
+                checksums.push_back(checksum_range(db, keyspace, cf, range));
+                for (auto&& neighbor : neighbors) {
+                    checksums.push_back(
+                            net::get_local_messaging_service().send_repair_checksum_range(
+                                    net::shard_id{neighbor},keyspace, cf, range));
+                }
+                when_all(checksums.begin(), checksums.end()).then(
+                        [&db, &keyspace, &cf, &range, &neighbors, &success]
+                        (std::vector<future<partition_checksum>> checksums) {
+                    for (unsigned i = 0; i < checksums.size(); i++) {
+                        if (checksums[i].failed()) {
+                            logger.warn(
+                                "Checksum of range {} on {} failed: {}",
+                                range,
+                                (i ? neighbors[i-1] :
+                                 utils::fb_utilities::get_broadcast_address()),
+                                checksums[i].get_exception());
+                            success = false;
+                            // Do not break out of the loop here, so we can log
+                            // (and discard) all the exceptions.
+                        }
+                    }
+                    if (!success) {
+                        return make_ready_future<>();
+                    }
+                    auto checksum0 = checksums[0].get();
+                    for (unsigned i = 1; i < checksums.size(); i++) {
+                        if (checksum0 != checksums[i].get()) {
+                            logger.info("Found differing range {}", range);
+                            return sync_range(db, keyspace, cf, range, neighbors);
+                        }
+                    }
+                    return make_ready_future<>();
+                }).handle_exception([&success, &range] (std::exception_ptr eptr) {
+                    // Something above (e.g., sync_range) failed. We could
+                    // stop the repair immediately, or let it continue with
+                    // other ranges (at the moment, we do the latter). But in
+                    // any case, we need to remember that the repair failed to
+                    // tell the caller.
+                    success = false;
+                    logger.warn("Failed sync of range {}: {}", range, eptr);
+                }).finally([&sem] { sem.signal(1); });
+            });
+        }).finally([&sem, &success, parallelism] {
+            return sem.wait(parallelism).then([&success] {
+                return success ? make_ready_future<>() :
+                        make_exception_future<>(std::runtime_error("Checksum or sync of partial range failed"));
+            });
+        });
+    });
+}
+
+// Repair a single local range, multiple column families.
+// Comparable to RepairSession in Origin
+static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
+        ::range<dht::token> range, std::vector<sstring>& cfs,
+        const std::vector<sstring>& data_centers,
+        const std::vector<sstring>& hosts) {
+    auto id = utils::UUID_gen::get_time_UUID();
+    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts), [&db, &cfs, keyspace, id, range] (auto& neighbors) {
+        logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
+        return do_for_each(cfs.begin(), cfs.end(),
+                [&db, keyspace, &neighbors, id, range] (auto&& cf) {
+            return repair_cf_range(db, keyspace, cf, range, neighbors);
+        });
     });
 }
 
@@ -278,11 +555,22 @@ struct repair_options {
     // keyspace. If this list is empty (the default), all the column families
     // in this keyspace are repaired
     std::vector<sstring> column_families;
+    // hosts specifies the list of known good hosts to repair with this host
+    // (note that this host is required to also be on this list). For each
+    // range repaired, only the relevant subset of the hosts (holding a
+    // replica of this range) is used.
+    std::vector<sstring> hosts;
+    // data_centers is used to restrict the repair to the local data center.
+    // The node starting the repair must be in the data center; Issuing a
+    // repair to a data center other than the named one returns an error.
+    std::vector<sstring> data_centers;
 
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
         list_opt(column_families, options, COLUMNFAMILIES_KEY);
+        list_opt(hosts, options, HOSTS_KEY);
+        list_opt(data_centers, options, DATACENTERS_KEY);
         // We currently do not support incremental repair. We could probably
         // ignore this option as it is just an optimization, but for now,
         // let's make it an error.
@@ -395,6 +683,40 @@ private:
     }
 };
 
+// repair_ranges repairs a list of token ranges, each assumed to be a token
+// range for which this node holds a replica, and, importantly, each range
+// is assumed to be a indivisible in the sense that all the tokens in has the
+// same nodes as replicas.
+static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
+        std::vector<query::range<dht::token>> ranges,
+        std::vector<sstring> cfs, int id,
+        std::vector<sstring> data_centers, std::vector<sstring> hosts) {
+    return do_with(std::move(ranges), std::move(keyspace), std::move(cfs),
+            std::move(data_centers), std::move(hosts),
+            [&db, id] (auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
+#if 1
+        // repair all the ranges in parallel
+        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+#else
+        // repair all the ranges in sequence
+        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
+#endif
+            return repair_range(db, keyspace, range, cfs, data_centers, hosts);
+        }).then([id] {
+            logger.info("repair {} completed sucessfully", id);
+            repair_tracker.done(id, true);
+        }).handle_exception([id] (std::exception_ptr eptr) {
+            logger.info("repair {} failed - {}", id, eptr);
+            repair_tracker.done(id, false);
+        });
+    });
+}
+
+// repair_start() can run on any cpu; It runs on cpu0 the function
+// do_repair_start(). The benefit of always running that function on the same
+// CPU is that it allows us to keep some state (like a list of ongoing
+// repairs). It is fine to always do this on one CPU, because the function
+// itself does very little (mainly tell other nodes and CPUs what to do).
 static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options_map) {
 
@@ -454,23 +776,8 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         cfs = list_column_families(db.local(), keyspace);
     }
 
-    do_with(std::move(ranges), [&db, keyspace, cfs, id] (auto& ranges) {
-#if 1
-        // repair all the ranges in parallel
-        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, cfs, id] (auto&& range) {
-#else
-        // repair all the ranges in sequence
-        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, cfs, id] (auto&& range) {
-#endif
-            return repair_range(db, keyspace, range, cfs);
-        }).then([id] {
-            logger.info("repair {} completed sucessfully", id);
-            repair_tracker.done(id, true);
-        }).handle_exception([id] (std::exception_ptr eptr) {
-            logger.info("repair {} failed", id);
-            repair_tracker.done(id, false);
-        });
-    });
+    repair_ranges(db, std::move(keyspace), std::move(ranges), std::move(cfs),
+            id, options.data_centers, options.hosts);
 
     return id;
 }

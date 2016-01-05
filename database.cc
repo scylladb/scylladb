@@ -1798,6 +1798,36 @@ const sstring& database::get_snitch_name() const {
     return _cfg->endpoint_snitch();
 }
 
+// For the filesystem operations, this code will assume that all keyspaces are visible in all shards
+// (as we have been doing for a lot of the other operations, like the snapshot itself).
+future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names) {
+    std::vector<std::reference_wrapper<keyspace>> keyspaces;
+
+    if (keyspace_names.empty()) {
+        // if keyspace names are not given - apply to all existing local keyspaces
+        for (auto& ks: _keyspaces) {
+            keyspaces.push_back(std::reference_wrapper<keyspace>(ks.second));
+        }
+    } else {
+        for (auto& ksname: keyspace_names) {
+            try {
+                keyspaces.push_back(std::reference_wrapper<keyspace>(find_keyspace(ksname)));
+            } catch (no_such_keyspace& e) {
+                return make_exception_future(std::current_exception());
+            }
+        }
+    }
+
+    return parallel_for_each(keyspaces, [this, tag] (auto& ks) {
+        return parallel_for_each(ks.get().metadata()->cf_meta_data(), [this, tag] (auto& pair) {
+            auto& cf = this->find_column_family(pair.second);
+            return cf.clear_snapshot(tag);
+         }).then_wrapped([] (future<> f) {
+            dblog.debug("Cleared out snapshot directories");
+         });
+    });
+}
+
 future<> update_schema_version_and_announce(distributed<service::storage_proxy>& proxy)
 {
     return db::schema_tables::calculate_schema_digest(proxy).then([&proxy] (utils::UUID uuid) {

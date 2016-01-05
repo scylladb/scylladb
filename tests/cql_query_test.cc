@@ -1997,4 +1997,22 @@ SEASTAR_TEST_CASE(test_result_order) {
     });
 }
 
+SEASTAR_TEST_CASE(test_frozen_collections) {
+    return do_with_cql_env([] (auto& e) {
+        auto set_of_ints = set_type_impl::get_instance(int32_type, false);
+        auto list_of_ints = list_type_impl::get_instance(int32_type, false);
+        auto frozen_map_of_set_and_list = map_type_impl::get_instance(set_of_ints, list_of_ints, false);
+        return e.execute_cql("CREATE TABLE tfc (a int, b int, c frozen<map<set<int>, list<int>>> static, d int, PRIMARY KEY (a, b));").discard_result().then([&e] {
+            return e.execute_cql("INSERT INTO tfc (a, b, c, d) VALUES (0, 0, {}, 0);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("SELECT * FROM tfc;");
+        }).then([&e, frozen_map_of_set_and_list] (auto msg) {
+            map_type_impl::mutation_view empty_mv{};
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(0), int32_type->decompose(0), frozen_map_of_set_and_list->to_value(empty_mv, serialization_format::internal()), int32_type->decompose(0) },
+            });
+        });
+    });
+}
+
 
