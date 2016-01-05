@@ -679,22 +679,12 @@ public:
             "truststore : (Default: <system truststore> ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
             "Related information: Node-to-node encryption"  \
     )   \
-    val(client_encryption_options, string_map, /*none*/, Unused,     \
-            "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \
+    val(client_encryption_options, string_map, /*none*/, Used,     \
+            "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and certificate. No custom encryption options are currently enabled. The available options are:\n"    \
             "\n"    \
             "\tenabled : (Default: false ) To enable, set to true.\n"    \
-            "\tkeystore : (Default: conf/.keystore ) The location of a Java keystore (JKS) suitable for use with Java Secure Socket Extension (JSSE), which is the Java version of the Secure Sockets Layer (SSL), and Transport Layer Security (TLS) protocols. The keystore contains the private key used to encrypt outgoing messages.\n"    \
-            "\tkeystore_password : (Default: cassandra ) Password for the keystore. This must match the password used when generating the keystore and truststore.\n"    \
-            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication. (Available starting with Cassandra 1.2.3.)\n"    \
-            "\ttruststore : (Default: conf/.truststore ) Set if require_client_auth is true.\n"    \
-            "\ttruststore_password : <truststore_password> Set if require_client_auth is true.\n"    \
-            "\n"    \
-            "The advanced settings are:\n"    \
-            "\n"    \
-            "\tprotocol : (Default: TLS )\n"    \
-            "\talgorithm : (Default: SunX509 )\n"    \
-            "\tstore_type : (Default: JKS )\n"    \
-            "\tcipher_suites : (Default: TLS_RSA_WITH_AES_128_CBC_SHA , TLS_RSA_WITH_AES_256_CBC_SHA )\n"  \
+            "\tcertificate: (Default: conf/scylla.crt) The location of a PEM-encoded x509 certificate used to identify and encrypt the client/server communication.\n"   \
+            "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"   \
             "Related information: Client-to-node encryption"    \
     )   \
     val(ssl_storage_port, uint32_t, 7001, Unused,     \
