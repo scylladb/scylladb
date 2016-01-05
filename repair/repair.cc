@@ -25,6 +25,7 @@
 #include "streaming/stream_state.hh"
 #include "gms/inet_address.hh"
 #include "db/config.hh"
+#include "service/storage_service.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -71,21 +72,92 @@ void remove_item(Collection& c, T& item) {
 
 // Return all of the neighbors with whom we share the provided range.
 static std::vector<gms::inet_address> get_neighbors(database& db,
-        const sstring& ksname, query::range<dht::token> range
-        //Collection<String> dataCenters, Collection<String> hosts)
-        ) {
+        const sstring& ksname, query::range<dht::token> range,
+        const std::vector<sstring>& data_centers,
+        const std::vector<sstring>& hosts) {
+
     keyspace& ks = db.find_keyspace(ksname);
     auto& rs = ks.get_replication_strategy();
 
     dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = rs.get_natural_endpoints(tok);
     remove_item(ret, utils::fb_utilities::get_broadcast_address());
+
+    if (!data_centers.empty()) {
+        auto dc_endpoints_map = service::get_local_storage_service().get_token_metadata().get_topology().get_datacenter_endpoints();
+        std::unordered_set<gms::inet_address> dc_endpoints;
+        for (const sstring& dc : data_centers) {
+            auto it = dc_endpoints_map.find(dc);
+            if (it == dc_endpoints_map.end()) {
+                std::vector<sstring> dcs;
+                for (const auto& e : dc_endpoints_map) {
+                    dcs.push_back(e.first);
+                }
+                throw std::runtime_error(sprint("Unknown data center '%s'. "
+                        "Known data centers: %s", dc, dcs));
+            }
+            for (const auto& endpoint : it->second) {
+                dc_endpoints.insert(endpoint);
+            }
+        }
+        // The resulting list of nodes is the intersection of the nodes in the
+        // listed data centers, and the (range-dependent) list of neighbors.
+        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        ret.clear();
+        for (const auto& endpoint : dc_endpoints) {
+            if (neighbor_set.count(endpoint)) {
+                ret.push_back(endpoint);
+            }
+        }
+    } else if (!hosts.empty()) {
+        bool found_me = false;
+        std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
+        ret.clear();
+        for (const sstring& host : hosts) {
+            gms::inet_address endpoint;
+            try {
+                endpoint = gms::inet_address(host);
+            } catch(...) {
+                throw std::runtime_error(sprint("Unknown host specified: %s", host));
+            }
+            if (endpoint == utils::fb_utilities::get_broadcast_address()) {
+                found_me = true;
+            } else if (neighbor_set.count(endpoint)) {
+                ret.push_back(endpoint);
+                // If same host is listed twice, don't add it again later
+                neighbor_set.erase(endpoint);
+            }
+            // Nodes which aren't neighbors for this range are ignored.
+            // This allows the user to give a list of "good" nodes, where
+            // for each different range, only the subset of nodes actually
+            // holding a replica of the given range is used. This,
+            // however, means the user is never warned if one of the nodes
+            // on the list isn't even part of the cluster.
+        }
+        // We require, like Cassandra does, that the current host must also
+        // be listed on the "-hosts" option - even those we don't want it in
+        // the returned list:
+        if (!found_me) {
+            throw std::runtime_error("The current host must be part of the repair");
+        }
+        if (ret.size() < 1) {
+            auto me = utils::fb_utilities::get_broadcast_address();
+            auto others = rs.get_natural_endpoints(tok);
+            remove_item(others, me);
+            throw std::runtime_error(sprint("Repair requires at least two "
+                    "endpoints that are neighbors before it can continue, "
+                    "the endpoint used for this repair is %s, other "
+                    "available neighbors are %s but these neighbors were not "
+                    "part of the supplied list of hosts to use during the "
+                    "repair (%s).", me, others, hosts));
+        }
+    }
+
     return ret;
 
 #if 0
-    // Origin's ActiveRepairService.getNeighbors() contains a lot of important
-    // stuff we need to do, like verifying the requested range fits a local
-    // range, and also taking the "datacenters" and "hosts" options.
+    // Origin's ActiveRepairService.getNeighbors() also verifies that the
+    // requested range fits into a local range
         StorageService ss = StorageService.instance;
         Map<Range<Token>, List<InetAddress>> replicaSets = ss.getRangeToAddressMap(keyspaceName);
         Range<Token> rangeSuperSet = null;
@@ -104,55 +176,6 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
         if (rangeSuperSet == null || !replicaSets.containsKey(rangeSuperSet))
             return Collections.emptySet();
 
-        Set<InetAddress> neighbors = new HashSet<>(replicaSets.get(rangeSuperSet));
-        neighbors.remove(FBUtilities.getBroadcastAddress());
-
-        if (dataCenters != null && !dataCenters.isEmpty())
-        {
-            TokenMetadata.Topology topology = ss.getTokenMetadata().cloneOnlyTokenMap().getTopology();
-            Set<InetAddress> dcEndpoints = Sets.newHashSet();
-            Multimap<String,InetAddress> dcEndpointsMap = topology.getDatacenterEndpoints();
-            for (String dc : dataCenters)
-            {
-                Collection<InetAddress> c = dcEndpointsMap.get(dc);
-                if (c != null)
-                   dcEndpoints.addAll(c);
-            }
-            return Sets.intersection(neighbors, dcEndpoints);
-        }
-        else if (hosts != null && !hosts.isEmpty())
-        {
-            Set<InetAddress> specifiedHost = new HashSet<>();
-            for (final String host : hosts)
-            {
-                try
-                {
-                    final InetAddress endpoint = InetAddress.getByName(host.trim());
-                    if (endpoint.equals(FBUtilities.getBroadcastAddress()) || neighbors.contains(endpoint))
-                        specifiedHost.add(endpoint);
-                }
-                catch (UnknownHostException e)
-                {
-                    throw new IllegalArgumentException("Unknown host specified " + host, e);
-                }
-            }
-
-            if (!specifiedHost.contains(FBUtilities.getBroadcastAddress()))
-                throw new IllegalArgumentException("The current host must be part of the repair");
-
-            if (specifiedHost.size() <= 1)
-            {
-                String msg = "Repair requires at least two endpoints that are neighbours before it can continue, the endpoint used for this repair is %s, " +
-                             "other available neighbours are %s but these neighbours were not part of the supplied list of hosts to use during the repair (%s).";
-                throw new IllegalArgumentException(String.format(msg, specifiedHost, neighbors, hosts));
-            }
-
-            specifiedHost.remove(FBUtilities.getBroadcastAddress());
-            return specifiedHost;
-
-        }
-
-        return neighbors;
 #endif
 }
 
@@ -481,9 +504,11 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 static future<> repair_range(seastar::sharded<database>& db, sstring keyspace,
-        ::range<dht::token> range, std::vector<sstring>& cfs) {
+        ::range<dht::token> range, std::vector<sstring>& cfs,
+        const std::vector<sstring>& data_centers,
+        const std::vector<sstring>& hosts) {
     auto id = utils::UUID_gen::get_time_UUID();
-    return do_with(get_neighbors(db.local(), keyspace, range), [&db, &cfs, keyspace, id, range] (auto& neighbors) {
+    return do_with(get_neighbors(db.local(), keyspace, range, data_centers, hosts), [&db, &cfs, keyspace, id, range] (auto& neighbors) {
         logger.info("[repair #{}] new session: will sync {} on range {} for {}.{}", id, neighbors, range, keyspace, cfs);
         return do_for_each(cfs.begin(), cfs.end(),
                 [&db, keyspace, &neighbors, id, range] (auto&& cf) {
@@ -530,11 +555,22 @@ struct repair_options {
     // keyspace. If this list is empty (the default), all the column families
     // in this keyspace are repaired
     std::vector<sstring> column_families;
+    // hosts specifies the list of known good hosts to repair with this host
+    // (note that this host is required to also be on this list). For each
+    // range repaired, only the relevant subset of the hosts (holding a
+    // replica of this range) is used.
+    std::vector<sstring> hosts;
+    // data_centers is used to restrict the repair to the local data center.
+    // The node starting the repair must be in the data center; Issuing a
+    // repair to a data center other than the named one returns an error.
+    std::vector<sstring> data_centers;
 
     repair_options(std::unordered_map<sstring, sstring> options) {
         bool_opt(primary_range, options, PRIMARY_RANGE_KEY);
         ranges_opt(ranges, options, RANGES_KEY);
         list_opt(column_families, options, COLUMNFAMILIES_KEY);
+        list_opt(hosts, options, HOSTS_KEY);
+        list_opt(data_centers, options, DATACENTERS_KEY);
         // We currently do not support incremental repair. We could probably
         // ignore this option as it is just an optimization, but for now,
         // let's make it an error.
@@ -652,17 +688,20 @@ private:
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
-        std::vector<query::range<dht::token>> ranges, std::vector<sstring> cfs, int id) {
+        std::vector<query::range<dht::token>> ranges,
+        std::vector<sstring> cfs, int id,
+        std::vector<sstring> data_centers, std::vector<sstring> hosts) {
     return do_with(std::move(ranges), std::move(keyspace), std::move(cfs),
-            [&db, id] (auto& ranges, auto& keyspace, auto& cfs) {
+            std::move(data_centers), std::move(hosts),
+            [&db, id] (auto& ranges, auto& keyspace, auto& cfs, auto& data_centers, auto& hosts) {
 #if 1
         // repair all the ranges in parallel
-        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, id] (auto&& range) {
+        return parallel_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #else
         // repair all the ranges in sequence
-        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, id] (auto&& range) {
+        return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #endif
-            return repair_range(db, keyspace, range, cfs);
+            return repair_range(db, keyspace, range, cfs, data_centers, hosts);
         }).then([id] {
             logger.info("repair {} completed sucessfully", id);
             repair_tracker.done(id, true);
@@ -737,7 +776,8 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         cfs = list_column_families(db.local(), keyspace);
     }
 
-    repair_ranges(db, std::move(keyspace), std::move(ranges), std::move(cfs), id);
+    repair_ranges(db, std::move(keyspace), std::move(ranges), std::move(cfs),
+            id, options.data_centers, options.hosts);
 
     return id;
 }
