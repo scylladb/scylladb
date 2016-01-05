@@ -300,8 +300,9 @@ query_processor::parse_statement(const sstring_view& query)
 }
 
 query_options query_processor::make_internal_options(
-        ::shared_ptr<statements::parsed_statement::prepared> p,
-        const std::initializer_list<data_value>& values) {
+                ::shared_ptr<statements::parsed_statement::prepared> p,
+                const std::initializer_list<data_value>& values,
+                db::consistency_level cl) {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
     }
@@ -317,13 +318,12 @@ query_options query_processor::make_internal_options(
             bound_values.push_back({n->type->decompose(v)});
         }
     }
-    return query_options(bound_values);
+    return query_options(cl, bound_values);
 }
 
 ::shared_ptr<statements::parsed_statement::prepared> query_processor::prepare_internal(
-        const std::experimental::string_view& query_string) {
-
-    auto& p = _internal_statements[sstring(query_string.begin(), query_string.end())];
+        const sstring& query_string) {
+    auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string)->prepare(_db.local());
         np->statement->validate(_proxy, *_internal_state);
@@ -333,21 +333,53 @@ query_options query_processor::make_internal_options(
 }
 
 future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
-        const std::experimental::string_view& query_string,
+        const sstring& query_string,
         const std::initializer_list<data_value>& values) {
     if (log.is_enabled(logging::log_level::trace)) {
         log.trace("execute_internal: \"{}\" ({})", query_string, ::join(", ", values));
     }
     auto p = prepare_internal(query_string);
+    return execute_internal(p, values);
+}
+
+future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
+        ::shared_ptr<statements::parsed_statement::prepared> p,
+        const std::initializer_list<data_value>& values) {
     auto opts = make_internal_options(p, values);
     return do_with(std::move(opts),
             [this, p = std::move(p)](query_options & opts) {
                 return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
-                        [](::shared_ptr<transport::messages::result_message> msg) {
+                        [p](::shared_ptr<transport::messages::result_message> msg) {
                             return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
                         });
             });
 }
+
+future<::shared_ptr<untyped_result_set>> query_processor::process(
+                const sstring& query_string,
+                db::consistency_level cl, const std::initializer_list<data_value>& values, bool cache)
+{
+    auto p = cache ? prepare_internal(query_string) : parse_statement(query_string)->prepare(_db.local());
+    if (!cache) {
+        p->statement->validate(_proxy, *_internal_state);
+    }
+    return process(p, cl, values);
+}
+
+future<::shared_ptr<untyped_result_set>> query_processor::process(
+                ::shared_ptr<statements::parsed_statement::prepared> p,
+                db::consistency_level cl, const std::initializer_list<data_value>& values)
+{
+    auto opts = make_internal_options(p, values, cl);
+    return do_with(std::move(opts),
+            [this, p = std::move(p)](query_options & opts) {
+                return p->statement->execute(_proxy, *_internal_state, opts).then(
+                        [p](::shared_ptr<transport::messages::result_message> msg) {
+                            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+                        });
+            });
+}
+
 
 future<::shared_ptr<transport::messages::result_message>>
 query_processor::process_batch(::shared_ptr<statements::batch_statement> batch, service::query_state& query_state, query_options& options) {
