@@ -2156,3 +2156,57 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         });
     }).then([s, tmp] {});
 }
+
+SEASTAR_TEST_CASE(sstable_rewrite) {
+    return test_setup::do_with_test_directory([] {
+        auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", utf8_type}}, {}, utf8_type));
+
+        auto mt = make_lw_shared<memtable>(s);
+
+        const column_definition& r1_col = *s->get_column_definition("r1");
+
+        auto key_for_this_shard = token_generation_for_current_shard(1);
+        auto apply_key = [mt, s, &r1_col] (sstring key_to_write) {
+            auto key = partition_key::from_exploded(*s, {to_bytes(key_to_write)});
+            auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1")});
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(bytes("a")));
+            mt->apply(std::move(m));
+        };
+        apply_key(key_for_this_shard[0].first);
+
+        auto sst = make_lw_shared<sstable>("ks", "cf", "tests/sstables/tests-temporary", 51, la, big);
+        return sst->write_components(*mt).then([s, sst] {
+            return reusable_sst("tests/sstables/tests-temporary", 51);
+        }).then([s, key = key_for_this_shard[0].first] (auto sstp) mutable {
+            auto new_tables = make_lw_shared<std::vector<sstables::shared_sstable>>();
+            auto creator = [new_tables] {
+                auto sst = make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary", 52, la, big);
+                sst->set_unshared();
+                new_tables->emplace_back(sst);
+                return sst;
+            };
+            auto cm = make_lw_shared<compaction_manager>();
+            auto cf = make_lw_shared<column_family>(s, column_family::config(), column_family::no_commitlog(), *cm);
+            std::vector<shared_sstable> sstables;
+            sstables.push_back(std::move(sstp));
+
+            return sstables::compact_sstables(std::move(sstables), *cf, creator,
+                    std::numeric_limits<uint64_t>::max(), 0).then([s, key, new_tables] {
+                BOOST_REQUIRE(new_tables->size() == 1);
+                auto newsst = (*new_tables)[0];
+                BOOST_REQUIRE(newsst->generation() == 52);
+                auto reader = make_lw_shared(sstable_reader(newsst, s));
+                return (*reader)().then([s, reader, key] (mutation_opt m) {
+                    BOOST_REQUIRE(m);
+                    auto pkey = partition_key::from_exploded(*s, {to_bytes(key)});
+                    BOOST_REQUIRE(m->key().equal(*s, pkey));
+                    return (*reader)();
+                }).then([reader] (mutation_opt m) {
+                    BOOST_REQUIRE(!m);
+                });
+            }).then([cm, cf] {});
+        }).then([sst, mt, s] {});
+    });
+}
