@@ -31,7 +31,7 @@ if [ "$AMI" = "yes" ]; then
         if [ "$DISKS" != "" ]; then
             /usr/lib/scylla/scylla_raid_setup -d $DISKS
         else
-            echo "WARN: Scylla is not using XFS to store data. Perforamnce will suffer." > /home/fedora/WARN_PLEASE_READ.TXT
+            echo "ERROR: Scylla is not using XFS to store data. The scylla service will refuse to start." > /home/fedora/SCYLLA_SETUP_ERROR.LOG
         fi
 
         /usr/lib/scylla/scylla-ami/ds2_configure.py
