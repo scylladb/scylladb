@@ -577,6 +577,7 @@ void gossiper::run() {
     }).then_wrapped([this] (auto&& f) {
         try {
             f.get();
+            _nr_run++;
             logger.trace("=== Gossip round OK");
         } catch (...) {
             logger.trace("=== Gossip round FAIL");
@@ -1304,6 +1305,7 @@ future<> gossiper::start_gossiping(int generation_nbr, std::map<application_stat
         return locator::i_endpoint_snitch::get_local_snitch_ptr()->gossiper_starting().then([this, &local_state] {
             logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
             _enabled = true;
+            _nr_run = 0;
             _scheduled_gossip_task.arm(INTERVAL);
             return make_ready_future<>();
         });
@@ -1554,6 +1556,44 @@ sstring gossiper::get_gossip_status(const inet_address& endpoint) const {
         return "";
     }
     return get_gossip_status(*ep_state);
+}
+
+future<> gossiper::wait_for_gossip_to_settle() {
+    return seastar::async([this] {
+        auto& cfg = service::get_local_storage_service().db().local().get_config();
+        auto force_after = cfg.skip_wait_for_gossip_to_settle();
+        if (force_after == 0) {
+            return;
+        }
+        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_MIN_WAIT_MS{5000};
+        static constexpr std::chrono::milliseconds GOSSIP_SETTLE_POLL_INTERVAL_MS{1000};
+        static constexpr int32_t GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED = 3;
+        int32_t total_polls = 0;
+        int32_t num_okay = 0;
+        logger.info("Waiting for gossip to settle before accepting client requests...");
+        sleep(GOSSIP_SETTLE_MIN_WAIT_MS).get();
+        while (num_okay < GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
+            sleep(GOSSIP_SETTLE_POLL_INTERVAL_MS).get();
+            total_polls++;
+            // Make sure 5 gossip rounds are completed sucessfully
+            if (_nr_run > 5) {
+                logger.debug("Gossip looks settled. {} gossip round completed: {}", _nr_run);
+                num_okay++;
+            } else {
+                logger.info("Gossip not settled after {} polls.", total_polls);
+                num_okay = 0;
+            }
+            if (force_after > 0 && total_polls > force_after) {
+                logger.warn("Gossip not settled but startup forced by cassandra.skip_wait_for_gossip_to_settle.", total_polls);
+                break;
+            }
+        }
+        if (total_polls > GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED) {
+            logger.info("Gossip settled after {} extra polls; proceeding", total_polls - GOSSIP_SETTLE_POLL_SUCCESSES_REQUIRED);
+        } else {
+            logger.info("No gossip backlog; proceeding");
+        }
+    });
 }
 
 } // namespace gms

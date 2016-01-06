@@ -716,6 +716,7 @@ public:
     val(override_decommission, bool, false, Used, "Set true to force a decommissioned node to join the cluster") \
     val(ring_delay_ms, uint32_t, 30 * 1000, Used, "Time a node waits to hear from other nodes before joining the ring in milliseconds. Same as -Dcassandra.ring_delay_ms in cassandra.") \
     val(developer_mode, bool, false, Used, "Relax environement checks. Setting to true can reduce performance and reliability significantly.") \
+    val(skip_wait_for_gossip_to_settle, int32_t, -1, Used, "An integer to configure the wait for gossip to settle. -1: wait normally, 0: do not wait at all, n: wait for at most n polls. Same as -Dcassandra.skip_wait_for_gossip_to_settle in cassandra.") \
     /* done! */
 
 #define _make_value_member(name, type, deflt, status, desc, ...)    \

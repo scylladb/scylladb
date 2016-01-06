@@ -447,6 +447,8 @@ int main(int ac, char** av) {
                 lb->start_broadcasting();
                 service::get_local_storage_service().set_load_broadcaster(lb);
                 engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
+            }).then([] {
+                return gms::get_local_gossiper().wait_for_gossip_to_settle();
             }).then([start_thrift] () {
                 return service::get_local_storage_service().start_native_transport().then([start_thrift] () {
                     if (start_thrift) {
