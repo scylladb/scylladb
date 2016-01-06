@@ -149,9 +149,10 @@ public:
     virtual void set_local_private_addr(const sstring& addr_str) {};
 
     static distributed<snitch_ptr>& snitch_instance() {
-        static distributed<snitch_ptr> snitch_inst;
+        // FIXME: leaked intentionally to avoid shutdown problems, see #293
+        static distributed<snitch_ptr>* snitch_inst = new distributed<snitch_ptr>();
 
-        return snitch_inst;
+        return *snitch_inst;
     }
 
     static snitch_ptr& get_local_snitch_ptr() {
