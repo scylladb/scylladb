@@ -687,7 +687,7 @@ public:
             "\tkeyfile: (Default: conf/scylla.key) PEM Key file associated with certificate.\n"   \
             "Related information: Client-to-node encryption"    \
     )   \
-    val(ssl_storage_port, uint32_t, 7001, Unused,     \
+    val(ssl_storage_port, uint32_t, 7001, Used,     \
             "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
     )                                                   \
     val(default_log_level, sstring, "warn", Used, \
