@@ -299,10 +299,10 @@ int main(int ac, char** av) {
                 return dns::gethostbyname(api_address);
             }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
                 auto ip = e.addresses[0].in.s_addr;
-                ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
+                return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
                     return set_server(ctx);
                 }).then([api_address, api_port, ip, &ctx] {
-                    ctx.http_server.listen(ipv4_addr{ip, api_port});
+                    return ctx.http_server.listen(ipv4_addr{ip, api_port});
                 }).then([api_address, api_port] {
                     print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
                 });
