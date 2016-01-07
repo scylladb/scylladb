@@ -347,6 +347,7 @@ public:
     future<int> get_current_heart_beat_version(inet_address endpoint);
 
     bool is_gossip_only_member(inet_address endpoint);
+    bool is_safe_for_bootstrap(inet_address endpoint);
 private:
     /**
      * Returns true if the chosen target was also a seed. False otherwise

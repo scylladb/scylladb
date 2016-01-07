@@ -1594,6 +1594,27 @@ future<> gossiper::wait_for_gossip_to_settle() {
             logger.info("No gossip backlog; proceeding");
         }
     });
+
+bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
+    auto eps = get_endpoint_state_for_endpoint(endpoint);
+
+    // if there's no previous state, or the node was previously removed from the cluster, we're good
+    if (!eps || is_dead_state(*eps)) {
+        return true;
+    }
+
+    sstring status = get_gossip_status(*eps);
+
+    logger.debug("is_safe_for_bootstrap: node {} status {}", endpoint, status);
+
+    // these states are not allowed to join the cluster as it would not be safe
+    std::unordered_set<sstring> unsafe_statuses{
+        sstring(""), // failed bootstrap but we did start gossiping
+        sstring(versioned_value::STATUS_NORMAL), // node is legit in the cluster or it was stopped with kill -9
+        sstring(versioned_value::SHUTDOWN) // node was shutdown
+    };
+
+    return !unsafe_statuses.count(status);
 }
 
 } // namespace gms

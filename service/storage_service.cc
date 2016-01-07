@@ -1103,8 +1103,7 @@ future<> storage_service::check_for_endpoint_collision() {
         do {
             gossiper.do_shadow_round().get();
             auto addr = get_broadcast_address();
-            auto eps = gossiper.get_endpoint_state_for_endpoint(addr);
-            if (eps && !gossiper.is_dead_state(*eps) && !gossiper.is_gossip_only_member(addr)) {
+            if (!gossiper.is_safe_for_bootstrap(addr)) {
                 throw std::runtime_error(sprint("A node with address %s already exists, cancelling join. "
                     "Use cassandra.replace_address if you want to replace this node.", addr));
             }
