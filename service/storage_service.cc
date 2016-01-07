@@ -1865,9 +1865,14 @@ sstring storage_service::get_load_string() {
 future<std::map<sstring, double>> storage_service::get_load_map() {
     return run_with_read_api_lock([] (storage_service& ss) {
         std::map<sstring, double> load_map;
-        for (auto& x : ss.get_load_broadcaster()->get_load_info()) {
-            load_map.emplace(sprint("%s", x.first), x.second);
-            logger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
+        auto& lb = ss.get_load_broadcaster();
+        if (lb) {
+            for (auto& x : lb->get_load_info()) {
+                load_map.emplace(sprint("%s", x.first), x.second);
+                logger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
+            }
+        } else {
+            logger.debug("load_broadcaster is not set yet!");
         }
         load_map.emplace(sprint("%s", ss.get_broadcast_address()), ss.get_load());
         return load_map;
