@@ -2663,7 +2663,13 @@ void storage_proxy::init_messaging_service() {
         auto src = net::messaging_service::get_source(cinfo);
         do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
             return service::get_local_migration_manager().merge_schema_from(src, mutations);
-        }).discard_result();
+        }).then_wrapped([src] (auto&& f) {
+            if (f.failed()) {
+                logger.error("Failed to update definitions from {}: {}", src, f.get_exception());
+            } else {
+                logger.debug("Applied definitions update from {}.", src);
+            }
+        });
         return net::messaging_service::no_wait();
     });
     ms.register_migration_request([] () {
