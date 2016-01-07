@@ -304,7 +304,7 @@ int main(int ac, char** av) {
                 }).then([api_address, api_port, ip, &ctx] {
                     ctx.http_server.listen(ipv4_addr{ip, api_port});
                 }).then([api_address, api_port] {
-                    print("Seastar HTTP server listening on %s:%s ...\n", api_address, api_port);
+                    print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
                 });
             }).then([&db] {
                 return init_storage_service(db);
