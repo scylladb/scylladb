@@ -453,7 +453,7 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                 for (auto&& neighbor : neighbors) {
                     checksums.push_back(
                             net::get_local_messaging_service().send_repair_checksum_range(
-                                    net::shard_id{neighbor},keyspace, cf, range));
+                                    net::msg_addr{neighbor},keyspace, cf, range));
                 }
                 when_all(checksums.begin(), checksums.end()).then(
                         [&db, &keyspace, &cf, &range, &neighbors, &success]

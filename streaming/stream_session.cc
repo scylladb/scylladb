@@ -313,7 +313,7 @@ future<> stream_session::initiate() {
     bool is_for_outgoing = true;
     messages::stream_init_message msg(from, session_index(), plan_id(), description(),
             is_for_outgoing, keep_ss_table_level());
-    auto id = shard_id{this->peer, 0};
+    auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND SENDSTREAM_INIT_MESSAGE to {}", plan_id(), id);
     return ms().send_stream_init_message(std::move(id), std::move(msg)).then_wrapped([this, id] (auto&& f) {
         try {
@@ -338,7 +338,7 @@ future<> stream_session::on_initialization_complete() {
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
-    auto id = shard_id{this->peer, this->dst_cpu_id};
+    auto id = msg_addr{this->peer, this->dst_cpu_id};
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
     return ms().send_prepare_message(id, std::move(prepare), plan_id(),
         this->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
@@ -525,7 +525,7 @@ void stream_session::transfer_task_completed(UUID cf_id) {
 }
 
 void stream_session::send_complete_message() {
-    auto id = shard_id{this->peer, this->dst_cpu_id};
+    auto id = msg_addr{this->peer, this->dst_cpu_id};
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
     this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session = shared_from_this(), plan_id] {

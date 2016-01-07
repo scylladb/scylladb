@@ -130,7 +130,7 @@ class stream_session : public gms::i_endpoint_state_change_subscriber, public en
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
-    using shard_id = net::messaging_service::shard_id;
+    using msg_addr = net::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
     using application_state = gms::application_state;

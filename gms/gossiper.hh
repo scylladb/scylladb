@@ -82,17 +82,17 @@ public:
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
-    using shard_id = net::messaging_service::shard_id;
+    using msg_addr = net::messaging_service::msg_addr;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
     void init_messaging_service_handler();
     void uninit_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(shard_id id, gossip_digest_ack ack_msg);
+    future<> handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
-    shard_id get_shard_id(inet_address to) {
-        return shard_id{to, _default_cpuid};
+    msg_addr get_msg_addr(inet_address to) {
+        return msg_addr{to, _default_cpuid};
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<clk> _scheduled_gossip_task;

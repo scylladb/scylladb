@@ -1121,7 +1121,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     auto rmutate = [this, &m, timeout, response_id, my_address] (gms::inet_address coordinator, std::vector<gms::inet_address>&& forward) {
         auto& ms = net::get_local_messaging_service();
         _stats.queued_write_bytes += m.representation().size();
-        return ms.send_mutation(net::messaging_service::shard_id{coordinator, 0}, timeout, m,
+        return ms.send_mutation(net::messaging_service::msg_addr{coordinator, 0}, timeout, m,
                 std::move(forward), my_address, engine().cpu_id(), response_id).finally([this, p = shared_from_this(), msize = m.representation().size()] {
             _stats.queued_write_bytes -= msize;
             unthrottle();
@@ -1660,7 +1660,7 @@ protected:
             return _proxy->query_mutations_locally(cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_mutation_data(net::messaging_service::shard_id{ep, 0}, *cmd, _partition_range).then([this](reconcilable_result&& result) {
+            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, *cmd, _partition_range).then([this](reconcilable_result&& result) {
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
         }
@@ -1670,7 +1670,7 @@ protected:
             return _proxy->query_singular_local(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_data(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
+            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
                 return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
         }
@@ -1680,7 +1680,7 @@ protected:
             return _proxy->query_singular_local_digest(_cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_digest(net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
+            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, *_cmd, _partition_range);
         }
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
@@ -2461,7 +2461,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname) {
     logger.trace("Enqueuing truncate messages to hosts {}", all_endpoints);
 
     return parallel_for_each(all_endpoints, [keyspace, cfname, &ms, timeout](auto ep) {
-        return ms.send_truncate(net::messaging_service::shard_id{ep, 0}, timeout, keyspace, cfname);
+        return ms.send_truncate(net::messaging_service::msg_addr{ep, 0}, timeout, keyspace, cfname);
     }).handle_exception([cfname](auto ep) {
        try {
            std::rethrow_exception(ep);
@@ -2674,7 +2674,7 @@ void storage_proxy::init_messaging_service() {
                     return p->mutate_locally(m);
                 }).then([reply_to, shard, response_id] {
                     auto& ms = net::get_local_messaging_service();
-                    ms.send_mutation_done(net::messaging_service::shard_id{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
+                    ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                     // return void, no need to wait for send to complete
@@ -2684,7 +2684,7 @@ void storage_proxy::init_messaging_service() {
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
                     auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
-                    return ms.send_mutation(net::messaging_service::shard_id{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
                 })

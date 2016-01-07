@@ -793,7 +793,7 @@ void storage_service::on_remove(gms::inet_address endpoint) {
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("endpoint={} on_dead", endpoint);
-    net::get_local_messaging_service().remove_rpc_client(net::shard_id{endpoint, 0});
+    net::get_local_messaging_service().remove_rpc_client(net::msg_addr{endpoint, 0});
     get_storage_service().invoke_on_all([endpoint] (auto&& ss) {
         for (auto&& subscriber : ss._lifecycle_subscribers) {
             try {
@@ -2115,7 +2115,7 @@ future<> storage_service::send_replication_notification(inet_address remote) {
         },
         [done, remote, local] {
             auto& ms = net::get_local_messaging_service();
-            net::shard_id id{remote, 0};
+            net::msg_addr id{remote, 0};
             return ms.send_replication_finished(id, local).then_wrapped([id, done] (auto&& f) {
                 try {
                     f.get();

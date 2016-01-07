@@ -42,11 +42,11 @@ public:
     tester()
        : ms(get_local_messaging_service()) {
     }
-    using shard_id = net::messaging_service::shard_id;
+    using msg_addr = net::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
     using endpoint_state = gms::endpoint_state;
-    shard_id get_shard_id() {
-        return shard_id{_server, _cpuid};
+    msg_addr get_msg_addr() {
+        return msg_addr{_server, _cpuid};
     }
     void set_server_ip(sstring ip) {
         _server = inet_address(ip);
@@ -98,7 +98,7 @@ public:
     future<> test_gossip_digest() {
         print("=== %s ===\n", __func__);
         // Prepare gossip_digest_syn message
-        auto id = get_shard_id();
+        auto id = get_msg_addr();
         auto ep1 = inet_address("1.1.1.1");
         auto ep2 = inet_address("2.2.2.2");
         int32_t gen = 100;
@@ -125,7 +125,7 @@ public:
 
     future<> test_gossip_shutdown() {
         print("=== %s ===\n", __func__);
-        auto id = get_shard_id();
+        auto id = get_msg_addr();
         inet_address from("127.0.0.1");
         return ms.send_gossip_shutdown(id, from).then([] () {
             print("Client sent gossip_shutdown got reply = void\n");
@@ -135,7 +135,7 @@ public:
 
     future<> test_echo() {
         print("=== %s ===\n", __func__);
-        auto id = get_shard_id();
+        auto id = get_msg_addr();
         return ms.send_echo(id).then_wrapped([] (auto&& f) {
             try {
                 f.get();

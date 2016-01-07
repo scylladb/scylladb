@@ -70,14 +70,14 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
 }
 
 void stream_transfer_task::start() {
-    using shard_id = net::messaging_service::shard_id;
+    using msg_addr = net::messaging_service::msg_addr;
     using net::messaging_verb;
     auto plan_id = session->plan_id();
     sslog.debug("[Stream #{}] stream_transfer_task: {} outgoing_file_message to send", plan_id, files.size());
     for (auto it = files.begin(); it != files.end();) {
         auto seq = it->first;
         auto& msg = it->second;
-        auto id = shard_id{session->peer, session->dst_cpu_id};
+        auto id = msg_addr{session->peer, session->dst_cpu_id};
         sslog.debug("[Stream #{}] stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", plan_id, seq, msg.detail.cf_id);
         it++;
         consume(*msg.detail.mr, [&msg, this, seq, id, plan_id] (mutation&& m) {
@@ -148,8 +148,8 @@ void stream_transfer_task::complete(int sequence_number) {
     auto signal_complete = files.empty();
     // all file sent, notify session this task is complete.
     if (signal_complete) {
-        using shard_id = net::messaging_service::shard_id;
-        auto id = shard_id{session->peer, session->dst_cpu_id};
+        using msg_addr = net::messaging_service::msg_addr;
+        auto id = msg_addr{session->peer, session->dst_cpu_id};
         sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", plan_id, id, sequence_number);
         session->ms().send_stream_mutation_done(id, plan_id, std::move(_ranges), this->cf_id, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
             try {

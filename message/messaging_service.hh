@@ -319,14 +319,14 @@ read(serializer s, Input& in, rpc::type<T> type) {
     return s.read(in, type);
 }
 
-struct shard_id {
+struct msg_addr {
     gms::inet_address addr;
     uint32_t cpu_id;
-    friend bool operator==(const shard_id& x, const shard_id& y);
-    friend bool operator<(const shard_id& x, const shard_id& y);
-    friend std::ostream& operator<<(std::ostream& os, const shard_id& x);
+    friend bool operator==(const msg_addr& x, const msg_addr& y);
+    friend bool operator<(const msg_addr& x, const msg_addr& y);
+    friend std::ostream& operator<<(std::ostream& os, const msg_addr& x);
     struct hash {
-        size_t operator()(const shard_id& id) const;
+        size_t operator()(const msg_addr& id) const;
     };
 };
 
@@ -337,10 +337,10 @@ public:
     struct rpc_protocol_server_wrapper;
     struct shard_info;
 
-    using shard_id = net::shard_id;
+    using msg_addr = net::msg_addr;
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
-    using clients_map = std::unordered_map<shard_id, shard_info, shard_id::hash>;
+    using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
 
     // FIXME: messaging service versioning
     static constexpr int32_t current_version = 0;
@@ -351,7 +351,7 @@ public:
         rpc::stats get_stats() const;
     };
 
-    void foreach_client(std::function<void(const shard_id& id, const shard_info& info)> f) const;
+    void foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const;
 
     void increment_dropped_messages(messaging_verb verb);
 
@@ -402,63 +402,63 @@ public:
 
     // Wrapper for STREAM_INIT_MESSAGE verb
     void register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo, streaming::messages::stream_init_message msg)>&& func);
-    future<unsigned> send_stream_init_message(shard_id id, streaming::messages::stream_init_message msg);
+    future<unsigned> send_stream_init_message(msg_addr id, streaming::messages::stream_init_message msg);
 
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
             streaming::messages::prepare_message msg, UUID plan_id,
             unsigned dst_cpu_id)>&& func);
-    future<streaming::messages::prepare_message> send_prepare_message(shard_id id, streaming::messages::prepare_message msg, UUID plan_id,
+    future<streaming::messages::prepare_message> send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
             unsigned dst_cpu_id);
 
     // Wrapper for PREPARE_DONE_MESSAGE verb
     void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
-    future<> send_prepare_done_message(shard_id id, UUID plan_id, unsigned dst_cpu_id);
+    future<> send_prepare_done_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for STREAM_MUTATION verb
     void register_stream_mutation(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation(shard_id id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
+    future<> send_stream_mutation(msg_addr id, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id);
 
     void register_stream_mutation_done(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id)>&& func);
-    future<> send_stream_mutation_done(shard_id id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id);
+    future<> send_stream_mutation_done(msg_addr id, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id);
 
     void register_complete_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
-    future<> send_complete_message(shard_id id, UUID plan_id, unsigned dst_cpu_id);
+    future<> send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for REPAIR_CHECKSUM_RANGE verb
     void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, query::range<dht::token> range)>&& func);
     void unregister_repair_checksum_range();
-    future<partition_checksum> send_repair_checksum_range(shard_id id, sstring keyspace, sstring cf, query::range<dht::token> range);
+    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, query::range<dht::token> range);
 
     // Wrapper for ECHO verb
     void register_echo(std::function<future<> ()>&& func);
     void unregister_echo();
-    future<> send_echo(shard_id id);
+    future<> send_echo(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
     void unregister_gossip_shutdown();
-    future<> send_gossip_shutdown(shard_id id, inet_address from);
+    future<> send_gossip_shutdown(msg_addr id, inet_address from);
 
     // Wrapper for GOSSIP_DIGEST_SYN
     void register_gossip_digest_syn(std::function<future<gms::gossip_digest_ack> (gms::gossip_digest_syn)>&& func);
     void unregister_gossip_digest_syn();
-    future<gms::gossip_digest_ack> send_gossip_digest_syn(shard_id id, gms::gossip_digest_syn msg);
+    future<gms::gossip_digest_ack> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);
     void unregister_gossip_digest_ack2();
-    future<> send_gossip_digest_ack2(shard_id id, gms::gossip_digest_ack2 msg);
+    future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for DEFINITIONS_UPDATE
     void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
     void unregister_definitions_update();
-    future<> send_definitions_update(shard_id id, std::vector<frozen_mutation> fm);
+    future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm);
 
     // Wrapper for MIGRATION_REQUEST
     void register_migration_request(std::function<future<std::vector<frozen_mutation>> ()>&& func);
     void unregister_migration_request();
-    future<std::vector<frozen_mutation>> send_migration_request(shard_id id);
+    future<std::vector<frozen_mutation>> send_migration_request(msg_addr id);
 
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
@@ -466,46 +466,46 @@ public:
     void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation();
-    future<> send_mutation(shard_id id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
+    future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id);
 
     // Wrapper for MUTATION_DONE
     void register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation_done();
-    future<> send_mutation_done(shard_id id, unsigned shard, response_id_type response_id);
+    future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id);
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
     void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_data();
-    future<query::result> send_read_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
+    future<query::result> send_read_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_mutation_data();
-    future<reconcilable_result> send_read_mutation_data(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
+    future<reconcilable_result> send_read_mutation_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_DIGEST
     void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_digest();
-    future<query::result_digest> send_read_digest(shard_id id, const query::read_command& cmd, const query::partition_range& pr);
+    future<query::result_digest> send_read_digest(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for TRUNCATE
     void register_truncate(std::function<future<>(sstring, sstring)>&& func);
     void unregister_truncate();
-    future<> send_truncate(shard_id, std::chrono::milliseconds, sstring, sstring);
+    future<> send_truncate(msg_addr, std::chrono::milliseconds, sstring, sstring);
 
     // Wrapper for REPLICATION_FINISHED verb
     void register_replication_finished(std::function<future<> (inet_address from)>&& func);
     void unregister_replication_finished();
-    future<> send_replication_finished(shard_id id, inet_address from);
+    future<> send_replication_finished(msg_addr id, inet_address from);
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 public:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
-    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, shard_id id);
-    void remove_rpc_client_one(clients_map& clients, shard_id id, bool dead_only);
-    void remove_error_rpc_client(messaging_verb verb, shard_id id);
-    void remove_rpc_client(shard_id id);
+    shared_ptr<rpc_protocol_client_wrapper> get_rpc_client(messaging_verb verb, msg_addr id);
+    void remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only);
+    void remove_error_rpc_client(messaging_verb verb, msg_addr id);
+    void remove_rpc_client(msg_addr id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
 };
 

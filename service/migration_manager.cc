@@ -504,7 +504,7 @@ future<> migration_manager::announce(std::vector<mutation> mutations, bool annou
 
 future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema)
 {
-    net::messaging_service::shard_id id{endpoint, 0};
+    net::messaging_service::msg_addr id{endpoint, 0};
     auto fm = std::vector<frozen_mutation>(schema.begin(), schema.end());
     return net::get_local_messaging_service().send_definitions_update(id, std::move(fm));
 }

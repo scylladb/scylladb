@@ -187,7 +187,7 @@ future<gossip_digest_ack> gossiper::handle_syn_msg(gossip_digest_syn syn_msg) {
     return make_ready_future<gossip_digest_ack>(std::move(ack_msg));
 }
 
-future<> gossiper::handle_ack_msg(shard_id id, gossip_digest_ack ack_msg) {
+future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     this->set_last_processed_message_at();
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
         return make_ready_future<>();
@@ -295,7 +295,7 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
     std::uniform_int_distribution<int> dist(0, size - 1);
     int index = dist(_random);
     inet_address to = __live_endpoints[index];
-    auto id = get_shard_id(to);
+    auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
     return ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
         try {
@@ -1046,7 +1046,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     // }
 
     local_state.mark_dead();
-    shard_id id = get_shard_id(addr);
+    msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
     ms().send_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
@@ -1322,7 +1322,7 @@ future<> gossiper::do_shadow_round() {
             for (inet_address seed : _seeds) {
                 std::vector<gossip_digest> digests;
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), digests);
-                auto id = get_shard_id(seed);
+                auto id = get_msg_addr(seed);
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
                 ms().send_gossip_digest_syn(id, std::move(message)).then_wrapped([this, id] (auto&& f) {
                     try {
@@ -1418,7 +1418,7 @@ future<> gossiper::do_stop_gossiping() {
             logger.info("Announcing shutdown");
             add_local_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true)).get();
             for (inet_address addr : _live_endpoints) {
-                shard_id id = get_shard_id(addr);
+                msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
                 ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
                     try {

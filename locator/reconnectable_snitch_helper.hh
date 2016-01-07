@@ -79,7 +79,7 @@ private:
             net::get_messaging_service().invoke_on_all([public_address, local_address] (auto& local_ms) {
                 local_ms.cache_preferred_ip(public_address, local_address);
 
-                net::shard_id id = {
+                net::msg_addr id = {
                     .addr = public_address
                 };
                 local_ms.remove_rpc_client(id);

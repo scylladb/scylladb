@@ -56,7 +56,7 @@ future<> migration_task::run_may_throw(distributed<service::storage_proxy>& prox
         logger.error("Can't send migration request: node {} is down.", endpoint);
         return make_ready_future<>();
     }
-    net::messaging_service::shard_id id{endpoint, 0};
+    net::messaging_service::msg_addr id{endpoint, 0};
     auto& ms = net::get_local_messaging_service();
     return ms.send_migration_request(std::move(id)).then([&proxy](const std::vector<frozen_mutation>& mutations) {
         try {
