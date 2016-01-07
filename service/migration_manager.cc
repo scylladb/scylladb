@@ -511,27 +511,21 @@ future<> migration_manager::push_schema_mutation(const gms::inet_address& endpoi
 
 // Returns a future on the local application of the schema
 future<> migration_manager::announce(std::vector<mutation> schema) {
-    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()] (auto&& schema) {
-        return parallel_for_each(live_members.begin(), live_members.end(), [&schema] (auto& endpoint) {
+    auto f = db::schema_tables::merge_schema(get_storage_proxy(), schema);
+
+    return do_with(std::move(schema), [live_members = gms::get_local_gossiper().get_live_members()](auto && schema) {
+        return parallel_for_each(live_members.begin(), live_members.end(), [&schema](auto& endpoint) {
             // only push schema to nodes with known and equal versions
             if (endpoint != utils::fb_utilities::get_broadcast_address() &&
-                    net::get_local_messaging_service().knows_version(endpoint) &&
-                    net::get_local_messaging_service().get_raw_version(endpoint) == net::messaging_service::current_version) {
+                net::get_local_messaging_service().knows_version(endpoint) &&
+                net::get_local_messaging_service().get_raw_version(endpoint) ==
+                net::messaging_service::current_version) {
                 return push_schema_mutation(endpoint, schema);
             } else {
                 return make_ready_future<>();
             }
-        }).then_wrapped([] (future<> f) {
-            try {
-                f.get();
-            } catch (...) {
-                return make_exception_future<>(std::current_exception());
-            }
-            return make_ready_future<>();
-        }).then([&schema] {
-            return db::schema_tables::merge_schema(get_storage_proxy(), std::move(schema));
         });
-    });
+    }).then([f = std::move(f)] () mutable { return std::move(f); });
 }
 
 /**
