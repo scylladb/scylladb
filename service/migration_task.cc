@@ -45,6 +45,7 @@
 #include "gms/failure_detector.hh"
 #include "db/schema_tables.hh"
 #include "frozen_mutation.hh"
+#include "migration_manager.hh"
 
 namespace service {
 
@@ -57,19 +58,12 @@ future<> migration_task::run_may_throw(distributed<service::storage_proxy>& prox
         return make_ready_future<>();
     }
     net::messaging_service::msg_addr id{endpoint, 0};
-    auto& ms = net::get_local_messaging_service();
-    return ms.send_migration_request(std::move(id)).then([&proxy](const std::vector<frozen_mutation>& mutations) {
+    return service::get_local_migration_manager().merge_schema_from(id).handle_exception([](std::exception_ptr e) {
         try {
-            std::vector<mutation> schema;
-            for (auto& m : mutations) {
-                schema_ptr s = proxy.local().get_db().local().find_schema(m.column_family_id());
-                schema.emplace_back(m.unfreeze(s));
-            }
-            return db::schema_tables::merge_schema(proxy, std::move(schema));
+            std::rethrow_exception(e);
         } catch (const exceptions::configuration_exception& e) {
             logger.error("Configuration exception merging remote schema: {}", e.what());
         }
-        return make_ready_future<>();
     });
 }
 
