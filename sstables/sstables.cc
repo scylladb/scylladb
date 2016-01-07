@@ -1755,7 +1755,6 @@ sstable::get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring 
 
 void sstable::mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     auto sst = sstable(ks, cf, dir, generation, v, f);
-    sstlog.info("sstable {} not relevant for this shard, ignoring", sst.get_filename());
     sst.mark_for_deletion();
 }
 

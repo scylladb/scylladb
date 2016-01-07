@@ -468,6 +468,9 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     return std::move(fut).then([this, sstdir = std::move(sstdir), comps] (range<partition_key> r) {
         // Checks whether or not sstable belongs to current shard.
         if (!belongs_to_current_shard(*_schema, std::move(r))) {
+            dblog.debug("sstable {} not relevant for this shard, ignoring",
+                    sstables::sstable::filename(sstdir, _schema->ks_name(), _schema->cf_name(), comps.version, comps.generation, comps.format,
+                            sstables::sstable::component_type::Data));
             sstable::mark_sstable_for_deletion(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
             return make_ready_future<>();
         }
@@ -945,7 +948,7 @@ future<> column_family::populate(sstring sstdir) {
                     sstables::sstable::format_types format = descriptor->format.value();
 
                     if (engine().cpu_id() != 0) {
-                        dblog.info("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
+                        dblog.debug("At directory: {}, partial SSTable with generation {} not relevant for this shard, ignoring", sstdir, v.first);
                         return make_ready_future<>();
                     }
                     // shard 0 is the responsible for removing a partial sstable.
