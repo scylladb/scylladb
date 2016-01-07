@@ -1594,6 +1594,7 @@ future<> gossiper::wait_for_gossip_to_settle() {
             logger.info("No gossip backlog; proceeding");
         }
     });
+}
 
 bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     auto eps = get_endpoint_state_for_endpoint(endpoint);
