@@ -703,8 +703,8 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                 auto& ks = db.find_keyspace(s->ks_name());
                 auto cfg = ks.make_column_family_config(*s);
                 db.add_column_family(s, cfg);
-                service::get_local_migration_manager().notify_create_column_family(s);
                 ks.make_directory_for_column_family(s->cf_name(), s->id());
+                service::get_local_migration_manager().notify_create_column_family(s);
             }
             for (auto&& gs : altered) {
                 update_column_family(db, gs.get());
