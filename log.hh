@@ -62,7 +62,7 @@ class registry;
 
 class logger {
     sstring _name;
-    std::atomic<log_level> _level = { log_level::warn };
+    std::atomic<log_level> _level = { log_level::info };
     static std::atomic<bool> _stdout;
     static std::atomic<bool> _syslog;
 private:
