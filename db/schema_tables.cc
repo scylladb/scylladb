@@ -608,15 +608,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
            for (auto&& keyspace_to_drop : keyspaces_to_drop) {
                db.drop_keyspace(keyspace_to_drop);
-           }
-           // FIXME: clean this up by reorganizing the code
-           // Send CQL events only once, not once per shard.
-           if (engine().cpu_id() == 0) {
-               return do_for_each(keyspaces_to_drop, [] (auto& ks_name) {
-                   return service::migration_manager::notify_drop_keyspace(ks_name);
-               });
-           } else {
-               return make_ready_future<>();
+               service::get_local_migration_manager().notify_drop_keyspace(keyspace_to_drop);
            }
        }).get0();
    });
@@ -654,27 +646,16 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     }
     return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
         return proxy.local().get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
-            return do_for_each(created, [&db] (auto&& val) {
+            return do_for_each(created, [&db](auto&& val) {
                 auto ksm = create_keyspace_from_schema_partition(val);
-                return db.create_keyspace(std::move(ksm));
+                return db.create_keyspace(ksm).then([ksm] {
+                    service::get_local_migration_manager().notify_create_keyspace(ksm);
+                });
             }).then([&altered, &db] () mutable {
                 for (auto&& name : altered) {
                     db.update_keyspace(name);
                 }
-
-                return make_ready_future<>();
             });
-        }).then([&created] {
-            // FIXME: clean this up by reorganizing the code
-            // Send CQL events only once, not once per shard.
-            if (engine().cpu_id() == 0) {
-                return do_for_each(created, [] (auto&& partition) {
-                    auto ksm = create_keyspace_from_schema_partition(partition);
-                    return service::migration_manager::notify_create_keyspace(ksm);
-                });
-            } else {
-                return make_ready_future<>();
-            }
         });
     }).then([dropped = std::move(dropped)] () {
         return make_ready_future<std::set<sstring>>(dropped);
@@ -710,6 +691,8 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                 auto& ks = db.find_keyspace(s->ks_name());
                 auto cfg = ks.make_column_family_config(*s);
                 db.add_column_family(s, cfg);
+                service::get_local_migration_manager().notify_create_column_family(s);
+                ks.make_directory_for_column_family(s->cf_name(), s->id());
             }
             for (auto&& gs : altered) {
                 // FIXME: Send out notifications
@@ -718,22 +701,10 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
             }
             parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db](auto&& gs) {
                 schema_ptr s = gs.get();
-                return db.drop_column_family(changed_at, s->ks_name(), s->cf_name());
+                return db.drop_column_family(changed_at, s->ks_name(), s->cf_name()).then([s] {
+                    service::get_local_migration_manager().notify_drop_column_family(s);
+                });
             }).get();
-            // FIXME: clean this up by reorganizing the code
-            // Send CQL events only once, not once per shard.
-            if (engine().cpu_id() == 0) {
-                for (auto&& gs : created) {
-                    schema_ptr s = gs.get();
-                    service::migration_manager::notify_create_column_family(s).get0();
-                    auto& ks = db.find_keyspace(s->ks_name());
-                    ks.make_directory_for_column_family(s->cf_name(), s->id());
-                }
-                for (auto&& gs : dropped) {
-                    schema_ptr s = gs.get();
-                    service::migration_manager::notify_drop_column_family(std::move(s)).get0();
-                }
-            }
         });
     }).get();
 }

@@ -197,30 +197,29 @@ bool migration_manager::should_pull_schema_from(const gms::inet_address& endpoin
             && !gms::get_local_gossiper().is_gossip_only_member(endpoint);
 }
 
-future<> migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
+void migration_manager::notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
 {
-    return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        auto&& name = ksm->name();
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_create_keyspace(name);
             } catch (...) {
                 logger.warn("Create keyspace notification failed {}: {}", name, std::current_exception());
             }
         }
-    });
 }
 
-future<> migration_manager::notify_create_column_family(schema_ptr cfm)
+void migration_manager::notify_create_column_family(const schema_ptr& cfm)
 {
-    return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        auto&& ks_name = cfm->ks_name();
+        auto&& cf_name = cfm->cf_name();
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_create_column_family(ks_name, cf_name);
             } catch (...) {
                 logger.warn("Create column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
         }
-    });
 }
 
 #if 0
@@ -243,30 +242,29 @@ public void notifyCreateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
+void migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm)
 {
-    return get_migration_manager().invoke_on_all([name = ksm->name()] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        auto&& name = ksm->name();
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_update_keyspace(name);
             } catch (...) {
                 logger.warn("Update keyspace notification failed {}: {}", name, std::current_exception());
             }
         }
-    });
 }
 
-future<> migration_manager::notify_update_column_family(schema_ptr cfm)
+void migration_manager::notify_update_column_family(const schema_ptr& cfm)
 {
-    return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        auto&& ks_name = cfm->ks_name();
+        auto&& cf_name = cfm->cf_name();
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_update_column_family(ks_name, cf_name);
             } catch (...) {
                 logger.warn("Update column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
         }
-    });
 }
 
 #if 0
@@ -289,30 +287,28 @@ public void notifyUpdateAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::notify_drop_keyspace(sstring ks_name)
+void migration_manager::notify_drop_keyspace(const sstring& ks_name)
 {
-    return get_migration_manager().invoke_on_all([ks_name] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_drop_keyspace(ks_name);
             } catch (...) {
                 logger.warn("Drop keyspace notification failed {}: {}", ks_name, std::current_exception());
             }
         }
-    });
 }
 
-future<> migration_manager::notify_drop_column_family(schema_ptr cfm)
+void migration_manager::notify_drop_column_family(const schema_ptr& cfm)
 {
-    return get_migration_manager().invoke_on_all([ks_name = cfm->ks_name(), cf_name = cfm->cf_name()] (auto&& mm) {
-        for (auto&& listener : mm._listeners) {
+        auto&& cf_name = cfm->cf_name();
+        auto&& ks_name = cfm->ks_name();
+        for (auto&& listener : _listeners) {
             try {
                 listener->on_drop_column_family(ks_name, cf_name);
             } catch (...) {
                 logger.warn("Drop column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
         }
-    });
 }
 
 #if 0
