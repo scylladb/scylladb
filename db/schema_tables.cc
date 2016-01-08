@@ -695,9 +695,9 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                 ks.make_directory_for_column_family(s->cf_name(), s->id());
             }
             for (auto&& gs : altered) {
-                // FIXME: Send out notifications
                 schema_ptr s = gs.get();
                 db.update_column_family(s).get();
+                service::get_local_migration_manager().notify_update_column_family(s);
             }
             parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db](auto&& gs) {
                 schema_ptr s = gs.get();
