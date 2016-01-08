@@ -896,3 +896,7 @@ schema::position(const column_definition& column) const {
 bool schema::is_synced() const {
     return _registry_entry && _registry_entry->is_synced();
 }
+
+bool schema::equal_columns(const schema& other) const {
+    return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
+}

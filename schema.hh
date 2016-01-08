@@ -589,6 +589,7 @@ public:
     // into current node's schema, so that current node's schema is at least as
     // recent as this version.
     bool is_synced() const;
+    bool equal_columns(const schema&) const;
 };
 
 bool operator==(const schema&, const schema&);
