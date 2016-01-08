@@ -36,8 +36,20 @@
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "frozen_schema.hh"
+#include "serializer_impl.hh"
 
 namespace net {
+
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_ack
+read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
+    return ser::deserialize(in, type);
+}
 
 static logging::logger logger("messaging_service");
 
