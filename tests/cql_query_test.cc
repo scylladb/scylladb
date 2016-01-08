@@ -2091,3 +2091,13 @@ SEASTAR_TEST_CASE(test_alter_table) {
         });
     });
 }
+SEASTAR_TEST_CASE(test_drop_table) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&e] {
+            e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
+            e.execute_cql("drop columnfamily tmp;").get();
+            e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
+            e.execute_cql("drop columnfamily tmp;").get();
+        });
+    });
+}
