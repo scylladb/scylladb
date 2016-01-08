@@ -227,7 +227,7 @@ public:
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
-    schema_ptr schema() const { return _schema; }
+    const schema_ptr& schema() const { return _schema; }
     void set_schema(schema_ptr);
     db::commitlog* commitlog() { return _commitlog; }
     future<const_mutation_partition_ptr> find_partition(schema_ptr, const dht::decorated_key& key) const;
