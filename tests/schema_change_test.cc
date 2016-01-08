@@ -23,6 +23,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
+#include <seastar/util/defer.hh>
 
 #include "tests/cql_test_env.hh"
 #include "tests/mutation_source_test.hh"
@@ -103,6 +104,83 @@ SEASTAR_TEST_CASE(test_column_is_dropped) {
             BOOST_REQUIRE(s->all_columns().count(to_bytes("c1")));
             BOOST_REQUIRE(!s->all_columns().count(to_bytes("c2")));
             BOOST_REQUIRE(s->all_columns().count(to_bytes("s1")));
+        });
+    });
+}
+
+class counting_migration_listener : public service::migration_listener {
+public:
+    int create_keyspace_count = 0;
+    int create_column_family_count = 0;
+    int create_user_type_count = 0;
+    int create_function_count = 0;
+    int create_aggregate_count = 0;
+    int update_keyspace_count = 0;
+    int update_column_family_count = 0;
+    int columns_changed_count = 0;
+    int update_user_type_count = 0;
+    int update_function_count = 0;
+    int update_aggregate_count = 0;
+    int drop_keyspace_count = 0;
+    int drop_column_family_count = 0;
+    int drop_user_type_count = 0;
+    int drop_function_count = 0;
+    int drop_aggregate_count = 0;
+public:
+    virtual void on_create_keyspace(const sstring&) override { ++create_keyspace_count; }
+    virtual void on_create_column_family(const sstring&, const sstring&) override { ++create_column_family_count; }
+    virtual void on_create_user_type(const sstring&, const sstring&) override { ++create_user_type_count; }
+    virtual void on_create_function(const sstring&, const sstring&) override { ++create_function_count; }
+    virtual void on_create_aggregate(const sstring&, const sstring&) override { ++create_aggregate_count; }
+    virtual void on_update_keyspace(const sstring&) override { ++update_keyspace_count; }
+    virtual void on_update_column_family(const sstring&, const sstring&, bool columns_changed) override {
+        ++update_column_family_count;
+        columns_changed_count += int(columns_changed);
+    }
+    virtual void on_update_user_type(const sstring&, const sstring&) override { ++update_user_type_count; }
+    virtual void on_update_function(const sstring&, const sstring&) override { ++update_function_count; }
+    virtual void on_update_aggregate(const sstring&, const sstring&) override { ++update_aggregate_count; }
+    virtual void on_drop_keyspace(const sstring&) override { ++drop_keyspace_count; }
+    virtual void on_drop_column_family(const sstring&, const sstring&) override { ++drop_column_family_count; }
+    virtual void on_drop_user_type(const sstring&, const sstring&) override { ++drop_user_type_count; }
+    virtual void on_drop_function(const sstring&, const sstring&) override { ++drop_function_count; }
+    virtual void on_drop_aggregate(const sstring&, const sstring&) override { ++drop_aggregate_count; }
+};
+
+SEASTAR_TEST_CASE(test_notifications) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            counting_migration_listener listener;
+            service::get_local_migration_manager().register_listener(&listener);
+            auto listener_lease = defer([&listener] { service::get_local_migration_manager().register_listener(&listener); });
+
+            e.execute_cql("create keyspace tests with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").get();
+
+            BOOST_REQUIRE_EQUAL(listener.create_keyspace_count, 1);
+
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
+
+            BOOST_REQUIRE_EQUAL(listener.create_column_family_count, 1);
+            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 0);
+
+            e.execute_cql("alter table tests.table1 drop c2;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 1);
+            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 1);
+
+            e.execute_cql("alter table tests.table1 add s1 int;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 2);
+            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 2);
+
+            e.execute_cql("alter table tests.table1 alter s1 type blob;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_column_family_count, 3);
+            BOOST_REQUIRE_EQUAL(listener.columns_changed_count, 3);
+
+            e.execute_cql("drop table tests.table1;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.drop_column_family_count, 1);
         });
     });
 }
