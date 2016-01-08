@@ -81,7 +81,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
     auto cd = schema->get_column_definition(target->column->name());
 
     if (cd == nullptr) {
-        throw exceptions::invalid_request_exception(sprint("No column definition found for column %s", target->column->name()));
+        throw exceptions::invalid_request_exception(sprint("No column definition found for column %s", target->column->text()));
     }
 
     bool is_map = dynamic_cast<const collection_type_impl *>(cd->type.get()) != nullptr
