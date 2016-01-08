@@ -81,7 +81,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
     auto cd = schema->get_column_definition(target->column->name());
 
     if (cd == nullptr) {
-        throw exceptions::invalid_request_exception(sprint("No column definition found for column %s", target->column->text()));
+        throw exceptions::invalid_request_exception(sprint("No column definition found for column %s", *target->column));
     }
 
     bool is_map = dynamic_cast<const collection_type_impl *>(cd->type.get()) != nullptr
@@ -93,7 +93,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
             throw exceptions::invalid_request_exception(
                     sprint("Cannot create index on %s of frozen<map> column %s",
                             index_target::index_option(target->type),
-                            target->column->name()));
+                            *target->column));
         }
     } else {
         // validateNotFullIndex
@@ -107,7 +107,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
                     sprint(
                             "Cannot create index on %s of column %s; only non-frozen collections support %s indexes",
                             index_target::index_option(target->type),
-                            target->column->name(),
+                            *target->column,
                             index_target::index_option(target->type)));
         }
         // validateTargetColumnIsMapIfIndexInvolvesKeys
@@ -118,7 +118,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
                         sprint(
                                 "Cannot create index on %s of column %s with non-map type",
                                 index_target::index_option(target->type),
-                                target->column->name()));
+                                *target->column));
 
             }
         }
@@ -132,9 +132,9 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
                             "Cannot create index on %s(%s): an index on %s(%s) already exists and indexing "
                                     "a map on more than one dimension at the same time is not currently supported",
                             index_target::index_option(target->type),
-                            target->column->name(),
+                            *target->column,
                             index_target::index_option(prev_type),
-                            target->column->name()));
+                            *target->column));
         }
         if (_if_not_exists) {
             return;
