@@ -37,6 +37,9 @@ public:
     inet_address(int32_t ip)
         : _addr(uint32_t(ip)) {
     }
+    explicit inet_address(uint32_t ip)
+        : _addr(ip) {
+    }
     inet_address(net::ipv4_address&& addr) : _addr(std::move(addr)) {}
 
     const net::ipv4_address& addr() const {
