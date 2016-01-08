@@ -444,9 +444,7 @@ void query_processor::migration_subscriber::remove_invalid_prepared_statements(s
         }
     }
     for (auto& id : invalid) {
-        get_query_processor().invoke_on_all([id] (auto& qp) {
-            qp.invalidate_prepared_statement(id);
-        });
+        _qp->invalidate_prepared_statement(id);
     }
 }
 
