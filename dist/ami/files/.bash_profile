@@ -35,6 +35,7 @@ if [ "`systemctl is-active scylla-server`" = "active" ]; then
 	tput bold
 	echo "    ScyllaDB is active."
 	tput sgr0
+	echo
 else
 	tput setaf 1
 	tput bold
@@ -42,4 +43,5 @@ else
 	tput sgr0
 	echo "Please wait for startup. To see status of ScyllaDB, run "
 	echo " 'systemctl status scylla-server'"
+	echo
 fi
