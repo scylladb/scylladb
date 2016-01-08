@@ -156,7 +156,9 @@ public:
         std::vector<bytes_opt> values) override
     {
         auto prepared = _qp->local().get_prepared(id);
-        assert(bool(prepared));
+        if (!prepared) {
+            throw not_prepared_exception(id);
+        }
         auto stmt = prepared->statement;
         assert(stmt->get_bound_terms() == values.size());
 

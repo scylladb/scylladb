@@ -40,6 +40,11 @@ namespace cql3 {
     class query_processor;
 }
 
+class not_prepared_exception : public std::runtime_error {
+public:
+    not_prepared_exception(const bytes& id) : std::runtime_error(sprint("Not prepared: %s", id)) {}
+};
+
 class cql_test_env {
 public:
     virtual ~cql_test_env() {};
