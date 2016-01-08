@@ -662,6 +662,18 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     });
 }
 
+static void update_column_family(database& db, schema_ptr new_schema) {
+    column_family& cfm = db.find_column_family(new_schema->id());
+
+    bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
+
+    auto s = local_schema_registry().learn(new_schema);
+    s->registry_entry()->mark_synced();
+    cfm.set_schema(std::move(s));
+
+    service::get_local_migration_manager().notify_update_column_family(cfm.schema(), columns_changed);
+}
+
 // see the comments for merge_keyspaces()
 static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
@@ -695,9 +707,7 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                 ks.make_directory_for_column_family(s->cf_name(), s->id());
             }
             for (auto&& gs : altered) {
-                schema_ptr s = gs.get();
-                db.update_column_family(s).get();
-                service::get_local_migration_manager().notify_update_column_family(s);
+                update_column_family(db, gs.get());
             }
             parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db](auto&& gs) {
                 schema_ptr s = gs.get();

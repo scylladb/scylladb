@@ -1213,14 +1213,6 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-future<> database::update_column_family(schema_ptr new_schema) {
-    column_family& old_cfm = find_column_family(new_schema->id());
-    auto s = local_schema_registry().learn(new_schema);
-    s->registry_entry()->mark_synced();
-    old_cfm.set_schema(std::move(s));
-    return make_ready_future<>();
-}
-
 future<> database::drop_column_family(db_clock::time_point dropped_at, const sstring& ks_name, const sstring& cf_name) {
     auto uuid = find_uuid(ks_name, cf_name);
     auto& ks = find_keyspace(ks_name);

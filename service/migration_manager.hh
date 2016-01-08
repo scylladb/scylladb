@@ -82,7 +82,7 @@ public:
     void notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     void notify_create_column_family(const schema_ptr& cfm);
     void notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    void notify_update_column_family(const schema_ptr& cfm);
+    void notify_update_column_family(const schema_ptr& cfm, bool columns_changed);
     void notify_drop_keyspace(const sstring& ks_name);
     void notify_drop_column_family(const schema_ptr& cfm);
 

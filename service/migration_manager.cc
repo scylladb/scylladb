@@ -254,13 +254,13 @@ void migration_manager::notify_update_keyspace(const lw_shared_ptr<keyspace_meta
         }
 }
 
-void migration_manager::notify_update_column_family(const schema_ptr& cfm)
+void migration_manager::notify_update_column_family(const schema_ptr& cfm, bool columns_changed)
 {
         auto&& ks_name = cfm->ks_name();
         auto&& cf_name = cfm->cf_name();
         for (auto&& listener : _listeners) {
             try {
-                listener->on_update_column_family(ks_name, cf_name);
+                listener->on_update_column_family(ks_name, cf_name, columns_changed);
             } catch (...) {
                 logger.warn("Update column family notification failed {}.{}: {}", ks_name, cf_name, std::current_exception());
             }
