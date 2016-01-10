@@ -50,6 +50,9 @@ def apply_tristate(var, test, note, missing):
             return False
     return False
 
+def have_pkg(package):
+    return subprocess.call(['pkg-config', package]) == 0
+
 def pkg_config(option, package):
     output = subprocess.check_output(['pkg-config', option, package])
     return output.decode('utf-8').strip()
@@ -530,6 +533,17 @@ else:
     args.pie = ''
     args.fpie = ''
 
+optional_packages = []
+pkgs = []
+
+for pkg in optional_packages:
+    if have_pkg(pkg):
+        pkgs.append(pkg)
+        upkg = pkg.upper().replace('-', '_')
+        defines.append('HAVE_{}=1'.format(upkg))
+    else:
+        print('Missing optional package {pkg}'.format(**locals()))
+
 defines = ' '.join(['-D' + d for d in defines])
 
 globals().update(vars(args))
@@ -592,6 +606,9 @@ seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_re
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
 libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
+for pkg in pkgs:
+    args.user_cflags += ' ' + pkg_config('--cflags', pkg)
+    libs += ' ' + pkg_config('--libs', pkg)
 user_cflags = args.user_cflags
 user_ldflags = args.user_ldflags
 if args.staticcxx:
