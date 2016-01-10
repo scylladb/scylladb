@@ -1,5 +1,22 @@
 #!/bin/sh -e
 
+print_usage() {
+    echo "build_rpm.sh -R"
+    echo "  -R  rebuild dependency packages (CentOS)"
+    exit 1
+}
+REBUILD=0
+while getopts Rh OPT; do
+    case "$OPT" in
+        "R")
+            REBUILD=1
+            ;;
+        "h")
+            print_usage
+            ;;
+    esac
+done
+
 RPMBUILD=`pwd`/build/rpmbuild
 
 if [ ! -e dist/redhat/build_rpm.sh ]; then

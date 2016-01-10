@@ -8,9 +8,10 @@
       "security_group_id": "{{user `security_group_id`}}",
       "region": "{{user `region`}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "ami-a51564c0",
+      "source_ami": "ami-61bbf104",
+      "user_data_file": "user_data.txt",
       "instance_type": "{{user `instance_type`}}",
-      "ssh_username": "fedora",
+      "ssh_username": "centos",
       "ssh_timeout": "5m",
       "ami_name": "scylla_{{isotime | clean_ami_name}}"
     }
@@ -19,37 +20,37 @@
     {
       "type": "file",
       "source": "files/scylla-ami",
-      "destination": "/home/fedora/scylla-ami"
+      "destination": "/home/centos/scylla-ami"
     },
     {
       "type": "file",
       "source": "files/.bash_profile",
-      "destination": "/home/fedora/.bash_profile"
+      "destination": "/home/centos/.bash_profile"
     },
     {
       "type": "file",
       "source": "../../scripts/scylla_install",
-      "destination": "/home/fedora/scylla_install"
+      "destination": "/home/centos/scylla_install"
     },
     {
       "type": "file",
       "source": "scylla-server.x86_64.rpm",
-      "destination": "/home/fedora/scylla-server.x86_64.rpm"
+      "destination": "/home/centos/scylla-server.x86_64.rpm"
     },
     {
       "type": "file",
       "source": "scylla-jmx.noarch.rpm",
-      "destination": "/home/fedora/scylla-jmx.noarch.rpm"
+      "destination": "/home/centos/scylla-jmx.noarch.rpm"
     },
     {
       "type": "file",
       "source": "scylla-tools.noarch.rpm",
-      "destination": "/home/fedora/scylla-tools.noarch.rpm"
+      "destination": "/home/centos/scylla-tools.noarch.rpm"
     },
     {
       "type": "shell",
       "inline": [
-          "sudo sh -x -e /home/fedora/scylla_install -a -l /home/fedora"
+          "sudo sh -x -e /home/centos/scylla_install -a -l /home/centos"
       ]
     }
   ],

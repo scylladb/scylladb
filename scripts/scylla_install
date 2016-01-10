@@ -61,15 +61,17 @@ else
     setenforce 0
     sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
     mv /tmp/selinux /etc/sysconfig/
+    if [ "$ID" = "fedora" ]; then
+        curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
+    elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
+        curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
+	yum install -y epel-release
+    else
+        echo "Unsupported distribution"
+        exit 1
+    fi
+
     if [ "$LOCAL_PKG" = "" ]; then
-        if [ "$ID" = "fedora" ]; then
-            curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
-        elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
-            curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
-        else
-            echo "Unsupported distribution"
-            exit 1
-        fi
         yum install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
     else
         yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
@@ -83,7 +85,7 @@ else
         fi
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
-        mv /home/fedora/scylla-ami /usr/lib/scylla/scylla-ami
+        mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
         chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
     fi
     systemctl enable scylla-server.service

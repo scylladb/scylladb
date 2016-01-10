@@ -8,7 +8,7 @@ fi
 sudo yum -y install git
 if [ ! -f dist/ami/scylla-server.x86_64.rpm ]; then
     dist/redhat/build_rpm.sh
-    cp build/rpms/scylla-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/scylla-server.x86_64.rpm
+    cp build/rpmbuild/RPMS/x86_64/scylla-server-`cat build/SCYLLA-VERSION-FILE`-`cat build/SCYLLA-RELEASE-FILE`.*.x86_64.rpm dist/ami/scylla-server.x86_64.rpm
 fi
 if [ ! -f dist/ami/scylla-jmx.noarch.rpm ]; then
     cd build
@@ -16,7 +16,7 @@ if [ ! -f dist/ami/scylla-jmx.noarch.rpm ]; then
     cd scylla-jmx
     sh -x -e dist/redhat/build_rpm.sh
     cd ../..
-    cp build/scylla-jmx/build/rpms/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/scylla-jmx.noarch.rpm
+    cp build/scylla-jmx/build/rpmbuild/RPMS/x86_64/scylla-jmx-`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/scylla-jmx.noarch.rpm
 fi
 if [ ! -f dist/ami/scylla-tools.noarch.rpm ]; then
     cd build
@@ -24,7 +24,7 @@ if [ ! -f dist/ami/scylla-tools.noarch.rpm ]; then
     cd scylla-tools-java
     sh -x -e dist/redhat/build_rpm.sh
     cd ../..
-    cp build/scylla-tools-java/build/rpms/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/scylla-tools.noarch.rpm
+    cp build/scylla-tools-java/build/rpmbuild/RPMS/x86_64/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/scylla-tools.noarch.rpm
 fi
 
 exec dist/ami/build_ami.sh scylla_local.json
