@@ -37,6 +37,8 @@
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return seastar::async([] {
         distributed<database> db;
+        utils::fb_utilities::set_broadcast_address(gms::inet_address("127.0.0.1"));
+        locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
         service::get_pending_range_calculator_service().start(std::ref(db));
         service::get_storage_service().start(std::ref(db)).get();
         db.start().get();
@@ -50,5 +52,6 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         db.stop().get();
         service::get_storage_service().stop().get();
         service::get_pending_range_calculator_service().stop().get();
+        locator::i_endpoint_snitch::stop_snitch().get();
     });
 }
