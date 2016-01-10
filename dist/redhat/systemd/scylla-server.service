@@ -15,6 +15,7 @@ ExecStopPost=/usr/lib/scylla/scylla_stop
 TimeoutStartSec=900
 KillMode=process
 Restart=no
+User=scylla
 
 [Install]
 WantedBy=multi-user.target

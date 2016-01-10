@@ -11,4 +11,4 @@ elif [ "$NETWORK_MODE" = "dpdk" ]; then
 fi
 
 export HOME=/var/lib/scylla
-exec sudo -E -u $USER /usr/bin/scylla $args
+exec /usr/bin/scylla $args
