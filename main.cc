@@ -48,7 +48,20 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 
+#ifdef HAVE_LIBSYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
+
 logging::logger startlog("init");
+
+void
+supervisor_notify(sstring msg, bool ready = false) {
+    startlog.trace("{}", msg);
+#ifdef HAVE_LIBSYSTEMD
+    auto ready_msg = ready ? "READY=1\n" : "";
+    sd_notify(0, sprint("%sSTATUS=%s\n", ready_msg, msg).c_str());
+#endif
+}
 
 namespace bpo = boost::program_options;
 
@@ -292,12 +305,15 @@ int main(int ac, char** av) {
             }
 
             using namespace locator;
+            supervisor_notify("creating snitch");
             return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             }).then([api_address] {
+                supervisor_notify("determining DNS name");
                 return dns::gethostbyname(api_address);
             }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                supervisor_notify("starting API server");
                 auto ip = e.addresses[0].in.s_addr;
                 return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
                     return set_server(ctx);
@@ -307,8 +323,10 @@ int main(int ac, char** av) {
                     print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
                 });
             }).then([&db] {
+                supervisor_notify("initializing storage service");
                 return init_storage_service(db);
             }).then([&db, cfg] {
+                supervisor_notify("starting per-shard database core");
                 // Note: changed from using a move here, because we want the config object intact.
                 return db.start(std::ref(*cfg)).then([&db] {
                     engine().at_exit([&db] {
@@ -324,6 +342,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([cfg, listen_address] {
+                supervisor_notify("starting gossip");
                 // Moved local parameters here, esp since with the
                 // ssl stuff it gets to be a lot.
                 uint16_t storage_port = cfg->storage_port();
@@ -349,8 +368,10 @@ int main(int ac, char** av) {
                                 , cluster_name
                                 , phi);
             }).then([&db] {
+                supervisor_notify("starting streaming service");
                 return streaming::stream_session::init_streaming_service(db);
             }).then([&db] {
+                supervisor_notify("starting messaging service");
                 // Start handling REPAIR_CHECKSUM_RANGE messages
                 return net::get_messaging_service().invoke_on_all([&db] (auto& ms) {
                     ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range) {
@@ -361,30 +382,37 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([&proxy, &db] {
+                supervisor_notify("starting storage proxy");
                 return proxy.start(std::ref(db)).then([&proxy] {
                     // #293 - do not stop anything
                     // engine().at_exit([&proxy] { return proxy.stop(); });
                 });
             }).then([&mm] {
+                supervisor_notify("starting migration manager");
                 return mm.start().then([&mm] {
                     // #293 - do not stop anything
                     // engine().at_exit([&mm] { return mm.stop(); });
                 });
             }).then([&db, &proxy, &qp] {
+                supervisor_notify("starting query processor");
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     // #293 - do not stop anything
                     // engine().at_exit([&qp] { return qp.stop(); });
                 });
             }).then([&qp] {
+                supervisor_notify("initializing batchlog manager");
                 return db::get_batchlog_manager().start(std::ref(qp)).then([] {
                     // #293 - do not stop anything
                     // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
                 });
             }).then([&db, &dirs] {
+                supervisor_notify("creating data directories");
                 return dirs.touch_and_lock(db.local().get_config().data_file_directories());
             }).then([&db, &dirs] {
+                supervisor_notify("creating commitlog directory");
                 return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
             }).then([&db] {
+                supervisor_notify("verifying data and commitlog directories");
                 std::unordered_set<sstring> directories;
                 directories.insert(db.local().get_config().data_file_directories().cbegin(),
                         db.local().get_config().data_file_directories().cend());
@@ -395,6 +423,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([&db] {
+                supervisor_notify("loading sstables");
                 return db.invoke_on_all([] (database& db) {
                     return db.init_system_keyspace();
                 }).then([&db] {
@@ -405,12 +434,15 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([&db, &proxy] {
+                supervisor_notify("loading sstables");
                 return db.invoke_on_all([&proxy] (database& db) {
                     return db.load_sstables(proxy);
                 });
             }).then([&db, &qp] {
+                supervisor_notify("setting up system keyspace");
                 return db::system_keyspace::setup(db, qp);
             }).then([&db, &qp] {
+                supervisor_notify("starting commit log");
                 auto cl = db.local().commitlog();
                 if (cl == nullptr) {
                     return make_ready_future<>();
@@ -419,28 +451,34 @@ int main(int ac, char** av) {
                     if (paths.empty()) {
                         return make_ready_future<>();
                     }
+                    supervisor_notify("replaying commit log");
                     return db::commitlog_replayer::create_replayer(qp).then([paths](auto rp) {
                         return do_with(std::move(rp), [paths = std::move(paths)](auto& rp) {
                             return rp.recover(paths);
                         });
                     }).then([&db] {
+                        supervisor_notify("replaying commit log - flushing memtables");
                         return db.invoke_on_all([] (database& db) {
                             return db.flush_all_memtables();
                         });
                     }).then([paths] {
+                        supervisor_notify("replaying commit log - removing old commitlog segments");
                         for (auto& path : paths) {
                             ::unlink(path.c_str());
                         }
                     });
                 });
             }).then([] {
+                supervisor_notify("starting storage service");
                 auto& ss = service::get_local_storage_service();
                 return ss.init_server();
             }).then([] {
+                supervisor_notify("starting batchlog manager");
                 return db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
                     return b.start();
                 });
             }).then([&db] {
+                supervisor_notify("starting load broadcaster");
                 // should be unique_ptr, but then lambda passed to at_exit will be non copieable and
                 // casting to std::function<> will fail to compile
                 auto lb = make_shared<service::load_broadcaster>(db, gms::get_local_gossiper());
@@ -450,6 +488,7 @@ int main(int ac, char** av) {
             }).then([] {
                 return gms::get_local_gossiper().wait_for_gossip_to_settle();
             }).then([start_thrift] () {
+                supervisor_notify("starting native transport");
                 return service::get_local_storage_service().start_native_transport().then([start_thrift] () {
                     if (start_thrift) {
                         return service::get_local_storage_service().start_rpc_server();
@@ -457,6 +496,8 @@ int main(int ac, char** av) {
                     return make_ready_future<>();
                 });
             });
+        }).then([] {
+            supervisor_notify("serving", true);
         }).or_terminate();
     });
 }

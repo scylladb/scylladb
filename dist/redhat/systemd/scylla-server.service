@@ -3,7 +3,7 @@ Description=Scylla Server
 After=network.target libvirtd.service
 
 [Service]
-Type=simple
+Type=notify
 LimitMEMLOCK=infinity
 LimitNOFILE=200000
 LimitAS=infinity

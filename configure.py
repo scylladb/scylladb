@@ -533,7 +533,7 @@ else:
     args.pie = ''
     args.fpie = ''
 
-optional_packages = []
+optional_packages = ['libsystemd']
 pkgs = []
 
 for pkg in optional_packages:
