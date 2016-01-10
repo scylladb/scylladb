@@ -39,7 +39,11 @@ if [ ! -f /usr/bin/git ]; then
 fi
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 if [ "$ID" = "centos" ]; then
-    ./dist/redhat/centos_dep/build_dependency.sh
+    if [ $REBUILD = 1 ]; then
+        ./dist/redhat/centos_dep/build_dependency.sh
+    else
+        sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo -o /etc/yum.repos.d/scylla.repo
+    fi
 fi
 VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
@@ -54,7 +58,7 @@ if [ "$ID" = "fedora" ]; then
     rpmbuild -bs --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
     mock rebuild --resultdir=`pwd`/build/rpms $RPMBUILD/SRPMS/scylla-server-$VERSION*.src.rpm
 else
-    . /etc/profile.d/scylla.sh
     sudo yum-builddep -y  $RPMBUILD/SPECS/scylla-server.spec
+    . /etc/profile.d/scylla.sh
     rpmbuild -ba --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
 fi
