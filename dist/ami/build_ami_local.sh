@@ -5,6 +5,7 @@ if [ ! -e dist/ami/build_ami_local.sh ]; then
     exit 1
 fi
 
+rm -rf build/*
 sudo yum -y install git
 if [ ! -f dist/ami/files/scylla-server.x86_64.rpm ]; then
     dist/redhat/build_rpm.sh
