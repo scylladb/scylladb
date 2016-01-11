@@ -8,29 +8,14 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla-install -d /dev/hda,/dev/hdb... -n eth0 -a -l /home/scylla/rpms"
-    echo "  -d  specify disks for RAID"
-    echo "  -n  specify NIC"
-    echo "  -a  setup AMI instance"
+    echo "scylla_install_pkg -l /home/scylla/rpms"
     echo "  -l	install locally built .rpm/.deb on specified directory"
     exit 1
 }
 
-NIC=eth0
-RAID=/dev/md0
-AMI=0
 LOCAL_PKG=
-while getopts d:n:al:h OPT; do
+while getopts l:h OPT; do
     case "$OPT" in
-        "n")
-            NIC=$OPTARG
-            ;;
-        "d")
-            DISKS=$OPTARG
-            ;;
-        "a")
-            AMI=1
-            ;;
         "l")
             LOCAL_PKG=$OPTARG
             ;;
@@ -40,12 +25,6 @@ while getopts d:n:al:h OPT; do
     esac
 done
 
-if [ $AMI -eq 0 ] && [ "$DISKS" = "" ]; then
-    print_usage
-    exit 1
-fi
-
-SYSCONFIG_SETUP_ARGS="-n $NIC"
 . /etc/os-release
 
 if [ "$ID" = "ubuntu" ]; then
@@ -58,9 +37,6 @@ if [ "$ID" = "ubuntu" ]; then
         gdebi $LOCAL_PKG/scylla-server*.deb $LOCAL_PKG/scylla-jmx*.deb $LOCAL_PKG/scylla-tools*.deb
     fi
 else
-    setenforce 0
-    sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
-    mv /tmp/selinux /etc/sysconfig/
     if [ "$ID" = "fedora" ]; then
         curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
     elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
@@ -76,27 +52,4 @@ else
     else
         yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
     fi
-    if [ $AMI -eq 1 ]; then
-        SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -N -a"
-        if [ "$LOCAL_PKG" = "" ]; then
-            yum update -y
-        else
-            SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
-        fi
-        grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
-        mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
-        mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
-        chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
-    fi
-    systemctl enable scylla-server.service
-    systemctl enable scylla-jmx.service
-    /usr/lib/scylla/scylla_ntp_setup -a
 fi
-/usr/lib/scylla/scylla_coredump_setup
-if [ $AMI -eq 0 ]; then
-    /usr/lib/scylla/scylla_bootparam_setup
-    /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
-else
-    /usr/lib/scylla/scylla_bootparam_setup -a
-fi
-/usr/lib/scylla/scylla_sysconfig_setup $SYSCONFIG_SETUP_ARGS

@@ -143,6 +143,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_run
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_save_coredump
+%{_prefix}/lib/scylla/scylla_setup
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup

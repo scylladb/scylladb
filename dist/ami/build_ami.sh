@@ -11,7 +11,6 @@ print_usage() {
     exit 1
 }
 LOCALRPM=0
-AMI_CMD="sudo sh -x -e /home/centos/scylla_install -a"
 while getopts lh OPT; do
     case "$OPT" in
         "l")
@@ -22,10 +21,6 @@ while getopts lh OPT; do
             ;;
     esac
 done
-
-if [ $LOCALRPM = 1 ]; then
-    AMI_CMD="$AMI_CMD -l /home/centos"
-fi
 
 cd dist/ami
 
@@ -42,6 +37,12 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-echo $AMI_CMD > scylla_deploy.sh
+if [ $LOCALRPM = 0 ]; then
+    echo "sudo sh -x -e /home/centos/scylla_install_pkg; sudo sh -x -e /usr/lib/scylla/scylla_setup -a" > scylla_deploy.sh
+else
+    echo "sudo sh -x -e /home/centos/scylla_install_pkg -l /home/centos; sudo sh -x -e /usr/lib/scylla/scylla_setup -a" > scylla_deploy.sh
+
+fi
+
 chmod a+rx scylla_deploy.sh
 packer/packer build -var-file=variables.json scylla.json

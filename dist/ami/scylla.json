@@ -24,8 +24,8 @@
     },
     {
       "type": "file",
-      "source": "../../scripts/scylla_install",
-      "destination": "/home/centos/scylla_install"
+      "source": "../../scripts/scylla_install_pkg",
+      "destination": "/home/centos/scylla_install_pkg"
     },
     {
       "type": "shell",
