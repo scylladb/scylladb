@@ -314,10 +314,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
         if (_encrypt_what == encrypt_what::dc) {
             return snitch_ptr->get_datacenter(id.addr)
-                            == snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
+                            != snitch_ptr->get_datacenter(utils::fb_utilities::get_broadcast_address());
         }
         return snitch_ptr->get_rack(id.addr)
-                        == snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address());
+                        != snitch_ptr->get_rack(utils::fb_utilities::get_broadcast_address());
     }();
 
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
