@@ -44,9 +44,7 @@ if [ "$ID" != "ubuntu" ]; then
     mv /tmp/selinux /etc/sysconfig/
     if [ $AMI -eq 1 ]; then
         SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -N -a"
-        if [ "$LOCAL_PKG" = "" ]; then
-            yum update -y
-        else
+        if [ "$LOCAL_PKG" != "" ]; then
             SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
         fi
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
