@@ -1350,6 +1350,17 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
         }
         future<> read_entry() {
             static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
+
+            /**
+             * #598 - Must check that data left in chunk is enough to even read an entry.
+             * If not, this is small slack space in the chunk end, and we should just go
+             * to the next.
+             */
+            assert(pos <= next);
+            if ((pos + entry_header_size) >= next) {
+                return skip(next - pos);
+            }
+
             return fin.read_exactly(entry_header_size).then([this](temporary_buffer<char> buf) {
                 replay_position rp(id, position_type(pos));
 
