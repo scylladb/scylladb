@@ -2125,9 +2125,17 @@ storage_proxy::query(schema_ptr s,
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, ::join(", ", partition_ranges), query_id);
+        try {
+            logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, ::join(", ", partition_ranges), query_id);
+        } catch (...) {
+            logger.trace("{}", std::current_exception());
+        }
         return do_query(s, cmd, std::move(partition_ranges), cl).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
-            logger.trace("query_result id={}, {}", query_id, res->pretty_print(s, cmd->slice));
+            try {
+                logger.trace("query_result id={}, {}", query_id, res->pretty_print(s, cmd->slice));
+            } catch (...) {
+                logger.trace("{}", std::current_exception());
+            }
             return std::move(res);
         });
     }
