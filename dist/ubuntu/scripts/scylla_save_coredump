@@ -7,4 +7,4 @@ TIME=`date --date @$2 +%F-%T`
 PID=$3
 
 mkdir -p /var/lib/scylla/coredump
-/usr/bin/gzip -c > /var/lib/scylla/coredump/core.$FILE-$TIME-$PID.gz
+cat - > /var/lib/scylla/coredump/core.$FILE-$TIME-$PID

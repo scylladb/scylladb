@@ -57,14 +57,17 @@ if [ "$ID" != "ubuntu" ]; then
     systemctl enable scylla-server.service
     systemctl enable scylla-jmx.service
 fi
-/usr/lib/scylla/scylla_coredump_setup
 if [ $AMI -eq 0 ]; then
     /usr/lib/scylla/scylla_ntp_setup
     /usr/lib/scylla/scylla_bootparam_setup
     if [ $DISKS != "" ]; then
         /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+        /usr/lib/scylla/scylla_coredump_setup -s
+    else
+        /usr/lib/scylla/scylla_coredump_setup
     fi
 else
+    /usr/lib/scylla/scylla_coredump_setup -s
     /usr/lib/scylla/scylla_ntp_setup -a
     /usr/lib/scylla/scylla_bootparam_setup -a
 fi

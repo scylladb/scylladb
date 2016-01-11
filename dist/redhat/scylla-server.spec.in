@@ -35,7 +35,6 @@ ninja-build -j2
 %install
 rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT%{_bindir}
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysctl.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -43,7 +42,6 @@ mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 
-install -m644 dist/common/sysctl.d/99-scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/sysctl.d/
 install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
@@ -128,7 +126,6 @@ rm -rf $RPM_BUILD_ROOT
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
-%{_sysconfdir}/sysctl.d/99-scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
@@ -142,7 +139,6 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_run
 %{_prefix}/lib/scylla/scylla_stop
-%{_prefix}/lib/scylla/scylla_save_coredump
 %{_prefix}/lib/scylla/scylla_setup
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
