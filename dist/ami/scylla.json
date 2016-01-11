@@ -19,13 +19,8 @@
   "provisioners": [
     {
       "type": "file",
-      "source": "files/scylla-ami",
-      "destination": "/home/centos/scylla-ami"
-    },
-    {
-      "type": "file",
-      "source": "files/.bash_profile",
-      "destination": "/home/centos/.bash_profile"
+      "source": "files/",
+      "destination": "/home/centos/"
     },
     {
       "type": "file",
@@ -34,9 +29,7 @@
     },
     {
       "type": "shell",
-      "inline": [
-          "sudo sh -x -e /home/centos/scylla_install -a"
-      ]
+      "script": "scylla_deploy.sh"
     }
   ],
   "variables": {
