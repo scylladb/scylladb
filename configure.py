@@ -224,6 +224,8 @@ arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_t
 			help = 'Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
                         help = 'Enable(1)/disable(0)compiler debug information generation for tests')
+arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
+                        help = 'Python3 path')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -569,7 +571,7 @@ elif args.dpdk_target:
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
 
-status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
+status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
 if status != 0:
     print('Seastar configuration failed')
@@ -765,7 +767,7 @@ with open(buildfile, 'w') as f:
     f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
-          command = python3 configure.py $configure_args
+          command = {python} configure.py $configure_args
           generator = 1
         build build.ninja: configure | configure.py
         rule cscope

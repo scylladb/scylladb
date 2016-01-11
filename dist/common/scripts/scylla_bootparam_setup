@@ -2,47 +2,23 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
-print_usage() {
-    echo "scylla_bootparam_setup -a"
-    echo "  -a  AMI instance mode"
-    exit 1
-}
-
-AMI=0
-while getopts a OPT; do
-    case "$OPT" in
-        "a")
-            AMI=1
-            ;;
-        "h")
-            print_usage
-            ;;
-    esac
-done
-
 . /etc/os-release
 
-if [ $AMI -eq 1 ]; then
-    . /etc/sysconfig/scylla-server
-    sed -e "s#append #append clocksource=tsc tsc=reliable hugepagesz=2M hugepages=$NR_HUGEPAGES #" /boot/extlinux/extlinux.conf > /tmp/extlinux.conf
-    mv /tmp/extlinux.conf /boot/extlinux/extlinux.conf
-else
-    . /etc/sysconfig/scylla-server
-    if [ ! -f /etc/default/grub ]; then
-        echo "Unsupported bootloader"
-        exit 1
-    fi
-    if [ "`grep hugepagesz /etc/default/grub`" != "" ] || [ "`grep hugepages /etc/default/grub`" != "" ]; then
-        sed -e "s#hugepagesz=2M ##" /etc/default/grub > /tmp/grub
-        mv /tmp/grub /etc/default/grub
-        sed -e "s#hugepages=[0-9]* ##" /etc/default/grub > /tmp/grub
-        mv /tmp/grub /etc/default/grub
-    fi
-    sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+. /etc/sysconfig/scylla-server
+if [ ! -f /etc/default/grub ]; then
+    echo "Unsupported bootloader"
+    exit 1
+fi
+if [ "`grep hugepagesz /etc/default/grub`" != "" ] || [ "`grep hugepages /etc/default/grub`" != "" ]; then
+    sed -e "s#hugepagesz=2M ##" /etc/default/grub > /tmp/grub
     mv /tmp/grub /etc/default/grub
-    if [ "$ID" = "ubuntu" ]; then
-        grub2-mkconfig -o /boot/grub/grub.cfg
-    else
-        grub2-mkconfig -o /boot/grub2/grub.cfg
-    fi
+    sed -e "s#hugepages=[0-9]* ##" /etc/default/grub > /tmp/grub
+    mv /tmp/grub /etc/default/grub
+fi
+sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+mv /tmp/grub /etc/default/grub
+if [ "$ID" = "ubuntu" ]; then
+    grub2-mkconfig -o /boot/grub/grub.cfg
+else
+    grub2-mkconfig -o /boot/grub2/grub.cfg
 fi

@@ -5,3 +5,6 @@ build
 build.ninja
 cscope.*
 /debian/
+dist/ami/files/*.rpm
+dist/ami/variables.json
+dist/ami/scylla_deploy.sh
