@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include "md5_hasher.hh"
 
 #include "core/sstring.hh"
 #include "core/do_with.hh"
@@ -43,6 +44,7 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_reader_assertions.hh"
 #include "tests/result_set_assertions.hh"
+#include "mutation_source_test.hh"
 
 using namespace std::chrono_literals;
 
@@ -53,9 +55,9 @@ static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(0, std::move(value));
 };
 
-static mutation_partition get_partition(const memtable& mt, const partition_key& key) {
+static mutation_partition get_partition(memtable& mt, const partition_key& key) {
     auto dk = dht::global_partitioner().decorate_key(*mt.schema(), key);
-    auto reader = mt.make_reader(query::partition_range::make_singular(dk));
+    auto reader = mt.make_reader(mt.schema(), query::partition_range::make_singular(dk));
     auto mo = reader().get0();
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
@@ -294,7 +296,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
                 insert_row(1003, 2003)).discard_result().then([s, &r1_col, &cf, key] {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-                return cf.find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
+                return cf.find_row(cf.schema(), dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
                     BOOST_REQUIRE(i);
@@ -351,13 +353,13 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner1 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner2 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader(query::full_partition_range));
+            auto assert_that_scanner3 = assert_that(cf.make_reader(s, query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
             assert_that_scanner1.produces(mutations[1]);
@@ -430,7 +432,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         }
 
         return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
-            return cf.for_all_partitions_slow([&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+            return cf.for_all_partitions_slow(s, [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
@@ -748,8 +750,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
             my_set_type->serialize_mutation_form(mset3));
 
         mutation m12(partition_key::from_single_value(*s, "key1"), s);
-        m12.partition().apply(*s, m1.partition());
-        m12.partition().apply(*s, m2.partition());
+        m12.apply(m1);
+        m12.apply(m2);
 
         auto m2_1 = m2.partition().difference(s, m1.partition());
         BOOST_REQUIRE_EQUAL(m2_1.partition_tombstone(), tombstone());
@@ -763,8 +765,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(3));
 
         mutation m12_1(partition_key::from_single_value(*s, "key1"), s);
-        m12_1.partition().apply(*s, m1.partition());
-        m12_1.partition().apply(*s, m2_1);
+        m12_1.apply(m1);
+        m12_1.partition().apply(*s, m2_1, *s);
         BOOST_REQUIRE_EQUAL(m12, m12_1);
 
         auto m1_2 = m1.partition().difference(s, m2.partition());
@@ -780,8 +782,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE(cm.cells.front().first == int32_type->decompose(2));
 
         mutation m12_2(partition_key::from_single_value(*s, "key1"), s);
-        m12_2.partition().apply(*s, m2.partition());
-        m12_2.partition().apply(*s, m1_2);
+        m12_2.apply(m2);
+        m12_2.partition().apply(*s, m1_2, *s);
         BOOST_REQUIRE_EQUAL(m12, m12_2);
 
         auto m3_12 = m3.partition().difference(s, m12.partition());
@@ -791,8 +793,8 @@ SEASTAR_TEST_CASE(test_mutation_diff) {
         BOOST_REQUIRE_EQUAL(m12_3.partition_tombstone(), m12.partition().partition_tombstone());
 
         mutation m123(partition_key::from_single_value(*s, "key1"), s);
-        m123.partition().apply(*s, m3.partition());
-        m123.partition().apply(*s, m12_3);
+        m123.apply(m3);
+        m123.partition().apply(*s, m12_3, *s);
         BOOST_REQUIRE_EQUAL(m12, m123);
     });
 }
@@ -845,7 +847,153 @@ SEASTAR_TEST_CASE(test_large_blobs) {
         BOOST_REQUIRE(cell2.is_live());
         BOOST_REQUIRE(bytes_type->equal(cell2.value(), bytes_type->decompose(data_value(blob2))));
     });
+}
 
+SEASTAR_TEST_CASE(test_mutation_equality) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            if (eq) {
+                assert_that(m1).is_equal_to(m2);
+            } else {
+                assert_that(m1).is_not_equal_to(m2);
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_hash) {
+    return seastar::async([] {
+        for_each_mutation_pair([] (auto&& m1, auto&& m2, are_equal eq) {
+            auto get_hash = [] (const mutation& m) {
+                md5_hasher h;
+                feed_hash(h, m);
+                return h.finalize();
+            };
+            auto h1 = get_hash(m1);
+            auto h2 = get_hash(m2);
+            if (eq) {
+                if (h1 != h2) {
+                    BOOST_FAIL(sprint("Hash should be equal for %s and %s", m1, m2));
+                }
+            } else {
+                // We're using a strong hasher, collision should be unlikely
+                if (h1 == h2) {
+                    BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
+                }
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
+    return seastar::async([] {
+        for_each_mutation_pair([](auto&& m1, auto&& m2, are_equal eq) {
+            if (eq == are_equal::yes) {
+                assert_that(m1).is_upgrade_equivalent(m2.schema());
+                assert_that(m2).is_upgrade_equivalent(m1.schema());
+            }
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_mutation_upgrade) {
+    return seastar::async([] {
+        auto make_builder = [] {
+            return schema_builder("ks", "cf")
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("ck", bytes_type, column_kind::clustering_key);
+        };
+
+        auto s = make_builder()
+                .with_column("sc1", bytes_type, column_kind::static_column)
+                .with_column("v1", bytes_type, column_kind::regular_column)
+                .with_column("v2", bytes_type, column_kind::regular_column)
+                .build();
+
+        auto pk = partition_key::from_singular(*s, data_value(bytes("key1")));
+        auto ckey1 = clustering_key::from_singular(*s, data_value(bytes("A")));
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // without v1
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // without sc1
+                            .with_column("v1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with v1 recreated as static
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v1", bytes_type, column_kind::static_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with new column inserted before v1
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v0", bytes_type, column_kind::regular_column)
+                            .with_column("v1", bytes_type, column_kind::regular_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .build());
+
+            assert_that(m).is_upgrade_equivalent(
+                    make_builder() // with new column inserted after v2
+                            .with_column("sc1", bytes_type, column_kind::static_column)
+                            .with_column("v0", bytes_type, column_kind::regular_column)
+                            .with_column("v2", bytes_type, column_kind::regular_column)
+                            .with_column("v3", bytes_type, column_kind::regular_column)
+                            .build());
+        }
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, "v1", data_value(bytes("v2:value")), 1);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+
+            auto s2 = make_builder() // v2 changed into a static column, v1 removed
+                    .with_column("v2", bytes_type, column_kind::static_column)
+                    .build();
+
+            m.upgrade(s2);
+
+            mutation m2(pk, s2);
+            m2.partition().clustered_row(ckey1);
+            assert_that(m).is_equal_to(m2);
+        }
+
+        {
+            mutation m(pk, make_builder()
+                    .with_column("v1", bytes_type, column_kind::regular_column)
+                    .with_column("v2", bytes_type, column_kind::regular_column)
+                    .with_column("v3", bytes_type, column_kind::regular_column)
+                    .build());
+            m.set_clustered_cell(ckey1, "v1", data_value(bytes("v1:value")), 1);
+            m.set_clustered_cell(ckey1, "v2", data_value(bytes("v2:value")), 1);
+            m.set_clustered_cell(ckey1, "v3", data_value(bytes("v3:value")), 1);
+
+            auto s2 = make_builder() // v2 changed into a static column
+                    .with_column("v1", bytes_type, column_kind::regular_column)
+                    .with_column("v2", bytes_type, column_kind::static_column)
+                    .with_column("v3", bytes_type, column_kind::regular_column)
+                    .build();
+
+            m.upgrade(s2);
+
+            mutation m2(pk, s2);
+            m2.set_clustered_cell(ckey1, "v1", data_value(bytes("v1:value")), 1);
+            m2.set_clustered_cell(ckey1, "v3", data_value(bytes("v3:value")), 1);
+
+            assert_that(m).is_equal_to(m2);
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(test_tombstone_purge) {

@@ -28,9 +28,7 @@
 #include "utils/data_output.hh"
 #include "bytes_ostream.hh"
 #include "bytes.hh"
-#include "keys.hh"
 #include "database_fwd.hh"
-#include "frozen_mutation.hh"
 #include "db/commitlog/replay_position.hh"
 
 namespace db {
@@ -180,6 +178,7 @@ template<> utils::UUID serializer<utils::UUID>::read(input&);
 template<> serializer<bytes>::serializer(const bytes &);
 template<> void serializer<bytes>::write(output&, const type&);
 template<> void serializer<bytes>::read(bytes&, input&);
+template<> void serializer<bytes>::skip(input&);
 
 template<> serializer<bytes_view>::serializer(const bytes_view&);
 template<> void serializer<bytes_view>::write(output&, const type&);
@@ -189,6 +188,7 @@ template<> bytes_view serializer<bytes_view>::read(input&);
 template<> serializer<sstring>::serializer(const sstring&);
 template<> void serializer<sstring>::write(output&, const type&);
 template<> void serializer<sstring>::read(sstring&, input&);
+template<> void serializer<sstring>::skip(input&);
 
 template<> serializer<tombstone>::serializer(const tombstone &);
 template<> void serializer<tombstone>::write(output&, const type&);
@@ -202,22 +202,6 @@ template<> atomic_cell_view serializer<atomic_cell_view>::read(input&);
 template<> serializer<collection_mutation_view>::serializer(const collection_mutation_view &);
 template<> void serializer<collection_mutation_view>::write(output&, const type&);
 template<> void serializer<collection_mutation_view>::read(collection_mutation_view&, input&);
-
-template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
-template<> void serializer<frozen_mutation>::write(output&, const type&);
-template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&);
-template<> frozen_mutation serializer<frozen_mutation>::read(input&);
-
-template<> serializer<partition_key_view>::serializer(const partition_key_view &);
-template<> void serializer<partition_key_view>::write(output&, const partition_key_view&);
-template<> void serializer<partition_key_view>::read(partition_key_view&, input&);
-template<> partition_key_view serializer<partition_key_view>::read(input&);
-template<> void serializer<partition_key_view>::skip(input&);
-
-template<> serializer<clustering_key_prefix_view>::serializer(const clustering_key_prefix_view &);
-template<> void serializer<clustering_key_prefix_view>::write(output&, const clustering_key_prefix_view&);
-template<> void serializer<clustering_key_prefix_view>::read(clustering_key_prefix_view&, input&);
-template<> clustering_key_prefix_view serializer<clustering_key_prefix_view>::read(input&);
 
 template<> serializer<db::replay_position>::serializer(const db::replay_position&);
 template<> void serializer<db::replay_position>::write(output&, const db::replay_position&);
@@ -235,9 +219,6 @@ extern template class serializer<bytes>;
 extern template class serializer<bytes_view>;
 extern template class serializer<sstring>;
 extern template class serializer<utils::UUID>;
-extern template class serializer<partition_key_view>;
-extern template class serializer<clustering_key_view>;
-extern template class serializer<clustering_key_prefix_view>;
 extern template class serializer<db::replay_position>;
 
 typedef serializer<tombstone> tombstone_serializer;
@@ -247,10 +228,6 @@ typedef serializer<sstring> sstring_serializer;
 typedef serializer<atomic_cell_view> atomic_cell_view_serializer;
 typedef serializer<collection_mutation_view> collection_mutation_view_serializer;
 typedef serializer<utils::UUID> uuid_serializer;
-typedef serializer<partition_key_view> partition_key_view_serializer;
-typedef serializer<clustering_key_view> clustering_key_view_serializer;
-typedef serializer<clustering_key_prefix_view> clustering_key_prefix_view_serializer;
-typedef serializer<frozen_mutation> frozen_mutation_serializer;
 typedef serializer<db::replay_position> replay_position_serializer;
 
 }

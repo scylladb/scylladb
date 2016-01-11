@@ -57,6 +57,7 @@ typedef std::vector<clustering_range> clustering_row_ranges;
 
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
+// Schema-dependent.
 class partition_slice {
 public:
     enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry, reversed, distinct };
@@ -104,12 +105,18 @@ constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
 class read_command {
 public:
     utils::UUID cf_id;
+    table_schema_version schema_version; // TODO: This should be enough, drop cf_id
     partition_slice slice;
     uint32_t row_limit;
     gc_clock::time_point timestamp;
 public:
-    read_command(const utils::UUID& cf_id, partition_slice slice, uint32_t row_limit = max_rows, gc_clock::time_point now = gc_clock::now())
+    read_command(const utils::UUID& cf_id,
+                 const table_schema_version& schema_version,
+                 partition_slice slice,
+                 uint32_t row_limit = max_rows,
+                 gc_clock::time_point now = gc_clock::now())
         : cf_id(cf_id)
+        , schema_version(schema_version)
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)

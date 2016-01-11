@@ -43,6 +43,8 @@
 #include "service/storage_proxy.hh"
 #include "mutation.hh"
 #include "schema.hh"
+#include "hashing.hh"
+#include "schema_mutations.hh"
 
 #include <vector>
 #include <map>
@@ -92,17 +94,24 @@ std::vector<mutation> make_drop_keyspace_mutations(lw_shared_ptr<keyspace_metada
 
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& partition);
 
-future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after);
-
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result_value_type& partition);
 
 mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
+std::vector<mutation> make_update_table_mutations(
+    lw_shared_ptr<keyspace_metadata> keyspace,
+    schema_ptr old_table,
+    schema_ptr new_table,
+    api::timestamp_type timestamp,
+    bool from_thrift);
+
+schema_mutations make_table_mutations(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers = true);
+
 future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
+void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, std::vector<mutation>& mutations);
 
 std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
@@ -110,13 +119,11 @@ future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& p
 
 future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row);
 
-void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
-
-future<schema_ptr> create_table_from_table_partition(distributed<service::storage_proxy>& proxy, lw_shared_ptr<query::result_set>&& partition);
+schema_ptr create_table_from_mutations(schema_mutations, std::experimental::optional<table_schema_version> version = {});
 
 void drop_column_from_schema_mutation(schema_ptr table, const column_definition& column, long timestamp, std::vector<mutation>& mutations);
 
-std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
+std::vector<column_definition> create_columns_from_column_rows(const query::result_set& rows,
                                                                const sstring& keyspace,
                                                                const sstring& table,/*,
                                                                AbstractType<?> rawComparator, */
@@ -129,11 +136,25 @@ column_definition create_column_from_column_row(const query::result_set_row& row
                                                 bool is_super);
 
 
-void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, const partition_key& pkey, std::vector<mutation>& mutations);
+void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, mutation& mutation);
 
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
+
+schema_ptr columns();
+schema_ptr columnfamilies();
+
+template<typename Hasher>
+void feed_hash_for_schema_digest(Hasher& h, const mutation& m) {
+    // Cassandra is skipping tombstones from digest calculation
+    // to avoid disagreements due to tombstone GC.
+    // See https://issues.apache.org/jira/browse/CASSANDRA-6862.
+    // We achieve similar effect with compact_for_compaction().
+    mutation m_compacted(m);
+    m_compacted.partition().compact_for_compaction(*m.schema(), api::max_timestamp, gc_clock::time_point::max());
+    feed_hash(h, m_compacted);
+}
 
 } // namespace schema_tables
 } // namespace db

@@ -119,7 +119,7 @@ void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
     }
 }
 
-void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name)
+void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
 {
     for (auto&& conn : _schema_change_listeners) {
         using namespace transport;

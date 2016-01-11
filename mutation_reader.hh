@@ -71,6 +71,9 @@ make_mutation_reader(Args&&... args) {
     return mutation_reader(std::make_unique<Impl>(std::forward<Args>(args)...));
 }
 
+// Creates a mutation reader which combines data return by supplied readers.
+// Returns mutation of the same schema only when all readers return mutations
+// of the same schema.
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
 mutation_reader make_combined_reader(mutation_reader&& a, mutation_reader&& b);
 // reads from the input readers, in order
@@ -147,7 +150,9 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 // mutation_source represents source of data in mutation form. The data source
 // can be queried multiple times and in parallel. For each query it returns
 // independent mutation_reader.
-using mutation_source = std::function<mutation_reader(const query::partition_range& range)>;
+// The reader returns mutations having all the same schema, the one passed
+// when invoking the source.
+using mutation_source = std::function<mutation_reader(schema_ptr, const query::partition_range& range)>;
 
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).

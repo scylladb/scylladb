@@ -23,9 +23,13 @@
 #include "cql3/column_identifier.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "md5_hasher.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include "db/marshal/type_parser.hh"
 #include "version.hh"
+#include "schema_registry.hh"
+#include <boost/range/algorithm.hpp>
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -50,6 +54,65 @@ sstring to_sstring(index_type t) {
     case index_type::none:       return "null";
     }
     throw std::invalid_argument("unknown index type");
+}
+
+template class db::serializer<column_mapping>;
+
+template<>
+db::serializer<column_mapping>::serializer(const column_mapping& cm)
+        : _item(cm)
+        , _size([&cm] {
+            size_t size = 2 * data_output::serialized_size<column_count_type>();
+            for (auto&& col : cm._columns) {
+                size += db::serializer<bytes>(col.name()).size();
+                size += db::serializer<sstring>(col.type()->name()).size();
+            }
+            return size;
+        }())
+{ }
+
+template<>
+void
+db::serializer<column_mapping>::write(output& out, const column_mapping& cm) {
+    static_assert(std::is_same<column_count_type, uint32_t>::value, "ABI change");
+    out.write<column_count_type>(cm._columns.size());
+    out.write<column_count_type>(cm._n_static);
+    for (const column_mapping::column& col : cm._columns) {
+        db::serializer<bytes>(col.name()).write(out);
+        db::serializer<sstring>(col.type()->name()).write(out);
+    }
+}
+
+template<>
+void db::serializer<column_mapping>::write(bytes_ostream& out) const {
+    auto buf = out.write_place_holder(_size);
+    data_output data_out((char*)buf, _size);
+    write(data_out, _item);
+}
+
+template<>
+column_mapping db::serializer<column_mapping>::read(input& in) {
+    auto n_columns = in.read<column_count_type>();
+    auto n_static = in.read<column_count_type>();
+    std::vector<column_mapping::column> columns;
+    columns.reserve(n_columns);
+    for (column_count_type i = 0; i < n_columns; ++i) {
+        auto name = db::serializer<bytes>::read(in);
+        auto type_name = db::serializer<sstring>::read(in);
+        auto type = db::marshal::type_parser::parse(type_name);
+        columns.emplace_back(column_mapping::column{std::move(name), std::move(type)});
+    }
+    return column_mapping(std::move(columns), n_static);
+}
+
+template<>
+void db::serializer<column_mapping>::skip(input& in) {
+    auto n_columns = in.read<column_count_type>();
+    in.read<column_count_type>();
+    for (column_count_type i = 0; i < n_columns; ++i) {
+        db::serializer<bytes>::skip(in);
+        db::serializer<sstring>::skip(in);
+    }
 }
 
 template<typename Sequence>
@@ -79,9 +142,29 @@ void schema::rebuild() {
         _columns_by_name[def.name()] = &def;
     }
 
+    static_assert(row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
+    if (!std::is_sorted(regular_columns().begin(), regular_columns().end(), column_definition::name_comparator())) {
+        throw std::runtime_error("Regular columns should be sorted by name");
+    }
+    if (!std::is_sorted(static_columns().begin(), static_columns().end(), column_definition::name_comparator())) {
+        throw std::runtime_error("Static columns should be sorted by name");
+    }
+
     for (const column_definition& def : regular_columns()) {
         _regular_columns_by_name[def.name()] = &def;
     }
+
+    {
+        std::vector<column_mapping::column> cm_columns;
+        for (const column_definition& def : boost::range::join(static_columns(), regular_columns())) {
+            cm_columns.emplace_back(column_mapping::column{def.name(), def.type});
+        }
+        _column_mapping = column_mapping(std::move(cm_columns), static_columns_count());
+    }
+}
+
+const column_mapping& schema::get_column_mapping() const {
+    return _column_mapping;
 }
 
 schema::raw_schema::raw_schema(utils::UUID id)
@@ -91,18 +174,28 @@ schema::raw_schema::raw_schema(utils::UUID id)
 schema::schema(const raw_schema& raw)
     : _raw(raw)
     , _offsets([this] {
+        if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
+            throw std::runtime_error(sprint("Column count limit (%d) overflowed: %d",
+                                            std::numeric_limits<column_count_type>::max(), _raw._columns.size()));
+        }
+
         auto& cols = _raw._columns;
-        std::array<size_t, 5> count = { 0, 0, 0, 0, 0 };
+        std::array<column_count_type, 5> count = { 0, 0, 0, 0, 0 };
         auto i = cols.begin();
         auto e = cols.end();
         for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column, column_kind::compact_column }) {
             auto j = std::stable_partition(i, e, [k](const auto& c) {
                 return c.kind == k;
             });
-            count[size_t(k)] = std::distance(i, j);
+            count[column_count_type(k)] = std::distance(i, j);
             i = j;
         }
-        return std::array<size_t, 4> { count[0], count[0] + count[1], count[0] + count[1] + count[2], count[0] + count[1] + count[2] + count[3] };
+        return std::array<column_count_type, 4> {
+                count[0],
+                count[0] + count[1],
+                count[0] + count[1] + count[2],
+                count[0] + count[1] + count[2] + count[3]
+        };
     }())
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
@@ -138,6 +231,11 @@ schema::schema(const raw_schema& raw)
         def.column_specification = make_column_specification(def);
         assert(!def.id || def.id == id - column_offset(def.kind));
         def.id = id - column_offset(def.kind);
+
+        auto dropped_at_it = _raw._dropped_columns.find(def.name_as_text());
+        if (dropped_at_it != _raw._dropped_columns.end()) {
+            def._dropped_at = std::max(def._dropped_at, dropped_at_it->second);
+        }
 
         def._thrift_bits = column_definition::thrift_bits();
 
@@ -208,6 +306,17 @@ schema::schema(const schema& o)
     rebuild();
 }
 
+schema::~schema() {
+    if (_registry_entry) {
+        _registry_entry->detach_schema();
+    }
+}
+
+schema_registry_entry*
+schema::registry_entry() const noexcept {
+    return _registry_entry;
+}
+
 sstring schema::thrift_key_validator() const {
     if (partition_key_size() == 1) {
         return partition_key_columns().begin()->type->name();
@@ -251,9 +360,9 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._speculative_retry == y._raw._speculative_retry
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
-        && x._raw._caching_options == y._raw._caching_options;
+        && x._raw._caching_options == y._raw._caching_options
+        && x._raw._dropped_columns == y._raw._dropped_columns;
 #if 0
-        && Objects.equal(droppedColumns, other.droppedColumns)
         && Objects.equal(triggers, other.triggers)
 #endif
 }
@@ -264,8 +373,8 @@ index_info::index_info(::index_type idx_type,
     : index_type(idx_type), index_name(idx_name), index_options(idx_options)
 {}
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx)
-        : _name(std::move(name)), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, index_info idx, api::timestamp_type dropped_at)
+        : _name(std::move(name)), _dropped_at(dropped_at), type(std::move(type)), id(component_index), kind(kind), idx_info(std::move(idx))
 {}
 
 std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
@@ -276,6 +385,7 @@ std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
     os << ", componentIndex=" << (cd.has_component_index() ? std::to_string(cd.component_index()) : "null");
     os << ", indexName=" << (cd.idx_info.index_name ? *cd.idx_info.index_name : "null");
     os << ", indexType=" << to_sstring(cd.idx_info.index_type);
+    os << ", droppedAt=" << cd._dropped_at;
     os << "}";
     return os;
 }
@@ -347,6 +457,16 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
     os << ",droppedColumns={}";
     os << ",triggers=[]";
     os << ",isDense=" << std::boolalpha << s._raw._is_dense;
+    os << ",version=" << s.version();
+    os << ",droppedColumns={";
+    n = 0;
+    for (auto& dc : s._raw._dropped_columns) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << dc.first << " : " << dc.second;
+    }
+    os << "}";
     os << "]";
     return os;
 }
@@ -370,7 +490,8 @@ bool operator==(const column_definition& x, const column_definition& y)
     return x._name == y._name
         && x.type->equals(y.type)
         && x.id == y.id
-        && x.kind == y.kind;
+        && x.kind == y.kind
+        && x._dropped_at == y._dropped_at;
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
@@ -398,7 +519,14 @@ schema_builder::schema_builder(const schema_ptr s)
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
     : _raw(raw)
-{}
+{
+    static_assert(schema::row_column_ids_are_ordered_by_name::value, "row columns don't need to be ordered by name");
+    // Schema builder may add or remove columns and their ids need to be
+    // recomputed in build().
+    for (auto& def : _raw._columns | boost::adaptors::filtered([] (auto& def) { return !def.is_primary_key(); })) {
+            def.id = 0;
+    }
+}
 
 column_definition& schema_builder::find_column(const cql3::column_identifier& c) {
     auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [c](auto& p) {
@@ -472,25 +600,85 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
     return *this;
 }
 
-schema_ptr schema_builder::build() {
-    return make_lw_shared<schema>(schema(_raw));
+schema_builder& schema_builder::without_column(bytes name)
+{
+    auto it = boost::range::find_if(_raw._columns, [&] (auto& column) {
+        return column.name() == name;
+    });
+    assert(it != _raw._columns.end());
+    auto now = api::new_timestamp();
+    auto ret = _raw._dropped_columns.emplace(it->name_as_text(), now);
+    if (!ret.second) {
+        ret.first->second = std::max(ret.first->second, now);
+    }
+    _raw._columns.erase(it);
+    return *this;
 }
 
-schema_ptr schema_builder::build(compact_storage cp) {
+schema_builder& schema_builder::without_column(sstring name, api::timestamp_type timestamp)
+{
+    auto ret = _raw._dropped_columns.emplace(name, timestamp);
+    if (!ret.second) {
+        ret.first->second = std::max(ret.first->second, timestamp);
+    }
+    return *this;
+}
+
+schema_builder& schema_builder::with_column_rename(bytes from, bytes to)
+{
+    auto it = std::find_if(_raw._columns.begin(), _raw._columns.end(), [&] (auto& col) {
+        return col.name() == from;
+    });
+    assert(it != _raw._columns.end());
+    auto& def = *it;
+    column_definition new_def(to, def.type, def.kind, def.component_index(), def.idx_info);
+    _raw._columns.erase(it);
+    return with_column(new_def);
+}
+
+schema_builder& schema_builder::with_altered_column_type(bytes name, data_type new_type)
+{
+    auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
+    assert(it != _raw._columns.end());
+    it->type = new_type;
+    return *this;
+}
+
+schema_builder& schema_builder::with(compact_storage cs) {
+    _compact_storage = cs;
+    return *this;
+}
+
+schema_builder& schema_builder::with_version(table_schema_version v) {
+    _version = v;
+    return *this;
+}
+
+schema_ptr schema_builder::build() {
+    if (_version) {
+        _raw._version = *_version;
+    } else {
+        _raw._version = utils::UUID_gen::get_time_UUID();
+    }
+
+    if (!_compact_storage) {
+        return make_lw_shared<schema>(schema(_raw));
+    }
+
     schema s(_raw);
 
     // Dense means that no part of the comparator stores a CQL column name. This means
     // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
-    s._raw._is_dense = (cp == compact_storage::yes) && (s.clustering_key_size() > 0);
+    s._raw._is_dense = (*_compact_storage == compact_storage::yes) && (s.clustering_key_size() > 0);
 
     if (s.clustering_key_size() == 0) {
-        if (cp == compact_storage::yes) {
+        if (*_compact_storage == compact_storage::yes) {
             s._raw._is_compound = false;
         } else {
             s._raw._is_compound = true;
         }
     } else {
-        if ((cp == compact_storage::yes) && s.clustering_key_size() == 1) {
+        if ((*_compact_storage == compact_storage::yes) && s.clustering_key_size() == 1) {
             s._raw._is_compound = false;
         } else {
             s._raw._is_compound = true;
@@ -507,11 +695,14 @@ schema_ptr schema_builder::build(compact_storage cp) {
             throw exceptions::configuration_exception(sprint("Expecting exactly one regular column. Found %d", s.regular_columns_count()));
         }
         s._raw._columns.at(s.column_offset(column_kind::regular_column)).kind = column_kind::compact_column;
-
-        // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
-        // from the constructor
     }
+    // We need to rebuild the schema in case we added some column. This is way simpler than trying to factor out the relevant code
+    // from the constructor
     return make_lw_shared<schema>(schema(s._raw));
+}
+
+schema_ptr schema_builder::build(compact_storage cp) {
+    return with(cp).build();
 }
 
 // Useful functions to manipulate the schema's comparator field
@@ -632,27 +823,27 @@ schema::has_static_columns() const {
     return !static_columns().empty();
 }
 
-size_t
+column_count_type
 schema::partition_key_size() const {
     return column_offset(column_kind::clustering_key);
 }
 
-size_t
+column_count_type
 schema::clustering_key_size() const {
     return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
 }
 
-size_t
+column_count_type
 schema::static_columns_count() const {
     return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
 }
 
-size_t
+column_count_type
 schema::compact_columns_count() const {
     return _raw._columns.size() - column_offset(column_kind::compact_column);
 }
 
-size_t
+column_count_type
 schema::regular_columns_count() const {
     return _raw._columns.size() - column_offset(column_kind::regular_column);
 }
@@ -700,4 +891,12 @@ schema::position(const column_definition& column) const {
         return column.id;
     }
     return clustering_key_size();
+}
+
+bool schema::is_synced() const {
+    return _registry_entry && _registry_entry->is_synced();
+}
+
+bool schema::equal_columns(const schema& other) const {
+    return boost::equal(all_columns_in_select_order(), other.all_columns_in_select_order());
 }

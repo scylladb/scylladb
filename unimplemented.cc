@@ -58,6 +58,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::WRAP_AROUND: return out << "WRAP_AROUND";
         case cause::STORAGE_SERVICE: return out << "STORAGE_SERVICE";
         case cause::API: return out << "API";
+        case cause::SCHEMA_CHANGE: return out << "SCHEMA_CHANGE";
     }
     assert(0);
 }

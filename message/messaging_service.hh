@@ -33,6 +33,7 @@
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
 #include "frozen_mutation.hh"
+#include "frozen_schema.hh"
 #include "query-request.hh"
 #include "db/serializer.hh"
 #include "mutation_query.hh"
@@ -89,7 +90,8 @@ enum class messaging_verb : int32_t {
     COMPLETE_MESSAGE = 19,
     REPAIR_CHECKSUM_RANGE = 20,
     // end of streaming verbs
-    LAST = 21,
+    GET_SCHEMA_VERSION = 21,
+    LAST = 22,
 };
 
 } // namespace net
@@ -234,6 +236,16 @@ struct serializer {
     template <typename Input>
     frozen_mutation read(Input& in, rpc::type<frozen_mutation>) const {
         return read_serializable<frozen_mutation>(in);
+    }
+
+    // For frozen_schema
+    template <typename Output>
+    void write(Output& out, const frozen_schema& v) const{
+        return write_serializable(out, v);
+    }
+    template <typename Input>
+    frozen_schema read(Input& in, rpc::type<frozen_schema>) const {
+        return read_serializable<frozen_schema>(in);
     }
 
     // For reconcilable_result
@@ -451,7 +463,7 @@ public:
     future<> send_gossip_digest_ack2(msg_addr id, gms::gossip_digest_ack2 msg);
 
     // Wrapper for DEFINITIONS_UPDATE
-    void register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func);
+    void register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm)>&& func);
     void unregister_definitions_update();
     future<> send_definitions_update(msg_addr id, std::vector<frozen_mutation> fm);
 
@@ -463,7 +475,7 @@ public:
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
     // Wrapper for MUTATION
-    void register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+    void register_mutation(std::function<rpc::no_wait_type (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
@@ -476,17 +488,22 @@ public:
 
     // Wrapper for READ_DATA
     // Note: WTH is future<foreign_ptr<lw_shared_ptr<query::result>>
-    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_data();
     future<query::result> send_read_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
+    // Wrapper for GET_SCHEMA_VERSION
+    void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
+    void unregister_get_schema_version();
+    future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
+
     // Wrapper for READ_MUTATION_DATA
-    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_mutation_data();
     future<reconcilable_result> send_read_mutation_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
     // Wrapper for READ_DIGEST
-    void register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func);
+    void register_read_digest(std::function<future<query::result_digest> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);
     void unregister_read_digest();
     future<query::result_digest> send_read_digest(msg_addr id, const query::read_command& cmd, const query::partition_range& pr);
 
@@ -507,6 +524,7 @@ public:
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_rpc_client(msg_addr id);
     std::unique_ptr<rpc_protocol_wrapper>& rpc();
+    static msg_addr get_source(const rpc::client_info& client);
 };
 
 extern distributed<messaging_service> _the_messaging_service;

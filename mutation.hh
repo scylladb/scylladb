@@ -27,6 +27,7 @@
 #include "keys.hh"
 #include "schema.hh"
 #include "dht/i_partitioner.hh"
+#include "hashing.hh"
 
 class mutation final {
 private:
@@ -70,6 +71,25 @@ public:
     void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection&& value);
     void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection&& value);
+
+    // Upgrades this mutation to a newer schema. The new schema must
+    // be obtained using only valid schema transformation:
+    //  * primary key column count must not change
+    //  * column types may only change to those with compatible representations
+    //
+    // After upgrade, mutation's partition should only be accessed using the new schema. User must
+    // ensure proper isolation of accesses.
+    //
+    // Strong exception guarantees.
+    //
+    // Note that the conversion may lose information, it's possible that m1 != m2 after:
+    //
+    //   auto m2 = m1;
+    //   m2.upgrade(s2);
+    //   m2.upgrade(m1.schema());
+    //
+    void upgrade(const schema_ptr&);
+
     std::experimental::optional<atomic_cell_or_collection> get_cell(const clustering_key& rkey, const column_definition& def) const;
     const partition_key& key() const { return _ptr->_dk._key; };
     const dht::decorated_key& decorated_key() const { return _ptr->_dk; };
@@ -79,13 +99,18 @@ public:
     const mutation_partition& partition() const { return _ptr->_p; }
     mutation_partition& partition() { return _ptr->_p; }
     const utils::UUID& column_family_id() const { return _ptr->_schema->id(); }
+    // Consistent with hash<canonical_mutation>
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:
+    // The supplied partition_slice must be governed by this mutation's schema
     query::result query(const query::partition_slice&, gc_clock::time_point now = gc_clock::now(), uint32_t row_limit = query::max_rows) const;
 
     // See mutation_partition::live_row_count()
     size_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;
+
+    void apply(mutation&&);
+    void apply(const mutation&);
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
     friend class mutation_opt;
@@ -147,6 +172,19 @@ public:
     }
 };
 
+// Consistent with operator==()
+// Consistent across the cluster, so should not rely on particular
+// serialization format, only on actual data stored.
+template<>
+struct appending_hash<mutation> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const mutation& m) const {
+        const schema& s = *m.schema();
+        m.key().feed_hash(h, s);
+        m.partition().feed_hash(h, s);
+    }
+};
+
 inline mutation_opt move_and_disengage(mutation_opt& opt) {
     return std::move(opt);
 }
@@ -156,7 +194,7 @@ void apply(mutation_opt& dst, mutation&& src) {
     if (!dst) {
         dst = std::move(src);
     } else {
-        dst->partition().apply(*src.schema(), src.partition());
+        dst->apply(std::move(src));
     }
 }
 

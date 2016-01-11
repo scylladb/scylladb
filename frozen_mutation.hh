@@ -23,7 +23,7 @@
 
 #include "dht/i_partitioner.hh"
 #include "atomic_cell.hh"
-#include "keys.hh"
+#include "database_fwd.hh"
 #include "mutation_partition_view.hh"
 
 class mutation;
@@ -51,6 +51,7 @@ public:
 
     bytes_view representation() const { return _bytes; }
     utils::UUID column_family_id() const;
+    utils::UUID schema_version() const; // FIXME: Should replace column_family_id()
     partition_key_view key(const schema& s) const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
@@ -66,3 +67,14 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
+
+namespace db {
+
+typedef serializer<frozen_mutation> frozen_mutation_serializer;
+
+template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
+template<> void serializer<frozen_mutation>::write(output&, const type&);
+template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&);
+template<> frozen_mutation serializer<frozen_mutation>::read(input&);
+
+}

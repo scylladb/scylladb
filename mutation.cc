@@ -117,7 +117,8 @@ mutation::get_cell(const clustering_key& rkey, const column_definition& def) con
 }
 
 bool mutation::operator==(const mutation& m) const {
-    return decorated_key().equal(*schema(), m.decorated_key()) && partition().equal(*schema(), m.partition());
+    return decorated_key().equal(*schema(), m.decorated_key())
+           && partition().equal(*schema(), m.partition(), *m.schema());
 }
 
 bool mutation::operator!=(const mutation& m) const {
@@ -164,4 +165,21 @@ slice(const std::vector<mutation>& partitions, const query::partition_range& r) 
               ? std::upper_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp())
               : std::lower_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp()))
             : partitions.cend());
+}
+
+void
+mutation::upgrade(const schema_ptr& new_schema) {
+    if (_ptr->_schema != new_schema) {
+        schema_ptr s = new_schema;
+        partition().upgrade(*schema(), *new_schema);
+        _ptr->_schema = std::move(s);
+    }
+}
+
+void mutation::apply(mutation&& m) {
+    partition().apply(*schema(), std::move(m.partition()), *m.schema());
+}
+
+void mutation::apply(const mutation& m) {
+    partition().apply(*schema(), m.partition(), *m.schema());
 }

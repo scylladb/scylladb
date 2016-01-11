@@ -109,6 +109,7 @@ future<> query_processor::stop()
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {
+    log.trace("process: \"{}\"", query_string);
     auto p = get_statement(query_string, query_state.get_client_state());
     options.prepare(p->bound_names);
     auto cql_statement = p->statement;
@@ -388,8 +389,12 @@ void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks
 {
 }
 
-void query_processor::migration_subscriber::on_update_column_family(const sstring& ks_name, const sstring& cf_name)
+void query_processor::migration_subscriber::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
 {
+    if (columns_changed) {
+        log.info("Column definitions for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
+        remove_invalid_prepared_statements(ks_name, cf_name);
+    }
 }
 
 void query_processor::migration_subscriber::on_update_user_type(const sstring& ks_name, const sstring& type_name)
@@ -439,9 +444,7 @@ void query_processor::migration_subscriber::remove_invalid_prepared_statements(s
         }
     }
     for (auto& id : invalid) {
-        get_query_processor().invoke_on_all([id] (auto& qp) {
-            qp.invalidate_prepared_statement(id);
-        });
+        _qp->invalidate_prepared_statement(id);
     }
 }
 

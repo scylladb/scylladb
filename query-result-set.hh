@@ -106,6 +106,7 @@ public:
     result_set(schema_ptr s, const std::vector<result_set_row>& rows)
         : _schema(std::move(s)), _rows{std::move(rows)}
     { }
+    explicit result_set(const mutation&);
     bool empty() const {
         return _rows.empty();
     }

@@ -173,6 +173,6 @@ mutation_partition_serializer::read_as_view(data_input& in) {
 mutation_partition
 mutation_partition_serializer::read(data_input& in, schema_ptr s) {
     mutation_partition p(s);
-    p.apply(*s, read_as_view(in));
+    p.apply(*s, read_as_view(in), *s);
     return p;
 }

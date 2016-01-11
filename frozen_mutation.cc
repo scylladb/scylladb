@@ -32,7 +32,7 @@
 //
 // Representation layout:
 //
-// <mutation> ::= <column-family-id> <partition-key> <partition>
+// <mutation> ::= <column-family-id> <schema-version> <partition-key> <partition>
 //
 
 using namespace db;
@@ -43,10 +43,18 @@ frozen_mutation::column_family_id() const {
     return uuid_serializer::read(in);
 }
 
+utils::UUID
+frozen_mutation::schema_version() const {
+    data_input in(_bytes);
+    uuid_serializer::skip(in); // cf_id
+    return uuid_serializer::read(in);
+}
+
 partition_key_view
 frozen_mutation::key(const schema& s) const {
     data_input in(_bytes);
-    uuid_serializer::skip(in);
+    uuid_serializer::skip(in); // cf_id
+    uuid_serializer::skip(in); // schema_version
     return partition_key_view_serializer::read(in);
 }
 
@@ -62,14 +70,21 @@ frozen_mutation::frozen_mutation(bytes&& b)
 frozen_mutation::frozen_mutation(const mutation& m) {
     auto&& id = m.schema()->id();
     partition_key_view key_view = m.key();
+    auto version = m.schema()->version();
 
     uuid_serializer id_ser(id);
+    uuid_serializer schema_version_ser(version);
     partition_key_view_serializer key_ser(key_view);
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes buf(bytes::initialized_later(), id_ser.size() + key_ser.size() + part_ser.size_without_framing());
+    bytes buf(bytes::initialized_later(),
+              id_ser.size()
+              + schema_version_ser.size()
+              + key_ser.size()
+              + part_ser.size_without_framing());
     data_output out(buf);
     id_ser.write(out);
+    schema_version_ser.write(out);
     key_ser.write(out);
     part_ser.write_without_framing(out);
 
@@ -90,7 +105,8 @@ frozen_mutation freeze(const mutation& m) {
 
 mutation_partition_view frozen_mutation::partition() const {
     data_input in(_bytes);
-    uuid_serializer::skip(in);
+    uuid_serializer::skip(in); // cf_id
+    uuid_serializer::skip(in); // schema_version
     partition_key_view_serializer::skip(in);
     return mutation_partition_view::from_bytes(in.read_view(in.avail()));
 }
@@ -101,4 +117,27 @@ std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) 
 
 frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
+}
+
+template class db::serializer<frozen_mutation>;
+
+template<>
+db::serializer<frozen_mutation>::serializer(const frozen_mutation& mutation)
+        : _item(mutation), _size(sizeof(uint32_t) /* size */ + mutation.representation().size()) {
+}
+
+template<>
+void db::serializer<frozen_mutation>::write(output& out, const frozen_mutation& mutation) {
+    bytes_view v = mutation.representation();
+    out.write(v);
+}
+
+template<>
+void db::serializer<frozen_mutation>::read(frozen_mutation& m, input& in) {
+    m = read(in);
+}
+
+template<>
+frozen_mutation db::serializer<frozen_mutation>::read(input& in) {
+    return frozen_mutation(bytes_serializer::read(in));
 }

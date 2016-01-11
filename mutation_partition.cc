@@ -22,6 +22,8 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
+#include "converting_mutation_partition_applier.hh"
+#include "partition_builder.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -126,14 +128,21 @@ mutation_partition::operator=(mutation_partition&& x) noexcept {
 }
 
 void
-mutation_partition::apply(const schema& schema, const mutation_partition& p) {
+mutation_partition::apply(const schema& s, const mutation_partition& p, const schema& p_schema) {
+    if (s.version() != p_schema.version()) {
+        auto p2 = p;
+        p2.upgrade(p_schema, s);
+        apply(s, std::move(p2), s);
+        return;
+    }
+
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(schema, e.prefix(), e.t());
+        apply_row_tombstone(s, e.prefix(), e.t());
     }
 
-    _static_row.merge(schema, column_kind::static_column, p._static_row);
+    _static_row.merge(s, column_kind::static_column, p._static_row);
 
     for (auto&& entry : p._rows) {
         auto i = _rows.find(entry);
@@ -143,13 +152,19 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
         } else {
             i->row().apply(entry.row().deleted_at());
             i->row().apply(entry.row().marker());
-            i->row().cells().merge(schema, column_kind::regular_column, entry.row().cells());
+            i->row().cells().merge(s, column_kind::regular_column, entry.row().cells());
         }
     }
 }
 
 void
-mutation_partition::apply(const schema& s, mutation_partition&& p) {
+mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema) {
+    if (s.version() != p_schema.version()) {
+        // We can't upgrade p in-place due to exception guarantees
+        apply(s, p, p_schema);
+        return;
+    }
+
     _tombstone.apply(p._tombstone);
 
     p._row_tombstones.clear_and_dispose([this, &s] (row_tombstones_entry* e) {
@@ -176,9 +191,17 @@ mutation_partition::apply(const schema& s, mutation_partition&& p) {
 }
 
 void
-mutation_partition::apply(const schema& schema, mutation_partition_view p) {
-    mutation_partition_applier applier(schema, *this);
-    p.accept(schema, applier);
+mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
+    if (p_schema.version() == s.version()) {
+        mutation_partition_applier applier(s, *this);
+        p.accept(s, applier);
+    } else {
+        mutation_partition p2(*this, copy_comparators_only{});
+        partition_builder b(p_schema, p2);
+        p.accept(p_schema, b);
+        p2.upgrade(p_schema, s);
+        apply(s, std::move(p2), s);
+    }
 }
 
 tombstone
@@ -577,16 +600,22 @@ int compare_row_marker_for_merge(const row_marker& left, const row_marker& right
 }
 
 bool
-deletable_row::equal(const schema& s, const deletable_row& other) const {
+deletable_row::equal(column_kind kind, const schema& s, const deletable_row& other, const schema& other_schema) const {
     if (_deleted_at != other._deleted_at || _marker != other._marker) {
         return false;
     }
-    return _cells == other._cells;
+    return _cells.equal(kind, s, other._cells, other_schema);
 }
 
 bool
 rows_entry::equal(const schema& s, const rows_entry& other) const {
-    return key().equal(s, other.key()) && row().equal(s, other.row());
+    return equal(s, other, s);
+}
+
+bool
+rows_entry::equal(const schema& s, const rows_entry& other, const schema& other_schema) const {
+    return key().equal(s, other.key()) // Only representation-compatible changes are allowed
+           && row().equal(column_kind::regular_column, s, other.row(), other_schema);
 }
 
 bool
@@ -595,24 +624,30 @@ row_tombstones_entry::equal(const schema& s, const row_tombstones_entry& other) 
 }
 
 bool mutation_partition::equal(const schema& s, const mutation_partition& p) const {
+    return equal(s, p, s);
+}
+
+bool mutation_partition::equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const {
     if (_tombstone != p._tombstone) {
         return false;
     }
 
     if (!std::equal(_rows.begin(), _rows.end(), p._rows.begin(), p._rows.end(),
-        [&s] (const rows_entry& e1, const rows_entry& e2) { return e1.equal(s, e2); }
+        [&] (const rows_entry& e1, const rows_entry& e2) {
+            return e1.equal(this_schema, e2, p_schema);
+        }
     )) {
         return false;
     }
 
     if (!std::equal(_row_tombstones.begin(), _row_tombstones.end(),
         p._row_tombstones.begin(), p._row_tombstones.end(),
-        [&s] (const row_tombstones_entry& e1, const row_tombstones_entry& e2) { return e1.equal(s, e2); }
+        [&] (const row_tombstones_entry& e1, const row_tombstones_entry& e2) { return e1.equal(this_schema, e2); }
     )) {
         return false;
     }
 
-    return _static_row == p._static_row;
+    return _static_row.equal(column_kind::static_column, this_schema, p._static_row, p_schema);
 }
 
 void
@@ -753,6 +788,10 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
     uint32_t row_count = 0;
 
+    auto can_purge_tombstone = [&] (const tombstone& t) {
+        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
+    };
+
     auto row_callback = [&] (rows_entry& e) {
         deletable_row& row = e.row();
 
@@ -760,6 +799,10 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
         bool is_live = row.cells().compact_and_expire(s, column_kind::regular_column, tomb, query_time, max_purgeable, gc_before);
         is_live |= row.marker().compact_and_expire(tomb, query_time, max_purgeable, gc_before);
+
+        if (can_purge_tombstone(row.deleted_at())) {
+            row.remove_tombstone();
+        }
 
         // when row_limit is reached, do not exit immediately,
         // iterate to the next live_row instead to include trailing
@@ -790,9 +833,6 @@ uint32_t mutation_partition::do_compact(const schema& s,
         ++row_count;
     }
 
-    auto can_purge_tombstone = [&] (const tombstone& t) {
-        return t.timestamp < max_purgeable && t.deletion_time < gc_before;
-    };
     auto it = _row_tombstones.begin();
     while (it != _row_tombstones.end()) {
         auto& tomb = it->t();
@@ -996,8 +1036,25 @@ bool row::operator==(const row& other) const {
         return false;
     }
 
-    auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1, std::pair<column_id, const atomic_cell_or_collection&> c2) {
+    auto cells_equal = [] (std::pair<column_id, const atomic_cell_or_collection&> c1,
+                           std::pair<column_id, const atomic_cell_or_collection&> c2) {
         return c1.first == c2.first && c1.second == c2.second;
+    };
+    return with_both_ranges(other, [&] (auto r1, auto r2) {
+        return boost::equal(r1, r2, cells_equal);
+    });
+}
+
+bool row::equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const {
+    if (size() != other.size()) {
+        return false;
+    }
+
+    auto cells_equal = [&] (std::pair<column_id, const atomic_cell_or_collection&> c1,
+                            std::pair<column_id, const atomic_cell_or_collection&> c2) {
+        static_assert(schema::row_column_ids_are_ordered_by_name::value, "Relying on column ids being ordered by name");
+        return this_schema.column_at(kind, c1.first).name() == other_schema.column_at(kind, c2.first).name()
+               && c1.second == c2.second;
     };
     return with_both_ranges(other, [&] (auto r1, auto r2) {
         return boost::equal(r1, r2, cells_equal);
@@ -1159,4 +1216,40 @@ mutation_partition mutation_partition::difference(schema_ptr s, const mutation_p
         }
     }
     return mp;
+}
+
+void mutation_partition::accept(const schema& s, mutation_partition_visitor& v) const {
+    v.accept_partition_tombstone(_tombstone);
+    _static_row.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        const column_definition& def = s.static_column_at(id);
+        if (def.is_atomic()) {
+            v.accept_static_cell(id, cell.as_atomic_cell());
+        } else {
+            v.accept_static_cell(id, cell.as_collection_mutation());
+        }
+    });
+    for (const row_tombstones_entry& e : _row_tombstones) {
+        v.accept_row_tombstone(e.prefix(), e.t());
+    }
+    for (const rows_entry& e : _rows) {
+        const deletable_row& dr = e.row();
+        v.accept_row(e.key(), dr.deleted_at(), dr.marker());
+        dr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            const column_definition& def = s.regular_column_at(id);
+            if (def.is_atomic()) {
+                v.accept_row_cell(id, cell.as_atomic_cell());
+            } else {
+                v.accept_row_cell(id, cell.as_collection_mutation());
+            }
+        });
+    }
+}
+
+void
+mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) {
+    // We need to copy to provide strong exception guarantees.
+    mutation_partition tmp(new_schema.shared_from_this());
+    converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
+    accept(old_schema, v);
+    *this = std::move(tmp);
 }

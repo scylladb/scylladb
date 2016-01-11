@@ -114,6 +114,7 @@ extern template class serializer<reconcilable_result>;
 //
 // 'source' doesn't have to survive deferring.
 future<reconcilable_result> mutation_query(
+    schema_ptr,
     const mutation_source& source,
     const query::partition_range& range,
     const query::partition_slice& slice,

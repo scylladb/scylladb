@@ -156,7 +156,9 @@ public:
         std::vector<bytes_opt> values) override
     {
         auto prepared = _qp->local().get_prepared(id);
-        assert(bool(prepared));
+        if (!prepared) {
+            throw not_prepared_exception(id);
+        }
         auto stmt = prepared->statement;
         assert(stmt->get_bound_terms() == values.size());
 
@@ -172,17 +174,10 @@ public:
 
     virtual future<> create_table(std::function<schema(const sstring&)> schema_maker) override {
         auto id = utils::UUID_gen::get_time_UUID();
-        return _db->invoke_on_all([schema_maker, id, this] (database& db) {
-            schema_builder builder(make_lw_shared(schema_maker(ks_name)));
-            builder.set_uuid(id);
-            auto cf_schema = builder.build(schema_builder::compact_storage::no);
-            auto& ks = db.find_keyspace(ks_name);
-            auto cfg = ks.make_column_family_config(*cf_schema);
-            db.add_column_family(cf_schema, std::move(cfg));
-            return do_with(std::move(cf_schema), [&ks, id] (schema_ptr& cf_schema) {
-                return ks.make_directory_for_column_family(cf_schema->cf_name(), id);
-            });
-        });
+        schema_builder builder(make_lw_shared(schema_maker(ks_name)));
+        builder.set_uuid(id);
+        auto s = builder.build(schema_builder::compact_storage::no);
+        return service::get_local_migration_manager().announce_new_column_family(s, true);
     }
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) override {
@@ -218,7 +213,8 @@ public:
                                       table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
-          return cf.find_partition_slow(pkey).then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
+          return cf.find_partition_slow(schema, pkey)
+                  .then([schema, ckey, column_name, exp] (column_family::const_mutation_partition_ptr p) {
             assert(p != nullptr);
             auto row = p->find_row(ckey);
             assert(row != nullptr);

@@ -345,8 +345,8 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
     });
 }
 
-::mutation_source as_mutation_source(schema_ptr s, lw_shared_ptr<sstables::sstable> sst) {
-    return [s, sst] (const query::partition_range& range) mutable {
+::mutation_source as_mutation_source(lw_shared_ptr<sstables::sstable> sst) {
+    return [sst] (schema_ptr s, const query::partition_range& range) mutable {
         return as_mutation_reader(sst, sst->read_range_rows(s, range));
     };
 }
@@ -373,7 +373,7 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source) {
             sst->write_components(*mt).get();
             sst->load().get();
 
-            return as_mutation_source(s, sst);
+            return as_mutation_source(sst);
         });
     });
 }

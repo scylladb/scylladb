@@ -108,7 +108,8 @@ void db::serializer<reconcilable_result>::read(reconcilable_result& v, input& in
 }
 
 future<reconcilable_result>
-mutation_query(const mutation_source& source,
+mutation_query(schema_ptr s,
+    const mutation_source& source,
     const query::partition_range& range,
     const query::partition_slice& slice,
     uint32_t row_limit,
@@ -141,8 +142,9 @@ mutation_query(const mutation_source& source,
         return make_ready_future<reconcilable_result>(reconcilable_result());
     }
 
-    return do_with(query_state(range, slice, row_limit, query_time), [&source] (query_state& state) -> future<reconcilable_result> {
-        state.reader = source(state.range);
+    return do_with(query_state(range, slice, row_limit, query_time),
+                   [&source, s = std::move(s)] (query_state& state) -> future<reconcilable_result> {
+        state.reader = source(std::move(s), state.range);
         return consume(state.reader, [&state] (mutation&& m) {
             // FIXME: Make data sources respect row_ranges so that we don't have to filter them out here.
             auto is_distinct = state.slice.options.contains(query::partition_slice::option::distinct);

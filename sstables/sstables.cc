@@ -1352,9 +1352,9 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     }
 }
 
-future<> sstable::write_components(const memtable& mt) {
+future<> sstable::write_components(memtable& mt) {
     _collector.set_replay_position(mt.replay_position());
-    return write_components(mt.make_reader(),
+    return write_components(mt.make_reader(mt.schema()),
             mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max());
 }
 

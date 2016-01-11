@@ -57,7 +57,7 @@ public:
     virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;
 
     virtual void on_update_keyspace(const sstring& ks_name) = 0;
-    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name) = 0;
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) = 0;
     virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) = 0;
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;

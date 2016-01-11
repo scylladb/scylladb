@@ -129,7 +129,7 @@ private:
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
+    response_id_type create_write_response_handler(schema_ptr s, keyspace& ks, db::consistency_level cl, db::write_type type, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets,
             const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>);
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
@@ -143,8 +143,8 @@ private:
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
     ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
-    future<query::result_digest> query_singular_local_digest(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+    future<query::result_digest> query_singular_local_digest(schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_partition_key_range(lw_shared_ptr<query::read_command> cmd, query::partition_range&& range, db::consistency_level cl);
     std::vector<query::partition_range> get_restricted_ranges(keyspace& ks, const schema& s, query::partition_range range);
     float estimate_result_rows_per_range(lw_shared_ptr<query::read_command> cmd, keyspace& ks);
@@ -174,7 +174,7 @@ public:
     }
 
     future<> mutate_locally(const mutation& m);
-    future<> mutate_locally(const frozen_mutation& m);
+    future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
     /**
@@ -222,11 +222,12 @@ public:
         db::consistency_level cl);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations_locally(
-        lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
+        schema_ptr, lw_shared_ptr<query::read_command> cmd, const query::partition_range&);
 
     /*
      * Returns mutation_reader for given column family
      * which combines data from all shards.
+     * Uses schema current at the time of invocation.
      */
     mutation_reader make_local_reader(utils::UUID cf_id, const query::partition_range&);
 

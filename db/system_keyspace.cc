@@ -63,6 +63,8 @@
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
+#include "md5_hasher.hh"
+#include "release.hh"
 #include <core/enum.hh>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -72,6 +74,23 @@ namespace db {
 std::unique_ptr<query_context> qctx = {};
 
 namespace system_keyspace {
+
+static const api::timestamp_type creation_timestamp = api::new_timestamp();
+
+api::timestamp_type schema_creation_timestamp() {
+    return creation_timestamp;
+}
+
+// Increase whenever changing schema of any system table.
+// FIXME: Make automatic by calculating from schema structure.
+static const uint16_t version_sequence_number = 1;
+
+table_schema_version generate_schema_version(utils::UUID table_id) {
+    md5_hasher h;
+    feed_hash(h, table_id);
+    feed_hash(h, version_sequence_number);
+    return utils::UUID_gen::get_name_UUID(h.finalize());
+}
 
 // Currently, the type variables (uuid_type, etc.) are thread-local reference-
 // counted shared pointers. This forces us to also make the built in schemas
@@ -101,6 +120,7 @@ schema_ptr hints() {
        )));
        builder.set_gc_grace_seconds(0);
        builder.set_compaction_strategy_options({{ "enabled", "false" }});
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return hints;
@@ -126,6 +146,7 @@ schema_ptr batchlog() {
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
        )));
        builder.set_gc_grace_seconds(0);
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return batchlog;
@@ -150,6 +171,7 @@ schema_ptr batchlog() {
         // operations on resulting CFMetaData:
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return paxos;
@@ -171,6 +193,7 @@ schema_ptr built_indexes() {
         // comment
         "built column indexes"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::yes);
     }();
     return built_indexes;
@@ -212,6 +235,7 @@ schema_ptr built_indexes() {
         // comment
         "information about the local node"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return local;
@@ -242,6 +266,7 @@ schema_ptr built_indexes() {
         // comment
         "information about known peers in the cluster"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peers;
@@ -265,6 +290,7 @@ schema_ptr built_indexes() {
         // comment
         "events related to peers"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return peer_events;
@@ -286,6 +312,7 @@ schema_ptr built_indexes() {
         // comment
         "ranges requested for transfer"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return range_xfers;
@@ -311,6 +338,7 @@ schema_ptr built_indexes() {
         // comment
         "unfinished compactions"
         )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return compactions_in_progress;
@@ -340,6 +368,7 @@ schema_ptr built_indexes() {
         "week-long compaction history"
         )));
         builder.set_default_time_to_live(std::chrono::duration_cast<std::chrono::seconds>(days(7)));
+        builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
     }();
     return compaction_history;
@@ -368,6 +397,7 @@ schema_ptr built_indexes() {
         // comment
         "historic sstable read rates"
        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
        return builder.build(schema_builder::compact_storage::no);
     }();
     return sstable_activity;
@@ -393,6 +423,7 @@ schema_ptr size_estimates() {
             "per-table primary range size estimates"
             )));
         builder.set_gc_grace_seconds(0);
+        builder.with_version(generate_schema_version(builder.uuid()));
         return builder.build(schema_builder::compact_storage::no);
     }();
     return size_estimates;
@@ -513,7 +544,6 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
             return ms.init_local_preferred_ip_cache();
         });
     });
-    return make_ready_future<>();
 }
 
 typedef std::pair<replay_positions, db_clock::time_point> truncation_entry;
@@ -985,8 +1015,9 @@ query_mutations(distributed<service::storage_proxy>& proxy, const sstring& cf_na
     database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
-    return proxy.local().query_mutations_locally(cmd, query::full_partition_range);
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
+        std::move(slice), std::numeric_limits<uint32_t>::max());
+    return proxy.local().query_mutations_locally(std::move(schema), std::move(cmd), query::full_partition_range);
 }
 
 future<lw_shared_ptr<query::result_set>>
@@ -994,7 +1025,8 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name) {
     database& db = proxy.local().get_db().local();
     schema_ptr schema = db.find_schema(db::system_keyspace::NAME, cf_name);
     auto slice = partition_slice_builder(*schema).build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), std::numeric_limits<uint32_t>::max());
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(),
+        std::move(slice), std::numeric_limits<uint32_t>::max());
     return proxy.local().query(schema, cmd, {query::full_partition_range}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
@@ -1008,7 +1040,7 @@ query(distributed<service::storage_proxy>& proxy, const sstring& cf_name, const 
     auto slice = partition_slice_builder(*schema)
         .with_range(std::move(row_range))
         .build();
-    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), schema->version(), std::move(slice), query::max_rows);
     return proxy.local().query(schema, cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
         return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });

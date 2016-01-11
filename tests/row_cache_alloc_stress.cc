@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
             // Verify that all mutations from memtable went through
             for (auto&& key : keys) {
                 auto range = query::partition_range::make_singular(key);
-                auto reader = cache.make_reader(range);
+                auto reader = cache.make_reader(s, range);
                 auto mo = reader().get0();
                 assert(mo);
                 assert(mo->partition().live_row_count(*s) ==
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
 
             for (auto&& key : keys) {
                 auto range = query::partition_range::make_singular(key);
-                auto reader = cache.make_reader(range);
+                auto reader = cache.make_reader(s, range);
                 auto mo = reader().get0();
                 assert(mo);
             }
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
                 }
 
                 try {
-                    auto reader = cache.make_reader(range);
+                    auto reader = cache.make_reader(s, range);
                     assert(!reader().get0());
                     auto evicted_from_cache = logalloc::segment_size + cell_size * row_count;
                     new char[evicted_from_cache + logalloc::segment_size];
