@@ -39,6 +39,7 @@ if [ ! -f /usr/bin/git ]; then
 fi
 mkdir -p $RPMBUILD/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 if [ "$ID" = "centos" ]; then
+    sudo yum install -y epel-release
     if [ $REBUILD = 1 ]; then
         ./dist/redhat/centos_dep/build_dependency.sh
     else
