@@ -51,6 +51,5 @@ else
         yum install -y scylla-server scylla-server-debuginfo scylla-jmx scylla-tools
     else
         yum install -y $LOCAL_PKG/scylla-server*.x86_64.rpm $LOCAL_PKG/scylla-jmx*.noarch.rpm $LOCAL_PKG/scylla-tools*.noarch.rpm
-        rm /etc/yum.repos.d/scylla.repo
     fi
 fi
