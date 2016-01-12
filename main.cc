@@ -251,6 +251,13 @@ int main(int ac, char** av) {
         apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                 cfg->log_to_stdout(), cfg->log_to_syslog());
 
+        // Check developer mode before even reading the config file, because we may not be
+        // able to read it if we need to disable strict dma mode.
+        // We'll redo this later and apply it to all reactors.
+        if (opts.count("developer-mode")) {
+            engine().set_strict_dma(false);
+        }
+
         return read_config(opts, *cfg).then([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs]() {
             apply_logger_settings(cfg->default_log_level(), cfg->logger_log_level(),
                     cfg->log_to_stdout(), cfg->log_to_syslog());
@@ -305,8 +312,16 @@ int main(int ac, char** av) {
             }
 
             using namespace locator;
-            supervisor_notify("creating snitch");
-            return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch()).then([] {
+            // Re-apply strict-dma after we've read the config file, this time
+            // to all reactors
+            return parallel_for_each(boost::irange(0u, smp::count), [devmode = opts.count("developer-mode")] (unsigned cpu) {
+                if (devmode) {
+                    engine().set_strict_dma(false);
+                }
+                return make_ready_future<>();
+            }).then([cfg] {
+                supervisor_notify("creating snitch");
+                return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch());
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
             }).then([api_address] {
