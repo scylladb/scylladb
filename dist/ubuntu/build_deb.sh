@@ -21,9 +21,6 @@ fi
 VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
-if [ "$SCYLLA_VERSION" = "development" ]; then
-	SCYLLA_VERSION=0development
-fi
 echo $VERSION > version
 ./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
 
