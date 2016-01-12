@@ -145,7 +145,7 @@ private:
                     return 0;
                 });
 
-                _cmd->slice.set_range(*_last_pkey, row_ranges);
+                _cmd->slice.set_range(*_schema, *_last_pkey, row_ranges);
             }
         }
 
@@ -281,6 +281,15 @@ private:
 
         myvisitor v(*this, std::min(page_size, _max), builder, *_schema, *_selection);
         query::result_view::consume(results->buf(), _cmd->slice, v);
+
+        if (_last_pkey) {
+            // refs #752, when doing aggregate queries we will re-use same
+            // slice repeatedly. Since "specific ck ranges" only deal with
+            // a single extra range, we must clear out the old one
+            // Even if it was not so of course, leaving junk in the slice
+            // is bad.
+            _cmd->slice.clear_range(*_schema, *_last_pkey);
+        }
 
         _max = _max - v.included_rows;
         _exhausted = v.included_rows < page_size || _max == 0;
