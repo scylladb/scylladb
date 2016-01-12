@@ -89,10 +89,19 @@ public:
     }
     specific_ranges(const specific_ranges&) = default;
 
-    void add(partition_key pk, clustering_row_ranges ranges) {
-        throw std::runtime_error("Only single specific range supported currently");
+    void add(const schema& s, partition_key pk, clustering_row_ranges ranges) {
+        if (!_pk.equal(s, pk)) {
+            throw std::runtime_error("Only single specific range supported currently");
+        }
+        _pk = std::move(pk);
+        _ranges = std::move(ranges);
     }
-
+    bool contains(const schema& s, const partition_key& pk) {
+        return _pk.equal(s, pk);
+    }
+    size_t size() const {
+        return 1;
+    }
     const clustering_row_ranges* range_for(const schema& s, const partition_key& key) const {
         if (_pk.equal(s, key)) {
             return &_ranges;
@@ -157,11 +166,21 @@ const clustering_row_ranges& partition_slice::row_ranges(const schema& s, const 
     return r ? *r : _row_ranges;
 }
 
-void partition_slice::set_range(const partition_key& k, clustering_row_ranges range) {
+void partition_slice::set_range(const schema& s, const partition_key& k, clustering_row_ranges range) {
     if (!_specific_ranges) {
         _specific_ranges = std::make_unique<specific_ranges>(k, std::move(range));
     } else {
-        _specific_ranges->add(k, std::move(range));
+        _specific_ranges->add(s, k, std::move(range));
+    }
+}
+
+void partition_slice::clear_range(const schema& s, const partition_key& k) {
+    if (_specific_ranges && _specific_ranges->contains(s, k)) {
+        // just in case someone changes the impl above,
+        // we should do actual remove if specific_ranges suddenly
+        // becomes an actual map
+        assert(_specific_ranges->size() == 1);
+        _specific_ranges = nullptr;
     }
 }
 
