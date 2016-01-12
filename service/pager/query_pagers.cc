@@ -279,7 +279,7 @@ private:
             }
         };
 
-        myvisitor v(*this, page_size, builder, *_schema, *_selection);
+        myvisitor v(*this, std::min(page_size, _max), builder, *_schema, *_selection);
         query::result_view::consume(results->buf(), _cmd->slice, v);
 
         if (_last_pkey) {
