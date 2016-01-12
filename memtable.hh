@@ -38,13 +38,15 @@ namespace bi = boost::intrusive;
 
 class partition_entry {
     bi::set_member_hook<> _link;
+    schema_ptr _schema;
     dht::decorated_key _key;
     mutation_partition _p;
 public:
     friend class memtable;
 
-    partition_entry(dht::decorated_key key, mutation_partition p)
-        : _key(std::move(key))
+    partition_entry(schema_ptr s, dht::decorated_key key, mutation_partition p)
+        : _schema(std::move(s))
+        , _key(std::move(key))
         , _p(std::move(p))
     { }
 
@@ -54,6 +56,9 @@ public:
     dht::decorated_key& key() { return _key; }
     const mutation_partition& partition() const { return _p; }
     mutation_partition& partition() { return _p; }
+    const schema_ptr& schema() const { return _schema; }
+    schema_ptr& schema() { return _schema; }
+    mutation read(const schema_ptr&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -92,6 +97,7 @@ public:
         bi::compare<partition_entry::compare>>;
 private:
     schema_ptr _schema;
+    logalloc::allocating_section _read_section;
     mutable logalloc::region _region;
     logalloc::allocating_section _allocating_section;
     partitions_type partitions;
@@ -103,13 +109,18 @@ private:
     boost::iterator_range<partitions_type::const_iterator> slice(const query::partition_range& r) const;
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(partition_key_view key);
+    void upgrade_entry(partition_entry&);
 public:
     explicit memtable(schema_ptr schema, logalloc::region_group* dirty_memory_region_group = nullptr);
     ~memtable();
     schema_ptr schema() const { return _schema; }
-    future<> apply(const memtable&);
+    void set_schema(schema_ptr) noexcept;
+    future<> apply(memtable&);
+    // Applies mutation to this memtable.
+    // The mutation is upgraded to current schema.
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
-    void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
+    // The mutation is upgraded to current schema.
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     const logalloc::region& region() const {
         return _region;
     }
@@ -123,7 +134,9 @@ public:
     // doesn't need to ensure that memtable remains live.
     //
     // The 'range' parameter must be live as long as the reader is being used
-    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+    //
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_reader(schema_ptr, const query::partition_range& range = query::full_partition_range);
 
     mutation_source as_data_source();
     key_source as_key_source();

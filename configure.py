@@ -134,6 +134,7 @@ modes = {
 
 scylla_tests = [
     'tests/mutation_test',
+    'tests/canonical_mutation_test',
     'tests/range_test',
     'tests/types_test',
     'tests/keys_test',
@@ -151,6 +152,7 @@ scylla_tests = [
     'tests/perf/perf_sstable',
     'tests/cql_query_test',
     'tests/storage_proxy_test',
+    'tests/schema_change_test',
     'tests/mutation_reader_test',
     'tests/key_reader_test',
     'tests/mutation_query_test',
@@ -222,6 +224,8 @@ arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_t
 			help = 'Link libgcc and libstdc++ statically')
 arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
                         help = 'Enable(1)/disable(0)compiler debug information generation for tests')
+arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
+                        help = 'Python3 path')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -235,11 +239,15 @@ cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'C
 
 scylla_core = (['database.cc',
                  'schema.cc',
+                 'frozen_schema.cc',
+                 'schema_registry.cc',
                  'bytes.cc',
                  'mutation.cc',
                  'row_cache.cc',
+                 'canonical_mutation.cc',
                  'frozen_mutation.cc',
                  'memtable.cc',
+                 'schema_mutations.cc',
                  'release.cc',
                  'utils/logalloc.cc',
                  'utils/large_bitset.cc',
@@ -469,6 +477,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/partitioner_test',
     'tests/map_difference_test',
     'tests/frozen_mutation_test',
+    'tests/canonical_mutation_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
@@ -562,7 +571,7 @@ elif args.dpdk_target:
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
 
-status = subprocess.call(['./configure.py'] + seastar_flags, cwd = 'seastar')
+status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
 if status != 0:
     print('Seastar configuration failed')
@@ -758,7 +767,7 @@ with open(buildfile, 'w') as f:
     f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
-          command = python3 configure.py $configure_args
+          command = {python} configure.py $configure_args
           generator = 1
         build build.ninja: configure | configure.py
         rule cscope

@@ -37,11 +37,29 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
+#include "db/serializer.hh"
+
+using column_count_type = uint32_t;
 
 // Column ID, unique within column_kind
-using column_id = uint32_t;
+using column_id = column_count_type;
+
+// Cluster-wide identifier of schema version of particular table.
+//
+// The version changes the value not only on structural changes but also
+// temporal. For example, schemas with the same set of columns but created at
+// different times should have different versions. This allows nodes to detect
+// if the version they see was already synchronized with or not even if it has
+// the same structure as the past versions.
+//
+// Schema changes merged in any order should result in the same final version.
+//
+// When table_schema_version changes, schema_tables::calculate_schema_digest() should
+// also change when schema mutations are applied.
+using table_schema_version = utils::UUID;
 
 class schema;
+class schema_registry_entry;
 
 // Useful functions to manipulate the schema's comparator field
 namespace cell_comparator {
@@ -169,8 +187,14 @@ struct index_info {
 
 class column_definition final {
 public:
+    struct name_comparator {
+        bool operator()(const column_definition& d1, const column_definition& d2) const {
+            return d1.name() < d2.name();
+        }
+    };
 private:
     bytes _name;
+    api::timestamp_type _dropped_at;
 
     struct thrift_bits {
         thrift_bits()
@@ -183,7 +207,9 @@ private:
     thrift_bits _thrift_bits;
     friend class schema;
 public:
-    column_definition(bytes name, data_type type, column_kind kind, column_id component_index = 0, index_info = index_info());
+    column_definition(bytes name, data_type type, column_kind kind,
+        column_id component_index = 0, index_info = index_info(),
+        api::timestamp_type dropped_at = api::missing_timestamp);
 
     data_type type;
 
@@ -201,7 +227,7 @@ public:
     bool is_partition_key() const { return kind == column_kind::partition_key; }
     bool is_clustering_key() const { return kind == column_kind::clustering_key; }
     bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
-    bool is_atomic() const { return !type->is_multi_cell(); }
+    bool is_atomic() const { return type->is_atomic(); }
     bool is_compact_value() const { return kind == column_kind::compact_column; }
     const sstring& name_as_text() const;
     const bytes& name() const;
@@ -229,6 +255,7 @@ public:
     bool is_part_of_cell_name() const {
         return is_regular() || is_static();
     }
+    api::timestamp_type dropped_at() const { return _dropped_at; }
     friend bool operator==(const column_definition&, const column_definition&);
 };
 
@@ -250,11 +277,61 @@ bool operator==(const column_definition&, const column_definition&);
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 
+// Encapsulates information needed for converting mutations between different schema versions.
+class column_mapping {
+public:
+    struct column {
+        bytes _name;
+        data_type _type;
+        const bytes& name() const { return _name; }
+        const data_type& type() const { return _type; }
+    };
+private:
+    // Contains _n_static definitions for static columns followed by definitions for regular columns,
+    // both ordered by consecutive column_ids.
+    // Primary key column sets are not mutable so we don't need to map them.
+    std::vector<column> _columns;
+    column_count_type _n_static = 0;
+public:
+    column_mapping() {}
+    column_mapping(std::vector<column> columns, column_count_type n_static)
+            : _columns(std::move(columns))
+            , _n_static(n_static)
+    { }
+    const column& static_column_at(column_id id) const {
+        if (id >= _n_static) {
+            throw std::out_of_range(sprint("static column id %d >= %d", id, _n_static));
+        }
+        return _columns[id];
+    }
+    const column& regular_column_at(column_id id) const {
+        auto n_regular = _columns.size() - _n_static;
+        if (id >= n_regular) {
+            throw std::out_of_range(sprint("regular column id %d >= %d", id, n_regular));
+        }
+        return _columns[id + _n_static];
+    }
+    friend class db::serializer<column_mapping>;
+};
+
+namespace db {
+
+template<> serializer<column_mapping>::serializer(const column_mapping&);
+template<> void serializer<column_mapping>::write(output&, const column_mapping&);
+template<> void serializer<column_mapping>::write(bytes_ostream&) const;
+template<> column_mapping serializer<column_mapping>::read(input&);
+template<> void serializer<column_mapping>::skip(input&);
+
+extern template class serializer<column_mapping>;
+
+}
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
+ * Use global_schema_ptr for safe across-shard access.
  */
-class schema final {
+class schema final : public enable_lw_shared_from_this<schema> {
 private:
     // More complex fields are derived from these inside rebuild().
     // Contains only fields which can be safely default-copied.
@@ -289,23 +366,28 @@ private:
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::size_tiered;
         std::map<sstring, sstring> _compaction_strategy_options;
         caching_options _caching_options;
+        table_schema_version _version;
+        std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
     };
     raw_schema _raw;
     thrift_schema _thrift;
+    mutable schema_registry_entry* _registry_entry = nullptr;
 
-    const std::array<size_t, 4> _offsets;
+    const std::array<column_count_type, 4> _offsets;
 
-    inline size_t column_offset(column_kind k) const {
-        return k == column_kind::partition_key ? 0 : _offsets[size_t(k) - 1];
+    inline column_count_type column_offset(column_kind k) const {
+        return k == column_kind::partition_key ? 0 : _offsets[column_count_type(k) - 1];
     }
 
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
     std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_type;
-
+    column_mapping _column_mapping;
     friend class schema_builder;
 public:
+    using row_column_ids_are_ordered_by_name = std::true_type;
+
     typedef std::vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;
     typedef typename columns_type::const_iterator const_iterator;
@@ -326,6 +408,7 @@ private:
     void rebuild();
     schema(const raw_schema&);
 public:
+    // deprecated, use schema_builder.
     schema(std::experimental::optional<utils::UUID> id,
         sstring ks_name,
         sstring cf_name,
@@ -336,6 +419,10 @@ public:
         data_type regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
+    ~schema();
+    table_schema_version version() const {
+        return _raw._version;
+    }
     double bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
@@ -440,11 +527,11 @@ public:
     bool is_last_partition_key(const column_definition& def) const;
     bool has_multi_cell_collections() const;
     bool has_static_columns() const;
-    size_t partition_key_size() const;
-    size_t clustering_key_size() const;
-    size_t static_columns_count() const;
-    size_t compact_columns_count() const;
-    size_t regular_columns_count() const;
+    column_count_type partition_key_size() const;
+    column_count_type clustering_key_size() const;
+    column_count_type static_columns_count() const;
+    column_count_type compact_columns_count() const;
+    column_count_type regular_columns_count() const;
     // Returns a range of column definitions
     const_iterator_range_type partition_key_columns() const;
     // Returns a range of column definitions
@@ -460,6 +547,12 @@ public:
     // Returns a range of column definitions
     const columns_type& all_columns_in_select_order() const;
     uint32_t position(const column_definition& column) const;
+
+    const auto& all_columns() const { return _columns_by_name; }
+
+    const auto& dropped_columns() const {
+        return _raw._dropped_columns;
+    }
 
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
@@ -487,6 +580,16 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const schema& s);
     friend bool operator==(const schema&, const schema&);
+    const column_mapping& get_column_mapping() const;
+    friend class schema_registry_entry;
+    // May be called from different shard
+    schema_registry_entry* registry_entry() const noexcept;
+    // Returns true iff this schema version was synced with on current node.
+    // Schema version is said to be synced with when its mutations were merged
+    // into current node's schema, so that current node's schema is at least as
+    // recent as this version.
+    bool is_synced() const;
+    bool equal_columns(const schema&) const;
 };
 
 bool operator==(const schema&, const schema&);

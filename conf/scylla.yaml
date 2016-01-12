@@ -169,6 +169,12 @@ rpc_address: localhost
 # port for Thrift to listen for clients on
 rpc_port: 9160
 
+# port for REST API server
+api_port: 10000
+
+# IP for the REST API server
+api_address: 127.0.0.1
+
 ###################################################
 ## Not currently supported, reserved for future use
 ###################################################

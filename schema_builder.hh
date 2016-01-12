@@ -25,8 +25,12 @@
 #include "database_fwd.hh"
 
 struct schema_builder {
+public:
+    enum class compact_storage { no, yes };
+private:
     schema::raw_schema _raw;
-
+    std::experimental::optional<compact_storage> _compact_storage;
+    std::experimental::optional<table_schema_version> _version;
     schema_builder(const schema::raw_schema&);
 public:
     schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -176,10 +180,18 @@ public:
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index);
+    schema_builder& without_column(bytes name);
+    schema_builder& without_column(sstring name, api::timestamp_type timestamp);
+    schema_builder& with_column_rename(bytes from, bytes to);
+    schema_builder& with_altered_column_type(bytes name, data_type new_type);
+
+    schema_builder& with(compact_storage);
+    schema_builder& with_version(table_schema_version);
 
     void add_default_index_names(database&);
 
-    enum class compact_storage { no, yes };
+    // Equivalent to with(cp).build()
     schema_ptr build(compact_storage cp);
+
     schema_ptr build();
 };

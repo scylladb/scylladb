@@ -221,7 +221,7 @@ public:
     mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
-    future<> write_components(const memtable& mt);
+    future<> write_components(memtable& mt);
     future<> write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size);
 

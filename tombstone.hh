@@ -23,6 +23,7 @@
 
 #include "timestamp.hh"
 #include "gc_clock.hh"
+#include "hashing.hh"
 
 /**
  * Represents deletion operation. Can be commuted with other tombstones via apply() method.
@@ -98,5 +99,11 @@ struct tombstone final {
     }
 };
 
-
-
+template<>
+struct appending_hash<tombstone> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const tombstone& t) const {
+        feed_hash(h, t.timestamp);
+        feed_hash(h, t.deletion_time);
+    }
+};

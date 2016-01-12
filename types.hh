@@ -42,6 +42,7 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
 #include "net/ip.hh"
+#include "hashing.hh"
 #include <boost/multiprecision/cpp_int.hpp>  // FIXME: remove somehow
 
 class tuple_type_impl;
@@ -468,6 +469,7 @@ public:
     virtual bool is_counter() const { return false; }
     virtual bool is_collection() const { return false; }
     virtual bool is_multi_cell() const { return false; }
+    virtual bool is_atomic() const { return !is_multi_cell(); }
     virtual bool is_reversed() const { return false; }
     virtual bool is_tuple() const { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
@@ -1426,3 +1428,10 @@ data_value::data_value(std::experimental::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
 
+template<>
+struct appending_hash<data_type> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const data_type& v) const {
+        feed_hash(h, v->name());
+    }
+};

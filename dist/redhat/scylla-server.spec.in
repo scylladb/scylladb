@@ -8,9 +8,9 @@ License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 
-BuildRequires:  libaio-devel boost-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel
-%{?fedora:BuildRequires: ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan}
-%{?rhel:BuildRequires: scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1}
+BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel
+%{?fedora:BuildRequires: boost-devel ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan}
+%{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1}
 Requires:       systemd-libs xfsprogs mdadm hwloc
 
 %description
@@ -28,14 +28,13 @@ Requires:       systemd-libs xfsprogs mdadm hwloc
 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
 %endif
 %if 0%{?rhel}
-./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++
+python3.4 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
 ninja-build -j2
 
 %install
 rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT%{_bindir}
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysctl.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -43,7 +42,6 @@ mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 
-install -m644 dist/common/sysctl.d/99-scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/sysctl.d/
 install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
@@ -128,7 +126,6 @@ rm -rf $RPM_BUILD_ROOT
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
-%{_sysconfdir}/sysctl.d/99-scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
@@ -142,7 +139,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_run
 %{_prefix}/lib/scylla/scylla_stop
-%{_prefix}/lib/scylla/scylla_save_coredump
+%{_prefix}/lib/scylla/scylla_setup
 %{_prefix}/lib/scylla/scylla_coredump_setup
 %{_prefix}/lib/scylla/scylla_raid_setup
 %{_prefix}/lib/scylla/scylla_sysconfig_setup

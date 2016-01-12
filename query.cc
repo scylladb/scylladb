@@ -51,6 +51,7 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
 std::ostream& operator<<(std::ostream& out, const read_command& r) {
     return out << "read_command{"
         << "cf_id=" << r.cf_id
+        << ", version=" << r.schema_version
         << ", slice=" << r.slice << ""
         << ", limit=" << r.row_limit
         << ", timestamp=" << r.timestamp.time_since_epoch().count() << "}";
@@ -216,7 +217,7 @@ partition_slice partition_slice::deserialize(bytes_view& v) {
 }
 
 size_t read_command::serialized_size() const {
-    return 2 * serialize_int64_size // cf_id
+    return 4 * serialize_int64_size // cf_id
             + serialize_int32_size // row_limit
             + serialize_int32_size // timestamp
             + slice.serialized_size()
@@ -226,20 +227,27 @@ size_t read_command::serialized_size() const {
 void read_command::serialize(bytes::iterator& out) const {
     serialize_int64(out, cf_id.get_most_significant_bits());
     serialize_int64(out, cf_id.get_least_significant_bits());
+    serialize_int64(out, schema_version.get_most_significant_bits());
+    serialize_int64(out, schema_version.get_least_significant_bits());
     serialize_int32(out, row_limit);
     serialize_int32(out, timestamp.time_since_epoch().count());
     slice.serialize(out);
 }
 
-read_command read_command::deserialize(bytes_view& v) {
+static utils::UUID read_uuid(bytes_view& v) {
     auto msb = read_simple<int64_t>(v);
     auto lsb = read_simple<int64_t>(v);
-    utils::UUID uuid(msb, lsb);
+    return { msb, lsb };
+}
+
+read_command read_command::deserialize(bytes_view& v) {
+    auto cf_id = read_uuid(v);
+    auto schema_version = read_uuid(v);
     uint32_t row_limit = read_simple<int32_t>(v);
     auto timestamp = gc_clock::time_point(gc_clock::duration(read_simple<int32_t>(v)));
 
     partition_slice slice = partition_slice::deserialize(v);
-    return read_command(std::move(uuid), std::move(slice), row_limit, timestamp);
+    return read_command(cf_id, schema_version, std::move(slice), row_limit, timestamp);
 }
 
 

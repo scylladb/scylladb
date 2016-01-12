@@ -189,7 +189,8 @@ private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
-    mutation_reader make_sstable_reader(const query::partition_range& range) const;
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_sstable_reader(schema_ptr schema, const query::partition_range& range) const;
 
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
@@ -200,7 +201,8 @@ public:
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
-    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+    // Mutations returned by the reader will all have given schema.
+    mutation_reader make_reader(schema_ptr schema, const query::partition_range& range = query::full_partition_range) const;
 
     mutation_source as_mutation_source() const;
 
@@ -225,16 +227,21 @@ public:
     column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
-    schema_ptr schema() const { return _schema; }
+    const schema_ptr& schema() const { return _schema; }
+    void set_schema(schema_ptr);
     db::commitlog* commitlog() { return _commitlog; }
-    future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
-    future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
-    future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
-    void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position());
+    future<const_mutation_partition_ptr> find_partition(schema_ptr, const dht::decorated_key& key) const;
+    future<const_mutation_partition_ptr> find_partition_slow(schema_ptr, const partition_key& key) const;
+    future<const_row_ptr> find_row(schema_ptr, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
+    // Applies given mutation to this column family
+    // The mutation is always upgraded to current schema.
+    void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
 
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<lw_shared_ptr<query::result>> query(schema_ptr,
+        const query::read_command& cmd,
+        const std::vector<query::partition_range>& ranges);
 
     future<> populate(sstring datadir);
 
@@ -360,14 +367,14 @@ private:
     // so that iteration can be stopped by returning false.
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
-    future<bool> for_all_partitions(Func&& func) const;
+    future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
     void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
-    future<bool> for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
+    future<bool> for_all_partitions_slow(schema_ptr, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
     // Testing purposes.
@@ -541,7 +548,7 @@ class database {
     circular_buffer<promise<>> _throttled_requests;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
+    future<> apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position&);
     future<> populate(sstring datadir);
     future<> populate_keyspace(sstring datadir, sstring ks_name);
 
@@ -553,7 +560,7 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
     future<> throttle();
-    future<> do_apply(const frozen_mutation&);
+    future<> do_apply(schema_ptr, const frozen_mutation&);
     void unthrottle();
 public:
     static utils::UUID empty_version;
@@ -584,7 +591,6 @@ public:
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
-    future<> update_column_family(const sstring& ks_name, const sstring& cf_name);
     future<> drop_column_family(db_clock::time_point changed_at, const sstring& ks_name, const sstring& cf_name);
 
     /* throws std::out_of_range if missing */
@@ -619,9 +625,9 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
-    future<reconcilable_result> query_mutations(const query::read_command& cmd, const query::partition_range& range);
-    future<> apply(const frozen_mutation&);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
+    future<> apply(schema_ptr, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);
@@ -704,11 +710,11 @@ column_family::check_valid_rp(const db::replay_position& rp) const {
 
 inline
 void
-column_family::apply(const frozen_mutation& m, const db::replay_position& rp) {
+column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     check_valid_rp(rp);
-    active_memtable().apply(m, rp);
+    active_memtable().apply(m, m_schema, rp);
     seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {

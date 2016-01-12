@@ -23,7 +23,7 @@ override_dh_auto_install:
 	cp $(CURDIR)/dist/common/limits.d/scylla.conf  $(LIMITS)
 
 	mkdir -p $(SYSCTL) && \
-	cp $(CURDIR)/dist/common/sysctl.d/99-scylla.conf $(SYSCTL)
+	cp $(CURDIR)/dist/ubuntu/sysctl.d/99-scylla.conf $(SYSCTL)
 
 	mkdir -p $(CONF) && \
 	cp $(CURDIR)/conf/scylla.yaml $(CONF)

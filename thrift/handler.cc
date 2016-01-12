@@ -36,6 +36,7 @@
 #include "service/migration_manager.hh"
 #include "utils/class_registrator.hh"
 #include "noexcept_traits.hh"
+#include "schema_registry.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -194,16 +195,18 @@ public:
                     throw unimplemented_exception();
                 } else if (predicate.__isset.slice_range) {
                   auto&& range = predicate.slice_range;
-                  return cf.find_row(dk, clustering_key::make_empty(*cf.schema())).then([&cf, range = std::move(range)] (column_family::const_row_ptr rw) {
+                    auto s = cf.schema();
+                    return cf.find_row(s, dk, clustering_key::make_empty(*s)).then(
+                          [s, &cf, range = std::move(range)] (column_family::const_row_ptr rw) {
                     std::vector<ColumnOrSuperColumn> ret;
                     if (rw) {
-                        auto beg = cf.schema()->regular_begin();
+                        auto beg = s->regular_begin();
                         if (!range.start.empty()) {
-                            beg = cf.schema()->regular_lower_bound(to_bytes(range.start));
+                            beg = s->regular_lower_bound(to_bytes(range.start));
                         }
-                        auto end = cf.schema()->regular_end();
+                        auto end = s->regular_end();
                         if (!range.finish.empty()) {
-                            end = cf.schema()->regular_upper_bound(to_bytes(range.finish));
+                            end = s->regular_upper_bound(to_bytes(range.finish));
                         }
                         auto count = range.count;
                         // FIXME: force limit count?
@@ -314,8 +317,9 @@ public:
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
                     auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
-                    mutation m_to_apply(key_from_thrift(cf.schema(), thrift_key), cf.schema());
-                    auto empty_clustering_key = clustering_key::make_empty(*cf.schema());
+                    auto schema = cf.schema();
+                    mutation m_to_apply(key_from_thrift(schema, thrift_key), schema);
+                    auto empty_clustering_key = clustering_key::make_empty(*schema);
                     for (const Mutation& m : mutations) {
                         if (m.__isset.column_or_supercolumn) {
                             auto&& cosc = m.column_or_supercolumn;
@@ -359,8 +363,8 @@ public:
                         }
                     }
                     auto shard = _db.local().shard_of(m_to_apply);
-                    return _db.invoke_on(shard, [this, cf_name, m = freeze(m_to_apply)] (database& db) {
-                        return db.apply(m);
+                    return _db.invoke_on(shard, [this, gs = global_schema_ptr(schema), cf_name, m = freeze(m_to_apply)] (database& db) {
+                        return db.apply(gs, m);
                     });
                 });
             });

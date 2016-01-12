@@ -29,11 +29,14 @@
 #include <boost/range/adaptor/filtered.hpp>
 
 #include "schema.hh"
+#include "tombstone.hh"
 #include "keys.hh"
-#include "atomic_cell.hh"
+#include "atomic_cell_or_collection.hh"
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
+#include "mutation_partition_visitor.hh"
 #include "utils/managed_vector.hh"
+#include "hashing_partition_visitor.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -243,7 +246,11 @@ public:
 
     row difference(const schema&, column_kind, const row& other) const;
 
+    // Assumes the other row has the same schema
+    // Consistent with feed_hash()
     bool operator==(const row&) const;
+
+    bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     friend std::ostream& operator<<(std::ostream& os, const row& r);
 };
@@ -335,6 +342,7 @@ public:
         }
         return !is_missing() && _ttl != dead;
     }
+    // Consistent with feed_hash()
     bool operator==(const row_marker& other) const {
         if (_timestamp != other._timestamp) {
             return false;
@@ -350,7 +358,26 @@ public:
     bool operator!=(const row_marker& other) const {
         return !(*this == other);
     }
+    // Consistent with operator==()
+    template<typename Hasher>
+    void feed_hash(Hasher& h) const {
+        ::feed_hash(h, _timestamp);
+        if (!is_missing()) {
+            ::feed_hash(h, _ttl);
+            if (_ttl != no_ttl) {
+                ::feed_hash(h, _expiry);
+            }
+        }
+    }
     friend std::ostream& operator<<(std::ostream& os, const row_marker& rm);
+};
+
+template<>
+struct appending_hash<row_marker> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const row_marker& m) const {
+        m.feed_hash(h);
+    }
 };
 
 class deletable_row final {
@@ -367,6 +394,10 @@ public:
     void apply(const row_marker& rm) {
         _marker.apply(rm);
     }
+
+    void remove_tombstone() {
+        _deleted_at = tombstone();
+    }
 public:
     tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -375,7 +406,7 @@ public:
     const row& cells() const { return _cells; }
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
-    bool equal(const schema& s, const deletable_row& other) const;
+    bool equal(column_kind, const schema& s, const deletable_row& other, const schema& other_schema) const;
     bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
@@ -522,6 +553,7 @@ public:
     }
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
     bool equal(const schema& s, const rows_entry& other) const;
+    bool equal(const schema& s, const rows_entry& other, const schema& other_schema) const;
 };
 
 namespace db {
@@ -553,17 +585,30 @@ private:
     template<typename T>
     friend class db::serializer;
     friend class mutation_partition_applier;
+    friend class converting_mutation_partition_applier;
 public:
+    struct copy_comparators_only {};
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
         , _row_tombstones(row_tombstones_entry::compare(*s))
+    { }
+    mutation_partition(mutation_partition& other, copy_comparators_only)
+        : _rows(other._rows.comp())
+        , _row_tombstones(other._row_tombstones.comp())
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;
-    bool equal(const schema& s, const mutation_partition&) const;
+    bool equal(const schema&, const mutation_partition&) const;
+    bool equal(const schema& this_schema, const mutation_partition& p, const schema& p_schema) const;
+    // Consistent with equal()
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        hashing_partition_visitor<Hasher> v(h, s);
+        accept(s, v);
+    }
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
@@ -578,23 +623,30 @@ public:
     //
     // Applies p to current object.
     //
+    // Commutative when this_schema == p_schema. If schemas differ, data in p which
+    // is not representable in this_schema is dropped, thus apply() loses commutativity.
+    //
     // Basic exception guarantees. If apply() throws after being called in
     // some entry state p0, the object is left in some consistent state p1 and
     // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
     //
     // FIXME: make stronger exception guarantees (p1 = p0).
-    //
-    void apply(const schema& schema, const mutation_partition& p);
+    void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
     //
     // Same guarantees as for apply(const schema&, const mutation_partition&).
     //
     // In case of exception the current object and external object (moved-from)
     // are both left in some valid states, such that they still will commute to
     // a state the current object would have should the exception had not occurred.
+    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
+    // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
+    void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
+
+    // Converts partition to the new schema. When succeeds the partition should only be accessed
+    // using the new schema.
     //
-    void apply(const schema& schema, mutation_partition&& p);
-    // Same guarantees as for apply(const schema&, const mutation_partition&).
-    void apply(const schema& schema, mutation_partition_view);
+    // Strong exception guarantees.
+    void upgrade(const schema& old_schema, const schema& new_schema);
 private:
     void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
     void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);
@@ -644,6 +696,7 @@ public:
 
     // Returns the minimal mutation_partition that when applied to "other" will
     // create a mutation_partition equal to the sum of other and this one.
+    // This and other must both be governed by the same schema s.
     mutation_partition difference(schema_ptr s, const mutation_partition& other) const;
 
     // Returns true if there is no live data or tombstones.
@@ -667,6 +720,7 @@ public:
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
     // Returns at most "limit" rows. The limit must be greater than 0.
     void query(query::result::partition_writer& pw, const schema& s, gc_clock::time_point now, uint32_t limit = query::max_rows) const;
+    void accept(const schema&, mutation_partition_visitor&) const;
 
     // Returns the number of live CQL rows in this partition.
     //

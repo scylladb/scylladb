@@ -38,7 +38,6 @@ fi
 
 cd -
 
-sudo yum install -y epel-release
 sudo yum install -y cryptopp cryptopp-devel jsoncpp jsoncpp-devel lz4 lz4-devel yaml-cpp yaml-cpp-devel thrift thrift-devel scons gtest gtest-devel python34
 sudo ln -sf /usr/bin/python3.4 /usr/bin/python3
 

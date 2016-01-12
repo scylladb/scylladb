@@ -22,6 +22,7 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "hashing.hh"
 #include <experimental/optional>
 #include <iosfwd>
 #include <functional>
@@ -57,3 +58,20 @@ std::ostream& operator<<(std::ostream& os, const bytes_view& b);
 
 }
 
+template<>
+struct appending_hash<bytes> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const bytes& v) const {
+        feed_hash(h, v.size());
+        h.update(reinterpret_cast<const char*>(v.cbegin()), v.size() * sizeof(bytes::value_type));
+    }
+};
+
+template<>
+struct appending_hash<bytes_view> {
+    template<typename Hasher>
+    void operator()(Hasher& h, bytes_view v) const {
+        feed_hash(h, v.size());
+        h.update(reinterpret_cast<const char*>(v.begin()), v.size() * sizeof(bytes_view::value_type));
+    }
+};

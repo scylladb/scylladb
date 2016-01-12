@@ -57,6 +57,7 @@
 #include <seastar/core/enum.hh>
 #include "utils/latency.hh"
 #include "utils/flush_queue.hh"
+#include "schema_registry.hh"
 
 using namespace std::chrono_literals;
 
@@ -126,8 +127,8 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
 
 mutation_source
 column_family::sstables_as_mutation_source() {
-    return [this] (const query::partition_range& r) {
-        return make_sstable_reader(r);
+    return [this] (schema_ptr s, const query::partition_range& r) {
+        return make_sstable_reader(std::move(s), r);
     };
 }
 
@@ -206,16 +207,16 @@ public:
 };
 
 mutation_reader
-column_family::make_sstable_reader(const query::partition_range& pr) const {
+column_family::make_sstable_reader(schema_ptr s, const query::partition_range& pr) const {
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return make_mutation_reader<single_key_sstable_reader>(_schema, _sstables, *pos.key());
+        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key());
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return make_mutation_reader<range_sstable_reader>(_schema, _sstables, pr);
+        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr);
     }
 }
 
@@ -239,9 +240,9 @@ key_source column_family::sstables_as_key_source() const {
 
 // Exposed for testing, not performance critical.
 future<column_family::const_mutation_partition_ptr>
-column_family::find_partition(const dht::decorated_key& key) const {
-    return do_with(query::partition_range::make_singular(key), [this] (auto& range) {
-        return do_with(this->make_reader(range), [] (mutation_reader& reader) {
+column_family::find_partition(schema_ptr s, const dht::decorated_key& key) const {
+    return do_with(query::partition_range::make_singular(key), [s = std::move(s), this] (auto& range) {
+        return do_with(this->make_reader(s, range), [] (mutation_reader& reader) {
             return reader().then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
                 if (!mo) {
                     return {};
@@ -253,13 +254,13 @@ column_family::find_partition(const dht::decorated_key& key) const {
 }
 
 future<column_family::const_mutation_partition_ptr>
-column_family::find_partition_slow(const partition_key& key) const {
-    return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
+column_family::find_partition_slow(schema_ptr s, const partition_key& key) const {
+    return find_partition(s, dht::global_partitioner().decorate_key(*s, key));
 }
 
 future<column_family::const_row_ptr>
-column_family::find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const {
-    return find_partition(partition_key).then([clustering_key = std::move(clustering_key)] (const_mutation_partition_ptr p) {
+column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, clustering_key clustering_key) const {
+    return find_partition(std::move(s), partition_key).then([clustering_key = std::move(clustering_key)] (const_mutation_partition_ptr p) {
         if (!p) {
             return make_ready_future<const_row_ptr>();
         }
@@ -274,8 +275,8 @@ column_family::find_row(const dht::decorated_key& partition_key, clustering_key 
 }
 
 mutation_reader
-column_family::make_reader(const query::partition_range& range) const {
-    if (query::is_wrap_around(range, *_schema)) {
+column_family::make_reader(schema_ptr s, const query::partition_range& range) const {
+    if (query::is_wrap_around(range, *s)) {
         // make_combined_reader() can't handle streams that wrap around yet.
         fail(unimplemented::cause::WRAP_AROUND);
     }
@@ -304,13 +305,13 @@ column_family::make_reader(const query::partition_range& range) const {
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(range));
+        readers.emplace_back(mt->make_reader(s, range));
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_reader(range));
+        readers.emplace_back(_cache.make_reader(s, range));
     } else {
-        readers.emplace_back(make_sstable_reader(range));
+        readers.emplace_back(make_sstable_reader(s, range));
     }
 
     return make_combined_reader(std::move(readers));
@@ -318,7 +319,7 @@ column_family::make_reader(const query::partition_range& range) const {
 
 template <typename Func>
 future<bool>
-column_family::for_all_partitions(Func&& func) const {
+column_family::for_all_partitions(schema_ptr s, Func&& func) const {
     static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
                   "bad Func signature");
 
@@ -329,13 +330,13 @@ column_family::for_all_partitions(Func&& func) const {
         bool empty = false;
     public:
         bool done() const { return !ok || empty; }
-        iteration_state(const column_family& cf, Func&& func)
-            : reader(cf.make_reader())
+        iteration_state(schema_ptr s, const column_family& cf, Func&& func)
+            : reader(cf.make_reader(std::move(s)))
             , func(std::move(func))
         { }
     };
 
-    return do_with(iteration_state(*this, std::move(func)), [] (iteration_state& is) {
+    return do_with(iteration_state(std::move(s), *this, std::move(func)), [] (iteration_state& is) {
         return do_until([&is] { return is.done(); }, [&is] {
             return is.reader().then([&is](mutation_opt&& mo) {
                 if (!mo) {
@@ -351,8 +352,8 @@ column_family::for_all_partitions(Func&& func) const {
 }
 
 future<bool>
-column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
-    return for_all_partitions(std::move(func));
+column_family::for_all_partitions_slow(schema_ptr s, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
+    return for_all_partitions(std::move(s), std::move(func));
 }
 
 class lister {
@@ -975,8 +976,6 @@ database::database(const db::config& cfg)
     if (!_memtable_total_space) {
         _memtable_total_space = memory::stats().total_memory() / 2;
     }
-    bool durable = cfg.data_file_directories().size() > 0;
-    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
     setup_collectd();
@@ -1119,6 +1118,9 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
 
 future<>
 database::init_system_keyspace() {
+    bool durable = _cfg->data_file_directories().size() > 0;
+    db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
+
     // FIXME support multiple directories
     return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
@@ -1184,6 +1186,8 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(schema_ptr schema, column_family::config cfg) {
+    schema = local_schema_registry().learn(schema);
+    schema->registry_entry()->mark_synced();
     auto uuid = schema->id();
     lw_shared_ptr<column_family> cf;
     if (cfg.enable_commitlog && _commitlog) {
@@ -1207,17 +1211,6 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     cf->start();
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
-}
-
-future<> database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
-    auto& proxy = service::get_storage_proxy();
-    auto old_cfm = find_schema(ks_name, cf_name);
-    return db::schema_tables::create_table_from_name(proxy, ks_name, cf_name).then([old_cfm] (auto&& new_cfm) {
-        if (old_cfm->id() != new_cfm->id()) {
-            return make_exception_future<>(exceptions::configuration_exception(sprint("Column family ID mismatch (found %s; expected %s)", new_cfm->id(), old_cfm->id())));
-        }
-        return make_exception_future<>(std::runtime_error("update column family not implemented"));
-    });
 }
 
 future<> database::drop_column_family(db_clock::time_point dropped_at, const sstring& ks_name, const sstring& cf_name) {
@@ -1483,13 +1476,17 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 }
 
 struct query_state {
-    explicit query_state(const query::read_command& cmd, const std::vector<query::partition_range>& ranges)
-            : cmd(cmd)
+    explicit query_state(schema_ptr s,
+                         const query::read_command& cmd,
+                         const std::vector<query::partition_range>& ranges)
+            : schema(std::move(s))
+            , cmd(cmd)
             , builder(cmd.slice)
             , limit(cmd.row_limit)
             , current_partition_range(ranges.begin())
             , range_end(ranges.end()){
     }
+    schema_ptr schema;
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
@@ -1503,21 +1500,21 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
+column_family::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    return do_with(query_state(cmd, partition_ranges), [this] (query_state& qs) {
+    return do_with(query_state(std::move(s), cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            qs.reader = make_reader(range);
+            qs.reader = make_reader(qs.schema, range);
             qs.range_empty = false;
-            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [this, &qs] {
-                return qs.reader().then([this, &qs](mutation_opt mo) {
+            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [&qs] {
+                return qs.reader().then([&qs](mutation_opt mo) {
                     if (mo) {
                         auto p_builder = qs.builder.add_partition(*mo->schema(), mo->key());
                         auto is_distinct = qs.cmd.slice.options.contains(query::partition_slice::option::distinct);
                         auto limit = !is_distinct ? qs.limit : 1;
-                        mo->partition().query(p_builder, *_schema, qs.cmd.timestamp, limit);
+                        mo->partition().query(p_builder, *qs.schema, qs.cmd.timestamp, limit);
                         qs.limit -= p_builder.row_count();
                     } else {
                         qs.range_empty = true;
@@ -1538,21 +1535,21 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
 
 mutation_source
 column_family::as_mutation_source() const {
-    return [this] (const query::partition_range& range) {
-        return this->make_reader(range);
+    return [this] (schema_ptr s, const query::partition_range& range) {
+        return this->make_reader(std::move(s), range);
     };
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
+database::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(cmd, ranges);
+    return cf.query(std::move(s), cmd, ranges);
 }
 
 future<reconcilable_result>
-database::query_mutations(const query::read_command& cmd, const query::partition_range& range) {
+database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -1616,28 +1613,32 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m, const db::replay_position& rp) {
+future<> database::apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
     try {
         auto& cf = find_column_family(m.column_family_id());
-        cf.apply(m, rp);
+        cf.apply(m, m_schema, rp);
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
     }
     return make_ready_future<>();
 }
 
-future<> database::do_apply(const frozen_mutation& m) {
+future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
-    auto& cf = find_column_family(m.column_family_id());
+    auto uuid = m.column_family_id();
+    auto& cf = find_column_family(uuid);
+    if (!s->is_synced()) {
+        throw std::runtime_error(sprint("attempted to mutate using not synced schema of %s.%s, version=%s",
+                                 s->ks_name(), s->cf_name(), s->version()));
+    }
     if (cf.commitlog() != nullptr) {
-        auto uuid = m.column_family_id();
         bytes_view repr = m.representation();
         auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
-        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
+        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this, s](auto rp) {
             try {
-                return this->apply_in_memory(m, rp);
+                return this->apply_in_memory(m, s, rp);
             } catch (replay_position_reordered_exception&) {
                 // expensive, but we're assuming this is super rare.
                 // if we failed to apply the mutation due to future re-ordering
@@ -1645,11 +1646,11 @@ future<> database::do_apply(const frozen_mutation& m) {
                 // let's just try again, add the mutation to the CL once more,
                 // and assume success in inevitable eventually.
                 dblog.debug("replay_position reordering detected");
-                return this->apply(m);
+                return this->apply(s, m);
             }
         });
     }
-    return apply_in_memory(m, db::replay_position());
+    return apply_in_memory(m, s, db::replay_position());
 }
 
 future<> database::throttle() {
@@ -1683,9 +1684,9 @@ void database::unthrottle() {
     }
 }
 
-future<> database::apply(const frozen_mutation& m) {
-    return throttle().then([this, &m] {
-        return do_apply(m);
+future<> database::apply(schema_ptr s, const frozen_mutation& m) {
+    return throttle().then([this, &m, s = std::move(s)] {
+        return do_apply(std::move(s), m);
     });
 }
 
@@ -2225,4 +2226,16 @@ std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m) {
     os << ", userTypes=" << m._user_types;
     os << "}";
     return os;
+}
+
+void column_family::set_schema(schema_ptr s) {
+    dblog.debug("Changing schema version of {}.{} ({}) from {} to {}",
+                _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
+
+    for (auto& m : *_memtables) {
+        m->set_schema(s);
+    }
+
+    _cache.set_schema(s);
+    _schema = std::move(s);
 }

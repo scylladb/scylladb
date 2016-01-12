@@ -84,6 +84,8 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
+table_schema_version generate_schema_version(utils::UUID table_id);
+
 // Only for testing.
 void minimal_setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 
@@ -673,5 +675,7 @@ future<> set_bootstrap_state(bootstrap_state state);
         executeInternal(String.format(cql, SSTABLE_ACTIVITY), keyspace, table, generation);
     }
 #endif
+
+    api::timestamp_type schema_creation_timestamp();
 } // namespace system_keyspace
 } // namespace db

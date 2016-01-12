@@ -34,4 +34,5 @@ private:
 public:
     static mutation_partition_view from_bytes(bytes_view v) { return { v }; }
     void accept(const schema& schema, mutation_partition_visitor& visitor) const;
+    void accept(const column_mapping&, mutation_partition_visitor& visitor) const;
 };

@@ -8,9 +8,10 @@
       "security_group_id": "{{user `security_group_id`}}",
       "region": "{{user `region`}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "ami-a51564c0",
+      "source_ami": "ami-61bbf104",
+      "user_data_file": "user_data.txt",
       "instance_type": "{{user `instance_type`}}",
-      "ssh_username": "fedora",
+      "ssh_username": "centos",
       "ssh_timeout": "5m",
       "ami_name": "scylla_{{isotime | clean_ami_name}}"
     }
@@ -18,24 +19,17 @@
   "provisioners": [
     {
       "type": "file",
-      "source": "files/scylla-ami",
-      "destination": "/home/fedora/scylla-ami"
+      "source": "files/",
+      "destination": "/home/centos/"
     },
     {
       "type": "file",
-      "source": "files/.bash_profile",
-      "destination": "/home/fedora/.bash_profile"
-    },
-    {
-      "type": "file",
-      "source": "../../scripts/scylla_install",
-      "destination": "/home/fedora/scylla_install"
+      "source": "../../scripts/scylla_install_pkg",
+      "destination": "/home/centos/scylla_install_pkg"
     },
     {
       "type": "shell",
-      "inline": [
-          "sudo sh -x -e /home/fedora/scylla_install -a"
-      ]
+      "script": "scylla_deploy.sh"
     }
   ],
   "variables": {

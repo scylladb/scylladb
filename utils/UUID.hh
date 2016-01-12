@@ -32,6 +32,7 @@
 #include "core/print.hh"
 #include "net/byteorder.hh"
 #include "bytes.hh"
+#include "hashing.hh"
 #include "utils/serialization.hh"
 
 namespace utils {
@@ -115,6 +116,15 @@ public:
 UUID make_random_uuid();
 
 }
+
+template<>
+struct appending_hash<utils::UUID> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const utils::UUID& id) const {
+        feed_hash(h, id.get_most_significant_bits());
+        feed_hash(h, id.get_least_significant_bits());
+    }
+};
 
 namespace std {
 template<>

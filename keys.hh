@@ -26,6 +26,7 @@
 #include "types.hh"
 #include "compound_compat.hh"
 #include "utils/managed_bytes.hh"
+#include "hashing.hh"
 
 //
 // This header defines type system for primary key holders.
@@ -121,6 +122,18 @@ public:
         auto it = begin(s);
         std::advance(it, idx);
         return *it;
+    }
+
+    // Returns a range of bytes_view
+    auto components(const schema& s) const {
+        return boost::make_iterator_range(begin(s), end(s));
+    }
+
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        for (bytes_view v : components(s)) {
+            ::feed_hash(h, v);
+        }
     }
 };
 
@@ -251,6 +264,11 @@ public:
         auto it = begin(s);
         std::advance(it, idx);
         return *it;
+    }
+
+    template<typename Hasher>
+    void feed_hash(Hasher& h, const schema& s) const {
+        view().feed_hash(h, s);
     }
 };
 
@@ -586,6 +604,12 @@ public:
     static clustering_key_prefix_view from_bytes(bytes_view v) {
         return { v };
     }
+
+    using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
+
+    static const compound& get_compound_type(const schema& s) {
+        return s.clustering_key_prefix_type();
+    }
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
@@ -613,3 +637,22 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
+
+namespace db {
+
+template<> serializer<partition_key_view>::serializer(const partition_key_view &);
+template<> void serializer<partition_key_view>::write(output&, const partition_key_view&);
+template<> void serializer<partition_key_view>::read(partition_key_view&, input&);
+template<> partition_key_view serializer<partition_key_view>::read(input&);
+template<> void serializer<partition_key_view>::skip(input&);
+
+template<> serializer<clustering_key_prefix_view>::serializer(const clustering_key_prefix_view &);
+template<> void serializer<clustering_key_prefix_view>::write(output&, const clustering_key_prefix_view&);
+template<> void serializer<clustering_key_prefix_view>::read(clustering_key_prefix_view&, input&);
+template<> clustering_key_prefix_view serializer<clustering_key_prefix_view>::read(input&);
+
+typedef serializer<partition_key_view> partition_key_view_serializer;
+typedef serializer<clustering_key_view> clustering_key_view_serializer;
+typedef serializer<clustering_key_prefix_view> clustering_key_prefix_view_serializer;
+
+}

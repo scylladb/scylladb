@@ -35,6 +35,7 @@
 #include "db/config.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
+#include "frozen_schema.hh"
 
 namespace net {
 
@@ -116,7 +117,7 @@ rpc::stats messaging_service::shard_info::get_stats() const {
 }
 
 void messaging_service::foreach_client(std::function<void(const msg_addr& id, const shard_info& info)> f) const {
-    for (unsigned idx = 0; idx < 2; idx ++) {
+    for (unsigned idx = 0; idx < _clients.size(); idx ++) {
         for (auto i = _clients[idx].cbegin(); i != _clients[idx].cend(); i++) {
             f(i->first, i->second);
         }
@@ -194,6 +195,13 @@ messaging_service::messaging_service(gms::inet_address ip
     });
 }
 
+msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
+    return msg_addr{
+        cinfo.retrieve_auxiliary<gms::inet_address>("baddr"),
+        cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id")
+    };
+}
+
 messaging_service::~messaging_service() = default;
 
 uint16_t messaging_service::port() {
@@ -221,10 +229,15 @@ rpc::no_wait_type messaging_service::no_wait() {
 
 static unsigned get_rpc_client_idx(messaging_verb verb) {
     unsigned idx = 0;
+    // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
+    // sent on a different connection to avoid potential deadlocks
+    // as well as reduce latency as there are potentially many requests
+    // blocked on schema version request.
     if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
         verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
         verb == messaging_verb::GOSSIP_SHUTDOWN ||
-        verb == messaging_verb::ECHO) {
+        verb == messaging_verb::ECHO ||
+        verb == messaging_verb::GET_SCHEMA_VERSION) {
         idx = 1;
     }
     return idx;
@@ -558,7 +571,7 @@ future<> messaging_service::send_gossip_digest_ack2(msg_addr id, gossip_digest_a
     return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(msg));
 }
 
-void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (std::vector<frozen_mutation> fm)>&& func) {
+void messaging_service::register_definitions_update(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, std::vector<frozen_mutation> fm)>&& func) {
     register_handler(this, net::messaging_verb::DEFINITIONS_UPDATE, std::move(func));
 }
 void messaging_service::unregister_definitions_update() {
@@ -578,7 +591,7 @@ future<std::vector<frozen_mutation>> messaging_service::send_migration_request(m
     return send_message<std::vector<frozen_mutation>>(this, messaging_verb::MIGRATION_REQUEST, std::move(id));
 }
 
-void messaging_service::register_mutation(std::function<rpc::no_wait_type (frozen_mutation fm, std::vector<inet_address> forward,
+void messaging_service::register_mutation(std::function<rpc::no_wait_type (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
     inet_address reply_to, unsigned shard, response_id_type response_id)>&& func) {
     register_handler(this, net::messaging_verb::MUTATION, std::move(func));
 }
@@ -601,7 +614,7 @@ future<> messaging_service::send_mutation_done(msg_addr id, unsigned shard, resp
     return send_message_oneway(this, messaging_verb::MUTATION_DONE, std::move(id), std::move(shard), std::move(response_id));
 }
 
-void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_shared_ptr<query::result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DATA, std::move(func));
 }
 void messaging_service::unregister_read_data() {
@@ -611,7 +624,17 @@ future<query::result> messaging_service::send_read_data(msg_addr id, const query
     return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
 }
 
-void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
+    register_handler(this, net::messaging_verb::GET_SCHEMA_VERSION, std::move(func));
+}
+void messaging_service::unregister_get_schema_version() {
+    _rpc->unregister_handler(net::messaging_verb::GET_SCHEMA_VERSION);
+}
+future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, table_schema_version v) {
+    return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
+}
+
+void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
 }
 void messaging_service::unregister_read_mutation_data() {
@@ -621,7 +644,7 @@ future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr 
     return send_message<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
 }
 
-void messaging_service::register_read_digest(std::function<future<query::result_digest> (query::read_command cmd, query::partition_range pr)>&& func) {
+void messaging_service::register_read_digest(std::function<future<query::result_digest> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_DIGEST, std::move(func));
 }
 void messaging_service::unregister_read_digest() {

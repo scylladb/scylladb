@@ -272,45 +272,6 @@ template<typename T>
 class serializer;
 }
 
-// A variant type that can hold either an atomic_cell, or a serialized collection.
-// Which type is stored is determined by the schema.
-class atomic_cell_or_collection final {
-    managed_bytes _data;
-
-    template<typename T>
-    friend class db::serializer;
-private:
-    atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
-public:
-    atomic_cell_or_collection() = default;
-    atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
-    static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
-    atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
-    atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm.data)) {}
-    explicit operator bool() const {
-        return !_data.empty();
-    }
-    static atomic_cell_or_collection from_collection_mutation(collection_mutation data) {
-        return std::move(data.data);
-    }
-    collection_mutation_view as_collection_mutation() const {
-        return collection_mutation_view{_data};
-    }
-    bytes_view serialize() const {
-        return _data;
-    }
-    bool operator==(const atomic_cell_or_collection& other) const {
-        return _data == other._data;
-    }
-    void linearize() {
-        _data.linearize();
-    }
-    void unlinearize() {
-        _data.scatter();
-    }
-    friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
-};
-
 class column_definition;
 
 int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
