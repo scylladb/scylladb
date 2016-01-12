@@ -54,6 +54,7 @@ private:
         // CF being currently compacted.
         column_family* compacting_cf = nullptr;
         bool stopping = false;
+        bool cleanup = false;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
@@ -61,6 +62,9 @@ private:
 
     // Queue shared among all tasks containing all column families to be compacted.
     std::deque<column_family*> _cfs_to_compact;
+
+    // Queue shared among all tasks containing all column families to be cleaned up.
+    std::deque<column_family*> _cfs_to_cleanup;
 
     // Used to assert that compaction_manager was explicitly stopped, if started.
     bool _stopped = true;
@@ -89,6 +93,9 @@ public:
 
     // Submit a column family to be compacted.
     void submit(column_family* cf);
+
+    // Submit a column family to be cleaned up.
+    void submit_cleanup_job(column_family* cf);
 
     // Remove a column family from the compaction manager.
     // Cancel requests on cf and wait for a possible ongoing compaction on cf.

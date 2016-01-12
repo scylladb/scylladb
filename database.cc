@@ -750,13 +750,13 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
 }
 
 future<>
-column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
+column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         return make_ready_future<>();
     }
 
-    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor)] {
+    return with_lock(_sstables_lock.for_read(), [this, descriptor = std::move(descriptor), cleanup] {
         auto sstables_to_compact = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
 
         auto new_tables = make_lw_shared<std::vector<sstables::shared_sstable>>();
@@ -771,9 +771,42 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor) {
                 return sst;
         };
         return sstables::compact_sstables(*sstables_to_compact, *this,
-                create_sstable, descriptor.max_sstable_bytes, descriptor.level).then([this, new_tables, sstables_to_compact] {
+                create_sstable, descriptor.max_sstable_bytes, descriptor.level, cleanup).then([this, new_tables, sstables_to_compact] {
             this->rebuild_sstable_list(*new_tables, *sstables_to_compact);
         });
+    });
+}
+
+static bool needs_cleanup(const lw_shared_ptr<sstables::sstable>& sst,
+                   const lw_shared_ptr<std::vector<range<dht::token>>>& owned_ranges,
+                   schema_ptr s) {
+    auto first = sst->get_first_partition_key(*s);
+    auto last = sst->get_last_partition_key(*s);
+    auto first_token = dht::global_partitioner().get_token(*s, first);
+    auto last_token = dht::global_partitioner().get_token(*s, last);
+    range<dht::token> sst_token_range = range<dht::token>::make(first_token, last_token);
+
+    // return true iff sst partition range isn't fully contained in any of the owned ranges.
+    for (auto& r : *owned_ranges) {
+        if (r.contains(sst_token_range, dht::token_comparator())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+future<> column_family::cleanup_sstables(sstables::compaction_descriptor descriptor) {
+    std::vector<range<dht::token>> r = service::get_local_storage_service().get_local_ranges(_schema->ks_name());
+    auto owned_ranges = make_lw_shared<std::vector<range<dht::token>>>(std::move(r));
+    auto sstables_to_cleanup = make_lw_shared<std::vector<sstables::shared_sstable>>(std::move(descriptor.sstables));
+
+    return parallel_for_each(*sstables_to_cleanup, [this, owned_ranges = std::move(owned_ranges), sstables_to_cleanup] (auto& sst) {
+        if (!owned_ranges->empty() && !needs_cleanup(sst, owned_ranges, _schema)) {
+           return make_ready_future<>();
+        }
+
+        std::vector<sstables::shared_sstable> sstable_to_compact({ sst });
+        return this->compact_sstables(sstables::compaction_descriptor(std::move(sstable_to_compact)), true);
     });
 }
 

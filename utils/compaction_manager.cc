@@ -35,17 +35,20 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
     task->compaction_done = keep_doing([this, task] {
         return task->compaction_sem.wait().then([this, task] {
             return seastar::with_gate(task->compaction_gate, [this, task] {
-                if (_cfs_to_compact.empty() && !task->compacting_cf) {
+                if (_cfs_to_compact.empty() && _cfs_to_cleanup.empty()) {
                     return make_ready_future<>();
                 }
 
-                // Get a column family from the shared queue if and only
-                // if, the previous compaction job succeeded.
-                if (!task->compacting_cf) {
+                if (!_cfs_to_cleanup.empty()) {
+                    task->cleanup = true;
+                    task->compacting_cf = _cfs_to_cleanup.front();
+                    _cfs_to_cleanup.pop_front();
+                } else {
+                    task->cleanup = false;
                     task->compacting_cf = _cfs_to_compact.front();
                     _cfs_to_compact.pop_front();
-                    _stats.pending_tasks--;
                 }
+                _stats.pending_tasks--;
                 _stats.active_tasks++;
 
                 column_family& cf = *task->compacting_cf;
@@ -61,22 +64,43 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     }
                 }
 
-                sstables::compaction_strategy cs = cf.get_compaction_strategy();
-                sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
+                sstables::compaction_descriptor descriptor;
                 // Created to erase generations from cf.compacting_generations() after compaction finishes.
                 std::vector<unsigned long> generations_to_compact;
                 generations_to_compact.reserve(descriptor.sstables.size());
 
-                for (auto& sst : descriptor.sstables) {
-                    auto generation = sst->generation();
-                    generations_to_compact.push_back(generation);
-                    compacting_generations.insert(generation);
+                auto insert_generations_to_compact = [&compacting_generations, &generations_to_compact, &descriptor] {
+                    for (auto& sst : descriptor.sstables) {
+                        auto generation = sst->generation();
+                        generations_to_compact.push_back(generation);
+                        compacting_generations.insert(generation);
+                    }
+                };
+
+                future<> operation = make_ready_future<>();
+                if (task->cleanup) {
+                    descriptor = sstables::compaction_descriptor(std::move(candidates));
+                    insert_generations_to_compact();
+                    operation = cf.cleanup_sstables(std::move(descriptor));
+                } else {
+                    sstables::compaction_strategy cs = cf.get_compaction_strategy();
+                    descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
+                    insert_generations_to_compact();
+                    operation = cf.run_compaction(std::move(descriptor));
                 }
 
-                return cf.run_compaction(std::move(descriptor)).then([this, task] {
+                return operation.then([this, task] {
+                    _stats.completed_tasks++;
                     // If compaction completed successfully, let's reset
                     // sleep time of compaction_retry.
                     task->compaction_retry.reset();
+
+                    // The code below is to re-schedule the operation, so let's skip it
+                    // if cleaning up.
+                    if (task->cleanup) {
+                        task->compacting_cf = nullptr;
+                        return make_ready_future<>();
+                    }
 
                     // Re-schedule compaction for compacting_cf, if needed.
                     if (!task->stopping && task->compacting_cf->pending_compactions()) {
@@ -90,7 +114,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     }
                     task->compacting_cf = nullptr;
 
-                    _stats.completed_tasks++;
+                    return make_ready_future<>();
                 }).finally([this, &compacting_generations, generations_to_compact = std::move(generations_to_compact)] {
                     // Remove compacted generations from the set of compacting generations,
                     // stored in column family.
@@ -123,13 +147,22 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 cmlog.info("compaction task handler sleeping for {} seconds",
                     std::chrono::duration_cast<std::chrono::seconds>(task->compaction_retry.sleep_time()).count());
                 return task->compaction_retry.retry().then([this, task] {
+                    if (!task->compacting_cf) {
+                        return make_ready_future<>();
+                    }
                     // pushing cf to the back, so if the error is persistent,
                     // at least the others get a chance.
-                    add_column_family(task->compacting_cf);
+                    if (task->cleanup) {
+                        _cfs_to_cleanup.push_back(task->compacting_cf);
+                        _stats.pending_tasks++;
+                    } else {
+                        add_column_family(task->compacting_cf);
+                    }
                     task->compacting_cf = nullptr;
 
                     // after sleeping, signal semaphore for the next compaction attempt.
                     task->compaction_sem.signal();
+                    return make_ready_future<>();
                 });
             }
             return make_ready_future<>();
@@ -209,6 +242,7 @@ future<> compaction_manager::stop() {
             cf->set_compaction_manager_queued(false);
         }
         _cfs_to_compact.clear();
+        _cfs_to_cleanup.clear();
         return make_ready_future<>();
     });
 }
@@ -230,6 +264,23 @@ void compaction_manager::submit(column_family* cf) {
     (*result)->compaction_sem.signal();
 }
 
+void compaction_manager::submit_cleanup_job(column_family* cf) {
+    if (_stopped || _tasks.empty()) {
+        return;
+    }
+    // To avoid having two or more entries of the same cf stored in the queue.
+    if (std::find(_cfs_to_cleanup.begin(), _cfs_to_cleanup.end(), cf) != _cfs_to_cleanup.end()) {
+        return;
+    }
+    // Signal the compaction task with the lowest amount of pending jobs.
+    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
+        return i->compaction_sem.current() < j->compaction_sem.current();
+    });
+    _cfs_to_cleanup.push_back(cf);
+    _stats.pending_tasks++;
+    (*result)->compaction_sem.signal();
+}
+
 future<> compaction_manager::remove(column_family* cf) {
     // Remove every reference to cf from _cfs_to_compact.
     _cfs_to_compact.erase(
@@ -237,6 +288,12 @@ future<> compaction_manager::remove(column_family* cf) {
             return cf == entry;
         }),
         _cfs_to_compact.end());
+    // Remove every reference to cf from _cfs_to_cleanup.
+    _cfs_to_cleanup.erase(
+        std::remove_if(_cfs_to_cleanup.begin(), _cfs_to_cleanup.end(), [cf] (column_family* entry) {
+            return cf == entry;
+        }),
+        _cfs_to_cleanup.end());
     _stats.pending_tasks = _cfs_to_compact.size();
     cf->set_compaction_manager_queued(false);
     // We need to guarantee that a task being stopped will not re-queue the
