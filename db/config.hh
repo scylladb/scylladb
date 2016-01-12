@@ -383,7 +383,7 @@ public:
             "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. When initializing a fresh cluster with no data, add auto_bootstrap: false.\n"  \
             "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
     )   \
-    val(batch_size_warn_threshold_in_kb, uint32_t, 5, Unused,     \
+    val(batch_size_warn_threshold_in_kb, uint32_t, 5, Used,     \
             "Log WARN on any batch size exceeding this value in kilobytes. Caution should be taken on increasing the size of this threshold as it can lead to node instability."  \
     )   \
     val(broadcast_address, sstring, /* listen_address */, Used, \

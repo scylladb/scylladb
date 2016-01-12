@@ -196,27 +196,8 @@ public:
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    static void verify_batch_size(const std::vector<mutation>& mutations) {
-        size_t warn_threshold = 1000; // FIXME: database_descriptor::get_batch_size_warn_threshold();
-        size_t fail_threshold = 2000; // FIXME: database_descriptor::get_batch_size_fail_threshold();
+    static void verify_batch_size(const std::vector<mutation>& mutations);
 
-        size_t size = mutations.size();
-
-        if (size > warn_threshold) {
-            std::unordered_set<sstring> ks_cf_pairs;
-            for (auto&& m : mutations) {
-                ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
-            }
-            const char* format = "Batch of prepared statements for {} is of size {}, exceeding specified threshold of {} by {}.{}";
-            if (size > fail_threshold) {
-                // FIXME: Tracing.trace(format, new Object[] {ksCfPairs, size, failThreshold, size - failThreshold, " (see batch_size_fail_threshold_in_kb)"});
-                _logger.error(format, join(", ", ks_cf_pairs), size, fail_threshold, size - fail_threshold, " (see batch_size_fail_threshold_in_kb)");
-                throw exceptions::invalid_request_exception("Batch too large");
-            } else {
-                _logger.warn(format, join(", ", ks_cf_pairs), size, warn_threshold, size - warn_threshold, "");
-            }
-        }
-    }
     virtual future<shared_ptr<transport::messages::result_message>> execute(
             distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override {
         return execute(storage, state, options, false, options.get_timestamp(state));
