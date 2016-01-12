@@ -321,7 +321,7 @@ public:
 
     void start_compaction();
     void trigger_compaction();
-    future<> run_compaction();
+    future<> run_compaction(sstables::compaction_descriptor descriptor);
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;

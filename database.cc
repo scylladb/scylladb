@@ -822,12 +822,9 @@ void column_family::trigger_compaction() {
     }
 }
 
-future<> column_family::run_compaction() {
-    sstables::compaction_strategy strategy = _compaction_strategy;
-    return do_with(std::move(strategy), [this] (sstables::compaction_strategy& cs) {
-        return cs.compact(*this).then([this] {
-            _stats.pending_compactions--;
-        });
+future<> column_family::run_compaction(sstables::compaction_descriptor descriptor) {
+    return compact_sstables(std::move(descriptor)).then([this] {
+        _stats.pending_compactions--;
     });
 }
 

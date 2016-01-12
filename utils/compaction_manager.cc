@@ -48,7 +48,11 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 }
 
                 _stats.active_tasks++;
-                return task->compacting_cf->run_compaction().then([this, task] {
+                column_family& cf = *task->compacting_cf;
+                sstables::compaction_strategy cs = cf.get_compaction_strategy();
+                sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf);
+
+                return cf.run_compaction(std::move(descriptor)).then([this, task] {
                     // If compaction completed successfully, let's reset
                     // sleep time of compaction_retry.
                     task->compaction_retry.reset();

@@ -359,7 +359,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
 class compaction_strategy_impl {
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual future<> compact(column_family& cfs) = 0;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs) = 0;
     virtual compaction_strategy_type type() const = 0;
 };
 
@@ -369,8 +369,8 @@ public:
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual future<> compact(column_family& cfs) override {
-        return make_ready_future<>();
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs) override {
+        return sstables::compaction_descriptor();
     }
 
     virtual compaction_strategy_type type() const {
@@ -383,15 +383,21 @@ public:
 //
 class major_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual future<> compact(column_family& cfs) override {
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs) override {
         static constexpr size_t min_compact_threshold = 2;
 
         // At least, two sstables must be available for compaction to take place.
         if (cfs.sstables_count() < min_compact_threshold) {
-            return make_ready_future<>();
+            return sstables::compaction_descriptor();
         }
 
-        return cfs.compact_all_sstables();
+        auto candidates = cfs.get_sstables();
+        std::vector<sstables::shared_sstable> sstables;
+        sstables.reserve(candidates->size());
+        for (auto& entry : *candidates) {
+            sstables.push_back(entry.second);
+        }
+        return sstables::compaction_descriptor(std::move(sstables));
     }
 
     virtual compaction_strategy_type type() const {
@@ -519,7 +525,7 @@ public:
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
         _options(options) {}
 
-    virtual future<> compact(column_family& cfs) override;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs) override;
 
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
 
@@ -636,7 +642,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return hottest;
 }
 
-future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
+compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = cfs.schema()->min_compaction_threshold();
     int max_threshold = cfs.schema()->max_compaction_threshold();
@@ -653,10 +659,10 @@ future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
 #endif
     if (most_interesting.empty()) {
         // nothing to do
-        return make_ready_future<>();
+        return sstables::compaction_descriptor();
     }
 
-    return cfs.compact_sstables(sstables::compaction_descriptor(std::move(most_interesting)));
+    return sstables::compaction_descriptor(std::move(most_interesting));
 }
 
 std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
@@ -674,14 +680,14 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     // FIXME: User may choose to change this value; add support.
     static constexpr uint32_t max_sstable_size_in_mb = 160;
 public:
-    virtual future<> compact(column_family& cfs) override;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs) override;
 
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::leveled;
     }
 };
 
-future<> leveled_compaction_strategy::compact(column_family& cfs) {
+compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs) {
     // NOTE: leveled_manifest creation may be slightly expensive, so later on,
     // we may want to store it in the strategy itself. However, the sstable
     // lists managed by the manifest may become outdated. For example, one
@@ -691,12 +697,12 @@ future<> leveled_compaction_strategy::compact(column_family& cfs) {
     auto candidate = manifest.get_compaction_candidates();
 
     if (candidate.sstables.empty()) {
-        return make_ready_future<>();
+        return sstables::compaction_descriptor();
     }
 
     logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
 
-    return cfs.compact_sstables(std::move(candidate));
+    return std::move(candidate);
 }
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
@@ -710,8 +716,8 @@ compaction_strategy& compaction_strategy::operator=(compaction_strategy&&) = def
 compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
-future<> compaction_strategy::compact(column_family& cfs) {
-    return _compaction_strategy_impl->compact(cfs);
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs) {
+    return _compaction_strategy_impl->get_sstables_for_compaction(cfs);
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
