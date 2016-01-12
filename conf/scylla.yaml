@@ -175,6 +175,11 @@ api_port: 10000
 # IP for the REST API server
 api_address: 127.0.0.1
 
+# Log WARN on any batch size exceeding this value. 5kb per batch by default.
+# Caution should be taken on increasing the size of this threshold as it can lead to node instability.
+batch_size_warn_threshold_in_kb: 5
+
+
 ###################################################
 ## Not currently supported, reserved for future use
 ###################################################
@@ -604,10 +609,6 @@ commitlog_total_space_in_mb: -1
 #      you can cache more hot rows
 # column_index_size_in_kb: 64
 
-
-# Log WARN on any batch size exceeding this value. 5kb per batch by default.
-# Caution should be taken on increasing the size of this threshold as it can lead to node instability.
-# batch_size_warn_threshold_in_kb: 5
 
 # Number of simultaneous compactions to allow, NOT including
 # validation "compactions" for anti-entropy repair.  Simultaneous
