@@ -88,8 +88,8 @@ enum class messaging_verb : int32_t {
     STREAM_MUTATION = 17,
     STREAM_MUTATION_DONE = 18,
     COMPLETE_MESSAGE = 19,
-    REPAIR_CHECKSUM_RANGE = 20,
     // end of streaming verbs
+    REPAIR_CHECKSUM_RANGE = 20,
     GET_SCHEMA_VERSION = 21,
     LAST = 22,
 };
