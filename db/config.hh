@@ -638,8 +638,8 @@ public:
     )   \
     /* Security properties */   \
     /* Server and client security settings. */  \
-    val(authenticator, sstring, "org.apache.cassandra.auth.AllowAllAuthenticator", Unused,     \
-            "The authentication backend. It implements IAuthenticator, which is used to identify users. The available authenticators are:\n"    \
+    val(authenticator, sstring, "org.apache.cassandra.auth.AllowAllAuthenticator", Used,     \
+            "The authentication backend, used to identify users. The available authenticators are:\n"    \
             "\n"    \
             "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"   \
             "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"  \

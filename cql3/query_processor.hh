@@ -322,13 +322,24 @@ public:
     }
 #endif
 private:
-    ::shared_ptr<statements::parsed_statement::prepared> prepare_internal(const std::experimental::string_view& query);
-    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<data_value>&);
-
+    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<data_value>&, db::consistency_level = db::consistency_level::ONE);
 public:
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            const std::experimental::string_view& query_string,
+            const sstring& query_string,
             const std::initializer_list<data_value>& = { });
+
+    ::shared_ptr<statements::parsed_statement::prepared> prepare_internal(const sstring& query);
+
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            ::shared_ptr<statements::parsed_statement::prepared>,
+            const std::initializer_list<data_value>& = { });
+
+    future<::shared_ptr<untyped_result_set>> process(
+                    const sstring& query_string,
+                    db::consistency_level, const std::initializer_list<data_value>& = { }, bool cache = false);
+    future<::shared_ptr<untyped_result_set>> process(
+                    ::shared_ptr<statements::parsed_statement::prepared>,
+                    db::consistency_level, const std::initializer_list<data_value>& = { });
 
     /*
      * This function provides a timestamp that is guaranteed to be higher than any timestamp

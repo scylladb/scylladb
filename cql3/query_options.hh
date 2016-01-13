@@ -112,6 +112,7 @@ public:
 
     // forInternalUse
     explicit query_options(std::vector<bytes_opt> values);
+    explicit query_options(db::consistency_level, std::vector<bytes_opt> values);
 
     db::consistency_level get_consistency() const;
     bytes_view_opt get_value_at(size_t idx) const;

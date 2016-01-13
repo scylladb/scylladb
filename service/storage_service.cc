@@ -67,6 +67,7 @@
 #include <seastar/core/rwlock.hh>
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "auth/auth.hh"
 #include <seastar/net/tls.hh>
 
 using token = dht::token;
@@ -376,7 +377,8 @@ void storage_service::join_token_ring(int delay) {
             }
         }
         assert(_token_metadata.sorted_tokens().size() > 0);
-        //Auth.setup();
+
+        auth::auth::setup().get();
     } else {
         logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
     }
@@ -395,7 +397,7 @@ future<> storage_service::join_ring() {
                 ss._is_survey_mode = false;
                 logger.info("Leaving write survey mode and joining ring at operator request");
                 assert(ss._token_metadata.sorted_tokens().size() > 0);
-                //Auth.setup();
+                auth::auth::setup().get();
             }
         });
     });

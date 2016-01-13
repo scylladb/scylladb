@@ -189,6 +189,7 @@ scylla_tests = [
     'tests/crc_test',
     'tests/flush_queue_test',
     'tests/dynamic_bitset_test',
+    'tests/auth_test',
 ]
 
 apps = [
@@ -386,6 +387,7 @@ scylla_core = (['database.cc',
                  'locator/ec2_snitch.cc',
                  'locator/ec2_multi_region_snitch.cc',
                  'message/messaging_service.cc',
+                 'service/client_state.cc',
                  'service/migration_task.cc',
                  'service/storage_service.cc',
                  'service/pending_range_calculator_service.cc',
@@ -419,6 +421,12 @@ scylla_core = (['database.cc',
                  'repair/repair.cc',
                  'exceptions/exceptions.cc',
                  'dns.cc',
+                 'auth/auth.cc',
+                 'auth/authenticated_user.cc',
+                 'auth/authenticator.cc',
+                 'auth/data_resource.cc',
+                 'auth/password_authenticator.cc',
+                 'auth/permission.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -614,7 +622,7 @@ for mode in build_modes:
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
+libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem' + ' -lcrypt'
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config('--cflags', pkg)
     libs += ' ' + pkg_config('--libs', pkg)

@@ -26,6 +26,7 @@
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
+#include "auth/authenticator.hh"
 #include "core/distributed.hh"
 #include <seastar/core/semaphore.hh>
 #include <memory>
@@ -126,6 +127,13 @@ private:
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
         unsigned _request_cpu = 0;
+
+        enum class state : uint8_t {
+            UNINITIALIZED, AUTHENTICATION, READY
+        };
+
+        state _state = state::UNINITIALIZED;
+        ::shared_ptr<auth::authenticator::sasl_challenge> _sasl_challenge;
     public:
         connection(cql_server& server, connected_socket&& fd, socket_address addr);
         ~connection();
@@ -159,6 +167,10 @@ private:
         shared_ptr<cql_server::response> make_topology_change_event(const transport::event::topology_change& event);
         shared_ptr<cql_server::response> make_status_change_event(const transport::event::status_change& event);
         shared_ptr<cql_server::response> make_schema_change_event(const transport::event::schema_change& event);
+        shared_ptr<cql_server::response> make_autheticate(int16_t, const sstring&);
+        shared_ptr<cql_server::response> make_auth_success(int16_t, bytes);
+        shared_ptr<cql_server::response> make_auth_challenge(int16_t, bytes);
+
         future<> write_response(foreign_ptr<shared_ptr<cql_server::response>>&& response);
 
         void check_room(bytes_view& buf, size_t n);
