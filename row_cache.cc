@@ -502,6 +502,8 @@ void row_cache::invalidate(const query::partition_range& range) {
         return;
     }
 
+    logalloc::reclaim_lock _(_tracker.region());
+
     auto cmp = cache_entry::compare(_schema);
     auto begin = _partitions.begin();
     if (range.start()) {
