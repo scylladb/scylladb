@@ -495,6 +495,13 @@ void row_cache::invalidate(const dht::decorated_key& dk) {
 }
 
 void row_cache::invalidate(const query::partition_range& range) {
+    if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
+        auto unwrapped = range.unwrap();
+        invalidate(unwrapped.first);
+        invalidate(unwrapped.second);
+        return;
+    }
+
     auto cmp = cache_entry::compare(_schema);
     auto begin = _partitions.begin();
     if (range.start()) {

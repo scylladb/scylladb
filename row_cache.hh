@@ -233,6 +233,7 @@ public:
     void invalidate(const dht::decorated_key&);
 
     // Removes given range of partitions from cache.
+    // The range can be a wrap around.
     void invalidate(const query::partition_range&);
 
     auto num_entries() const {
