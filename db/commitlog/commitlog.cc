@@ -342,6 +342,8 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     time_point _sync_time;
     seastar::gate _gate;
 
+    std::unordered_set<table_schema_version> _known_schema_versions;
+
     friend std::ostream& operator<<(std::ostream&, const segment&);
     friend class segment_manager;
 public:
@@ -381,6 +383,16 @@ public:
         } else {
             logger.warn("Segment {} is dirty and is left on disk.", *this);
         }
+    }
+
+    bool is_schema_version_known(schema_ptr s) {
+        return _known_schema_versions.count(s->version());
+    }
+    void add_schema_version(schema_ptr s) {
+        _known_schema_versions.emplace(s->version());
+    }
+    void forget_schema_versions() {
+        _known_schema_versions.clear();
     }
 
     bool must_sync() {
@@ -544,6 +556,8 @@ public:
 
         out.write(uint32_t(_file_pos));
         out.write(crc.checksum());
+
+        forget_schema_versions();
 
         // acquire read lock
         return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me]() mutable {
