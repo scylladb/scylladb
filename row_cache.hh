@@ -210,6 +210,7 @@ public:
     // Implements mutation_source for this cache, see mutation_reader.hh
     // User needs to ensure that the row_cache object stays alive
     // as long as the reader is used.
+    // The range must not wrap around.
     mutation_reader make_reader(schema_ptr, const query::partition_range& = query::full_partition_range);
     const stats& stats() const { return _stats; }
 public:

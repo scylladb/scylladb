@@ -347,6 +347,10 @@ private:
 
 mutation_reader
 row_cache::make_scanning_reader(schema_ptr s, const query::partition_range& range) {
+    if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
+        warn(unimplemented::cause::WRAP_AROUND);
+        throw std::runtime_error("row_cache doesn't support wrap-around ranges");
+    }
     return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range);
 }
 
