@@ -226,15 +226,16 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     // An aggregation query will never be paged for the user, but we always page it internally to avoid OOM.
     // If we user provided a page_size we'll use that to page internally (because why not), otherwise we use our default
     // Note that if there are some nodes in the cluster with a version less than 2.0, we can't use paging (CASSANDRA-6707).
-    if (_selection->is_aggregate() && page_size <= 0) {
+    auto aggregate = _selection->is_aggregate();
+    if (aggregate && page_size <= 0) {
         page_size = DEFAULT_COUNT_PAGE_SIZE;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
-    if (page_size <= 0
+    if (!aggregate && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(page_size,
-                    *command, key_ranges)) {
+                    *command, key_ranges))) {
         return execute(proxy, command, std::move(key_ranges), state, options,
                 now);
     }
@@ -242,7 +243,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     auto p = service::pager::query_pagers::pager(_schema, _selection,
             state, options, command, std::move(key_ranges));
 
-    if (_selection->is_aggregate()) {
+    if (aggregate) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
                         options.get_serialization_format()),
