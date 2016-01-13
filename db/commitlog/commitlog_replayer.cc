@@ -61,6 +61,7 @@
 static logging::logger logger("commitlog_replayer");
 
 class db::commitlog_replayer::impl {
+    std::unordered_map<table_schema_version, column_mapping> _column_mappings;
 public:
     impl(seastar::sharded<cql3::query_processor>& db);
 
@@ -183,20 +184,29 @@ db::commitlog_replayer::impl::recover(sstring file) {
 }
 
 future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> buf, replay_position rp) {
-    auto shard = rp.shard_id();
-    if (rp < _min_pos[shard]) {
-        logger.trace("entry {} is less than global min position. skipping", rp);
-        s->skipped_mutations++;
-        return make_ready_future<>();
-    }
-
     try {
 
         commitlog_entry_reader cer(buf);
         auto& fm = cer.mutation();
 
+        auto cm_it = _column_mappings.find(fm.schema_version());
+        if (cm_it == _column_mappings.end()) {
+            if (!cer.get_column_mapping()) {
+                throw std::runtime_error(sprint("unknown schema version {}", fm.schema_version()));
+            }
+            logger.debug("new schema version {} in entry {}", fm.schema_version(), rp);
+            cm_it = _column_mappings.emplace(fm.schema_version(), *cer.get_column_mapping()).first;
+        }
+
+        auto shard_id = rp.shard_id();
+        if (rp < _min_pos[shard_id]) {
+            logger.trace("entry {} is less than global min position. skipping", rp);
+            s->skipped_mutations++;
+            return make_ready_future<>();
+        }
+
         auto uuid = fm.column_family_id();
-        auto& map = _rpm[shard];
+        auto& map = _rpm[shard_id];
         auto i = map.find(uuid);
         if (i != map.end() && rp <= i->second) {
             logger.trace("entry {} at {} is younger than recorded replay position {}. skipping", fm.column_family_id(), rp, i->second);
@@ -205,7 +215,7 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         }
 
         auto shard = _qp.local().db().local().shard_of(fm);
-        return _qp.local().db().invoke_on(shard, [this, cer = std::move(cer), rp, shard, s] (database& db) -> future<> {
+        return _qp.local().db().invoke_on(shard, [this, cer = std::move(cer), cm_it, rp, shard, s] (database& db) -> future<> {
             auto& fm = cer.mutation();
             // TODO: might need better verification that the deserialized mutation
             // is schema compatible. My guess is that just applying the mutation
