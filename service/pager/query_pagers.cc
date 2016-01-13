@@ -362,8 +362,9 @@ bool service::pager::query_pagers::may_need_paging(uint32_t page_size,
     auto est = est_max_rows();
     auto need_paging = est > page_size;
 
-    logger.debug("Query of {}, page_size={}, limit={} requires paging",
-            cmd.cf_id, page_size, cmd.row_limit);
+    logger.debug("Query of {}, page_size={}, limit={} {}", cmd.cf_id, page_size,
+                    cmd.row_limit,
+                    need_paging ? "requires paging" : "does not require paging");
 
     return need_paging;
 }
