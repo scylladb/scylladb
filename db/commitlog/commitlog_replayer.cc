@@ -56,6 +56,8 @@
 #include "db/serializer.hh"
 #include "cql3/query_processor.hh"
 #include "log.hh"
+#include "converting_mutation_partition_applier.hh"
+#include "schema_registry.hh"
 #include "commitlog_entry.hh"
 
 static logging::logger logger("commitlog_replayer");
@@ -232,8 +234,11 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
             // their "replay_position" attribute will be empty, which is
             // lower than anything the new session will produce.
             if (cf.schema()->version() != fm.schema_version()) {
-                // TODO: Convert fm to current schema
-                fail(unimplemented::cause::SCHEMA_CHANGE);
+                const column_mapping& cm = cm_it->second;
+                mutation m(fm.decorated_key(*cf.schema()), cf.schema());
+                converting_mutation_partition_applier v(cm, *cf.schema(), m.partition());
+                fm.partition().accept(cm, v);
+                cf.apply(std::move(m));
             } else {
                 cf.apply(fm, cf.schema());
             }
