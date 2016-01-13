@@ -1426,10 +1426,6 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                     return skip(slack);
                 }
 
-                if (start_off > pos) {
-                    return skip(size - entry_header_size);
-                }
-
                 return fin.read_exactly(size - entry_header_size).then([this, size, crc = std::move(crc), rp](temporary_buffer<char> buf) mutable {
                     advance(buf);
 
