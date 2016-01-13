@@ -64,6 +64,7 @@
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "log.hh"
+#include "commitlog_entry.hh"
 
 static logging::logger logger("commitlog");
 
@@ -1155,6 +1156,29 @@ future<db::replay_position> db::commitlog::add(const cf_id_type& id,
         }
     };
     auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func));
+    return _segment_manager->active_segment().then([id, writer] (auto s) {
+        return s->allocate(id, writer);
+    });
+}
+
+future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew)
+{
+    class cl_entry_writer final : public entry_writer {
+        commitlog_entry_writer _writer;
+    public:
+        cl_entry_writer(const commitlog_entry_writer& wr) : _writer(wr) { }
+        virtual size_t size(segment& seg) override {
+            _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
+            return _writer.size();
+        }
+        virtual void write(segment& seg, output& out) override {
+            if (_writer.with_schema()) {
+                seg.add_schema_version(_writer.schema());
+            }
+            _writer.write(out);
+        }
+    };
+    auto writer = ::make_shared<cl_entry_writer>(cew);
     return _segment_manager->active_segment().then([id, writer] (auto s) {
         return s->allocate(id, writer);
     });

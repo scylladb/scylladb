@@ -48,6 +48,7 @@
 #include "core/stream.hh"
 #include "utils/UUID.hh"
 #include "replay_position.hh"
+#include "commitlog_entry.hh"
 
 class file;
 
@@ -180,6 +181,13 @@ public:
             mu(out);
         });
     }
+
+    /**
+     * Add an entry to the commit log.
+     *
+     * @param entry_writer a writer responsible for writing the entry
+     */
+    future<replay_position> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
