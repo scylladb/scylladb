@@ -56,6 +56,7 @@
 #include "db/serializer.hh"
 #include "cql3/query_processor.hh"
 #include "log.hh"
+#include "commitlog_entry.hh"
 
 static logging::logger logger("commitlog_replayer");
 
@@ -191,7 +192,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
 
     try {
 
-        frozen_mutation fm(bytes(reinterpret_cast<const int8_t *>(buf.get()), buf.size()));
+        commitlog_entry_reader cer(buf);
+        auto& fm = cer.mutation();
 
         auto uuid = fm.column_family_id();
         auto& map = _rpm[shard];
@@ -203,7 +205,8 @@ future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> 
         }
 
         auto shard = _qp.local().db().local().shard_of(fm);
-        return _qp.local().db().invoke_on(shard, [fm = std::move(fm), rp, shard, s] (database& db) -> future<> {
+        return _qp.local().db().invoke_on(shard, [this, cer = std::move(cer), rp, shard, s] (database& db) -> future<> {
+            auto& fm = cer.mutation();
             // TODO: might need better verification that the deserialized mutation
             // is schema compatible. My guess is that just applying the mutation
             // will not do this.

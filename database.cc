@@ -23,6 +23,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
+#include "db/commitlog/commitlog_entry.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
 #include "db/serializer.hh"
@@ -1634,9 +1635,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
                                  s->ks_name(), s->cf_name(), s->version()));
     }
     if (cf.commitlog() != nullptr) {
-        bytes_view repr = m.representation();
-        auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
-        return cf.commitlog()->add_mutation(uuid, repr.size(), write_repr).then([&m, this, s](auto rp) {
+        commitlog_entry_writer cew(s, m);
+        return cf.commitlog()->add_entry(uuid, cew).then([&m, this, s](auto rp) {
             try {
                 return this->apply_in_memory(m, s, rp);
             } catch (replay_position_reordered_exception&) {
