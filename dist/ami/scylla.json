@@ -13,7 +13,13 @@
       "instance_type": "{{user `instance_type`}}",
       "ssh_username": "centos",
       "ssh_timeout": "5m",
-      "ami_name": "scylla_{{isotime | clean_ami_name}}"
+      "ami_name": "scylla_{{isotime | clean_ami_name}}",
+      "launch_block_device_mappings": [
+        {
+          "device_name": "/dev/sda1",
+          "volume_size": 10
+        }
+      ]
     }
   ],
   "provisioners": [
