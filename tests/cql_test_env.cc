@@ -272,6 +272,7 @@ public:
             cfg->commitlog_directory() = _data_dir->path + "/commitlog.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
+            cfg->experimental() = true;
             boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
             tst_init_storage_service(*db).get();

@@ -30,6 +30,7 @@
 #include "core/shared_ptr.hh"
 #include "core/fstream.hh"
 #include "core/do_with.hh"
+#include "core/print.hh"
 #include "log.hh"
 #include <boost/any.hpp>
 
@@ -431,4 +432,10 @@ boost::filesystem::path db::config::get_conf_dir() {
     }
 
     return confdir;
+}
+
+void db::config::check_experimental(const sstring& what) const {
+    if (!experimental()) {
+        throw std::runtime_error(sprint("%s is currently disabled. Start Scylla with --experimental=on to enable.", what));
+    }
 }
