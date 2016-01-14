@@ -1720,6 +1720,9 @@ void database::unthrottle() {
 }
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m) {
+    if (dblog.is_enabled(logging::log_level::trace)) {
+        dblog.trace("apply {}", m.pretty_printer(s));
+    }
     return throttle().then([this, &m, s = std::move(s)] {
         return do_apply(std::move(s), m);
     });
