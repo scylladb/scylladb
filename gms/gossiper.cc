@@ -662,8 +662,7 @@ void gossiper::convict(inet_address endpoint, double phi) {
         return;
     }
     auto& state = it->second;
-    // FIXME: Add getGossipStatus
-    // logger.debug("Convicting {} with status {} - alive {}", endpoint, getGossipStatus(epState), state.is_alive());
+    logger.debug("Convicting {} with status {} - alive {}", endpoint, get_gossip_status(state), state.is_alive());
     if (!state.is_alive()) {
         return;
     }
