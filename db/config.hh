@@ -693,7 +693,7 @@ public:
     val(ssl_storage_port, uint32_t, 7001, Used,     \
             "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
     )                                                   \
-    val(default_log_level, sstring, "warn", Used, \
+    val(default_log_level, sstring, "info", Used, \
             "Default log level for log messages.  Valid values are trace, debug, info, warn, error.") \
     val(logger_log_level, string_map, /* none */, Used,\
             "map of logger name to log level.  Valid values are trace, debug, info, warn, error.  " \
