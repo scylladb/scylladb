@@ -55,21 +55,10 @@ static const std::map<application_state, sstring> application_state_names = {
     {application_state::REMOVAL_COORDINATOR,    "REMOVAL_COORDINATOR"},
     {application_state::INTERNAL_IP,            "INTERNAL_IP"},
     {application_state::RPC_ADDRESS,            "RPC_ADDRESS"},
-    {application_state::X_11_PADDING,           "X_11_PADDING"},
     {application_state::SEVERITY,               "SEVERITY"},
     {application_state::NET_VERSION,            "NET_VERSION"},
     {application_state::HOST_ID,                "HOST_ID"},
     {application_state::TOKENS,                 "TOKENS"},
-    {application_state::X1,                     "X1"},
-    {application_state::X2,                     "X2"},
-    {application_state::X3,                     "X3"},
-    {application_state::X4,                     "X4"},
-    {application_state::X5,                     "X5"},
-    {application_state::X6,                     "X6"},
-    {application_state::X7,                     "X7"},
-    {application_state::X8,                     "X8"},
-    {application_state::X9,                     "X9"},
-    {application_state::X10,                    "X10"},
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m) {
