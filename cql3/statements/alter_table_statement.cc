@@ -42,6 +42,7 @@
 #include "cql3/statements/alter_table_statement.hh"
 #include "service/migration_manager.hh"
 #include "validation.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 
@@ -77,9 +78,13 @@ void alter_table_statement::validate(distributed<service::storage_proxy>& proxy,
     // validated in announce_migration()
 }
 
+static const sstring ALTER_TABLE_FEATURE = "ALTER TABLE";
+
 future<bool> alter_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
     auto& db = proxy.local().get_db().local();
+    db.get_config().check_experimental(ALTER_TABLE_FEATURE);
+
     auto schema = validation::validate_column_family(db, keyspace(), column_family());
     auto cfm = schema_builder(schema);
 
