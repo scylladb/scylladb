@@ -509,10 +509,12 @@ void stream_session::send_complete_message() {
     auto id = msg_addr{this->peer, this->dst_cpu_id};
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
-    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session = shared_from_this(), id, plan_id] {
+    auto session = shared_from_this();
+    this->ms().send_complete_message(id, plan_id, this->dst_cpu_id).then([session, id, plan_id] {
         sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE Reply from {}", plan_id, id.addr);
-    }).handle_exception([id, plan_id] (auto ep) {
+    }).handle_exception([session, id, plan_id] (auto ep) {
         sslog.warn("[Stream #{}] ERROR COMPLETE_MESSAGE Reply from {}: {}", plan_id, id.addr, ep);
+        session->on_error();
     });
 }
 
