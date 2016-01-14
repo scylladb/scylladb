@@ -267,14 +267,19 @@ storage_proxy::response_id_type storage_proxy::register_response_handler(std::un
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
-            e.handler->signal(hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets()));
-            logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+            auto hints = hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets());
+            e.handler->signal(hints);
+            if (e.handler->_cl == db::consistency_level::ANY && hints) {
+                logger.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+            }
         }
 
         // _cl_achieved can be modified after previous check by call to signal() above if cl == ANY
         if (!e.handler->_cl_achieved) {
             // timeout happened before cl was achieved, throw exception
             e.handler->_ready.set_exception(mutation_write_timeout_exception(e.handler->_cl, e.handler->_cl_acks, e.handler->total_block_for(), e.handler->_type));
+        } else {
+            logger.trace("Write is not acknowledged by {} replicas after achieving CL", e.handler->get_targets());
         }
         remove_response_handler(id);
     }));
