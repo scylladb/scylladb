@@ -324,19 +324,6 @@ int main(int ac, char** av) {
                 return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch());
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
-            }).then([api_address] {
-                supervisor_notify("determining DNS name");
-                return dns::gethostbyname(api_address);
-            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
-                supervisor_notify("starting API server");
-                auto ip = e.addresses[0].in.s_addr;
-                return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
-                    return set_server(ctx);
-                }).then([api_address, api_port, ip, &ctx] {
-                    return ctx.http_server.listen(ipv4_addr{ip, api_port});
-                }).then([api_address, api_port] {
-                    print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
-                });
             }).then([&db] {
                 supervisor_notify("initializing storage service");
                 return init_storage_service(db);
@@ -509,6 +496,19 @@ int main(int ac, char** av) {
                         return service::get_local_storage_service().start_rpc_server();
                     }
                     return make_ready_future<>();
+                });
+            }).then([api_address] {
+                supervisor_notify("determining DNS name");
+                return dns::gethostbyname(api_address);
+            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                supervisor_notify("starting API server");
+                auto ip = e.addresses[0].in.s_addr;
+                return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
+                    return set_server(ctx);
+                }).then([api_address, api_port, ip, &ctx] {
+                    return ctx.http_server.listen(ipv4_addr{ip, api_port});
+                }).then([api_address, api_port] {
+                    print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
                 });
             });
         }).then([] {
