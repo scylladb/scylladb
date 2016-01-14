@@ -347,6 +347,10 @@ private:
 
 mutation_reader
 row_cache::make_scanning_reader(schema_ptr s, const query::partition_range& range) {
+    if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
+        warn(unimplemented::cause::WRAP_AROUND);
+        throw std::runtime_error("row_cache doesn't support wrap-around ranges");
+    }
     return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range);
 }
 
@@ -495,6 +499,15 @@ void row_cache::invalidate(const dht::decorated_key& dk) {
 }
 
 void row_cache::invalidate(const query::partition_range& range) {
+    if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
+        auto unwrapped = range.unwrap();
+        invalidate(unwrapped.first);
+        invalidate(unwrapped.second);
+        return;
+    }
+
+    logalloc::reclaim_lock _(_tracker.region());
+
     auto cmp = cache_entry::compare(_schema);
     auto begin = _partitions.begin();
     if (range.start()) {

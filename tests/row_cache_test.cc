@@ -586,3 +586,47 @@ SEASTAR_TEST_CASE(test_invalidate) {
         }
     });
 }
+
+SEASTAR_TEST_CASE(test_invalidate_works_with_wrap_arounds) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, mt->as_data_source(), mt->as_key_source(), tracker);
+
+        std::vector<mutation> ring = make_ring(s, 8);
+
+        for (auto& m : ring) {
+            cache.populate(m);
+        }
+
+        for (auto& m : ring) {
+            verify_has(cache, m.decorated_key());
+        }
+
+        // wrap-around
+        cache.invalidate(query::partition_range({ring[6].ring_position()}, {ring[1].ring_position()}));
+
+        verify_does_not_have(cache, ring[0].decorated_key());
+        verify_does_not_have(cache, ring[1].decorated_key());
+        verify_has(cache, ring[2].decorated_key());
+        verify_has(cache, ring[3].decorated_key());
+        verify_has(cache, ring[4].decorated_key());
+        verify_has(cache, ring[5].decorated_key());
+        verify_does_not_have(cache, ring[6].decorated_key());
+        verify_does_not_have(cache, ring[7].decorated_key());
+
+        // not wrap-around
+        cache.invalidate(query::partition_range({ring[3].ring_position()}, {ring[4].ring_position()}));
+
+        verify_does_not_have(cache, ring[0].decorated_key());
+        verify_does_not_have(cache, ring[1].decorated_key());
+        verify_has(cache, ring[2].decorated_key());
+        verify_does_not_have(cache, ring[3].decorated_key());
+        verify_does_not_have(cache, ring[4].decorated_key());
+        verify_has(cache, ring[5].decorated_key());
+        verify_does_not_have(cache, ring[6].decorated_key());
+        verify_does_not_have(cache, ring[7].decorated_key());
+    });
+}
