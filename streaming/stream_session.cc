@@ -461,10 +461,7 @@ void stream_session::retry(UUID cf_id, int sequence_number) {
 
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
-        if (!_complete_sent) {
-            _complete_sent = true;
-            send_complete_message();
-        }
+        send_complete_message();
         sslog.debug("[Stream #{}] complete: WAIT_COMPLETE -> COMPLETE: session={}", plan_id(), this);
         close_session(stream_session_state::COMPLETE);
     } else {
@@ -504,6 +501,11 @@ void stream_session::transfer_task_completed(UUID cf_id) {
 }
 
 void stream_session::send_complete_message() {
+    if (!_complete_sent) {
+        _complete_sent = true;
+    } else {
+        return;
+    }
     auto id = msg_addr{this->peer, this->dst_cpu_id};
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] SEND COMPLETE_MESSAGE to {}", plan_id, id);
@@ -518,15 +520,11 @@ bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
         if (_state == stream_session_state::WAIT_COMPLETE) {
-            if (!_complete_sent) {
-                _complete_sent = true;
-                send_complete_message();
-            }
+            send_complete_message();
             sslog.debug("[Stream #{}] maybe_completed: WAIT_COMPLETE -> COMPLETE: session={}, peer={}", plan_id(), this, peer);
             close_session(stream_session_state::COMPLETE);
         } else {
             // notify peer that this session is completed
-            _complete_sent = true;
             sslog.debug("[Stream #{}] maybe_completed: {} -> WAIT_COMPLETE: session={}, peer={}", plan_id(), _state, this, peer);
             set_state(stream_session_state::WAIT_COMPLETE);
             send_complete_message();
