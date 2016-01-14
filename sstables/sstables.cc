@@ -46,12 +46,35 @@
 #include <boost/range/adaptor/map.hpp>
 #include <regex>
 #include <core/align.hh>
+#include "utils/phased_barrier.hh"
 
 namespace sstables {
 
 logging::logger sstlog("sstable");
 
 thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
+
+static utils::phased_barrier& background_jobs() {
+    static thread_local lw_shared_ptr<utils::phased_barrier> gate = [] {
+        auto g = make_lw_shared<utils::phased_barrier>();
+        engine().at_exit([] { return await_background_jobs(); });
+        return g;
+    }();
+    return *gate;
+}
+
+future<> await_background_jobs() {
+    sstlog.debug("Waiting for background jobs");
+    return background_jobs().advance_and_await().finally([] {
+        sstlog.debug("Waiting done");
+    });
+}
+
+future<> await_background_jobs_on_all_shards() {
+    return smp::invoke_on_all([] {
+        return await_background_jobs();
+    });
+}
 
 class random_access_reader {
     input_stream<char> _in;
@@ -1609,12 +1632,12 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
 
 sstable::~sstable() {
     if (_index_file) {
-        _index_file.close().handle_exception([save = _index_file] (auto ep) {
+        _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
             sstlog.warn("sstable close index_file failed: {}", ep);
         });
     }
     if (_data_file) {
-        _data_file.close().handle_exception([save = _data_file] (auto ep) {
+        _data_file.close().handle_exception([save = _data_file, op = background_jobs().start()] (auto ep) {
             sstlog.warn("sstable close data_file failed: {}", ep);
         });
     }
@@ -1628,7 +1651,7 @@ sstable::~sstable() {
         // generation number anyway.
         try {
             shared_remove_by_toc_name(filename(component_type::TOC), _shared).handle_exception(
-                        [] (std::exception_ptr eptr) {
+                        [op = background_jobs().start()] (std::exception_ptr eptr) {
                             sstlog.warn("Exception when deleting sstable file: {}", eptr);
                         });
         } catch (...) {

@@ -552,4 +552,14 @@ struct entry_descriptor {
         : ks(ks), cf(cf), version(version), generation(generation), format(format), component(component) {}
 };
 
+// Waits for all prior tasks started on current shard related to sstable management to finish.
+//
+// There may be asynchronous cleanup started from sstable destructor. Since we can't have blocking
+// destructors in seastar, that cleanup is not waited for. It can be waited for using this function.
+// It is also waited for when seastar exits.
+future<> await_background_jobs();
+
+// Invokes await_background_jobs() on all shards
+future<> await_background_jobs_on_all_shards();
+
 }
