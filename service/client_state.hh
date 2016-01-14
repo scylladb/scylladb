@@ -47,6 +47,7 @@
 #include "db_clock.hh"
 #include "database.hh"
 #include "auth/authenticated_user.hh"
+#include "auth/authenticator.hh"
 
 namespace service {
 
@@ -96,11 +97,9 @@ public:
     // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
     // anywhere so I didn't bother converting it.
     client_state(external_tag) : _is_internal(false) {
-        warn(unimplemented::cause::AUTH);
-#if 0
-            if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
-                this.user = AuthenticatedUser.ANONYMOUS_USER;
-#endif
+        if (!auth::authenticator::get().require_authentication()) {
+            _user = ::make_shared<auth::authenticated_user>();
+        }
     }
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
