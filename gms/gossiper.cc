@@ -1112,7 +1112,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
             logger.info("Node {} is now part of the cluster", ep);
         }
     }
-    logger.trace("Adding endpoint state for {}", ep);
+    logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
     endpoint_state_map[ep] = eps;
 
     auto& ep_state = endpoint_state_map.at(ep);
