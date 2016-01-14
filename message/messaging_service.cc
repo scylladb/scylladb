@@ -162,6 +162,16 @@ messaging_service::messaging_service(gms::inet_address ip, uint16_t port)
     : messaging_service(std::move(ip), port, encrypt_what::none, 0, nullptr)
 {}
 
+static
+rpc::resource_limits
+rpc_resource_limits() {
+    rpc::resource_limits limits;
+    limits.bloat_factor = 3;
+    limits.basic_request_size = 1000;
+    limits.max_memory = std::max<size_t>(0.08 * memory::stats().total_memory(), 1'000'000);
+    return limits;
+}
+
 messaging_service::messaging_service(gms::inet_address ip
         , uint16_t port
         , encrypt_what ew
@@ -173,7 +183,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _ssl_port(ssl_port)
     , _encrypt_what(ew)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
-    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr { _listen_address.raw_addr(), _port }))
+    , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr { _listen_address.raw_addr(), _port }, rpc_resource_limits()))
     , _credentials(std::move(credentials))
     , _server_tls([this]() -> std::unique_ptr<rpc_protocol_server_wrapper>{
         if (_encrypt_what == encrypt_what::none) {
