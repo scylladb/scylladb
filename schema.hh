@@ -368,6 +368,7 @@ private:
         caching_options _caching_options;
         table_schema_version _version;
         std::unordered_map<sstring, api::timestamp_type> _dropped_columns;
+        std::map<bytes, data_type> _collections;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -552,6 +553,10 @@ public:
 
     const auto& dropped_columns() const {
         return _raw._dropped_columns;
+    }
+
+    const auto& collections() const {
+        return _raw._collections;
     }
 
     gc_clock::duration default_time_to_live() const {

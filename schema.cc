@@ -285,6 +285,9 @@ schema::schema(std::experimental::optional<utils::UUID> id,
 
         auto build_columns = [&raw](std::vector<column>& columns, column_kind kind) {
             for (auto& sc : columns) {
+                if (sc.type->is_multi_cell()) {
+                    raw._collections.emplace(sc.name, sc.type);
+                }
                 raw._columns.emplace_back(std::move(sc.name), std::move(sc.type), kind);
             }
         };
@@ -597,6 +600,9 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
     _raw._columns.emplace_back(name, type, kind, component_index, info);
+    if (type->is_multi_cell()) {
+        with_collection(name, type);
+    }
     return *this;
 }
 
@@ -641,6 +647,18 @@ schema_builder& schema_builder::with_altered_column_type(bytes name, data_type n
     auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
     assert(it != _raw._columns.end());
     it->type = new_type;
+
+    if (new_type->is_multi_cell()) {
+        auto c_it = _raw._collections.find(name);
+        assert(c_it != _raw._collections.end());
+        c_it->second = new_type;
+    }
+    return *this;
+}
+
+schema_builder& schema_builder::with_collection(bytes name, data_type type)
+{
+    _raw._collections.emplace(name, type);
     return *this;
 }
 
