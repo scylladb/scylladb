@@ -296,7 +296,11 @@ public:
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
 
-        if (col.collection_extra_data.size()) {
+        bool is_multi_cell = col.collection_extra_data.size();
+        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            return;
+        }
+        if (is_multi_cell) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
             return;
         }
@@ -331,8 +335,13 @@ public:
     void consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
+        bool is_multi_cell = col.collection_extra_data.size();
+        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            return;
+        }
+
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-        if (col.collection_extra_data.size()) {
+        if (is_multi_cell) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
@@ -389,7 +398,7 @@ public:
         } else {
             auto&& column = pop_back(start);
             auto cdef = _schema->get_column_definition(column);
-            if (cdef && deltime.marked_for_delete_at > cdef->dropped_at()) {
+            if (cdef && cdef->type->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
                 auto clustering_prefix = exploded_clustering_prefix(std::move(start));
                 update_pending_collection(clustering_prefix, cdef, tombstone(deltime));
             }
