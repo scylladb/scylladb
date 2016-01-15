@@ -747,14 +747,12 @@ static sstring compound_name(const schema& s) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
-    if (s.has_multi_cell_collections()) {
+    if (!s.collections().empty()) {
         compound += _collection_str;
         compound += "(";
-        for (auto& t: s.regular_columns()) {
-            if (t.type->is_collection() && t.type->is_multi_cell()) {
-                auto ct = static_pointer_cast<const collection_type_impl>(t.type);
-                compound += "00000000:" + ct->name() + ",";
-            }
+        for (auto& c : s.collections()) {
+            auto ct = static_pointer_cast<const collection_type_impl>(c.second);
+            compound += sprint("%s:%s,", to_hex(c.first), ct->name());
         }
         compound.back() = ')';
         compound += ",";
