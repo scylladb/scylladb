@@ -2156,3 +2156,49 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
         });
     }).then([s, tmp] {});
 }
+
+SEASTAR_TEST_CASE(check_multi_schema) {
+    // Schema used to write sstable:
+    // CREATE TABLE multi_schema_test (
+    //        a int PRIMARY KEY,
+    //        b int,
+    //        c int,
+    //        d set<int>,
+    //        e int
+    //);
+
+    // Schema used to read sstable:
+    // CREATE TABLE multi_schema_test (
+    //        a int PRIMARY KEY,
+    //        c set<int>,
+    //        d int,
+    //        e blob
+    //);
+    auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
+    auto builder = schema_builder("test", "test_multi_schema")
+        .with_column("a", int32_type, column_kind::partition_key)
+        .with_column("c", set_of_ints_type)
+        .with_column("d", int32_type)
+        .with_column("e", bytes_type);
+    auto s = builder.build();
+
+    auto sst = make_lw_shared<sstable>("test", "test_multi_schema", "tests/sstables/multi_schema_test", 1, sstables::sstable::version_types::ka, big);
+    auto f = sst->load();
+    return f.then([sst, s] {
+        auto reader = make_lw_shared(sstable_reader(sst, s));
+        return (*reader)().then([reader, s] (mutation_opt m) {
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().representation() == int32_type->decompose(0));
+            auto& rows = m->partition().clustered_rows();
+            BOOST_REQUIRE_EQUAL(rows.size(), 1);
+            auto& row = rows.begin()->row();
+            BOOST_REQUIRE(!row.deleted_at());
+            auto& cells = row.cells();
+            BOOST_REQUIRE_EQUAL(cells.size(), 1);
+            BOOST_REQUIRE_EQUAL(cells.cell_at(s->get_column_definition("e")->id).as_atomic_cell().value(), int32_type->decompose(5));
+            return (*reader)();
+        }).then([reader, s] (mutation_opt m) {
+            BOOST_REQUIRE(!m);
+        });
+    });
+}

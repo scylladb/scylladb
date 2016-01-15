@@ -132,6 +132,10 @@ class mp_row_consumer : public row_consumer {
             throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
         }
 
+        bool is_present(api::timestamp_type timestamp) {
+            return cdef && timestamp > cdef->dropped_at();
+        }
+
         static bool check_static(bytes_view col) {
             static bytes static_row(static_size, 0xff);
             return col.compare(0, static_size, static_row) == 0;
@@ -166,10 +170,6 @@ class mp_row_consumer : public row_consumer {
                         throw malformed_sstable_exception("Static row has clustering key information. I didn't expect that!");
                     }
                 }
-            }
-
-            if (cell.size() && !cdef) {
-                throw malformed_sstable_exception(sprint("schema does not contain column: %s", cell.c_str()));
             }
         }
     };
@@ -289,11 +289,18 @@ public:
 
     virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         struct column col(*_schema, col_name);
+        if (!col.is_present(timestamp)) {
+            return;
+        }
 
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
 
-        if (col.collection_extra_data.size()) {
+        bool is_multi_cell = col.collection_extra_data.size();
+        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            return;
+        }
+        if (is_multi_cell) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
             return;
         }
@@ -316,6 +323,10 @@ public:
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         struct column col(*_schema, col_name);
+        if (!col.is_present(deltime.marked_for_delete_at)) {
+            return;
+        }
+
         gc_clock::duration secs(deltime.local_deletion_time);
 
         consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
@@ -324,8 +335,13 @@ public:
     void consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
+        bool is_multi_cell = col.collection_extra_data.size();
+        if (is_multi_cell != col.cdef->type->is_multi_cell()) {
+            return;
+        }
+
         auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-        if (col.collection_extra_data.size()) {
+        if (is_multi_cell) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
@@ -381,9 +397,11 @@ public:
             mut->partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
         } else {
             auto&& column = pop_back(start);
-
-            auto clustering_prefix = exploded_clustering_prefix(std::move(start));
-            update_pending_collection(clustering_prefix, _schema->get_column_definition(column), tombstone(deltime));
+            auto cdef = _schema->get_column_definition(column);
+            if (cdef && cdef->type->is_multi_cell() && deltime.marked_for_delete_at > cdef->dropped_at()) {
+                auto clustering_prefix = exploded_clustering_prefix(std::move(start));
+                update_pending_collection(clustering_prefix, cdef, tombstone(deltime));
+            }
         }
     }
 };
