@@ -1,6 +1,5 @@
-diff -Nur ./debian/changelog ../thrift-0.9.1/debian/changelog
---- ./debian/changelog	2013-08-15 23:04:29.000000000 +0900
-+++ ../thrift-0.9.1/debian/changelog	2015-10-29 23:03:25.797937232 +0900
+--- debian/changelog	2013-08-15 23:04:29.000000000 +0900
++++ ../thrift-0.9.1-ubuntu/debian/changelog	2016-01-15 23:22:11.189982999 +0900
 @@ -1,65 +1,4 @@
 -thrift (1.0.0-dev) stable; urgency=low
 -  * update version
@@ -70,9 +69,8 @@ diff -Nur ./debian/changelog ../thrift-0.9.1/debian/changelog
 -
 - -- Esteve Fernandez <esteve@fluidinfo.com>  Thu, 15 Jan 2009 11:34:24 +0100
 + -- Takuya ASADA <syuu@scylladb.com>  Wed, 28 Oct 2015 05:11:38 +0900
-diff -Nur ./debian/control ../thrift-0.9.1/debian/control
---- ./debian/control	2013-08-18 23:58:22.000000000 +0900
-+++ ../thrift-0.9.1/debian/control	2015-10-28 00:54:05.950464999 +0900
+--- debian/control	2013-08-18 23:58:22.000000000 +0900
++++ ../thrift-0.9.1-ubuntu/debian/control	2016-01-15 23:32:47.373982999 +0900
 @@ -1,12 +1,10 @@
  Source: thrift
  Section: devel
@@ -86,7 +84,7 @@ diff -Nur ./debian/control ../thrift-0.9.1/debian/control
 +Build-Depends: debhelper (>= 5), build-essential, autoconf, 
 +    automake, pkg-config, libtool, bison, flex, libboost-dev | libboost1.55-dev, 
 +    libboost-test-dev | libboost-test1.55-dev, libevent-dev, 
-+    libglib2.0-dev, libqt4-dev
++    libglib2.0-dev, libqt4-dev, libssl-dev, python-support
  Maintainer: Thrift Developer's <dev@thrift.apache.org>
  Homepage: http://thrift.apache.org/
  Vcs-Git: https://git-wip-us.apache.org/repos/asf/thrift.git
@@ -205,9 +203,8 @@ diff -Nur ./debian/control ../thrift-0.9.1/debian/control
 - build services that work efficiently and seamlessly.
 - .
 - This package contains the PHP bindings for Thrift.
-diff -Nur ./debian/rules ../thrift-0.9.1/debian/rules
---- ./debian/rules	2013-08-15 23:04:29.000000000 +0900
-+++ ../thrift-0.9.1/debian/rules	2015-10-28 00:54:05.950464999 +0900
+--- debian/rules	2013-08-15 23:04:29.000000000 +0900
++++ ../thrift-0.9.1-ubuntu/debian/rules	2016-01-15 23:22:11.189982999 +0900
 @@ -45,18 +45,6 @@
  	# Compile C (glib) library
  	$(MAKE) -C $(CURDIR)/lib/c_glib
