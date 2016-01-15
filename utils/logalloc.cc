@@ -1824,7 +1824,9 @@ void tracker::impl::register_collectd_metrics() {
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "non_lsa_used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return memory::stats().allocated_memory() - occupancy().total_space(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
+                auto free_space_in_zones = shard_segment_pool.free_segments_in_zones() * segment_size;
+                return memory::stats().allocated_memory() - occupancy().total_space() - free_space_in_zones; })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "free_space_in_zones"),
