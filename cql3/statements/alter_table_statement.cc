@@ -137,6 +137,12 @@ future<bool> alter_table_statement::announce_migration(distributed<service::stor
             if (schema->is_super()) {
                 throw exceptions::invalid_request_exception("Cannot use non-frozen collections with super column families");
             }
+
+            auto it = schema->collections().find(column_name->name());
+            if (it != schema->collections().end() && !type->is_compatible_with(*it->second)) {
+                throw exceptions::invalid_request_exception(sprint("Cannot add a collection with the name %s "
+                    "because a collection with the same name and a different type has already been used in the past", column_name));
+            }
         }
 
         cfm.with_column(column_name->name(), type, _is_static ? column_kind::static_column : column_kind::regular_column);
