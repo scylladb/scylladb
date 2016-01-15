@@ -2,6 +2,7 @@
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
 
+sudo apt-get install -y gdebi-core
 if [ "$RELEASE" = "14.04" ]; then
     if [ ! -f build/antlr3_3.5.2-1_all.deb ]; then
         rm -rf build/antlr3-3.5.2
@@ -45,4 +46,8 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     cd ../..
 fi
 
-sudo dpkg -i build/*.deb
+sudo gdebi -n build/antlr3_*.deb
+sudo gdebi -n build/antlr3-c++-dev_*.deb
+sudo gdebi -n build/libthrift0_*.deb
+sudo gdebi -n build/libthrift-dev_*.deb
+sudo gdebi -n build/thrift-compiler_*.deb
