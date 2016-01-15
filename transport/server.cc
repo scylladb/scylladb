@@ -535,9 +535,10 @@ future<> cql_server::connection::process()
 
 future<> cql_server::connection::shutdown()
 {
-    _fd.shutdown_input();
-    return _pending_requests_gate.close().then([this] {
-        _fd.shutdown_output();
+    return _fd.shutdown_input().then([this] {
+        return _pending_requests_gate.close();
+    }).then([this] {
+        return _fd.shutdown_output();
     });
 }
 
