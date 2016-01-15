@@ -434,14 +434,17 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
     return do_with(int(nr_retry), std::move(msg)..., [ms, verb, id, timeout, wait, nr_retry] (auto& retry, const auto&... messages) {
         return repeat_until_value([ms, verb, id, timeout, wait, nr_retry, &retry, &messages...] {
             return send_message_timeout<MsgIn>(ms, verb, id, timeout, messages...).then_wrapped(
-                    [verb, id, wait, nr_retry, &retry] (auto&& f) mutable {
+                    [verb, id, timeout, wait, nr_retry, &retry] (auto&& f) mutable {
                 try {
                     MsgInTuple ret = f.get();
                     if (retry != nr_retry) {
                         logger.info("Retry verb={} to {}, retry={}: OK", int(verb), id, retry);
                     }
                     return make_ready_future<stdx::optional<MsgInTuple>>(std::move(ret));
-                } catch (...) {
+                } catch (rpc::timeout_error) {
+                    logger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", int(verb), id, retry, timeout.count());
+                    throw;
+                } catch (rpc::closed_error) {
                     logger.info("Retry verb={} to {}, retry={}: {}", int(verb), id, retry, std::current_exception());
                     if (--retry == 0) {
                         throw;
@@ -449,6 +452,8 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                     return sleep(wait).then([] {
                         return make_ready_future<stdx::optional<MsgInTuple>>(stdx::nullopt);
                     });
+                } catch (...) {
+                    throw;
                 }
             });
         }).then([] (MsgInTuple result) {
@@ -471,10 +476,11 @@ auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messagi
 
 // Wrappers for verbs
 
-// Retransmission parameters for streaming verbs
-// A stream plan gives up retrying in 10 minutes at most, 5 minutes at least
+// Retransmission parameters for streaming verbs.
+// A stream plan gives up retrying in 10*30 + 10*60 seconds (15 minutes) at
+// most, 10*30 seconds (5 minutes) at least.
 static constexpr int streaming_nr_retry = 10;
-static constexpr std::chrono::seconds streaming_timeout{30};
+static constexpr std::chrono::seconds streaming_timeout{10*60};
 static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
 // STREAM_INIT_MESSAGE
