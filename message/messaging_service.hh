@@ -475,14 +475,14 @@ public:
     // FIXME: response_id_type is an alias in service::storage_proxy::response_id_type
     using response_id_type = uint64_t;
     // Wrapper for MUTATION
-    void register_mutation(std::function<rpc::no_wait_type (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
+    void register_mutation(std::function<future<rpc::no_wait_type> (const rpc::client_info&, frozen_mutation fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation();
     future<> send_mutation(msg_addr id, clock_type::time_point timeout, const frozen_mutation& fm, std::vector<inet_address> forward,
         inet_address reply_to, unsigned shard, response_id_type response_id);
 
     // Wrapper for MUTATION_DONE
-    void register_mutation_done(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
+    void register_mutation_done(std::function<future<rpc::no_wait_type> (const rpc::client_info& cinfo, unsigned shard, response_id_type response_id)>&& func);
     void unregister_mutation_done();
     future<> send_mutation_done(msg_addr id, unsigned shard, response_id_type response_id);
 
