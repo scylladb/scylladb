@@ -100,6 +100,11 @@ static std::vector<gms::inet_address> get_neighbors(database& db,
                 dc_endpoints.insert(endpoint);
             }
         }
+        // We require, like Cassandra does, that the current host must also
+        // be part of the repair
+        if (!dc_endpoints.count(utils::fb_utilities::get_broadcast_address())) {
+            throw std::runtime_error("The current host must be part of the repair");
+        }
         // The resulting list of nodes is the intersection of the nodes in the
         // listed data centers, and the (range-dependent) list of neighbors.
         std::unordered_set<gms::inet_address> neighbor_set(ret.begin(), ret.end());
