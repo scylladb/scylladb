@@ -471,6 +471,15 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
         os << dc.first << " : " << dc.second;
     }
     os << "}";
+    os << ",collections={";
+    n = 0;
+    for (auto& c : s._raw._collections) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << c.first << " : " << c.second->name();
+    }
+    os << "}";
     os << "]";
     return os;
 }
