@@ -275,7 +275,7 @@ void storage_service::join_token_ring(int delay) {
              !_token_metadata.get_leaving_endpoints().empty() ||
              !_token_metadata.get_moving_endpoints().empty())) {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-            logger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elpased)",
+            logger.info("Checking bootstrapping/leaving/moving nodes: tokens {}, leaving {}, moving {}, sleep 1 second and check again ({} seconds elapsed)",
                 _token_metadata.get_bootstrap_tokens().size(),
                 _token_metadata.get_leaving_endpoints().size(),
                 _token_metadata.get_moving_endpoints().size(),
@@ -1132,7 +1132,7 @@ future<> storage_service::check_for_endpoint_collision() {
                             gossiper.reset_endpoint_state_map();
                             found_bootstrapping_node = true;
                             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(gms::gossiper::clk::now() - t).count();
-                            logger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elpased) (check_for_endpoint_collision)", x.first, state, elapsed);
+                            logger.info("Checking bootstrapping/leaving/moving nodes: node={}, status={}, sleep 1 second and check again ({} seconds elapsed) (check_for_endpoint_collision)", x.first, state, elapsed);
                             sleep(std::chrono::seconds(1)).get();
                             break;
                         }
