@@ -34,7 +34,7 @@ namespace api {
 using shard_info = messaging_service::shard_info;
 using msg_addr = messaging_service::msg_addr;
 
-static const int32_t num_verb = static_cast<int32_t>(messaging_verb::LAST) + 1;
+static const int32_t num_verb = static_cast<int32_t>(messaging_verb::LAST);
 
 std::vector<message_counter> map_to_message_counters(
         const std::unordered_map<gms::inet_address, unsigned long>& map) {
@@ -124,7 +124,7 @@ void set_messaging_service(http_context& ctx, routes& r) {
     });
 
     get_dropped_messages_by_ver.set(r, [](std::unique_ptr<request> req) {
-        shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb, 0);
+        shared_ptr<std::vector<uint64_t>> map = make_shared<std::vector<uint64_t>>(num_verb);
 
         return net::get_messaging_service().map_reduce([map](const uint64_t* local_map) mutable {
             for (auto i = 0; i < num_verb; i++) {
@@ -137,8 +137,12 @@ void set_messaging_service(http_context& ctx, routes& r) {
             for (auto i : verb_counter::verb_wrapper::all_items()) {
                 verb_counter c;
                 messaging_verb v = i; // for type safety we use messaging_verb values
-                if ((*map)[static_cast<int32_t>(v)] > 0) {
-                    c.count = (*map)[static_cast<int32_t>(v)];
+                auto idx = static_cast<uint32_t>(v);
+                if (idx >= map->size()) {
+                    throw std::runtime_error(sprint("verb index out of bounds: %lu, map size: %lu", idx, map->size()));
+                }
+                if ((*map)[idx] > 0) {
+                    c.count = (*map)[idx];
                     c.verb = i;
                     res.push_back(c);
                 }
