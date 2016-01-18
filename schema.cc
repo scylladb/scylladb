@@ -285,6 +285,9 @@ schema::schema(std::experimental::optional<utils::UUID> id,
 
         auto build_columns = [&raw](std::vector<column>& columns, column_kind kind) {
             for (auto& sc : columns) {
+                if (sc.type->is_multi_cell()) {
+                    raw._collections.emplace(sc.name, sc.type);
+                }
                 raw._columns.emplace_back(std::move(sc.name), std::move(sc.type), kind);
             }
         };
@@ -597,6 +600,9 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, index_in
 
 schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind, column_id component_index) {
     _raw._columns.emplace_back(name, type, kind, component_index, info);
+    if (type->is_multi_cell()) {
+        with_collection(name, type);
+    }
     return *this;
 }
 
@@ -641,6 +647,18 @@ schema_builder& schema_builder::with_altered_column_type(bytes name, data_type n
     auto it = boost::find_if(_raw._columns, [&name] (auto& c) { return c.name() == name; });
     assert(it != _raw._columns.end());
     it->type = new_type;
+
+    if (new_type->is_multi_cell()) {
+        auto c_it = _raw._collections.find(name);
+        assert(c_it != _raw._collections.end());
+        c_it->second = new_type;
+    }
+    return *this;
+}
+
+schema_builder& schema_builder::with_collection(bytes name, data_type type)
+{
+    _raw._collections.emplace(name, type);
     return *this;
 }
 
@@ -729,14 +747,12 @@ static sstring compound_name(const schema& s) {
         compound += s.regular_column_name_type()->name() + ",";
     }
 
-    if (s.has_multi_cell_collections()) {
+    if (!s.collections().empty()) {
         compound += _collection_str;
         compound += "(";
-        for (auto& t: s.regular_columns()) {
-            if (t.type->is_collection() && t.type->is_multi_cell()) {
-                auto ct = static_pointer_cast<const collection_type_impl>(t.type);
-                compound += "00000000:" + ct->name() + ",";
-            }
+        for (auto& c : s.collections()) {
+            auto ct = static_pointer_cast<const collection_type_impl>(c.second);
+            compound += sprint("%s:%s,", to_hex(c.first), ct->name());
         }
         compound.back() = ')';
         compound += ",";
@@ -758,6 +774,54 @@ bool check_compound(sstring comparator) {
     static sstring compound(_composite_str);
     return comparator.compare(0, compound.size(), compound) == 0;
 }
+
+void read_collections(schema_builder& builder, sstring comparator)
+{
+    // The format of collection entries in the comparator is:
+    // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name>:<type>)
+
+    auto find_closing_parenthesis = [] (sstring_view str, size_t start) {
+        auto pos = start;
+        auto nest_level = 0;
+        do {
+            pos = str.find_first_of("()", pos);
+            if (pos == sstring::npos) {
+                throw marshal_exception();
+            }
+            if (str[pos] == ')') {
+                nest_level--;
+            } else if (str[pos] == '(') {
+                nest_level++;
+            }
+            pos++;
+        } while (nest_level > 0);
+        return pos;
+    };
+
+    auto collection_str_length = strlen(_collection_str);
+
+    auto pos = comparator.find(_collection_str);
+    while (pos != sstring::npos) {
+        pos += collection_str_length;
+        auto end = find_closing_parenthesis(comparator, pos++);
+
+        auto colon = comparator.find(':', pos);
+        if (colon == sstring::npos || colon > end) {
+            throw marshal_exception();
+        }
+
+        auto name = from_hex(sstring_view(comparator.c_str() + pos, colon - pos));
+
+        colon++;
+        auto type_str = sstring_view(comparator.c_str() + colon, end - colon);
+        auto type = db::marshal::type_parser::parse(type_str);
+
+        builder.with_collection(name, type);
+
+        pos = comparator.find(_collection_str, end);
+    }
+}
+
 }
 
 schema::const_iterator

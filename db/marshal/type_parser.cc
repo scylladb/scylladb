@@ -50,16 +50,20 @@ namespace db {
 
 namespace marshal {
 
-type_parser::type_parser(const sstring& str, size_t idx)
-    : _str{str}
+type_parser::type_parser(sstring_view str, size_t idx)
+    : _str{str.begin(), str.end()}
     , _idx{idx}
 { }
 
-type_parser::type_parser(const sstring& str)
+type_parser::type_parser(sstring_view str)
     : type_parser{str, 0}
 { }
 
 data_type type_parser::parse(const sstring& str) {
+    return type_parser(sstring_view(str)).parse();
+}
+
+data_type type_parser::parse(sstring_view str) {
     return type_parser(str).parse();
 }
 

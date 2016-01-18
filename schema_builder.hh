@@ -185,6 +185,11 @@ public:
     schema_builder& with_column_rename(bytes from, bytes to);
     schema_builder& with_altered_column_type(bytes name, data_type new_type);
 
+    // Adds information about collection that existed in the past but the column
+    // has since been removed. For adding colllections that are still alive
+    // use with_column().
+    schema_builder& with_collection(bytes name, data_type type);
+
     schema_builder& with(compact_storage);
     schema_builder& with_version(table_schema_version);
 
