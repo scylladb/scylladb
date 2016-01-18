@@ -31,8 +31,8 @@ else
 [Coredump]
 Storage=external
 Compress=yes
-ProcessSizeMax=16G
-ExternalSizeMax=16G
+ProcessSizeMax=1024G
+ExternalSizeMax=1024G
 EOS
     if [ $SYMLINK = 1 ]; then
         rm -rf /var/lib/systemd/coredump
