@@ -34,6 +34,8 @@ enum class compaction_strategy_type {
 };
 
 class compaction_strategy_impl;
+class sstable;
+struct compaction_descriptor;
 
 class compaction_strategy {
     ::shared_ptr<compaction_strategy_impl> _compaction_strategy_impl;
@@ -46,7 +48,9 @@ public:
     compaction_strategy(compaction_strategy&&);
     compaction_strategy& operator=(compaction_strategy&&);
 
-    future<> compact(column_family& cfs);
+    // Return a list of sstables to be compacted after applying the strategy.
+    compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<lw_shared_ptr<sstable>> candidates);
+
     static sstring name(compaction_strategy_type type) {
         switch (type) {
         case compaction_strategy_type::null:

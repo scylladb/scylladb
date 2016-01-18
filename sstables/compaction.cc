@@ -42,6 +42,7 @@
 #include <functional>
 #include <utility>
 #include <assert.h>
+#include <algorithm>
 
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptors.hpp>
@@ -59,6 +60,7 @@
 #include "leveled_manifest.hh"
 #include "db/system_keyspace.hh"
 #include "db/query_context.hh"
+#include "service/storage_service.hh"
 
 namespace sstables {
 
@@ -87,11 +89,26 @@ static api::timestamp_type get_max_purgeable_timestamp(schema_ptr schema,
     return timestamp;
 }
 
+static bool belongs_to_current_node(const dht::token& t, const std::vector<range<dht::token>>& sorted_owned_ranges) {
+    auto low = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), t,
+            [] (const range<dht::token>& a, const dht::token b) {
+        // check that range a is before token b.
+        return a.after(b, dht::token_comparator());
+    });
+
+    if (low != sorted_owned_ranges.end()) {
+        const range<dht::token>& r = *low;
+        return r.contains(t, dht::token_comparator());
+    }
+
+    return false;
+}
+
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
-future<> compact_sstables(std::vector<shared_sstable> sstables,
-        column_family& cf, std::function<shared_sstable()> creator, uint64_t max_sstable_size, uint32_t sstable_level) {
+future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
+                          uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup) {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
     auto ancestors = make_lw_shared<std::vector<unsigned long>>();
@@ -146,7 +163,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     stats->sstables = sstables.size();
     stats->ks = schema->ks_name();
     stats->cf = schema->cf_name();
-    logger.info("Compacting {}", sstable_logger_msg);
+    logger.info("{} {}", (!cleanup) ? "Compacting" : "Cleaning", sstable_logger_msg);
 
     class compacting_reader final : public ::mutation_reader::impl {
     private:
@@ -154,18 +171,26 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         ::mutation_reader _reader;
         std::vector<shared_sstable> _not_compacted_sstables;
         gc_clock::time_point _now;
+        std::vector<range<dht::token>> _sorted_owned_ranges;
+        bool _cleanup;
     public:
-        compacting_reader(schema_ptr schema, std::vector<::mutation_reader> readers, std::vector<shared_sstable> not_compacted_sstables)
+        compacting_reader(schema_ptr schema, std::vector<::mutation_reader> readers, std::vector<shared_sstable> not_compacted_sstables,
+                std::vector<range<dht::token>> sorted_owned_ranges, bool cleanup)
             : _schema(std::move(schema))
             , _reader(make_combined_reader(std::move(readers)))
             , _not_compacted_sstables(std::move(not_compacted_sstables))
             , _now(gc_clock::now())
+            , _sorted_owned_ranges(std::move(sorted_owned_ranges))
+            , _cleanup(cleanup)
         { }
 
         virtual future<mutation_opt> operator()() override {
             return _reader().then([this] (mutation_opt m) {
                 if (!bool(m)) {
                     return make_ready_future<mutation_opt>(std::move(m));
+                }
+                if (_cleanup && !belongs_to_current_node(m->token(), _sorted_owned_ranges)) {
+                    return operator()();
                 }
                 auto max_purgeable = get_max_purgeable_timestamp(_schema, _not_compacted_sstables, m->decorated_key());
                 m->partition().compact_for_compaction(*_schema, max_purgeable, _now);
@@ -176,7 +201,24 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
             });
         }
     };
-    auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables));
+    std::vector<range<dht::token>> owned_ranges;
+    if (cleanup) {
+        owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
+        // sort owned ranges
+        std::sort(owned_ranges.begin(), owned_ranges.end(), [](range<dht::token>& a, range<dht::token>& b) {
+            if (!a.start()) {
+                return true;
+            }
+            if (!b.start()) {
+                return false;
+            }
+            const dht::token& a_start = a.start()->value();
+            const dht::token& b_start = b.start()->value();
+            return a_start < b_start;
+        });
+    }
+    auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables),
+        std::move(owned_ranges), cleanup);
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -268,7 +310,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         if (ex.size()) {
             throw std::runtime_error(ex);
         }
-    }).then([start_time, stats] {
+    }).then([start_time, stats, cleanup] {
         double ratio = double(stats->end_size) / double(stats->start_size);
         auto end_time = std::chrono::steady_clock::now();
         // time taken by compaction in seconds.
@@ -285,8 +327,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // - add support to merge summary (message: Partition merge counts were {%s}.).
         // - there is no easy way, currently, to know the exact number of total partitions.
         // By the time being, using estimated key count.
-        logger.info("Compacted {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
+        logger.info("{} {} sstables to [{}]. {} bytes to {} (~{}% of original) in {}ms = {}MB/s. " \
             "~{} total partitions merged to {}.",
+            (!cleanup) ? "Compacted" : "Cleaned",
             stats->sstables, new_sstables_msg, stats->start_size, stats->end_size, (int) (ratio * 100),
             std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(), throughput,
             stats->total_partitions, stats->total_keys_written);
@@ -294,6 +337,11 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // If compaction is running for testing purposes, detect that there is
         // no query context and skip code that updates compaction history.
         if (!db::qctx) {
+            return make_ready_future<>();
+        }
+
+        // Skip code that updates compaction history if running on behalf of a cleanup job.
+        if (cleanup) {
             return make_ready_future<>();
         }
 
@@ -311,7 +359,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
 class compaction_strategy_impl {
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual future<> compact(column_family& cfs) = 0;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) = 0;
     virtual compaction_strategy_type type() const = 0;
 };
 
@@ -321,8 +369,8 @@ public:
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual future<> compact(column_family& cfs) override {
-        return make_ready_future<>();
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
+        return sstables::compaction_descriptor();
     }
 
     virtual compaction_strategy_type type() const {
@@ -335,15 +383,15 @@ public:
 //
 class major_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual future<> compact(column_family& cfs) override {
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override {
         static constexpr size_t min_compact_threshold = 2;
 
         // At least, two sstables must be available for compaction to take place.
         if (cfs.sstables_count() < min_compact_threshold) {
-            return make_ready_future<>();
+            return sstables::compaction_descriptor();
         }
 
-        return cfs.compact_all_sstables();
+        return sstables::compaction_descriptor(std::move(candidates));
     }
 
     virtual compaction_strategy_type type() const {
@@ -445,10 +493,10 @@ class size_tiered_compaction_strategy : public compaction_strategy_impl {
     size_tiered_compaction_strategy_options _options;
 
     // Return a list of pair of shared_sstable and its respective size.
-    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const sstable_list& sstables);
+    std::vector<std::pair<sstables::shared_sstable, uint64_t>> create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables);
 
     // Group files of similar size into buckets.
-    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const sstable_list& sstables, unsigned max_threshold);
+    std::vector<std::vector<sstables::shared_sstable>> get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold);
 
     // Maybe return a bucket of sstables to compact
     std::vector<sstables::shared_sstable>
@@ -471,7 +519,7 @@ public:
     size_tiered_compaction_strategy(const std::map<sstring, sstring>& options) :
         _options(options) {}
 
-    virtual future<> compact(column_family& cfs) override;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
     friend std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list>);
 
@@ -481,13 +529,12 @@ public:
 };
 
 std::vector<std::pair<sstables::shared_sstable, uint64_t>>
-size_tiered_compaction_strategy::create_sstable_and_length_pairs(const sstable_list& sstables) {
+size_tiered_compaction_strategy::create_sstable_and_length_pairs(const std::vector<sstables::shared_sstable>& sstables) {
 
     std::vector<std::pair<sstables::shared_sstable, uint64_t>> sstable_length_pairs;
     sstable_length_pairs.reserve(sstables.size());
 
-    for(auto& entry : sstables) {
-        auto& sstable = entry.second;
+    for(auto& sstable : sstables) {
         auto sstable_size = sstable->data_size();
         assert(sstable_size != 0);
 
@@ -498,7 +545,7 @@ size_tiered_compaction_strategy::create_sstable_and_length_pairs(const sstable_l
 }
 
 std::vector<std::vector<sstables::shared_sstable>>
-size_tiered_compaction_strategy::get_buckets(const sstable_list& sstables, unsigned max_threshold) {
+size_tiered_compaction_strategy::get_buckets(const std::vector<sstables::shared_sstable>& sstables, unsigned max_threshold) {
     // sstables sorted by size of its data file.
     auto sorted_sstables = create_sstable_and_length_pairs(sstables);
 
@@ -588,16 +635,14 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return hottest;
 }
 
-future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
+compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = cfs.schema()->min_compaction_threshold();
     int max_threshold = cfs.schema()->max_compaction_threshold();
 
-    auto candidates = cfs.get_sstables();
-
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
-    auto buckets = get_buckets(*candidates, max_threshold);
+    auto buckets = get_buckets(candidates, max_threshold);
 
     std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
 #ifdef __DEBUG__
@@ -605,16 +650,22 @@ future<> size_tiered_compaction_strategy::compact(column_family& cfs) {
 #endif
     if (most_interesting.empty()) {
         // nothing to do
-        return make_ready_future<>();
+        return sstables::compaction_descriptor();
     }
 
-    return cfs.compact_sstables(sstables::compaction_descriptor(std::move(most_interesting)));
+    return sstables::compaction_descriptor(std::move(most_interesting));
 }
 
 std::vector<sstables::shared_sstable> size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates) {
     size_tiered_compaction_strategy cs;
 
-    auto buckets = cs.get_buckets(*candidates, DEFAULT_MAX_COMPACTION_THRESHOLD);
+    std::vector<sstables::shared_sstable> sstables;
+    sstables.reserve(candidates->size());
+    for (auto& entry : *candidates) {
+        sstables.push_back(entry.second);
+    }
+
+    auto buckets = cs.get_buckets(sstables, DEFAULT_MAX_COMPACTION_THRESHOLD);
 
     std::vector<sstables::shared_sstable> most_interesting = cs.most_interesting_bucket(std::move(buckets),
         DEFAULT_MIN_COMPACTION_THRESHOLD, DEFAULT_MAX_COMPACTION_THRESHOLD);
@@ -626,29 +677,29 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     // FIXME: User may choose to change this value; add support.
     static constexpr uint32_t max_sstable_size_in_mb = 160;
 public:
-    virtual future<> compact(column_family& cfs) override;
+    virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
     virtual compaction_strategy_type type() const {
         return compaction_strategy_type::leveled;
     }
 };
 
-future<> leveled_compaction_strategy::compact(column_family& cfs) {
+compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
     // NOTE: leveled_manifest creation may be slightly expensive, so later on,
     // we may want to store it in the strategy itself. However, the sstable
     // lists managed by the manifest may become outdated. For example, one
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
-    leveled_manifest manifest = leveled_manifest::create(cfs, max_sstable_size_in_mb);
+    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, max_sstable_size_in_mb);
     auto candidate = manifest.get_compaction_candidates();
 
     if (candidate.sstables.empty()) {
-        return make_ready_future<>();
+        return sstables::compaction_descriptor();
     }
 
     logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), cfs.get_sstables()->size());
 
-    return cfs.compact_sstables(std::move(candidate));
+    return std::move(candidate);
 }
 
 compaction_strategy::compaction_strategy(::shared_ptr<compaction_strategy_impl> impl)
@@ -662,8 +713,8 @@ compaction_strategy& compaction_strategy::operator=(compaction_strategy&&) = def
 compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
-future<> compaction_strategy::compact(column_family& cfs) {
-    return _compaction_strategy_impl->compact(cfs);
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) {
+    return _compaction_strategy_impl->get_sstables_for_compaction(cfs, std::move(candidates));
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {

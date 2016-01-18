@@ -172,6 +172,9 @@ private:
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
+    // Store generation of sstables being compacted at the moment. That's needed to prevent a
+    // sstable from being compacted twice.
+    std::unordered_set<unsigned long> _compacting_generations;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -185,6 +188,14 @@ private:
     void update_sstables_known_generation(unsigned generation) {
         _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
     }
+
+    uint64_t calculate_generation_for_new_table() {
+        return _sstable_generation++ * smp::count + engine().cpu_id();
+    }
+
+    // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
+    void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
+                              const std::vector<sstables::shared_sstable>& sstables_to_remove);
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -290,7 +301,15 @@ public:
     // not a real compaction policy.
     future<> compact_all_sstables();
     // Compact all sstables provided in the vector.
-    future<> compact_sstables(sstables::compaction_descriptor descriptor);
+    // If cleanup is set to true, compaction_sstables will run on behalf of a cleanup job,
+    // meaning that irrelevant keys will be discarded.
+    future<> compact_sstables(sstables::compaction_descriptor descriptor, bool cleanup = false);
+    // Performs a cleanup on each sstable of this column family, excluding
+    // those ones that are irrelevant to this node or being compacted.
+    // Cleanup is about discarding keys that are no longer relevant for a
+    // given sstable, e.g. after node loses part of its token range because
+    // of a newly added node.
+    future<> cleanup_sstables(sstables::compaction_descriptor descriptor);
 
     future<bool> snapshot_exists(sstring name);
 
@@ -313,7 +332,7 @@ public:
 
     void start_compaction();
     void trigger_compaction();
-    future<> run_compaction();
+    future<> run_compaction(sstables::compaction_descriptor descriptor);
     void set_compaction_strategy(sstables::compaction_strategy_type strategy);
     const sstables::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
@@ -343,6 +362,10 @@ public:
                 trigger_compaction();
             }
         });
+    }
+
+    std::unordered_set<unsigned long>& compacting_generations() {
+        return _compacting_generations;
     }
 private:
     // One does not need to wait on this future if all we are interested in, is

@@ -102,13 +102,11 @@ public:
     }
 #endif
 
-    static leveled_manifest create(column_family& cfs, int max_sstable_size_in_mb) {
+    static leveled_manifest create(column_family& cfs, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb) {
         leveled_manifest manifest = leveled_manifest(cfs, max_sstable_size_in_mb);
 
         // ensure all SSTables are in the manifest
-        auto sstables = cfs.get_sstables();
-        for (auto& map_entry : *sstables) {
-            auto& sstable = map_entry.second;
+        for (auto& sstable : sstables) {
             manifest.add(sstable);
         }
 
