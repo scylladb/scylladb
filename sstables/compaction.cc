@@ -189,6 +189,10 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
                 if (!bool(m)) {
                     return make_ready_future<mutation_opt>(std::move(m));
                 }
+                // Filter out mutation that doesn't belong to current shard.
+                if (dht::shard_of(m->token()) != engine().cpu_id()) {
+                    return operator()();
+                }
                 if (_cleanup && !belongs_to_current_node(m->token(), _sorted_owned_ranges)) {
                     return operator()();
                 }
