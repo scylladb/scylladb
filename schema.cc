@@ -774,6 +774,54 @@ bool check_compound(sstring comparator) {
     static sstring compound(_composite_str);
     return comparator.compare(0, compound.size(), compound) == 0;
 }
+
+void read_collections(schema_builder& builder, sstring comparator)
+{
+    // The format of collection entries in the comparator is:
+    // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name>:<type>)
+
+    auto find_closing_parenthesis = [] (sstring_view str, size_t start) {
+        auto pos = start;
+        auto nest_level = 0;
+        do {
+            pos = str.find_first_of("()", pos);
+            if (pos == sstring::npos) {
+                throw marshal_exception();
+            }
+            if (str[pos] == ')') {
+                nest_level--;
+            } else if (str[pos] == '(') {
+                nest_level++;
+            }
+            pos++;
+        } while (nest_level > 0);
+        return pos;
+    };
+
+    auto collection_str_length = strlen(_collection_str);
+
+    auto pos = comparator.find(_collection_str);
+    while (pos != sstring::npos) {
+        pos += collection_str_length;
+        auto end = find_closing_parenthesis(comparator, pos++);
+
+        auto colon = comparator.find(':', pos);
+        if (colon == sstring::npos || colon > end) {
+            throw marshal_exception();
+        }
+
+        auto name = from_hex(sstring_view(comparator.c_str() + pos, colon - pos));
+
+        colon++;
+        auto type_str = sstring_view(comparator.c_str() + colon, end - colon);
+        auto type = db::marshal::type_parser::parse(type_str);
+
+        builder.with_collection(name, type);
+
+        pos = comparator.find(_collection_str, end);
+    }
+}
+
 }
 
 schema::const_iterator

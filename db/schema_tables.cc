@@ -1327,8 +1327,10 @@ schema_ptr create_table_from_mutations(schema_mutations sm, std::experimental::o
         throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
     }
 
-    bool is_compound = cell_comparator::check_compound(table_row.get_nonnull<sstring>("comparator"));
+    auto comparator = table_row.get_nonnull<sstring>("comparator");
+    bool is_compound = cell_comparator::check_compound(comparator);
     builder.set_is_compound(is_compound);
+    cell_comparator::read_collections(builder, comparator);
 #if 0
     CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
 

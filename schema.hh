@@ -60,11 +60,13 @@ using table_schema_version = utils::UUID;
 
 class schema;
 class schema_registry_entry;
+class schema_builder;
 
 // Useful functions to manipulate the schema's comparator field
 namespace cell_comparator {
 sstring to_sstring(const schema& s);
 bool check_compound(sstring comparator);
+void read_collections(schema_builder& builder, sstring comparator);
 }
 
 // make sure these match the order we like columns back from schema
