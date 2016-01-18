@@ -64,6 +64,7 @@
 #include "utils/crc.hh"
 #include "utils/runtime.hh"
 #include "log.hh"
+#include "commitlog_entry.hh"
 
 static logging::logger logger("commitlog");
 
@@ -342,6 +343,8 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     time_point _sync_time;
     seastar::gate _gate;
 
+    std::unordered_set<table_schema_version> _known_schema_versions;
+
     friend std::ostream& operator<<(std::ostream&, const segment&);
     friend class segment_manager;
 public:
@@ -381,6 +384,16 @@ public:
         } else {
             logger.warn("Segment {} is dirty and is left on disk.", *this);
         }
+    }
+
+    bool is_schema_version_known(schema_ptr s) {
+        return _known_schema_versions.count(s->version());
+    }
+    void add_schema_version(schema_ptr s) {
+        _known_schema_versions.emplace(s->version());
+    }
+    void forget_schema_versions() {
+        _known_schema_versions.clear();
     }
 
     bool must_sync() {
@@ -545,6 +558,8 @@ public:
         out.write(uint32_t(_file_pos));
         out.write(crc.checksum());
 
+        forget_schema_versions();
+
         // acquire read lock
         return _dwrite.read_lock().then([this, size, off, buf = std::move(buf), me]() mutable {
             auto written = make_lw_shared<size_t>(0);
@@ -587,8 +602,8 @@ public:
     /**
      * Add a "mutation" to the segment.
      */
-    future<replay_position> allocate(const cf_id_type& id, size_t size,
-            serializer_func func) {
+    future<replay_position> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer) {
+        const auto size = writer->size(*this);
         const auto s = size + entry_overhead_size; // total size
         if (s > _segment_manager->max_mutation_size) {
             return make_exception_future<replay_position>(
@@ -602,8 +617,8 @@ public:
             if (position() + s > _segment_manager->max_size) {
                 // do this in next segment instead.
                 return finish_and_get_new().then(
-                        [id, size, func = std::move(func)](auto new_seg) {
-                            return new_seg->allocate(id, size, func);
+                        [id, writer = std::move(writer)] (auto new_seg) mutable {
+                            return new_seg->allocate(id, std::move(writer));
                         });
             }
             // enough data?
@@ -634,7 +649,7 @@ public:
         out.write(crc.checksum());
 
         // actual data
-        func(out);
+        writer->write(*this, out);
 
         crc.process_bytes(p + 2 * sizeof(uint32_t), size);
 
@@ -1128,8 +1143,44 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
  */
 future<db::replay_position> db::commitlog::add(const cf_id_type& id,
         size_t size, serializer_func func) {
-    return _segment_manager->active_segment().then([=](auto s) {
-        return s->allocate(id, size, std::move(func));
+    class serializer_func_entry_writer final : public entry_writer {
+        serializer_func _func;
+        size_t _size;
+    public:
+        serializer_func_entry_writer(size_t sz, serializer_func func)
+            : _func(std::move(func)), _size(sz)
+        { }
+        virtual size_t size(segment&) override { return _size; }
+        virtual void write(segment&, output& out) override {
+            _func(out);
+        }
+    };
+    auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func));
+    return _segment_manager->active_segment().then([id, writer] (auto s) {
+        return s->allocate(id, writer);
+    });
+}
+
+future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew)
+{
+    class cl_entry_writer final : public entry_writer {
+        commitlog_entry_writer _writer;
+    public:
+        cl_entry_writer(const commitlog_entry_writer& wr) : _writer(wr) { }
+        virtual size_t size(segment& seg) override {
+            _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
+            return _writer.size();
+        }
+        virtual void write(segment& seg, output& out) override {
+            if (_writer.with_schema()) {
+                seg.add_schema_version(_writer.schema());
+            }
+            _writer.write(out);
+        }
+    };
+    auto writer = ::make_shared<cl_entry_writer>(cew);
+    return _segment_manager->active_segment().then([id, writer] (auto s) {
+        return s->allocate(id, writer);
     });
 }
 
@@ -1384,10 +1435,6 @@ db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type
                     }
                     // size == 0 -> special scylla case: zero padding due to dma blocks
                     return skip(slack);
-                }
-
-                if (start_off > pos) {
-                    return skip(size - entry_header_size);
                 }
 
                 return fin.read_exactly(size - entry_header_size).then([this, size, crc = std::move(crc), rp](temporary_buffer<char> buf) mutable {
