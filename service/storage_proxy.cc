@@ -1043,7 +1043,7 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             auto m = db::get_batchlog_manager().local().get_batch_log_mutation_for(_mutations, _batch_uuid, net::messaging_service::current_version);
             return send_batchlog_mutation(std::move(m));
         };
-        void async_remove_from_batchlog() {
+        future<> async_remove_from_batchlog() {
             // delete batch
             auto schema = _p._db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
             auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(_batch_uuid)});
@@ -1051,7 +1051,9 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
             mutation m(key, schema);
             m.partition().apply_delete(*schema, {}, tombstone(now, gc_clock::now()));
 
-            send_batchlog_mutation(std::move(m), db::consistency_level::ANY);
+            return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).handle_exception([] (std::exception_ptr eptr) {
+                logger.error("Failed to remove mutations from batchlog: {}", eptr);
+            });
         };
 
         future<> run() {
