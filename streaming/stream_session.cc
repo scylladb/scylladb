@@ -241,11 +241,12 @@ stream_session::~stream_session() = default;
 
 future<> stream_session::init_streaming_service(distributed<database>& db) {
     _db = &db;
-    engine().at_exit([] {
-        return _handlers.stop().then([]{
-            return get_stream_manager().stop();
-        });
-    });
+    // #293 - do not stop anything
+    // engine().at_exit([] {
+    //     return _handlers.stop().then([]{
+    //         return get_stream_manager().stop();
+    //     });
+    // });
     return get_stream_manager().start().then([] {
         return _handlers.start().then([] {
             return _handlers.invoke_on_all([] (handler& h) {
