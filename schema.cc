@@ -364,7 +364,8 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._caching_options == y._raw._caching_options
-        && x._raw._dropped_columns == y._raw._dropped_columns;
+        && x._raw._dropped_columns == y._raw._dropped_columns
+        && x._raw._collections == y._raw._collections;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
