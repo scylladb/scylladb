@@ -2577,6 +2577,7 @@ data_type abstract_type::parse_type(const sstring& name)
         { bytes_type_name,     bytes_type     },
         { utf8_type_name,      utf8_type      },
         { boolean_type_name,   boolean_type   },
+        { date_type_name,      date_type      },
         { timeuuid_type_name,  timeuuid_type  },
         { timestamp_type_name, timestamp_type },
         { uuid_type_name,      uuid_type      },
