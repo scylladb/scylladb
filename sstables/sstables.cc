@@ -1585,7 +1585,8 @@ input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
 // range, and too small reads, and repeated waits, when reading a large range
 // which we should have started at once.
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
-    return do_with(data_stream_at(pos), [len] (auto& stream) {
+    auto estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(len, uint64_t(8 << 10)));
+    return do_with(data_stream_at(pos, estimated_size), [len] (auto& stream) {
         return stream.read_exactly(len);
     });
 }
