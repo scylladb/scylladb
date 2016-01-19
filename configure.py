@@ -483,7 +483,6 @@ deps = {
 }
 
 tests_not_using_seastar_test_framework = set([
-    'tests/types_test',
     'tests/keys_test',
     'tests/partitioner_test',
     'tests/map_difference_test',
