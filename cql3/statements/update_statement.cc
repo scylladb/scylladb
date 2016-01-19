@@ -59,7 +59,7 @@ bool update_statement::require_full_clustering_key() const {
 void update_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (s->is_dense()) {
         if (!prefix || (prefix.size() == 1 && prefix.components().front().empty())) {
-            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", *s->clustering_key_columns().begin()));
+            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s", s->clustering_key_columns().begin()->name_as_text()));
         }
 
         // An empty name for the compact value is what we use to recognize the case where there is not column
