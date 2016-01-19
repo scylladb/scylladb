@@ -59,6 +59,7 @@
 #include "utils/latency.hh"
 #include "utils/flush_queue.hh"
 #include "schema_registry.hh"
+#include "service/priority_manager.hh"
 
 using namespace std::chrono_literals;
 
@@ -606,7 +607,8 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    return newtab->write_components(*old, incremental_backups_enabled()).then([this, newtab, old] {
+    auto& priority = service::get_local_memtable_flush_priority();
+    return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {
         _config.cf_stats->pending_memtables_flushes_count--;
@@ -1543,7 +1545,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, const std::ve
     return do_with(query_state(std::move(s), cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            qs.reader = make_reader(qs.schema, range);
+            qs.reader = make_reader(qs.schema, range, service::get_local_sstable_query_read_priority());
             qs.range_empty = false;
             return do_until([&qs] { return !qs.limit || qs.range_empty; }, [&qs] {
                 return qs.reader().then([&qs](mutation_opt mo) {
