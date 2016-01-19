@@ -32,8 +32,8 @@ class file_writer {
     output_stream<char> _out;
     size_t _offset = 0;
 public:
-    file_writer(file f, size_t buffer_size = 8192)
-        : _out(make_file_output_stream(std::move(f), buffer_size)) {}
+    file_writer(file f, file_output_stream_options options)
+        : _out(make_file_output_stream(std::move(f), std::move(options))) {}
 
     file_writer(output_stream<char>&& out)
         : _out(std::move(out)) {}
@@ -60,15 +60,15 @@ public:
     }
 };
 
-output_stream<char> make_checksummed_file_output_stream(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file);
+output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file, file_output_stream_options options);
 
 class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
 public:
-    checksummed_file_writer(file f, size_t buffer_size = 8192, bool checksum_file = false)
-            : file_writer(make_checksummed_file_output_stream(std::move(f), buffer_size, _c, _full_checksum, checksum_file))
-            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size))})
+    checksummed_file_writer(file f, file_output_stream_options options, bool checksum_file = false)
+            : file_writer(make_checksummed_file_output_stream(std::move(f), _c, _full_checksum, checksum_file, options))
+            , _c({uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), size_t(options.buffer_size)))})
             , _full_checksum(init_checksum_adler32()) {}
 
     // Since we are exposing a reference to _full_checksum, we delete the move
@@ -91,8 +91,8 @@ class checksummed_file_data_sink_impl : public data_sink_impl {
     uint32_t& _full_checksum;
     bool _checksum_file;
 public:
-    checksummed_file_data_sink_impl(file f, size_t buffer_size, struct checksum& c, uint32_t& full_file_checksum, bool checksum_file)
-            : _out(make_file_output_stream(std::move(f), buffer_size))
+    checksummed_file_data_sink_impl(file f, struct checksum& c, uint32_t& full_file_checksum, bool checksum_file, file_output_stream_options options)
+            : _out(make_file_output_stream(std::move(f), std::move(options)))
             , _c(c)
             , _full_checksum(full_file_checksum)
             , _checksum_file(checksum_file)
@@ -127,13 +127,14 @@ public:
 
 class checksummed_file_data_sink : public data_sink {
 public:
-    checksummed_file_data_sink(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file)
-        : data_sink(std::make_unique<checksummed_file_data_sink_impl>(std::move(f), buffer_size, cinfo, full_file_checksum, checksum_file)) {}
+    checksummed_file_data_sink(file f, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file, file_output_stream_options options)
+        : data_sink(std::make_unique<checksummed_file_data_sink_impl>(std::move(f), cinfo, full_file_checksum, checksum_file, std::move(options))) {}
 };
 
 inline
-output_stream<char> make_checksummed_file_output_stream(file f, size_t buffer_size, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file) {
-    return output_stream<char>(checksummed_file_data_sink(std::move(f), buffer_size, cinfo, full_file_checksum, checksum_file), buffer_size, true);
+output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file, file_output_stream_options options) {
+    auto buffer_size = options.buffer_size;
+    return output_stream<char>(checksummed_file_data_sink(std::move(f), cinfo, full_file_checksum, checksum_file, std::move(options)), true, buffer_size);
 }
 
 // compressed_file_data_sink_impl works as a filter for a file output stream,

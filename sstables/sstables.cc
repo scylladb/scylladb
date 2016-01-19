@@ -100,7 +100,10 @@ class file_random_access_reader : public random_access_reader {
     size_t _buffer_size;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override {
-        return make_file_input_stream(_file, pos, _buffer_size);
+        file_input_stream_options options;
+        options.buffer_size = _buffer_size;
+
+        return make_file_input_stream(_file, pos, std::move(options));
     }
     explicit file_random_access_reader(file f, size_t buffer_size = 8192)
         : _file(std::move(f)), _buffer_size(buffer_size)
@@ -748,7 +751,10 @@ void sstable::write_toc() {
 
     // Writing TOC content to temporary file.
     file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-    auto w = file_writer(std::move(f), 4096);
+
+    file_output_stream_options options;
+    options.buffer_size = 4096;
+    auto w = file_writer(std::move(f), std::move(options));
 
     for (auto&& key : _components) {
             // new line character is appended to the end of each component name.
@@ -787,7 +793,10 @@ void write_crc(const sstring file_path, checksum& c) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     file f = open_file_dma(file_path, oflags).get0();
-    auto w = file_writer(std::move(f), 4096);
+
+    file_output_stream_options options;
+    options.buffer_size = 4096;
+    auto w = file_writer(std::move(f), std::move(options));
     write(w, c);
     w.close().get();
 }
@@ -798,7 +807,10 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     auto f = open_file_dma(file_path, oflags).get0();
-    auto w = file_writer(std::move(f), 4096);
+
+    file_output_stream_options options;
+    options.buffer_size = 4096;
+    auto w = file_writer(std::move(f), std::move(options));
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(w, digest);
@@ -828,7 +840,9 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     estimated_size = std::max<size_t>(estimated_size, 8192);
 
     return do_with(index_consumer(quantity), [this, position, estimated_size] (index_consumer& ic) {
-        auto stream = make_file_input_stream(this->_index_file, position, estimated_size);
+        file_input_stream_options options;
+        options.buffer_size = estimated_size;
+        auto stream = make_file_input_stream(this->_index_file, position, std::move(options));
         auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
         return ctx->consume_input(*ctx).then([ctx, &ic] {
             return make_ready_future<index_list>(std::move(ic.indexes));
@@ -863,7 +877,10 @@ void sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-    auto w = file_writer(std::move(f), sstable_buffer_size);
+
+    file_output_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    auto w = file_writer(std::move(f), std::move(options));
     write(w, component);
     w.flush().get();
     w.close().get();
@@ -1248,7 +1265,9 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 ///
 void sstable::do_write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out) {
-    auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
+    file_output_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    auto index = make_shared<file_writer>(_index_file, std::move(options));
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
@@ -1353,7 +1372,10 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
-        auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
+        file_output_stream_options options;
+        options.buffer_size = sstable_buffer_size;
+
+        auto w = make_shared<checksummed_file_writer>(_data_file, std::move(options), checksum_file);
         this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
@@ -1546,7 +1568,9 @@ input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
         return make_compressed_file_input_stream(
                 _data_file, &_compression, pos);
     } else {
-        return make_file_input_stream(_data_file, pos, buf_size);
+        file_input_stream_options options;
+        options.buffer_size = buf_size;
+        return make_file_input_stream(_data_file, 0, std::move(options));
     }
 }
 
