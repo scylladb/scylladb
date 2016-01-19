@@ -381,7 +381,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
 };
 
-struct date_type_impl : public concrete_type<db_clock::time_point> {
+class date_type_impl : public concrete_type<db_clock::time_point> {
+    static logging::logger _logger;
+public:
     date_type_impl() : concrete_type(date_type_name) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -427,7 +429,21 @@ struct date_type_impl : public concrete_type<db_clock::time_point> {
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
+    virtual bool is_compatible_with(const abstract_type& other) const override {
+        if (&other == this) {
+            return true;
+        }
+        if (&other == timestamp_type.get()) {
+            _logger.warn("Changing from TimestampType to DateType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps "
+                         "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. There is no "
+                         "reason to switch from DateType to TimestampType except if you were using DateType in the first place and switched to "
+                         "TimestampType by mistake.");
+            return true;
+        }
+        return false;
+    }
 };
+logging::logger date_type_impl::_logger(date_type_name);
 
 struct timeuuid_type_impl : public concrete_type<utils::UUID> {
     timeuuid_type_impl() : concrete_type<utils::UUID>(timeuuid_type_name) {}
@@ -533,7 +549,9 @@ private:
     friend class uuid_type_impl;
 };
 
-struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
+class timestamp_type_impl : public simple_type_impl<db_clock::time_point> {
+    static logging::logger _logger;
+public:
     timestamp_type_impl() : simple_type_impl(timestamp_type_name) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
@@ -674,7 +692,20 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
     }
+    virtual bool is_compatible_with(const abstract_type& other) const override {
+        if (&other == this) {
+            return true;
+        }
+        if (&other == date_type.get()) {
+            _logger.warn("Changing from DateType to TimestampType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps "
+                         "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. So unless you "
+                         "know that you don't have *any* pre-unix-epoch timestamp you should change back to DateType");
+            return true;
+        }
+        return false;
+    }
 };
+logging::logger timestamp_type_impl::_logger(timestamp_type_name);
 
 struct uuid_type_impl : concrete_type<utils::UUID> {
     uuid_type_impl() : concrete_type(uuid_type_name) {}
