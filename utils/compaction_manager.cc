@@ -322,3 +322,21 @@ future<> compaction_manager::remove(column_family* cf) {
         });
     }).then([tasks_to_stop] {});
 }
+
+void compaction_manager::stop_compaction(sstring type) {
+    // TODO: this method only works for compaction of type compaction and cleanup.
+    // Other types are: validation, scrub, index_build.
+    sstables::compaction_type target_type;
+    if (type == "COMPACTION") {
+        target_type = sstables::compaction_type::Compaction;
+    } else if (type == "CLEANUP") {
+        target_type = sstables::compaction_type::Cleanup;
+    } else {
+        throw std::runtime_error(sprint("Compaction of type %s cannot be stopped by compaction manager", type.c_str()));
+    }
+    for (auto& info : _compactions) {
+        if (target_type == info->type) {
+            info->stop();
+        }
+    }
+}

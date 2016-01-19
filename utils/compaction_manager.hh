@@ -116,5 +116,8 @@ public:
     const std::list<lw_shared_ptr<sstables::compaction_info>>& get_compactions() const {
         return _compactions;
     }
+
+    // Stops ongoing compaction of a given type.
+    void stop_compaction(sstring type);
 };
 
