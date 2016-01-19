@@ -748,8 +748,7 @@ void sstable::write_toc() {
 
     // Writing TOC content to temporary file.
     file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-    auto out = file_writer(std::move(f), 4096);
-    auto w = file_writer(std::move(out));
+    auto w = file_writer(std::move(f), 4096);
 
     for (auto&& key : _components) {
             // new line character is appended to the end of each component name.
@@ -788,8 +787,7 @@ void write_crc(const sstring file_path, checksum& c) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     file f = open_file_dma(file_path, oflags).get0();
-    auto out = file_writer(std::move(f), 4096);
-    auto w = file_writer(std::move(out));
+    auto w = file_writer(std::move(f), 4096);
     write(w, c);
     w.close().get();
 }
@@ -800,8 +798,7 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     auto f = open_file_dma(file_path, oflags).get0();
-    auto out = file_writer(std::move(f), 4096);
-    auto w = file_writer(std::move(out));
+    auto w = file_writer(std::move(f), 4096);
 
     auto digest = to_sstring<bytes>(full_checksum);
     write(w, digest);
@@ -866,8 +863,7 @@ void sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
-    auto out = file_writer(std::move(f), sstable_buffer_size);
-    auto w = file_writer(std::move(out));
+    auto w = file_writer(std::move(f), sstable_buffer_size);
     write(w, component);
     w.flush().get();
     w.close().get();
