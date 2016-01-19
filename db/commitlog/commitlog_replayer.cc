@@ -74,6 +74,19 @@ public:
         uint64_t skipped_mutations = 0;
         uint64_t applied_mutations = 0;
         uint64_t corrupt_bytes = 0;
+
+        stats& operator+=(const stats& s) {
+            invalid_mutations += s.invalid_mutations;
+            skipped_mutations += s.skipped_mutations;
+            applied_mutations += s.applied_mutations;
+            corrupt_bytes += s.corrupt_bytes;
+            return *this;
+        }
+        stats operator+(const stats& s) const {
+            stats tmp = *this;
+            tmp += s;
+            return tmp;
+        }
     };
 
     future<> process(stats*, temporary_buffer<char> buf, replay_position rp);
@@ -152,8 +165,6 @@ future<> db::commitlog_replayer::impl::init() {
 
 future<db::commitlog_replayer::impl::stats>
 db::commitlog_replayer::impl::recover(sstring file) {
-    logger.info("Replaying {}", file);
-
     replay_position rp{commitlog::descriptor(file)};
     auto gp = _min_pos[rp.shard_id()];
 
@@ -281,32 +292,41 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(seastar::
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files) {
-    return parallel_for_each(files, [this](auto f) {
-        return this->recover(f);
+    logger.info("Replaying {}", join(", ", files));
+    return map_reduce(files, [this](auto f) {
+        logger.debug("Replaying {}", f);
+        return _impl->recover(f).then([f](impl::stats stats) {
+            if (stats.corrupt_bytes != 0) {
+                logger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
+            }
+            logger.debug("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
+                            , f
+                            , stats.applied_mutations
+                            , stats.invalid_mutations
+                            , stats.skipped_mutations
+            );
+            return make_ready_future<impl::stats>(stats);
+        }).handle_exception([f](auto ep) -> future<impl::stats> {
+            logger.error("Error recovering {}: {}", f, ep);
+            try {
+                std::rethrow_exception(ep);
+            } catch (std::invalid_argument&) {
+                logger.error("Scylla cannot process {}. Make sure to fully flush all Cassandra commit log files to sstable before migrating.");
+                throw;
+            } catch (...) {
+                throw;
+            }
+        });
+    }, impl::stats(), std::plus<impl::stats>()).then([](impl::stats totals) {
+        logger.info("Log replay complete, {} replayed mutations ({} invalid, {} skipped)"
+                        , totals.applied_mutations
+                        , totals.invalid_mutations
+                        , totals.skipped_mutations
+        );
     });
 }
 
 future<> db::commitlog_replayer::recover(sstring f) {
-    return _impl->recover(f).then([f](impl::stats stats) {
-        if (stats.corrupt_bytes != 0) {
-            logger.warn("Corrupted file: {}. {} bytes skipped.", f, stats.corrupt_bytes);
-        }
-        logger.info("Log replay of {} complete, {} replayed mutations ({} invalid, {} skipped)"
-                , f
-                , stats.applied_mutations
-                , stats.invalid_mutations
-                , stats.skipped_mutations
-                );
-    }).handle_exception([f](auto ep) {
-        logger.error("Error recovering {}: {}", f, ep);
-        try {
-            std::rethrow_exception(ep);
-        } catch (std::invalid_argument&) {
-            logger.error("Scylla cannot process {}. Make sure to fully flush all Cassandra commit log files to sstable before migrating.");
-            throw;
-        } catch (...) {
-            throw;
-        }
-    });;
+    return recover(std::vector<sstring>{ f });
 }
 
