@@ -1630,7 +1630,8 @@ std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) 
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    fprint(os, "{mutation: schema %p key %s data ", m.schema().get(), m.decorated_key());
+    const ::schema& s = *m.schema();
+    fprint(os, "{%s.%s key %s data ", s.ks_name(), s.cf_name(), m.decorated_key());
     os << m.partition() << "}";
     return os;
 }
