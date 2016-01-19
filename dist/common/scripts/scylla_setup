@@ -39,9 +39,11 @@ SYSCONFIG_SETUP_ARGS="-n $NIC"
 . /etc/os-release
 
 if [ "$ID" != "ubuntu" ]; then
-    setenforce 0
-    sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
-    mv /tmp/selinux /etc/sysconfig/
+    if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
+        setenforce 0
+        sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
+        mv /tmp/selinux /etc/sysconfig/
+    fi
     if [ $AMI -eq 1 ]; then
         SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -N -a"
         if [ "$LOCAL_PKG" = "" ]; then
