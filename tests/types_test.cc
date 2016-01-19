@@ -578,6 +578,36 @@ BOOST_AUTO_TEST_CASE(test_reversed_type_value_compatibility) {
     BOOST_REQUIRE(rb->is_value_compatible_with(*utf8_type));
 }
 
+static auto msg = [] (const char* m, data_type x, data_type y) -> std::string {
+    return sprint("%s(%s, %s)", m, x->name(), y->name());
+};
+
+// Sort order does not change
+auto verify_compat = [] (data_type to, data_type from) {
+    BOOST_CHECK_MESSAGE(to->is_compatible_with(*from), msg("verify_compat is_compatible", to, from));
+    // value compatibility is implied by compatibility
+    BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_compat is_value_compatible", to, from));
+};
+// Sort order may change
+auto verify_value_compat = [] (data_type to, data_type from) {
+    BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_value_compat !is_compatible", to, from)); // or verify_compat would be used
+    BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_value_compat is_value_compatible", to, from));
+};
+// Cannot be cast
+auto verify_not_compat = [] (data_type to, data_type from) {
+    BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_not_compat !is_compatible", to, from));
+    BOOST_CHECK_MESSAGE(!to->is_value_compatible_with(*from), msg("verify_not_compat !is_value_compatible", to, from));
+};
+auto cc = verify_compat;
+auto vc = verify_value_compat;
+auto nc = verify_not_compat;
+
+struct test_case {
+    void (*verify)(data_type to, data_type from);
+    data_type to;
+    data_type from;
+};
+
 BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     auto m__bi = map_type_impl::get_instance(bytes_type, int32_type, true);
     auto mf_bi = map_type_impl::get_instance(bytes_type, int32_type, false);
@@ -596,35 +626,6 @@ BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     auto l__b = list_type_impl::get_instance(bytes_type, true);
     auto lf_b = list_type_impl::get_instance(bytes_type, false);
 
-    static auto msg = [] (const char* m, data_type x, data_type y) -> std::string {
-        return sprint("%s(%s, %s)", m, x->name(), y->name());
-    };
-
-    // Sort order does not change
-    auto verify_compat = [] (data_type to, data_type from) {
-        BOOST_CHECK_MESSAGE(to->is_compatible_with(*from), msg("verify_compat is_compatible", to, from));
-        // value compatibility is implied by compatibility
-        BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_compat is_value_compatible", to, from));
-    };
-    // Sort order may change
-    auto verify_value_compat = [] (data_type to, data_type from) {
-        BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_value_compat !is_compatible", to, from)); // or verify_compat would be used
-        BOOST_CHECK_MESSAGE(to->is_value_compatible_with(*from), msg("verify_value_compat is_value_compatible", to, from));
-    };
-    // Cannot be cast
-    auto verify_not_compat = [] (data_type to, data_type from) {
-        BOOST_CHECK_MESSAGE(!to->is_compatible_with(*from), msg("verify_not_compat !is_compatible", to, from));
-        BOOST_CHECK_MESSAGE(!to->is_value_compatible_with(*from), msg("verify_not_compat !is_value_compatible", to, from));
-    };
-    auto cc = verify_compat;
-    auto vc = verify_value_compat;
-    auto nc = verify_not_compat;
-
-    struct test_case {
-        void (*verify)(data_type to, data_type from);
-        data_type to;
-        data_type from;
-    };
     test_case tests[] = {
             { nc, m__bi, int32_type },  // collection vs. primitiv
             { cc, m__bi, m__bi },       // identity
@@ -647,6 +648,26 @@ BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
             { vc, lf_b,  lf_i },        // values don't sort, so only value-compatible
             { nc, lf_i,  l__i },        // different temperature
             { nc, lf_i,  lf_b },        // elements not compatible
+    };
+    for (auto&& tc : tests) {
+        tc.verify(tc.to, tc.from);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_simple_type_compatibility) {
+    test_case tests[] = {
+        { vc, bytes_type, int32_type },
+        { nc, int32_type, bytes_type },
+        { vc, varint_type, int32_type },
+        { vc, varint_type, long_type },
+        { nc, int32_type, varint_type },
+        { nc, long_type, varint_type },
+        { cc, bytes_type, utf8_type },
+        { cc, utf8_type, ascii_type },
+        { cc, bytes_type, ascii_type },
+        { nc, utf8_type, bytes_type },
+        { nc, ascii_type, bytes_type },
+        { nc, ascii_type, utf8_type },
     };
     for (auto&& tc : tests) {
         tc.verify(tc.to, tc.from);
