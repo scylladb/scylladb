@@ -46,7 +46,7 @@ namespace sstables {
             : sstables(std::move(sstables)) {}
     };
 
-    struct compaction_stats {
+    struct compaction_info {
         sstring ks;
         sstring cf;
         size_t sstables = 0;
