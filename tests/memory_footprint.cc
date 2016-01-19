@@ -31,6 +31,7 @@
 #include "frozen_mutation.hh"
 #include "tmpdir.hh"
 #include "sstables/sstables.hh"
+#include "canonical_mutation.hh"
 
 class size_calculator {
     class nest {
@@ -158,6 +159,7 @@ struct sizes {
     size_t cache;
     size_t sstable;
     size_t frozen;
+    size_t canonical;
 };
 
 static sizes calculate_sizes(const mutation& m) {
@@ -176,6 +178,7 @@ static sizes calculate_sizes(const mutation& m) {
     result.memtable = mt->occupancy().used_space();
     result.cache = tracker.region().occupancy().used_space();
     result.frozen = freeze(m).representation().size();
+    result.canonical = db::serializer<canonical_mutation>(canonical_mutation(m)).size();
 
     tmpdir sstable_dir;
     auto sst = make_lw_shared<sstables::sstable>(s->ks_name(), s->cf_name(),
@@ -219,6 +222,7 @@ int main(int argc, char** argv) {
             std::cout << " - in memtable: " << sizes.memtable << "\n";
             std::cout << " - in sstable:  " << sizes.sstable << "\n";
             std::cout << " - frozen:      " << sizes.frozen << "\n";
+            std::cout << " - canonical:   " << sizes.canonical << "\n";
 
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
