@@ -821,7 +821,7 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_sample_pattern_cache;
 thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> downsampling::_original_index_cache;
 
-future<index_list> sstable::read_indexes(uint64_t summary_idx) {
+future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority_class& pc) {
     if (summary_idx >= _summary.header.size) {
         return make_ready_future<index_list>(index_list());
     }
@@ -840,9 +840,10 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
     estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(estimated_size, uint64_t(8 << 10)));
     estimated_size = std::max<size_t>(estimated_size, 8192);
 
-    return do_with(index_consumer(quantity), [this, position, estimated_size] (index_consumer& ic) {
+    return do_with(index_consumer(quantity), [this, position, estimated_size, &pc] (index_consumer& ic) {
         file_input_stream_options options;
         options.buffer_size = estimated_size;
+        options.io_priority_class = pc;
         auto stream = make_file_input_stream(this->_index_file, position, std::move(options));
         auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
         return ctx->consume_input(*ctx).then([ctx, &ic] {
@@ -852,7 +853,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx) {
 }
 
 template <sstable::component_type Type, typename T>
-future<> sstable::read_simple(T& component) {
+future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
@@ -888,16 +889,16 @@ void sstable::write_simple(T& component, const io_priority_class& pc) {
     w.close().get();
 }
 
-template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f);
+template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
 template void sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
 
-future<> sstable::read_compression() {
+future<> sstable::read_compression(const io_priority_class& pc) {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
     if (!has_component(sstable::component_type::CompressionInfo)) {
         return make_ready_future<>();
     }
 
-    return read_simple<component_type::CompressionInfo>(_compression);
+    return read_simple<component_type::CompressionInfo>(_compression, pc);
 }
 
 void sstable::write_compression(const io_priority_class& pc) {
@@ -908,8 +909,8 @@ void sstable::write_compression(const io_priority_class& pc) {
     write_simple<component_type::CompressionInfo>(_compression, pc);
 }
 
-future<> sstable::read_statistics() {
-    return read_simple<component_type::Statistics>(_statistics);
+future<> sstable::read_statistics(const io_priority_class& pc) {
+    return read_simple<component_type::Statistics>(_statistics, pc);
 }
 
 void sstable::write_statistics(const io_priority_class& pc) {
@@ -949,15 +950,17 @@ future<> sstable::create_data() {
     });
 }
 
+// This interface is only used during tests, snapshot loading and early initialization.
+// No need to set tunable priorities for it.
 future<> sstable::load() {
     return read_toc().then([this] {
-        return read_statistics();
+        return read_statistics(default_priority_class());
     }).then([this] {
-        return read_compression();
+        return read_compression(default_priority_class());
     }).then([this] {
-        return read_filter();
+        return read_filter(default_priority_class());
     }).then([this] {;
-        return read_summary();
+        return read_summary(default_priority_class());
     }).then([this] {
         return open_data();
     });
@@ -1577,13 +1580,14 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
-input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
+input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc) {
     if (_compression) {
         return make_compressed_file_input_stream(
-                _data_file, &_compression, pos);
+                _data_file, &_compression, pc, pos);
     } else {
         file_input_stream_options options;
         options.buffer_size = buf_size;
+        options.io_priority_class = pc;
         return make_file_input_stream(_data_file, pos, std::move(options));
     }
 }
@@ -1592,9 +1596,9 @@ input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
 // interface - it may cause too much read when we intend to read a small
 // range, and too small reads, and repeated waits, when reading a large range
 // which we should have started at once.
-future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
+future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
     auto estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(len, uint64_t(8 << 10)));
-    return do_with(data_stream_at(pos, estimated_size), [len] (auto& stream) {
+    return do_with(data_stream_at(pos, estimated_size, pc), [len] (auto& stream) {
         return stream.read_exactly(len);
     });
 }
@@ -1808,7 +1812,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
 future<range<partition_key>>
 sstable::get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     auto sst = std::make_unique<sstable>(ks, cf, dir, generation, v, f);
-    auto fut = sst->read_summary();
+    auto fut = sst->read_summary(default_priority_class());
     return std::move(fut).then([sst = std::move(sst), &s] () mutable {
         auto first = sst->get_first_partition_key(s);
         auto last = sst->get_last_partition_key(s);

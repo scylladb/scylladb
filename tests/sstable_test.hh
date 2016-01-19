@@ -57,14 +57,14 @@ public:
     }
 
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
-        return _sst->data_read(pos, len);
+        return _sst->data_read(pos, len, default_priority_class());
     }
     future<index_list> read_indexes(uint64_t summary_idx) {
-        return _sst->read_indexes(summary_idx);
+        return _sst->read_indexes(summary_idx, default_priority_class());
     }
 
     future<> read_statistics() {
-        return _sst->read_statistics();
+        return _sst->read_statistics(default_priority_class());
     }
 
     statistics& get_statistics() {
@@ -72,7 +72,7 @@ public:
     }
 
     future<> read_summary() {
-        return _sst->read_summary();
+        return _sst->read_summary(default_priority_class());
     }
 
     future<summary_entry&> read_summary_entry(size_t i) {

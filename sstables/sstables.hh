@@ -193,7 +193,8 @@ public:
         return _generation;
     }
 
-    future<mutation_opt> read_row(schema_ptr schema, const key& k);
+    future<mutation_opt> read_row(schema_ptr schema, const key& k,
+                                  const io_priority_class& pc = default_priority_class());
     /**
      * @param schema a schema_ptr object describing this table
      * @param min the minimum token we want to search for (inclusive)
@@ -202,10 +203,12 @@ public:
      * mutations.
      */
     mutation_reader read_range_rows(schema_ptr schema,
-            const dht::token& min, const dht::token& max);
+            const dht::token& min, const dht::token& max,
+            const io_priority_class& pc = default_priority_class());
 
     // Returns a mutation_reader for given range of partitions
-    mutation_reader read_range_rows(schema_ptr schema, const query::partition_range& range);
+    mutation_reader read_range_rows(schema_ptr schema, const query::partition_range& range,
+                                    const io_priority_class& pc = default_priority_class());
 
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.
@@ -218,7 +221,7 @@ public:
     // The caller must ensure (e.g., using do_with()) that the context object,
     // as well as the sstable, remains alive as long as a read() is in
     // progress (i.e., returned a future which hasn't completed yet).
-    mutation_reader read_rows(schema_ptr schema);
+    mutation_reader read_rows(schema_ptr schema, const io_priority_class& pc = default_priority_class());
 
     // Write sstable components from a memtable.
     future<> write_components(memtable& mt, bool backup = false,
@@ -378,7 +381,7 @@ private:
     const sstring filename(component_type f) const;
 
     template <sstable::component_type Type, typename T>
-    future<> read_simple(T& comp);
+    future<> read_simple(T& comp, const io_priority_class& pc);
 
     template <sstable::component_type Type, typename T>
     void write_simple(T& comp, const io_priority_class& pc);
@@ -387,28 +390,28 @@ private:
     void write_toc(const io_priority_class& pc);
     void seal_sstable();
 
-    future<> read_compression();
+    future<> read_compression(const io_priority_class& pc);
     void write_compression(const io_priority_class& pc);
 
-    future<> read_filter();
+    future<> read_filter(const io_priority_class& pc);
 
     void write_filter(const io_priority_class& pc);
 
-    future<> read_summary() {
-        return read_simple<component_type::Summary>(_summary);
+    future<> read_summary(const io_priority_class& pc) {
+        return read_simple<component_type::Summary>(_summary, pc);
     }
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_summary, pc);
     }
 
-    future<> read_statistics();
+    future<> read_statistics(const io_priority_class& pc);
     void write_statistics(const io_priority_class& pc);
 
     future<> create_data();
 
-    future<index_list> read_indexes(uint64_t summary_idx);
+    future<index_list> read_indexes(uint64_t summary_idx, const io_priority_class& pc);
 
-    input_stream<char> data_stream_at(uint64_t pos, uint64_t buf_size);
+    input_stream<char> data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -416,12 +419,12 @@ private:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
-    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, const io_priority_class& pc);
 
-    future<uint64_t> data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il);
+    future<uint64_t> data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il, const io_priority_class& pc);
 
     // Returns data file position for an entry right after all entries mapped by given summary page.
-    future<uint64_t> data_end_position(uint64_t summary_idx);
+    future<uint64_t> data_end_position(uint64_t summary_idx, const io_priority_class& pc);
 
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);
@@ -436,14 +439,14 @@ private:
     // position right after all entries is returned.
     //
     // The ring_position doesn't have to survive deferring.
-    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&);
+    future<uint64_t> lower_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
 
     // Returns position in the data file of the first partition which is
     // greater than the supplied ring_position. If no such entry exists, a
     // position right after all entries is returned.
     //
     // The ring_position doesn't have to survive deferring.
-    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&);
+    future<uint64_t> upper_bound(schema_ptr, const dht::ring_position&, const io_priority_class& pc);
 
     future<summary_entry&> read_summary_entry(size_t i);
 
@@ -539,7 +542,8 @@ public:
 using shared_sstable = lw_shared_ptr<sstable>;
 using sstable_list = std::map<int64_t, shared_sstable>;
 
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range);
+::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range,
+                             const io_priority_class& pc = default_priority_class());
 
 struct entry_descriptor {
     sstring ks;

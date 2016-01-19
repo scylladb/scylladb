@@ -363,7 +363,7 @@ data_consume_context sstable::data_consume_rows(
         row_consumer& consumer, uint64_t start, uint64_t end) {
     auto estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(end - start, uint64_t(8 << 10)));
     return std::make_unique<data_consume_context::impl>(
-            consumer, data_stream_at(start, std::max<size_t>(estimated_size, 8192)), end - start);
+            consumer, data_stream_at(start, std::max<size_t>(estimated_size, 8192), consumer.io_priority()), end - start);
 }
 
 data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
@@ -372,7 +372,7 @@ data_consume_context sstable::data_consume_rows(row_consumer& consumer) {
 
 future<> sstable::data_consume_rows_at_once(row_consumer& consumer,
         uint64_t start, uint64_t end) {
-    return data_read(start, end - start).then([&consumer]
+    return data_read(start, end - start, consumer.io_priority()).then([&consumer]
                                                (temporary_buffer<char> buf) {
         data_consume_rows_context ctx(consumer, input_stream<char>(), -1);
         ctx.process(buf);
