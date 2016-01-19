@@ -221,9 +221,12 @@ public:
     mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
-    future<> write_components(memtable& mt, bool backup = false);
+    future<> write_components(memtable& mt, bool backup = false,
+                              const io_priority_class& pc = default_priority_class());
+
     future<> write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false,
+            const io_priority_class& pc = default_priority_class());
 
     uint64_t get_estimated_key_count() const {
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
@@ -328,9 +331,11 @@ private:
     size_t sstable_buffer_size = 128*1024;
 
     void do_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size,
+            file_writer& out, const io_priority_class& pc);
     void prepare_write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size,
+            const io_priority_class& pc);
     static future<> shared_remove_by_toc_name(sstring toc_name, bool shared);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -376,28 +381,28 @@ private:
     future<> read_simple(T& comp);
 
     template <sstable::component_type Type, typename T>
-    void write_simple(T& comp);
+    void write_simple(T& comp, const io_priority_class& pc);
 
     void generate_toc(compressor c, double filter_fp_chance);
-    void write_toc();
+    void write_toc(const io_priority_class& pc);
     void seal_sstable();
 
     future<> read_compression();
-    void write_compression();
+    void write_compression(const io_priority_class& pc);
 
     future<> read_filter();
 
-    void write_filter();
+    void write_filter(const io_priority_class& pc);
 
     future<> read_summary() {
         return read_simple<component_type::Summary>(_summary);
     }
-    void write_summary() {
-        write_simple<component_type::Summary>(_summary);
+    void write_summary(const io_priority_class& pc) {
+        write_simple<component_type::Summary>(_summary, pc);
     }
 
     future<> read_statistics();
-    void write_statistics();
+    void write_statistics(const io_priority_class& pc);
 
     future<> create_data();
 

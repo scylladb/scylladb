@@ -50,7 +50,7 @@ future<> sstable::read_filter() {
     });
 }
 
-void sstable::write_filter() {
+void sstable::write_filter(const io_priority_class& pc) {
     if (!has_component(sstable::component_type::Filter)) {
         return;
     }
@@ -61,7 +61,7 @@ void sstable::write_filter() {
     std::deque<uint64_t> v(align_up(bs.size(), size_t(64)) / 64);
     bs.save(v.begin());
     auto filter = sstables::filter(f->num_hashes(), std::move(v));
-    write_simple<sstable::component_type::Filter>(filter);
+    write_simple<sstable::component_type::Filter>(filter, pc);
 }
 
 }

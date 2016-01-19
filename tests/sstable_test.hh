@@ -104,11 +104,11 @@ public:
         _sst->_components.erase(sstable::component_type::Index);
         _sst->_components.erase(sstable::component_type::Data);
         return seastar::async([sst = _sst] {
-            sst->write_toc();
-            sst->write_statistics();
-            sst->write_compression();
-            sst->write_filter();
-            sst->write_summary();
+            sst->write_toc(default_priority_class());
+            sst->write_statistics(default_priority_class());
+            sst->write_compression(default_priority_class());
+            sst->write_filter(default_priority_class());
+            sst->write_summary(default_priority_class());
             sst->seal_sstable();
         });
     }

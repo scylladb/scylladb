@@ -744,7 +744,7 @@ void sstable::generate_toc(compressor c, double filter_fp_chance) {
     }
 }
 
-void sstable::write_toc() {
+void sstable::write_toc(const io_priority_class& pc) {
     auto file_path = filename(sstable::component_type::TemporaryTOC);
 
     sstlog.debug("Writing TOC file {} ", file_path);
@@ -754,6 +754,7 @@ void sstable::write_toc() {
 
     file_output_stream_options options;
     options.buffer_size = 4096;
+    options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
 
     for (auto&& key : _components) {
@@ -873,13 +874,14 @@ future<> sstable::read_simple(T& component) {
 }
 
 template <sstable::component_type Type, typename T>
-void sstable::write_simple(T& component) {
+void sstable::write_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
+    options.io_priority_class = pc;
     auto w = file_writer(std::move(f), std::move(options));
     write(w, component);
     w.flush().get();
@@ -887,7 +889,7 @@ void sstable::write_simple(T& component) {
 }
 
 template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f);
-template void sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f);
+template void sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f, const io_priority_class& pc);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
@@ -898,20 +900,20 @@ future<> sstable::read_compression() {
     return read_simple<component_type::CompressionInfo>(_compression);
 }
 
-void sstable::write_compression() {
+void sstable::write_compression(const io_priority_class& pc) {
     if (!has_component(sstable::component_type::CompressionInfo)) {
         return;
     }
 
-    write_simple<component_type::CompressionInfo>(_compression);
+    write_simple<component_type::CompressionInfo>(_compression, pc);
 }
 
 future<> sstable::read_statistics() {
     return read_simple<component_type::Statistics>(_statistics);
 }
 
-void sstable::write_statistics() {
-    write_simple<component_type::Statistics>(_statistics);
+void sstable::write_statistics(const io_priority_class& pc) {
+    write_simple<component_type::Statistics>(_statistics, pc);
 }
 
 future<> sstable::open_data() {
@@ -1264,9 +1266,11 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
 ///  @param out holds an output stream to data file.
 ///
 void sstable::do_write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out) {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, file_writer& out,
+        const io_priority_class& pc) {
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
+    options.io_priority_class = pc;
     auto index = make_shared<file_writer>(_index_file, std::move(options));
 
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
@@ -1367,25 +1371,29 @@ void sstable::do_write_components(::mutation_reader mr,
 }
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema,
-        uint64_t max_sstable_size) {
+        uint64_t max_sstable_size, const io_priority_class& pc) {
     // CRC component must only be present when compression isn't enabled.
     bool checksum_file = has_component(sstable::component_type::CRC);
 
     if (checksum_file) {
         file_output_stream_options options;
         options.buffer_size = sstable_buffer_size;
+        options.io_priority_class = pc;
 
         auto w = make_shared<checksummed_file_writer>(_data_file, std::move(options), checksum_file);
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w, pc);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
         write_digest(filename(sstable::component_type::Digest), w->full_checksum());
         write_crc(filename(sstable::component_type::CRC), w->finalize_checksum());
     } else {
+        file_output_stream_options options;
+        options.io_priority_class = pc;
+
         prepare_compression(_compression, *schema);
-        auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
-        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w);
+        auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, std::move(options), &_compression));
+        this->do_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, *w, pc);
         w->close().get();
         _data_file = file(); // w->close() closed _data_file
 
@@ -1393,24 +1401,24 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     }
 }
 
-future<> sstable::write_components(memtable& mt, bool backup) {
+future<> sstable::write_components(memtable& mt, bool backup, const io_priority_class& pc) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(mt.schema()),
-            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup);
+            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup, pc);
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup] () mutable {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup, const io_priority_class& pc) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup, &pc] () mutable {
         generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
-        write_toc();
+        write_toc(pc);
         create_data().get();
-        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size);
-        write_summary();
-        write_filter();
-        write_statistics();
+        prepare_write_components(std::move(mr), estimated_partitions, std::move(schema), max_sstable_size, pc);
+        write_summary(pc);
+        write_filter(pc);
+        write_statistics(pc);
         // NOTE: write_compression means maybe_write_compression.
-        write_compression();
+        write_compression(pc);
         seal_sstable();
 
         if (backup) {
@@ -1647,7 +1655,12 @@ future<> sstable::mutate_sstable_level(uint32_t new_level) {
     // we will always write sequentially is a powerful one, and this does not merit an
     // exception.
     return seastar::async([this] {
-        write_statistics();
+        // This is not part of the standard memtable flush path, but there is no reason
+        // to come up with a class just for that. It is used by the snapshot/restore mechanism
+        // which comprises mostly hard link creation and this operation at the end + this operation,
+        // and also (eventually) by some compaction strategy. In any of the cases, it won't be high
+        // priority enough so we will use the default priority
+        write_statistics(default_priority_class());
     });
 }
 
