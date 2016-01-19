@@ -113,42 +113,50 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     db::config cfg;
     cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
 
+    /**
+     * Not using seastar::async due to apparent ASan bug.
+     * Enjoy the slightly less readable code.
+     */
     return do_with_cql_env([](cql_test_env&) {
-        return seastar::async([] {
-            sstring username("fisk");
-            sstring password("notter");
+        sstring username("fisk");
+        sstring password("notter");
 
-            auto& a = auth::authenticator::get();
+        using namespace auth;
+        using option = authenticator::option;
+        using user_ptr = ::shared_ptr<authenticated_user>;
 
-            using option = auth::authenticator::option;
-            auto USERNAME_KEY = auth::authenticator::USERNAME_KEY;
-            auto PASSWORD_KEY = auth::authenticator::PASSWORD_KEY;
+        auto USERNAME_KEY = authenticator::USERNAME_KEY;
+        auto PASSWORD_KEY = authenticator::PASSWORD_KEY;
 
-            // check non-existing user
+
+        // check non-existing user
+        return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
             try {
-                a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).get0();
+                f.get();
                 BOOST_FAIL("should not reach");
             } catch (exceptions::authentication_exception&) {
                 // ok
             }
-
-            a.create(username, { { option::PASSWORD, password} }).get();
-            {
-                auto user = a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).get0();
-
-                BOOST_REQUIRE_EQUAL(user->name(), username);
-                BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
-            }
+        }).then([=] {
+            return authenticator::get().create(username, { { option::PASSWORD, password} }).then([=] {
+                return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then([=](user_ptr user) {
+                    BOOST_REQUIRE_EQUAL(user->name(), username);
+                    BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
+                });
+            });
+        }).then([=] {
             // check wrong password
-            try {
-                a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, "hejkotte" } }).get0();
-                BOOST_FAIL("should not reach");
-            } catch (exceptions::authentication_exception&) {
-                // ok
-            }
-
+            return authenticator::get().authenticate( { {USERNAME_KEY, username}, {PASSWORD_KEY, "hejkotte"}}).then_wrapped([](future<user_ptr>&& f) {
+                try {
+                    f.get();
+                    BOOST_FAIL("should not reach");
+                } catch (exceptions::authentication_exception&) {
+                    // ok
+                }
+            });
+        }).then([=] {
             // sasl
-            auto sasl = a.new_sasl_challenge();
+            auto sasl = authenticator::get().new_sasl_challenge();
 
             BOOST_REQUIRE_EQUAL(sasl->is_complete(), false);
 
@@ -162,21 +170,22 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
             sasl->evaluate_response(b);
             BOOST_REQUIRE_EQUAL(sasl->is_complete(), true);
 
-            {
-                auto user = sasl->get_authenticated_user().get0();
+            return sasl->get_authenticated_user().then([=](user_ptr user) {
                 BOOST_REQUIRE_EQUAL(user->name(), username);
                 BOOST_REQUIRE_EQUAL(user->is_anonymous(), false);
-            }
-
+            });
+        }).then([=] {
             // check deleted user
-            a.drop(username).get();
-
-            try {
-                a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).get0();
-                BOOST_FAIL("should not reach");
-            } catch (exceptions::authentication_exception&) {
-                // ok
-            }
+            return authenticator::get().drop(username).then([=] {
+                return authenticator::get().authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr>&& f) {
+                    try {
+                        f.get();
+                        BOOST_FAIL("should not reach");
+                    } catch (exceptions::authentication_exception&) {
+                        // ok
+                    }
+                });
+            });
         });
     }, cfg);
 }
