@@ -2127,6 +2127,30 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
             return e.execute_cql("alter table tatv alter r2 type map<int, int>;").discard_result();
         }).then_wrapped([&e] (auto f) {
             assert_that_failed(f);
+            return e.execute_cql("alter table tatv add r3 map<int, int>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            return e.execute_cql("alter table tatv add r4 set<text>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            return e.execute_cql("alter table tatv drop r3;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            return e.execute_cql("alter table tatv drop r4;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            return e.execute_cql("alter table tatv add r3 map<int, text>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("alter table tatv add r4 set<int>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("alter table tatv add r3 map<int, blob>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            return e.execute_cql("alter table tatv add r4 set<blob>;").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
         });
     });
 }

@@ -364,7 +364,8 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
         && x._raw._caching_options == y._raw._caching_options
-        && x._raw._dropped_columns == y._raw._dropped_columns;
+        && x._raw._dropped_columns == y._raw._dropped_columns
+        && x._raw._collections == y._raw._collections;
 #if 0
         && Objects.equal(triggers, other.triggers)
 #endif
@@ -468,6 +469,15 @@ std::ostream& operator<<(std::ostream& os, const schema& s) {
             os << ", ";
         }
         os << dc.first << " : " << dc.second;
+    }
+    os << "}";
+    os << ",collections={";
+    n = 0;
+    for (auto& c : s._raw._collections) {
+        if (n++ != 0) {
+            os << ", ";
+        }
+        os << c.first << " : " << c.second->name();
     }
     os << "}";
     os << "]";
@@ -778,7 +788,7 @@ bool check_compound(sstring comparator) {
 void read_collections(schema_builder& builder, sstring comparator)
 {
     // The format of collection entries in the comparator is:
-    // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name>:<type>)
+    // org.apache.cassandra.db.marshal.ColumnToCollectionType(<name1>:<type1>, ...)
 
     auto find_closing_parenthesis = [] (sstring_view str, size_t start) {
         auto pos = start;
@@ -795,15 +805,22 @@ void read_collections(schema_builder& builder, sstring comparator)
             }
             pos++;
         } while (nest_level > 0);
-        return pos;
+        return pos - 1;
     };
 
     auto collection_str_length = strlen(_collection_str);
 
     auto pos = comparator.find(_collection_str);
-    while (pos != sstring::npos) {
-        pos += collection_str_length;
-        auto end = find_closing_parenthesis(comparator, pos++);
+    if (pos == sstring::npos) {
+        return;
+    }
+    pos += collection_str_length + 1;
+    while (pos < comparator.size()) {
+        size_t end = comparator.find('(', pos);
+        if (end == sstring::npos) {
+            throw marshal_exception();
+        }
+        end = find_closing_parenthesis(comparator, end) + 1;
 
         auto colon = comparator.find(':', pos);
         if (colon == sstring::npos || colon > end) {
@@ -818,7 +835,13 @@ void read_collections(schema_builder& builder, sstring comparator)
 
         builder.with_collection(name, type);
 
-        pos = comparator.find(_collection_str, end);
+        if (end < comparator.size() && comparator[end] == ',') {
+            pos = end + 1;
+        } else if (end < comparator.size() && comparator[end] == ')') {
+            pos = sstring::npos;
+        } else {
+            throw marshal_exception();
+        }
     }
 }
 
