@@ -19,10 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#define BOOST_TEST_DYN_LINK
-#define BOOST_TEST_MODULE core
-
-#include <boost/test/unit_test.hpp>
+#include <seastar/tests/test-utils.hh>
 #include <utils/UUID_gen.hh>
 #include <boost/asio/ip/address_v4.hpp>
 #include <net/ip.hh>
@@ -654,7 +651,7 @@ BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     }
 }
 
-BOOST_AUTO_TEST_CASE(test_simple_type_compatibility) {
+SEASTAR_TEST_CASE(test_simple_type_compatibility) {
     test_case tests[] = {
         { vc, bytes_type, int32_type },
         { nc, int32_type, bytes_type },
@@ -668,8 +665,11 @@ BOOST_AUTO_TEST_CASE(test_simple_type_compatibility) {
         { nc, utf8_type, bytes_type },
         { nc, ascii_type, bytes_type },
         { nc, ascii_type, utf8_type },
+        { cc, timestamp_type, date_type },
+        { cc, date_type, timestamp_type },
     };
     for (auto&& tc : tests) {
         tc.verify(tc.to, tc.from);
     }
+    return make_ready_future<>();
 }
