@@ -385,10 +385,6 @@ public:
     // "less" comparator corresponding to tri_compare()
     bool less_compare(const schema&, const ring_position&) const;
 
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static ring_position deserialize(bytes_view& in);
-
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 

@@ -55,31 +55,6 @@ bool is_single_partition(const query::partition_range& range) {
 
 typedef std::vector<clustering_range> clustering_row_ranges;
 
-static size_t ranges_size(const clustering_row_ranges& r) {
-    size_t row_range_size = serialize_int32_size;
-    for (auto&& i : r) {
-        row_range_size += i.serialized_size();
-    }
-    return row_range_size;
-}
-
-static void serialize_ranges(bytes::iterator& out, const clustering_row_ranges& r) {
-    serialize_int32(out, r.size());
-    for (auto&& i : r) {
-        i.serialize(out);
-    }
-}
-
-static clustering_row_ranges deserialize_ranges(bytes_view& v) {
-    auto size = read_simple<uint32_t>(v);
-    clustering_row_ranges row_ranges;
-    row_ranges.reserve(size);
-    while (size--) {
-        row_ranges.emplace_back(clustering_range::deserialize(v));
-    };
-    return row_ranges;
-}
-
 class specific_ranges {
 public:
     specific_ranges(partition_key pk, clustering_row_ranges ranges)
@@ -105,25 +80,6 @@ public:
             return &_ranges;
         }
         return nullptr;
-    }
-    size_t serialized_size() const {
-        return serialize_int32_size + _pk.representation().size()
-                + ranges_size(_ranges);
-    }
-    void serialize(bytes::iterator& out) const {
-        // I so wish this used serializers & data_output...
-        const auto& v = _pk.representation();
-        serialize_int32(out, v.size());
-        out = std::copy(v.begin(), v.end(), out);
-        serialize_ranges(out, _ranges);
-    }
-
-    static specific_ranges deserialize(bytes_view& v) {
-        auto size = read_simple<uint32_t>(v);
-        auto pk = partition_key::from_bytes(to_bytes(read_simple_bytes(v, size)));
-        auto range = deserialize_ranges(v);
-
-        return specific_ranges(std::move(pk), std::move(range));
     }
     const partition_key& pk() const {
         return _pk;
@@ -175,9 +131,6 @@ public:
     const std::unique_ptr<specific_ranges>& get_specific_ranges() const {
         return _specific_ranges;
     }
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static partition_slice deserialize(bytes_view& v);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
@@ -207,10 +160,6 @@ public:
         , row_limit(row_limit)
         , timestamp(now)
     { }
-
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static read_command deserialize(bytes_view& v);
 
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
