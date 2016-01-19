@@ -48,6 +48,7 @@ static const char* bytes_type_name     = "org.apache.cassandra.db.marshal.BytesT
 static const char* boolean_type_name   = "org.apache.cassandra.db.marshal.BooleanType";
 static const char* timeuuid_type_name  = "org.apache.cassandra.db.marshal.TimeUUIDType";
 static const char* timestamp_type_name = "org.apache.cassandra.db.marshal.TimestampType";
+static const char* date_type_name      = "org.apache.cassandra.db.marshal.DateType";
 static const char* uuid_type_name      = "org.apache.cassandra.db.marshal.UUIDType";
 static const char* inet_addr_type_name = "org.apache.cassandra.db.marshal.InetAddressType";
 static const char* double_type_name    = "org.apache.cassandra.db.marshal.DoubleType";
@@ -381,7 +382,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
 };
 
 struct date_type_impl : public concrete_type<db_clock::time_point> {
-    date_type_impl() : concrete_type("date") {}
+    date_type_impl() : concrete_type(date_type_name) {}
     virtual void serialize(const void* value, bytes::iterator& out) const override {
         if (!value) {
             return;
