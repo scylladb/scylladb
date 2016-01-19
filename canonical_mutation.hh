@@ -49,6 +49,8 @@ public:
     // is not intended, user should sync the schema first.
     mutation to_mutation(schema_ptr) const;
 
+    utils::UUID column_family_id() const;
+
     friend class db::serializer<canonical_mutation>;
 };
 //
