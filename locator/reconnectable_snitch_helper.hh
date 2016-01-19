@@ -65,7 +65,6 @@ private:
         auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         if (sn_ptr->get_datacenter(public_address) == _local_dc &&
-            ms.get_raw_version(public_address) == net::messaging_service::current_version &&
             ms.get_preferred_ip(public_address) != local_address) {
             //
             // First, store the local address in the system_table...

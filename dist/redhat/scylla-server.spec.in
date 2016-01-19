@@ -12,6 +12,7 @@ BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-
 %{?fedora:BuildRequires: boost-devel ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan}
 %{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1}
 Requires:       systemd-libs xfsprogs mdadm hwloc
+Conflicts:      abrt
 
 %description
 

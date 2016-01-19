@@ -62,14 +62,15 @@ class type_parser {
 
     public static final TypeParser EMPTY_PARSER = new TypeParser("", 0);
 #endif
-    type_parser(const sstring& str, size_t idx);
+    type_parser(sstring_view str, size_t idx);
 public:
-    explicit type_parser(const sstring& str);
+    explicit type_parser(sstring_view str);
 
     /**
      * Parse a string containing an type definition.
      */
     static data_type parse(const sstring& str);
+    static data_type parse(sstring_view str);
 
 #if 0
     public static AbstractType<?> parse(CharSequence compareWith) throws SyntaxException, ConfigurationException

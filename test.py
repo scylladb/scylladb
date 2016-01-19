@@ -36,7 +36,6 @@ boost_tests = [
     'cql_query_test',
     'storage_proxy_test',
     'schema_change_test',
-    'sstable_test',
     'sstable_mutation_test',
     'commitlog_test',
     'hash_test',
@@ -128,6 +127,9 @@ if __name__ == "__main__":
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m100M --count 24000 --standard-object-size 2048','other'))
         test_to_run.append(('build/release/tests/lsa_sync_eviction_test -c1 -m1G --count 4000000 --standard-object-size 128','other'))
         test_to_run.append(('build/release/tests/row_cache_alloc_stress -c1 -m1G','other'))
+        test_to_run.append(('build/release/tests/sstable_test -c1','boost'))
+    if 'debug' in modes_to_run:
+        test_to_run.append(('build/debug/tests/sstable_test -c1','boost'))
 
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t[0]]

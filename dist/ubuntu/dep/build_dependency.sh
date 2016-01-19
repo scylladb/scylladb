@@ -1,15 +1,8 @@
 #!/bin/sh -e
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
-DEP="build-essential debhelper openjdk-7-jre-headless build-essential autoconf automake pkg-config libtool bison flex libevent-dev libglib2.0-dev libqt4-dev python-dev python-dbg php5-dev devscripts python-support xfslibs-dev"
 
-if [ "$RELEASE" = "14.04" ]; then
-    DEP="$DEP libboost1.55-dev libboost-test1.55-dev"
-else
-    DEP="$DEP libboost-dev libboost-test-dev"
-fi
-sudo apt-get -y install $DEP
-
+sudo apt-get install -y gdebi-core
 if [ "$RELEASE" = "14.04" ]; then
     if [ ! -f build/antlr3_3.5.2-1_all.deb ]; then
         rm -rf build/antlr3-3.5.2
@@ -17,6 +10,7 @@ if [ "$RELEASE" = "14.04" ]; then
         cp -a dist/ubuntu/dep/antlr3-3.5.2/* build/antlr3-3.5.2
         cd build/antlr3-3.5.2
         wget http://www.antlr3.org/download/antlr-3.5.2-complete-no-st3.jar
+        echo Y | sudo mk-build-deps -i -r
         debuild -r fakeroot --no-tgz-check -us -uc
         cd -
     fi
@@ -33,6 +27,7 @@ if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then
     cd -
     cp -a dist/ubuntu/dep/antlr3-c++-dev-3.5.2/debian build/antlr3-c++-dev-3.5.2
     cd build/antlr3-c++-dev-3.5.2
+    echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
     cd -
 fi
@@ -46,8 +41,13 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     tar xpf thrift-0.9.1.tar.gz
     cd thrift-0.9.1
     patch -p0 < ../../dist/ubuntu/dep/thrift.diff
+    echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
     cd ../..
 fi
 
-sudo dpkg -i build/*.deb
+sudo gdebi -n build/antlr3_*.deb
+sudo gdebi -n build/antlr3-c++-dev_*.deb
+sudo gdebi -n build/libthrift0_*.deb
+sudo gdebi -n build/libthrift-dev_*.deb
+sudo gdebi -n build/thrift-compiler_*.deb

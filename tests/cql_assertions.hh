@@ -48,8 +48,8 @@ public:
 
 result_msg_assertions assert_that(shared_ptr<transport::messages::result_message> msg);
 
-template<typename T>
-void assert_that_failed(future<T>& f)
+template<typename... T>
+void assert_that_failed(future<T...>& f)
 {
     assert(f.failed());
     try {

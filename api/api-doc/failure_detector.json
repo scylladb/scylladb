@@ -196,6 +196,10 @@
                 "value": {
                     "type": "string",
                     "description": "The version value"
+                },
+                "version": {
+                    "type": "int",
+                    "description": "The application state version"
                 }
             }
         }

@@ -63,9 +63,12 @@ namespace sstables {
     // Example: It's okay for the size of a new sstable to go beyond max_sstable_size
     // when writing its last partition.
     // sstable_level will be level of the sstable(s) to be created by this function.
+    // If cleanup is true, mutation that doesn't belong to current node will be
+    // cleaned up, log messages will inform the user that compact_sstables runs for
+    // cleaning operation, and compaction history will not be updated.
     future<> compact_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable()> creator,
-            uint64_t max_sstable_size, uint32_t sstable_level);
+            uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false);
 
     // Return the most interesting bucket applying the size-tiered strategy.
     // NOTE: currently used for purposes of testing. May also be used by leveled compaction strategy.

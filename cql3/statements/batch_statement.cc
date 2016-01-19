@@ -88,7 +88,7 @@ void batch_statement::verify_batch_size(const std::vector<mutation>& mutations) 
 
     auto size = v.size / 1024;
 
-    if (v.size > warn_threshold) {
+    if (size > warn_threshold) {
         std::unordered_set<sstring> ks_cf_pairs;
         for (auto&& m : mutations) {
             ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
