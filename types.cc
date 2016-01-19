@@ -258,6 +258,11 @@ struct utf8_type_impl final : public string_type_impl {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::text;
     }
+    virtual bool is_compatible_with(const abstract_type& other) const override {
+        // Anything that is ascii is also utf8, and they both use bytes
+        // comparison
+        return this == &other || &other == ascii_type.get();
+    }
     using concrete_type::from_value;
 };
 
@@ -303,6 +308,11 @@ struct bytes_type_impl final : public concrete_type<bytes> {
     }
     virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
+    }
+    virtual bool is_compatible_with(const abstract_type& other) const override {
+        // Both asciiType and utf8Type really use bytes comparison and
+        // bytesType validate everything, so it is compatible with the former.
+        return this == &other || &other == ascii_type.get() || &other == utf8_type.get();
     }
 };
 
