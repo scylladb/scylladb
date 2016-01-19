@@ -344,7 +344,7 @@ int main(int ac, char** av) {
                         return db.invoke_on_all([](auto& db) {
                             return db.stop();
                         }).then([] {
-                            ::_exit(3);
+                            ::_exit(0);
                         });
                     });
                 });
