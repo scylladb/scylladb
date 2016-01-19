@@ -83,10 +83,17 @@ key_reader make_filtering_reader(key_reader&& reader, Filter&& filter) {
 }
 
 class key_source {
-    std::function<key_reader(const query::partition_range& range)> _fn;
+    std::function<key_reader(const query::partition_range& range, const io_priority_class& pc)> _fn;
 public:
-    key_source(std::function<key_reader(const query::partition_range& range)> fn) : _fn(std::move(fn)) {}
+    key_source(std::function<key_reader(const query::partition_range& range, const io_priority_class& pc)> fn) : _fn(std::move(fn)) {}
+    key_source(std::function<key_reader(const query::partition_range& range)> fn)
+        : _fn([fn = std::move(fn)](const query::partition_range& range, const io_priority_class& pc) {
+            return fn(range);
+        }) {}
+    key_reader operator()(const query::partition_range& range, const io_priority_class& pc) {
+        return _fn(range, pc);
+    }
     key_reader operator()(const query::partition_range& range) {
-        return _fn(range);
+        return _fn(range, default_priority_class());
     }
 };
