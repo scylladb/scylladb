@@ -1570,7 +1570,7 @@ input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size) {
     } else {
         file_input_stream_options options;
         options.buffer_size = buf_size;
-        return make_file_input_stream(_data_file, 0, std::move(options));
+        return make_file_input_stream(_data_file, pos, std::move(options));
     }
 }
 
