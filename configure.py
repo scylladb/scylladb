@@ -466,6 +466,12 @@ api = ['api/api.cc',
        'api/system.cc'
        ]
 idls = ['idl/gossip_digest.idl.hh',
+                  'idl/uuid.idl.hh',
+                  'idl/range.idl.hh',
+                  'idl/keys.idl.hh',
+                  'idl/read_command.idl.hh',
+                  'idl/token.idl.hh',
+                  'idl/ring_position.idl.hh',
           ]
 
 serialize = idls + ['serializer.inc.hh']
