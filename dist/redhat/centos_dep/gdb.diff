@@ -1,0 +1,29 @@
+--- gdb.spec.orig	2015-09-18 15:03:10.000000000 -0400
++++ gdb.spec	2016-01-20 06:53:53.696000000 -0500
+@@ -15,7 +15,10 @@
+ }
+ 
+ Summary: A GNU source-level debugger for C, C++, Fortran, Go and other languages
+-Name: %{?scl_prefix}gdb
++Name: %{?scl_prefix}scylla-gdb
++%define orig_name gdb
++Requires:	scylla-env
++%define _prefix /opt/scylladb
+ 
+ # Freeze it when GDB gets branched
+ %global snapsrc    20150706
+@@ -562,12 +565,8 @@
+ BuildRequires: rpm-devel%{?_isa}
+ BuildRequires: zlib-devel%{?_isa} libselinux-devel%{?_isa}
+ %if 0%{!?_without_python:1}
+-%if 0%{?rhel:1} && 0%{?rhel} <= 7
+-BuildRequires: python-devel%{?_isa}
+-%else
+-%global __python %{__python3}
+-BuildRequires: python3-devel%{?_isa}
+-%endif
++BuildRequires: python34-devel%{?_isa}
++%global __python /usr/bin/python3.4
+ %if 0%{?rhel:1} && 0%{?rhel} <= 6
+ # Temporarily before python files get moved to libstdc++.rpm
+ # libstdc++%{bits_other} is not present in Koji, the .spec script generating
