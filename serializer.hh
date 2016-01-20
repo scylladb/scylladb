@@ -47,16 +47,16 @@ inline void serialize_integral(Output& output, T data) {
 
 // For integer type
 template<typename Input>
-bool deserialize(Input& input, rpc::type<bool>) {
-    return deserialize(input, rpc::type<uint8_t>());
-}
-template<typename Input>
 int8_t deserialize(Input& input, rpc::type<int8_t>) {
     return deserialize_integral<int8_t>(input);
 }
 template<typename Input>
 uint8_t deserialize(Input& input, rpc::type<uint8_t>) {
     return deserialize_integral<uint8_t>(input);
+}
+template<typename Input>
+bool deserialize(Input& input, rpc::type<bool>) {
+    return deserialize(input, rpc::type<uint8_t>());
 }
 template<typename Input>
 int16_t deserialize(Input& input, rpc::type<int16_t>) {
@@ -84,16 +84,16 @@ uint64_t deserialize(Input& input, rpc::type<uint64_t>) {
 }
 
 template<typename Output>
-void serialize(Output& output, bool data) {
-    serialize(output, uint8_t(data));
-}
-template<typename Output>
 void serialize(Output& output, int8_t data) {
     serialize_integral(output, data);
 }
 template<typename Output>
 void serialize(Output& output, uint8_t data) {
     serialize_integral(output, data);
+}
+template<typename Output>
+void serialize(Output& output, bool data) {
+    serialize(output, uint8_t(data));
 }
 template<typename Output>
 void serialize(Output& output, int16_t data) {
