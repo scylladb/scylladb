@@ -182,14 +182,6 @@ void stream_session::init_messaging_service_handler() {
             }
         });
     });
-#if 0
-    ms().register_handler(messaging_verb::RETRY_MESSAGE, [] (messages::retry_message msg, unsigned dst_cpu_id) {
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            return make_ready_future<>();
-        });
-    });
-#endif
     ms().register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () mutable {
@@ -209,23 +201,8 @@ void stream_session::init_messaging_service_handler() {
             }
         });
     });
-#if 0
-    ms().register_handler(messaging_verb::SESSION_FAILED_MESSAGE, [] (messages::session_failed_message msg, unsigned dst_cpu_id) {
-        smp::submit_to(dst_cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-        }).then_wrapped([] (auto&& f) {
-            try {
-                f.get();
-            } catch (...) {
-                sslog.debug("stream_session: SESSION_FAILED_MESSAGE error");
-            }
-        });
-        return messaging_service::no_wait();
-    });
-#endif
 }
 
-distributed<stream_session::handler> stream_session::_handlers;
 distributed<database>* stream_session::_db;
 
 stream_session::stream_session() = default;
@@ -243,15 +220,11 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
     _db = &db;
     // #293 - do not stop anything
     // engine().at_exit([] {
-    //     return _handlers.stop().then([]{
-    //         return get_stream_manager().stop();
-    //     });
+    //     return get_stream_manager().stop();
     // });
     return get_stream_manager().start().then([] {
-        return _handlers.start().then([] {
-            return _handlers.invoke_on_all([] (handler& h) {
-                init_messaging_service_handler();
-            });
+        return _db->invoke_on_all([] (auto& db) {
+            init_messaging_service_handler();
         });
     });
 }

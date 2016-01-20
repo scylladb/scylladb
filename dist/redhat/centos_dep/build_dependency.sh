@@ -8,7 +8,7 @@ do_install()
     echo Install $name done
 }
 
-sudo yum install -y wget yum-utils rpm-build rpmdevtools gcc gcc-c++ make patch
+sudo yum install -y wget yum-utils rpm-build rpmdevtools gcc gcc-c++ make patch rpm-devel python34-devel guile-devel
 mkdir -p build/srpms
 cd build/srpms
 
@@ -34,6 +34,10 @@ fi
 
 if [ ! -f ragel-6.8-3.fc22.src.rpm ]; then
    wget http://download.fedoraproject.org/pub/fedora/linux/releases/22/Everything/source/SRPMS/r/ragel-6.8-3.fc22.src.rpm
+fi
+
+if [ ! -f gdb-7.10-23.fc23.src.rpm ]; then
+   wget http://download.fedoraproject.org/pub/fedora/linux/releases/23/Everything/source/SRPMS/g/gdb-7.10-23.fc23.src.rpm
 fi
 
 cd -
@@ -97,6 +101,13 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-ragel-6.8-3.el7.centos.x86_64.rpm ]; then
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/ragel.spec
 fi
 do_install scylla-ragel-6.8-3.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-gdb-7.10-23.el7.centos.x86_64.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/gdb-7.10-23.fc23.src.rpm
+    patch $RPMBUILD/SPECS/gdb.spec < dist/redhat/centos_dep/gdb.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/gdb.spec
+fi
+do_install scylla-gdb-7.10-23.el7.centos.x86_64.rpm
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm ]; then
    mkdir build/scylla-antlr3-tool-3.5.2
