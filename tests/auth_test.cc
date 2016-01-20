@@ -196,43 +196,45 @@ SEASTAR_TEST_CASE(test_cassandra_hash) {
     cfg.authenticator = auth::password_authenticator::PASSWORD_AUTHENTICATOR_NAME;
 
     return do_with_cql_env([](cql_test_env& env) {
-        return seastar::async([&env] {
+        /**
+         * Try to check password against hash from origin.
+         * Allow for specific failure if glibc cannot handle the
+         * hash algo (i.e. blowfish).
+         */
 
-            /**
-             * Try to check password against hash from origin.
-             * Allow for specific failure if glibc cannot handle the
-             * hash algo (i.e. blowfish).
-             */
+        sstring username("fisk");
+        sstring password("cassandra");
+        sstring salted_hash("$2a$10$8cz4EZ5v8f/aTZFkNEQafe.z66ZvjOonOpHCApwx0ksWp3aKf.Roq");
 
-            sstring username("fisk");
-            sstring password("cassandra");
-            sstring salted_hash("$2a$10$8cz4EZ5v8f/aTZFkNEQafe.z66ZvjOonOpHCApwx0ksWp3aKf.Roq");
+        // This is extremely whitebox. We'll just go right ahead and know
+        // what the tables etc are called. Oy wei...
+        auto f = env.local_qp().process("INSERT into system_auth.credentials (username, salted_hash) values (?, ?)", db::consistency_level::ONE,
+                        { username, salted_hash }).discard_result();
 
-            // This is extremely whitebox. We'll just go right ahead and know
-            // what the tables etc are called. Oy wei...
-            env.local_qp().process("INSERT into system_auth.credentials (username, salted_hash) values (?, ?)", db::consistency_level::ONE,
-                            {username, salted_hash}).get();
-
+        return f.then([=] {
             auto& a = auth::authenticator::get();
 
             auto USERNAME_KEY = auth::authenticator::USERNAME_KEY;
             auto PASSWORD_KEY = auth::authenticator::PASSWORD_KEY;
+            using user_ptr = ::shared_ptr<auth::authenticated_user>;
 
             // try to verify our user with a cassandra-originated salted_hash
-            try {
-                a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).get0();
-            } catch (exceptions::authentication_exception& e) {
+            return a.authenticate({ { USERNAME_KEY, username }, { PASSWORD_KEY, password } }).then_wrapped([](future<user_ptr> f) {
                 try {
-                    std::rethrow_if_nested(e);
-                    BOOST_FAIL(std::string("Unexcepted exception ") + e.what());
-                } catch (std::system_error & e) {
-                    bool is_einval = e.code().category() == std::system_category() && e.code().value() == EINVAL;
-                    BOOST_WARN_MESSAGE(is_einval, "Could not verify cassandra password hash due to glibc limitation");
-                    if (!is_einval) {
-                        BOOST_FAIL(std::string("Unexcepted system error ") + e.what());
+                    f.get();
+                } catch (exceptions::authentication_exception& e) {
+                    try {
+                        std::rethrow_if_nested(e);
+                        BOOST_FAIL(std::string("Unexcepted exception ") + e.what());
+                    } catch (std::system_error & e) {
+                        bool is_einval = e.code().category() == std::system_category() && e.code().value() == EINVAL;
+                        BOOST_WARN_MESSAGE(is_einval, "Could not verify cassandra password hash due to glibc limitation");
+                        if (!is_einval) {
+                            BOOST_FAIL(std::string("Unexcepted system error ") + e.what());
+                        }
                     }
                 }
-            }
+            });
         });
     }, cfg);
 }
