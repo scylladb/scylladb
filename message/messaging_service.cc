@@ -51,6 +51,17 @@ read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
     return ser::deserialize(in, type);
 }
 
+template<typename Output>
+void write(serializer, Output& out, const query::read_command& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::read_command
+read(serializer, Input& in, rpc::type<query::read_command> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
 
 using inet_address = gms::inet_address;
