@@ -138,13 +138,6 @@ private:
     using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
-    class handler {
-    public:
-        future<> stop() {
-            return make_ready_future<>();
-        }
-    };
-    static distributed<handler> _handlers;
     static void init_messaging_service_handler();
     static distributed<database>* _db;
 public:

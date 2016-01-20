@@ -225,7 +225,6 @@ void stream_session::init_messaging_service_handler() {
 #endif
 }
 
-distributed<stream_session::handler> stream_session::_handlers;
 distributed<database>* stream_session::_db;
 
 stream_session::stream_session() = default;
@@ -243,15 +242,11 @@ future<> stream_session::init_streaming_service(distributed<database>& db) {
     _db = &db;
     // #293 - do not stop anything
     // engine().at_exit([] {
-    //     return _handlers.stop().then([]{
-    //         return get_stream_manager().stop();
-    //     });
+    //     return get_stream_manager().stop();
     // });
     return get_stream_manager().start().then([] {
-        return _handlers.start().then([] {
-            return _handlers.invoke_on_all([] (handler& h) {
-                init_messaging_service_handler();
-            });
+        return _db->invoke_on_all([] (auto& db) {
+            init_messaging_service_handler();
         });
     });
 }
