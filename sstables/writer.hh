@@ -134,7 +134,7 @@ public:
 inline
 output_stream<char> make_checksummed_file_output_stream(file f, struct checksum& cinfo, uint32_t& full_file_checksum, bool checksum_file, file_output_stream_options options) {
     auto buffer_size = options.buffer_size;
-    return output_stream<char>(checksummed_file_data_sink(std::move(f), cinfo, full_file_checksum, checksum_file, std::move(options)), true, buffer_size);
+    return output_stream<char>(checksummed_file_data_sink(std::move(f), cinfo, full_file_checksum, checksum_file, std::move(options)), buffer_size, true);
 }
 
 // compressed_file_data_sink_impl works as a filter for a file output stream,
