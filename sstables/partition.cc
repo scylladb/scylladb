@@ -289,12 +289,22 @@ public:
 
     virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         struct column col(*_schema, col_name);
+
+        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
+
+        if (col.cell.size() == 0) {
+            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
+            auto& dr = mut->partition().clustered_row(clustering_key);
+            row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
+            dr.apply(rm);
+            return;
+        }
+
         if (!col.is_present(timestamp)) {
             return;
         }
 
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
-        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
 
         bool is_multi_cell = col.collection_extra_data.size();
         if (is_multi_cell != col.cdef->type->is_multi_cell()) {
@@ -310,29 +320,29 @@ public:
             return;
         }
 
-        if (col.cell.size() == 0) {
-            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
-            row_marker rm(timestamp, gc_clock::duration(ttl), gc_clock::time_point(gc_clock::duration(expiration)));
-            dr.apply(rm);
-            return;
-        }
-
         mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         struct column col(*_schema, col_name);
-        if (!col.is_present(deltime.marked_for_delete_at)) {
-            return;
-        }
-
         gc_clock::duration secs(deltime.local_deletion_time);
 
         consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
     }
 
     void consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
+        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
+        if (col.cell.size() == 0) {
+            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
+            auto& dr = mut->partition().clustered_row(clustering_key);
+            row_marker rm(tombstone(timestamp, ttl));
+            dr.apply(rm);
+            return;
+        }
+        if (!col.is_present(timestamp)) {
+            return;
+        }
+
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         bool is_multi_cell = col.collection_extra_data.size();
@@ -340,16 +350,10 @@ public:
             return;
         }
 
-        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
         if (is_multi_cell) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
-        } else if (col.cell.size() == 0) {
-            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
-            row_marker rm(tombstone(timestamp, ttl));
-            dr.apply(rm);
         } else {
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
