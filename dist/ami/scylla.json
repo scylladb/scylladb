@@ -8,7 +8,7 @@
       "security_group_id": "{{user `security_group_id`}}",
       "region": "{{user `region`}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "ami-61bbf104",
+      "source_ami": "ami-8ef1d6e4",
       "user_data_file": "user_data.txt",
       "instance_type": "{{user `instance_type`}}",
       "ssh_username": "centos",

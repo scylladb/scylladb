@@ -53,6 +53,11 @@ canonical_mutation::canonical_mutation(const mutation& m)
     }())
 { }
 
+utils::UUID canonical_mutation::column_family_id() const {
+    data_input in(_data);
+    return db::serializer<utils::UUID>::read(in);
+}
+
 mutation canonical_mutation::to_mutation(schema_ptr s) const {
     data_input in(_data);
 

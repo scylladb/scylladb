@@ -32,7 +32,10 @@ else
         sed -e s#fedora.pool.ntp.org#amazon.pool.ntp.org# /etc/ntp.conf > /tmp/ntp.conf
         mv /tmp/ntp.conf /etc/ntp.conf
     fi
-    systemctl enable ntpd.service
+    if [ "`systemctl is-active ntpd`" = "active" ]; then
+        systemctl stop ntpd.service
+    fi
     ntpdate `cat /etc/ntp.conf |grep "^server"|head -n1|awk '{print $2}'`
+    systemctl enable ntpd.service
     systemctl start ntpd.service
 fi
