@@ -139,11 +139,12 @@ std::ostream& operator<<(std::ostream& out, const partition_slice::specific_rang
 }
 
 partition_slice::partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
-    std::vector<column_id> regular_columns, option_set options)
+    std::vector<column_id> regular_columns, option_set options, std::unique_ptr<specific_ranges> specific_ranges)
     : _row_ranges(std::move(row_ranges))
     , static_columns(std::move(static_columns))
     , regular_columns(std::move(regular_columns))
     , options(options)
+    , _specific_ranges(std::move(specific_ranges))
 {}
 
 partition_slice::partition_slice(partition_slice&&) = default;

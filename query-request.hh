@@ -77,7 +77,8 @@ private:
     std::unique_ptr<specific_ranges> _specific_ranges;
 public:
     partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
-        std::vector<column_id> regular_columns, option_set options);
+        std::vector<column_id> regular_columns, option_set options,
+        std::unique_ptr<specific_ranges> specific_ranges = nullptr);
     partition_slice(const partition_slice&);
     partition_slice(partition_slice&&);
     ~partition_slice();
@@ -89,7 +90,9 @@ public:
     const clustering_row_ranges& default_row_ranges() const {
         return _row_ranges;
     }
-
+    const std::unique_ptr<specific_ranges>& get_specific_ranges() const {
+        return _specific_ranges;
+    }
     size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
     static partition_slice deserialize(bytes_view& v);
