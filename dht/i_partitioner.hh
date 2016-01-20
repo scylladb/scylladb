@@ -338,6 +338,12 @@ public:
         , _key(std::experimental::make_optional(std::move(key)))
     { }
 
+    ring_position(dht::token token, token_bound bound, std::experimental::optional<partition_key> key)
+        : _token(std::move(token))
+        , _token_bound(bound)
+        , _key(std::move(key))
+    { }
+
     ring_position(const dht::decorated_key& dk)
         : _token(dk._token)
         , _key(std::experimental::make_optional(dk._key))
