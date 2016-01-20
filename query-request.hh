@@ -55,6 +55,89 @@ bool is_single_partition(const query::partition_range& range) {
 
 typedef std::vector<clustering_range> clustering_row_ranges;
 
+static size_t ranges_size(const clustering_row_ranges& r) {
+    size_t row_range_size = serialize_int32_size;
+    for (auto&& i : r) {
+        row_range_size += i.serialized_size();
+    }
+    return row_range_size;
+}
+
+static void serialize_ranges(bytes::iterator& out, const clustering_row_ranges& r) {
+    serialize_int32(out, r.size());
+    for (auto&& i : r) {
+        i.serialize(out);
+    }
+}
+
+static clustering_row_ranges deserialize_ranges(bytes_view& v) {
+    auto size = read_simple<uint32_t>(v);
+    clustering_row_ranges row_ranges;
+    row_ranges.reserve(size);
+    while (size--) {
+        row_ranges.emplace_back(clustering_range::deserialize(v));
+    };
+    return row_ranges;
+}
+
+class specific_ranges {
+public:
+    specific_ranges(partition_key pk, clustering_row_ranges ranges)
+            : _pk(std::move(pk)), _ranges(std::move(ranges)) {
+    }
+    specific_ranges(const specific_ranges&) = default;
+
+    void add(const schema& s, partition_key pk, clustering_row_ranges ranges) {
+        if (!_pk.equal(s, pk)) {
+            throw std::runtime_error("Only single specific range supported currently");
+        }
+        _pk = std::move(pk);
+        _ranges = std::move(ranges);
+    }
+    bool contains(const schema& s, const partition_key& pk) {
+        return _pk.equal(s, pk);
+    }
+    size_t size() const {
+        return 1;
+    }
+    const clustering_row_ranges* range_for(const schema& s, const partition_key& key) const {
+        if (_pk.equal(s, key)) {
+            return &_ranges;
+        }
+        return nullptr;
+    }
+    size_t serialized_size() const {
+        return serialize_int32_size + _pk.representation().size()
+                + ranges_size(_ranges);
+    }
+    void serialize(bytes::iterator& out) const {
+        // I so wish this used serializers & data_output...
+        const auto& v = _pk.representation();
+        serialize_int32(out, v.size());
+        out = std::copy(v.begin(), v.end(), out);
+        serialize_ranges(out, _ranges);
+    }
+
+    static specific_ranges deserialize(bytes_view& v) {
+        auto size = read_simple<uint32_t>(v);
+        auto pk = partition_key::from_bytes(to_bytes(read_simple_bytes(v, size)));
+        auto range = deserialize_ranges(v);
+
+        return specific_ranges(std::move(pk), std::move(range));
+    }
+    const partition_key& pk() const {
+        return _pk;
+    }
+    const clustering_row_ranges& ranges() const {
+        return _ranges;
+    }
+private:
+    friend std::ostream& operator<<(std::ostream& out, const specific_ranges& r);
+
+    partition_key _pk;
+    clustering_row_ranges _ranges;
+};
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 // Schema-dependent.
@@ -73,7 +156,6 @@ public:
     std::vector<column_id> regular_columns;  // TODO: consider using bitmap
     option_set options;
 private:
-    class specific_ranges;
     std::unique_ptr<specific_ranges> _specific_ranges;
 public:
     partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
@@ -98,7 +180,7 @@ public:
     static partition_slice deserialize(bytes_view& v);
 
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
-    friend std::ostream& operator<<(std::ostream& out, const partition_slice::specific_ranges& ps);
+    friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
 constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
