@@ -82,6 +82,29 @@ inline std::map<K, V> deserialize(Input& in, rpc::type<std::map<K, V>>) {
     return m;
 }
 
+template<typename Output>
+void serialize(Output& out, const bytes_view& v) {
+    safe_serialize_as_uint32(out, uint32_t(v.size()));
+    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+}
+template<typename Output>
+void serialize(Output& out, const managed_bytes& v) {
+    safe_serialize_as_uint32(out, uint32_t(v.size()));
+    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+}
+template<typename Output>
+void serialize(Output& out, const bytes& v) {
+    safe_serialize_as_uint32(out, uint32_t(v.size()));
+    out.write(reinterpret_cast<const char*>(v.begin()), v.size());
+}
+template<typename Input>
+bytes deserialize(Input& in, rpc::type<bytes>) {
+    auto sz = deserialize(in, rpc::type<uint32_t>());
+    bytes v(bytes::initialized_later(), sz);
+    in.read(reinterpret_cast<char*>(v.begin()), sz);
+    return v;
+}
+
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::experimental::optional<T>& v) {
     serialize(out, bool(v));
@@ -110,6 +133,41 @@ sstring deserialize(Input& in, rpc::type<sstring>) {
     sstring v(sstring::initialized_later(), sz);
     in.read(v.begin(), sz);
     return v;
+}
+
+template<typename T, typename Output>
+inline void serialize(Output& out, const std::unique_ptr<T>& v) {
+    serialize(out, bool(v));
+    if (v) {
+        serialize(out, *v);
+    }
+}
+template<typename T, typename Input>
+inline std::unique_ptr<T> deserialize(Input& in, rpc::type<std::unique_ptr<T>>) {
+    std::unique_ptr<T> v;
+    auto b = deserialize(in, rpc::type<bool>());
+    if (b) {
+        v = std::make_unique<T>(deserialize(in, rpc::type<T>()));
+    }
+    return v;
+}
+
+template<typename Clock, typename Duration, typename Output>
+inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v) {
+    serialize(out, uint64_t(v.time_since_epoch().count()));
+}
+template<typename Clock, typename Duration, typename Input>
+inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, rpc::type<std::chrono::time_point<Clock, Duration>>) {
+    return typename Clock::time_point(Duration(deserialize(in, rpc::type<uint64_t>())));
+}
+
+template<typename Enum, typename Output>
+inline void serialize(Output& out, const enum_set<Enum>& v) {
+    serialize(out, uint64_t(v.mask()));
+}
+template<typename Enum, typename Input>
+inline enum_set<Enum> deserialize(Input& in, rpc::type<enum_set<Enum>>) {
+    return enum_set<Enum>::from_mask(deserialize(in, rpc::type<uint64_t>()));
 }
 
 template<typename T>

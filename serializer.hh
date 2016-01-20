@@ -23,6 +23,8 @@
 #include <vector>
 #include "core/sstring.hh"
 #include <unordered_map>
+#include <experimental/optional>
+
 namespace rpc {
     class simple_output_stream;
     class measuring_output_stream;
@@ -140,6 +142,33 @@ template<typename Output>
 void serialize(Output& out, const sstring& v);
 template<typename Input>
 sstring deserialize(Input& in, rpc::type<sstring>);
+// For optional
+template<typename T, typename Output>
+inline void serialize(Output& out, const std::experimental::optional<T>& v);
+template<typename T, typename Input>
+inline std::experimental::optional<T> deserialize(Input& in, rpc::type<std::experimental::optional<T>>);
+template<typename T, typename Output>
+// For unique_ptr
+inline void serialize(Output& out, const std::unique_ptr<T>& v);
+template<typename T, typename Input>
+inline std::unique_ptr<T> deserialize(Input& in, rpc::type<std::unique_ptr<T>>);
+// For time_point
+template<typename Clock, typename Duration, typename Output>
+inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v);
+template<typename Clock, typename Duration, typename Input>
+inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, rpc::type<std::chrono::time_point<Clock, Duration>>);
+// For enum_set
+template<typename Enum, typename Output>
+inline void serialize(Output& out, const enum_set<Enum>& v);
+template<typename Enum, typename Input>
+inline enum_set<Enum> deserialize(Input& in, rpc::type<enum_set<Enum>>);
+// For bytes/bytes_view
+template<typename Output>
+void serialize(Output& out, const bytes_view& v);
+template<typename Output>
+void serialize(Output& out, const bytes& v);
+template<typename Input>
+bytes deserialize(Input& in, rpc::type<bytes>);
 
 template<typename T>
 void set_size(rpc::simple_output_stream& os, const T& obj);
