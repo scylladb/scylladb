@@ -185,25 +185,6 @@ struct serializer {
     template <typename Output>
     void write(Output& output, uint64_t data) const { write_integral(output, data); }
 
-    // For vectors
-    template <typename T, typename Output>
-    inline void write(Output& out, const std::vector<T>& v) const {
-        write(out, uint32_t(v.size()));
-        for (auto&& e : v) {
-            write(out, e);
-        }
-    }
-    template <typename T, typename Input>
-    inline std::vector<T> read(Input& in, rpc::type<std::vector<T>>) const {
-        auto sz = read(in, rpc::type<uint32_t>());
-        std::vector<T> v;
-        v.reserve(sz);
-        while (sz--) {
-            v.push_back(read(in, rpc::type<T>()));
-        }
-        return v;
-    }
-
     // For messaging_verb
     template <typename Output>
     void write(Output& out, messaging_verb v) const {

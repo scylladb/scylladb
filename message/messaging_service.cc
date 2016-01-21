@@ -40,6 +40,16 @@
 
 namespace net {
 
+// For vectors
+template <typename T, typename Output>
+void write(serializer, Output& out, const std::vector<T>& data) {
+    ser::serialize(out, data);
+}
+template <typename T, typename Input>
+std::vector<T> read(serializer, Input& in, rpc::type<std::vector<T>> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
     ser::serialize(out, data);
