@@ -35,7 +35,7 @@
 #include "sstable_test.hh"
 #include "core/seastar.hh"
 #include "core/do_with.hh"
-#include "utils/compaction_manager.hh"
+#include "sstables/compaction_manager.hh"
 #include "tmpdir.hh"
 #include "dht/i_partitioner.hh"
 #include "range.hh"
