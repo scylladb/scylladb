@@ -44,7 +44,6 @@
 #include "streaming/messages/outgoing_file_message.hh"
 #include "streaming/messages/received_message.hh"
 #include "streaming/messages/retry_message.hh"
-#include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
