@@ -278,23 +278,6 @@ struct serializer {
         return T::deserialize(bv);
     }
 
-    template <typename Output, typename T>
-    void write(Output& out, const foreign_ptr<T>& v) const {
-        return write(out, *v);
-    }
-    template <typename Input, typename T>
-    foreign_ptr<T> read(Input& in, rpc::type<foreign_ptr<T>>) const {
-        return make_foreign(read(in, rpc::type<T>()));
-    }
-
-    template <typename Output, typename T>
-    void write(Output& out, const lw_shared_ptr<T>& v) const {
-        return write(out, *v);
-    }
-    template <typename Input, typename T>
-    lw_shared_ptr<T> read(Input& in, rpc::type<lw_shared_ptr<T>>) const {
-        return make_lw_shared(read(in, rpc::type<T>()));
-    }
 };
 
 // thunk from new-style free function serialization to old-style member function

@@ -40,6 +40,24 @@
 
 namespace net {
 
+template <typename Output, typename T>
+void write(serializer s, Output& out, const foreign_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+foreign_ptr<T> read(serializer s, Input& in, rpc::type<foreign_ptr<T>>) {
+    return make_foreign(read(s, in, rpc::type<T>()));
+}
+
+template <typename Output, typename T>
+void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+lw_shared_ptr<T> read(serializer s, Input& in, rpc::type<lw_shared_ptr<T>>) {
+    return make_lw_shared(read(s, in, rpc::type<T>()));
+}
+
 // For vectors
 template <typename T, typename Output>
 void write(serializer, Output& out, const std::vector<T>& data) {
