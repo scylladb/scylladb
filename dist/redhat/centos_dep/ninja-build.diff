@@ -1,34 +1,56 @@
-1c1
-< Name:           ninja-build
----
-> Name:           scylla-ninja-build
-8d7
-< Source1:        ninja.vim
-10a10
-> Requires:	scylla-env
-14,16c14,15
-< BuildRequires:  re2c >= 0.11.3
-< Requires:       emacs-filesystem
-< Requires:       vim-filesystem
----
-> #BuildRequires:  scylla-re2c >= 0.11.3
-> %define _prefix /opt/scylladb
-35,37c34
-< # TODO: Install ninja_syntax.py?
-< mkdir -p %{buildroot}/{%{_bindir},%{_datadir}/bash-completion/completions,%{_datadir}/emacs/site-lisp,%{_datadir}/vim/vimfiles/syntax,%{_datadir}/vim/vimfiles/ftdetect,%{_datadir}/zsh/site-functions}
-< 
----
-> mkdir -p %{buildroot}/opt/scylladb/bin
-39,43d35
-< install -pm644 misc/bash-completion %{buildroot}%{_datadir}/bash-completion/completions/ninja-bash-completion
-< install -pm644 misc/ninja-mode.el %{buildroot}%{_datadir}/emacs/site-lisp/ninja-mode.el
-< install -pm644 misc/ninja.vim %{buildroot}%{_datadir}/vim/vimfiles/syntax/ninja.vim
-< install -pm644 %{SOURCE1} %{buildroot}%{_datadir}/vim/vimfiles/ftdetect/ninja.vim
-< install -pm644 misc/zsh-completion %{buildroot}%{_datadir}/zsh/site-functions/_ninja
-53,58d44
-< %{_datadir}/bash-completion/completions/ninja-bash-completion
-< %{_datadir}/emacs/site-lisp/ninja-mode.el
-< %{_datadir}/vim/vimfiles/syntax/ninja.vim
-< %{_datadir}/vim/vimfiles/ftdetect/ninja.vim
-< # zsh does not have a -filesystem package
-< %{_datadir}/zsh/
+--- ninja-build.spec.orig	2016-01-20 14:41:16.892802134 +0000
++++ ninja-build.spec	2016-01-20 14:44:42.453227192 +0000
+@@ -1,19 +1,18 @@
+-Name:           ninja-build
++Name:           scylla-ninja-build
+ Version:        1.6.0
+ Release:        2%{?dist}
+ Summary:        A small build system with a focus on speed
+ License:        ASL 2.0
+ URL:            http://martine.github.com/ninja/
+ Source0:        https://github.com/martine/ninja/archive/v%{version}.tar.gz#/ninja-%{version}.tar.gz
+-Source1:        ninja.vim
+ # Rename mentions of the executable name to be ninja-build.
+ Patch1000:      ninja-1.6.0-binary-rename.patch
++Requires:	scylla-env
+ BuildRequires:  asciidoc
+ BuildRequires:  gtest-devel
+ BuildRequires:  python2-devel
+-BuildRequires:  re2c >= 0.11.3
+-Requires:       emacs-filesystem
+-Requires:       vim-filesystem
++#BuildRequires:  scylla-re2c >= 0.11.3
++%define _prefix /opt/scylladb
+ 
+ %description
+ Ninja is a small build system with a focus on speed. It differs from other
+@@ -32,15 +31,8 @@
+ ./ninja -v ninja_test
+ 
+ %install
+-# TODO: Install ninja_syntax.py?
+-mkdir -p %{buildroot}/{%{_bindir},%{_datadir}/bash-completion/completions,%{_datadir}/emacs/site-lisp,%{_datadir}/vim/vimfiles/syntax,%{_datadir}/vim/vimfiles/ftdetect,%{_datadir}/zsh/site-functions}
+-
++mkdir -p %{buildroot}/opt/scylladb/bin
+ install -pm755 ninja %{buildroot}%{_bindir}/ninja-build
+-install -pm644 misc/bash-completion %{buildroot}%{_datadir}/bash-completion/completions/ninja-bash-completion
+-install -pm644 misc/ninja-mode.el %{buildroot}%{_datadir}/emacs/site-lisp/ninja-mode.el
+-install -pm644 misc/ninja.vim %{buildroot}%{_datadir}/vim/vimfiles/syntax/ninja.vim
+-install -pm644 %{SOURCE1} %{buildroot}%{_datadir}/vim/vimfiles/ftdetect/ninja.vim
+-install -pm644 misc/zsh-completion %{buildroot}%{_datadir}/zsh/site-functions/_ninja
+ 
+ %check
+ # workaround possible too low default limits
+@@ -50,12 +42,6 @@
+ %files
+ %doc COPYING HACKING.md README doc/manual.html
+ %{_bindir}/ninja-build
+-%{_datadir}/bash-completion/completions/ninja-bash-completion
+-%{_datadir}/emacs/site-lisp/ninja-mode.el
+-%{_datadir}/vim/vimfiles/syntax/ninja.vim
+-%{_datadir}/vim/vimfiles/ftdetect/ninja.vim
+-# zsh does not have a -filesystem package
+-%{_datadir}/zsh/
+ 
+ %changelog
+ * Mon Nov 16 2015 Ben Boeckel <mathstuf@gmail.com> - 1.6.0-2

@@ -1,30 +1,14 @@
---- gcc.spec	2015-10-19 06:31:44.889189647 +0000
-+++ gcc.spec.1	2015-10-19 07:56:17.445991665 +0000
-@@ -1,22 +1,15 @@
- %global DATE 20150618
- %global SVNREV 224595
- %global gcc_version 5.1.1
+--- gcc.spec.orig	2015-12-08 16:03:46.000000000 +0000
++++ gcc.spec	2016-01-21 08:47:49.160667342 +0000
+@@ -1,6 +1,7 @@
+ %global DATE 20151207
+ %global SVNREV 231358
+ %global gcc_version 5.3.1
 +%define _prefix /opt/scylladb
  # Note, gcc_release must be integer, if you want to add suffixes to
  # %{release}, append them after %{gcc_release} on Release: line.
- %global gcc_release 4
- %global _unpackaged_files_terminate_build 0
- %global _performance_build 1
- %global multilib_64_archs sparc64 ppc64 ppc64p7 s390x x86_64
--%ifarch %{ix86} x86_64 ia64 ppc ppc64 ppc64p7 alpha %{arm} aarch64
--%global build_ada 1
--%else
- %global build_ada 0
--%endif
--%ifarch %{ix86} x86_64 ppc ppc64 ppc64le ppc64p7 s390 s390x %{arm} aarch64
--%global build_go 1
--%else
- %global build_go 0
--%endif
- %ifarch %{ix86} x86_64 ia64
- %global build_libquadmath 1
- %else
-@@ -82,7 +75,8 @@
+ %global gcc_release 2
+@@ -84,7 +85,8 @@
  %global multilib_32_arch i686
  %endif
  Summary: Various compilers (C, C++, Objective-C, Java, ...)
@@ -34,7 +18,7 @@
  Version: %{gcc_version}
  Release: %{gcc_release}%{?dist}
  # libgcc, libgfortran, libgomp, libstdc++ and crtstuff have
-@@ -97,6 +91,7 @@
+@@ -99,6 +101,7 @@
  %global isl_version 0.14
  URL: http://gcc.gnu.org
  BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
@@ -42,7 +26,7 @@
  # Need binutils with -pie support >= 2.14.90.0.4-4
  # Need binutils which can omit dot symbols and overlap .opd on ppc64 >= 2.15.91.0.2-4
  # Need binutils which handle -msecure-plt on ppc >= 2.16.91.0.2-2
-@@ -108,7 +103,7 @@
+@@ -110,7 +113,7 @@
  # Need binutils which support .cfi_sections >= 2.19.51.0.14-33
  # Need binutils which support --no-add-needed >= 2.20.51.0.2-12
  # Need binutils which support -plugin
@@ -51,7 +35,7 @@
  # While gcc doesn't include statically linked binaries, during testing
  # -static is used several times.
  BuildRequires: glibc-static
-@@ -143,15 +138,15 @@
+@@ -145,15 +148,15 @@
  BuildRequires: libunwind >= 0.98
  %endif
  %if %{build_isl}
@@ -71,7 +55,7 @@
  # Need .eh_frame ld optimizations
  # Need proper visibility support
  # Need -pie support
-@@ -166,7 +161,7 @@
+@@ -168,7 +171,7 @@
  # Need binutils that support .cfi_sections
  # Need binutils that support --no-add-needed
  # Need binutils that support -plugin
@@ -80,7 +64,7 @@
  # Make sure gdb will understand DW_FORM_strp
  Conflicts: gdb < 5.1-2
  Requires: glibc-devel >= 2.2.90-12
-@@ -174,17 +169,15 @@
+@@ -176,17 +179,15 @@
  # Make sure glibc supports TFmode long double
  Requires: glibc >= 2.3.90-35
  %endif
@@ -102,7 +86,7 @@
  Requires(post): /sbin/install-info
  Requires(preun): /sbin/install-info
  AutoReq: true
-@@ -226,12 +219,12 @@
+@@ -228,12 +229,12 @@
  The gcc package contains the GNU Compiler Collection version 5.
  You'll need this package in order to compile C code.
  
@@ -117,7 +101,7 @@
  %endif
  Obsoletes: libmudflap
  Obsoletes: libmudflap-devel
-@@ -239,17 +232,19 @@
+@@ -241,17 +242,19 @@
  Obsoletes: libgcj < %{version}-%{release}
  Obsoletes: libgcj-devel < %{version}-%{release}
  Obsoletes: libgcj-src < %{version}-%{release}
@@ -141,7 +125,7 @@
  Autoreq: true
  
  %description c++
-@@ -257,50 +252,55 @@
+@@ -259,50 +262,55 @@
  It includes support for most of the current C++ specification,
  including templates and exception handling.
  
@@ -209,7 +193,7 @@
  Autoreq: true
  
  %description objc
-@@ -311,29 +311,32 @@
+@@ -313,29 +321,32 @@
  %package objc++
  Summary: Objective-C++ support for GCC
  Group: Development/Languages
@@ -249,7 +233,7 @@
  %endif
  Requires(post): /sbin/install-info
  Requires(preun): /sbin/install-info
-@@ -343,260 +346,286 @@
+@@ -345,260 +356,286 @@
  The gcc-gfortran package provides support for compiling Fortran
  programs with the GNU Compiler Collection.
  
@@ -608,7 +592,7 @@
  Cpp is the GNU C-Compatible Compiler Preprocessor.
  Cpp is a macro processor which is used automatically
  by the C compiler to transform your program before actual
-@@ -621,8 +650,9 @@
+@@ -623,8 +660,9 @@
  %package gnat
  Summary: Ada 83, 95, 2005 and 2012 support for GCC
  Group: Development/Languages
@@ -620,7 +604,7 @@
  Requires(post): /sbin/install-info
  Requires(preun): /sbin/install-info
  Autoreq: true
-@@ -631,40 +661,44 @@
+@@ -633,82 +671,90 @@
  GNAT is a GNU Ada 83, 95, 2005 and 2012 front-end to GCC. This package includes
  development tools, the documents and Ada compiler.
  
@@ -674,8 +658,13 @@
 +Requires: scylla-libgo-devel = %{version}-%{release}
  Requires(post): /sbin/install-info
  Requires(preun): /sbin/install-info
- Requires(post): %{_sbindir}/update-alternatives
-@@ -675,38 +709,42 @@
+-Requires(post): %{_sbindir}/update-alternatives
+-Requires(postun): %{_sbindir}/update-alternatives
++Requires(post): /sbin/update-alternatives
++Requires(postun): /sbin/update-alternatives
+ Autoreq: true
+ 
+ %description go
  The gcc-go package provides support for compiling Go programs
  with the GNU Compiler Collection.
  
@@ -728,7 +717,7 @@
  Requires: gmp-devel >= 4.1.2-8, mpfr-devel >= 2.2.1, libmpc-devel >= 0.8.1
  
  %description plugin-devel
-@@ -726,7 +764,8 @@
+@@ -728,7 +774,8 @@
  Summary: Debug information for package %{name}
  Group: Development/Debug
  AutoReqProv: 0
@@ -738,21 +727,21 @@
  
  %description debuginfo
  This package provides debug information for package %{name}.
-@@ -961,11 +1000,10 @@
+@@ -958,11 +1005,11 @@
  	--enable-gnu-unique-object --enable-linker-build-id --with-linker-hash-style=gnu \
  	--enable-plugin --enable-initfini-array \
  	--disable-libgcj \
 -%if 0%{fedora} >= 21 && 0%{fedora} <= 22
- 	--with-default-libstdcxx-abi=c++98 \
+ 	--with-default-libstdcxx-abi=gcc4-compatible \
 -%endif
  %if %{build_isl}
--	--with-isl \
+ 	--with-isl \
 +	--with-isl-include=/opt/scylladb/include/ \
 +	--with-isl-lib=/opt/scylladb/lib64/ \
  %else
  	--without-isl \
  %endif
-@@ -974,11 +1012,9 @@
+@@ -971,11 +1018,9 @@
  %else
  	--disable-libmpx \
  %endif
@@ -764,7 +753,7 @@
  %ifarch %{arm}
  	--disable-sjlj-exceptions \
  %endif
-@@ -1009,9 +1045,6 @@
+@@ -1006,9 +1051,6 @@
  %if 0%{?rhel} >= 7
  	--with-cpu-32=power8 --with-tune-32=power8 --with-cpu-64=power8 --with-tune-64=power8 \
  %endif
@@ -774,7 +763,7 @@
  %endif
  %ifarch ppc
  	--build=%{gcc_target_platform} --target=%{gcc_target_platform} --with-cpu=default32
-@@ -1273,16 +1306,15 @@
+@@ -1270,16 +1312,15 @@
  mv %{buildroot}%{_prefix}/%{_lib}/libmpx.spec $FULLPATH/
  %endif
  
@@ -797,7 +786,7 @@
  %endif
  %ifarch ppc
  rm -f $FULLPATH/libgcc_s.so
-@@ -1816,7 +1848,7 @@
+@@ -1819,7 +1860,7 @@
  chmod 755 %{buildroot}%{_prefix}/bin/c?9
  
  cd ..
@@ -806,7 +795,7 @@
  %find_lang cpplib
  
  # Remove binaries we will not be including, so that they don't end up in
-@@ -1866,11 +1898,7 @@
+@@ -1869,11 +1910,7 @@
  
  # run the tests.
  make %{?_smp_mflags} -k check ALT_CC_UNDER_TEST=gcc ALT_CXX_UNDER_TEST=g++ \
@@ -818,7 +807,7 @@
  echo ====================TESTING=========================
  ( LC_ALL=C ../contrib/test_summary || : ) 2>&1 | sed -n '/^cat.*EOF/,/^EOF/{/^cat.*EOF/d;/^EOF/d;/^LAST_UPDATED:/d;p;}'
  echo ====================TESTING END=====================
-@@ -1897,13 +1925,13 @@
+@@ -1900,13 +1937,13 @@
      --info-dir=%{_infodir} %{_infodir}/gcc.info.gz || :
  fi
  
@@ -834,7 +823,21 @@
  if [ $1 = 0 -a -f %{_infodir}/cpp.info.gz ]; then
    /sbin/install-info --delete \
      --info-dir=%{_infodir} %{_infodir}/cpp.info.gz || :
-@@ -1954,7 +1982,7 @@
+@@ -1945,19 +1982,19 @@
+ fi
+ 
+ %post go
+-%{_sbindir}/update-alternatives --install \
++/sbin/update-alternatives --install \
+   %{_prefix}/bin/go go %{_prefix}/bin/go.gcc 92 \
+   --slave %{_prefix}/bin/gofmt gofmt %{_prefix}/bin/gofmt.gcc
+ 
+ %preun go
+ if [ $1 = 0 ]; then
+-  %{_sbindir}/update-alternatives --remove go %{_prefix}/bin/go.gcc
++  /sbin/update-alternatives --remove go %{_prefix}/bin/go.gcc
+ fi
+ 
  # Because glibc Prereq's libgcc and /sbin/ldconfig
  # comes from glibc, it might not exist yet when
  # libgcc is installed
@@ -843,7 +846,7 @@
  if posix.access ("/sbin/ldconfig", "x") then
    local pid = posix.fork ()
    if pid == 0 then
-@@ -1964,7 +1992,7 @@
+@@ -1967,7 +2004,7 @@
    end
  end
  
@@ -852,7 +855,7 @@
  if posix.access ("/sbin/ldconfig", "x") then
    local pid = posix.fork ()
    if pid == 0 then
-@@ -1974,120 +2002,120 @@
+@@ -1977,120 +2014,120 @@
    end
  end
  
@@ -1011,7 +1014,7 @@
  %defattr(-,root,root,-)
  %{_prefix}/bin/cc
  %{_prefix}/bin/c89
-@@ -2409,7 +2437,7 @@
+@@ -2414,7 +2451,7 @@
  %{!?_licensedir:%global license %%doc}
  %license gcc/COPYING* COPYING.RUNTIME
  
@@ -1020,7 +1023,7 @@
  %defattr(-,root,root,-)
  %{_prefix}/lib/cpp
  %{_prefix}/bin/cpp
-@@ -2420,10 +2448,10 @@
+@@ -2425,10 +2462,10 @@
  %dir %{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_version}
  %{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_version}/cc1
  
@@ -1034,7 +1037,7 @@
  %{!?_licensedir:%global license %%doc}
  %license gcc/COPYING* COPYING.RUNTIME
  
-@@ -2461,7 +2489,7 @@
+@@ -2469,7 +2506,7 @@
  %endif
  %doc rpm.doc/changelogs/gcc/cp/ChangeLog*
  
@@ -1043,7 +1046,7 @@
  %defattr(-,root,root,-)
  %{_prefix}/%{_lib}/libstdc++.so.6*
  %dir %{_datadir}/gdb
-@@ -2473,7 +2501,7 @@
+@@ -2481,7 +2518,7 @@
  %dir %{_prefix}/share/gcc-%{gcc_version}/python
  %{_prefix}/share/gcc-%{gcc_version}/python/libstdcxx
  
@@ -1052,7 +1055,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/include/c++
  %dir %{_prefix}/include/c++/%{gcc_version}
-@@ -2488,7 +2516,7 @@
+@@ -2507,7 +2544,7 @@
  %endif
  %doc rpm.doc/changelogs/libstdc++-v3/ChangeLog* libstdc++-v3/README*
  
@@ -1061,7 +1064,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2509,7 +2537,7 @@
+@@ -2528,7 +2565,7 @@
  %endif
  
  %if %{build_libstdcxx_docs}
@@ -1070,7 +1073,7 @@
  %defattr(-,root,root)
  %{_mandir}/man3/*
  %doc rpm.doc/libstdc++-v3/html
-@@ -2548,7 +2576,7 @@
+@@ -2567,7 +2604,7 @@
  %dir %{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_version}
  %{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_version}/cc1objplus
  
@@ -1079,7 +1082,7 @@
  %defattr(-,root,root,-)
  %{_prefix}/%{_lib}/libobjc.so.4*
  
-@@ -2602,11 +2630,11 @@
+@@ -2621,11 +2658,11 @@
  %endif
  %doc rpm.doc/gfortran/*
  
@@ -1093,7 +1096,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2652,12 +2680,12 @@
+@@ -2671,12 +2708,12 @@
  %{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_version}/gnat1
  %doc rpm.doc/changelogs/gcc/ada/ChangeLog*
  
@@ -1108,7 +1111,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2683,7 +2711,7 @@
+@@ -2702,7 +2739,7 @@
  %exclude %{_prefix}/lib/gcc/%{gcc_target_platform}/%{gcc_version}/adalib/libgnarl.a
  %endif
  
@@ -1117,7 +1120,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2707,7 +2735,7 @@
+@@ -2726,7 +2763,7 @@
  %endif
  %endif
  
@@ -1126,7 +1129,7 @@
  %defattr(-,root,root,-)
  %{_prefix}/%{_lib}/libgomp.so.1*
  %{_prefix}/%{_lib}/libgomp-plugin-host_nonshm.so.1*
-@@ -2715,14 +2743,14 @@
+@@ -2734,14 +2771,14 @@
  %doc rpm.doc/changelogs/libgomp/ChangeLog*
  
  %if %{build_libquadmath}
@@ -1143,7 +1146,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2735,7 +2763,7 @@
+@@ -2754,7 +2791,7 @@
  %endif
  %doc rpm.doc/libquadmath/ChangeLog*
  
@@ -1152,7 +1155,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2754,12 +2782,12 @@
+@@ -2773,12 +2810,12 @@
  %endif
  
  %if %{build_libitm}
@@ -1167,7 +1170,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2772,7 +2800,7 @@
+@@ -2791,7 +2828,7 @@
  %endif
  %doc rpm.doc/libitm/ChangeLog*
  
@@ -1176,7 +1179,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2791,11 +2819,11 @@
+@@ -2810,11 +2847,11 @@
  %endif
  
  %if %{build_libatomic}
@@ -1190,7 +1193,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2815,11 +2843,11 @@
+@@ -2834,11 +2871,11 @@
  %endif
  
  %if %{build_libasan}
@@ -1204,7 +1207,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2841,11 +2869,11 @@
+@@ -2860,11 +2897,11 @@
  %endif
  
  %if %{build_libubsan}
@@ -1218,7 +1221,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2867,11 +2895,11 @@
+@@ -2886,11 +2923,11 @@
  %endif
  
  %if %{build_libtsan}
@@ -1232,7 +1235,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2883,11 +2911,11 @@
+@@ -2902,11 +2939,11 @@
  %endif
  
  %if %{build_liblsan}
@@ -1246,7 +1249,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2899,11 +2927,11 @@
+@@ -2918,11 +2955,11 @@
  %endif
  
  %if %{build_libcilkrts}
@@ -1260,7 +1263,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2923,12 +2951,12 @@
+@@ -2942,12 +2979,12 @@
  %endif
  
  %if %{build_libmpx}
@@ -1275,7 +1278,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -2990,12 +3018,12 @@
+@@ -3009,12 +3046,12 @@
  %endif
  %doc rpm.doc/go/*
  
@@ -1290,7 +1293,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -3023,7 +3051,7 @@
+@@ -3042,7 +3079,7 @@
  %{_prefix}/lib/gcc/%{gcc_target_platform}/%{gcc_version}/libgo.so
  %endif
  
@@ -1299,7 +1302,7 @@
  %defattr(-,root,root,-)
  %dir %{_prefix}/lib/gcc
  %dir %{_prefix}/lib/gcc/%{gcc_target_platform}
-@@ -3041,12 +3069,12 @@
+@@ -3060,12 +3097,12 @@
  %endif
  %endif
  
