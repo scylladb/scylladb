@@ -472,6 +472,7 @@ idls = ['idl/gossip_digest.idl.hh',
                   'idl/read_command.idl.hh',
                   'idl/token.idl.hh',
                   'idl/ring_position.idl.hh',
+                  'idl/result.idl.hh',
           ]
 
 serialize = idls + ['serializer.inc.hh']

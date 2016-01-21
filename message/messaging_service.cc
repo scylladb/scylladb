@@ -73,6 +73,17 @@ read(serializer, Input& in, rpc::type<query::partition_range> type) {
     return ser::deserialize(in, type);
 }
 
+template<typename Output>
+void write(serializer, Output& out, const query::result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::result
+read(serializer, Input& in, rpc::type<query::result> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
 
 using inet_address = gms::inet_address;
