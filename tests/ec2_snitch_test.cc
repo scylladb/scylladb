@@ -46,7 +46,7 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
     return i_endpoint_snitch::create_snitch<const sstring&>(
-        "EC2Snitch",
+        "Ec2Snitch",
         sstring(fname.string()))
         .then_wrapped([exp_result] (auto&& f) {
             try {

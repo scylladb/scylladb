@@ -32,7 +32,7 @@ public:
     ec2_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
     virtual future<> start() override;
     virtual sstring get_name() const override {
-        return "org.apache.cassandra.locator.EC2Snitch";
+        return "org.apache.cassandra.locator.Ec2Snitch";
     }
 protected:
     future<> load_config();
