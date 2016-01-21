@@ -78,6 +78,14 @@ private:
     future<> task_stop(lw_shared_ptr<task>& task);
 
     void add_column_family(column_family* cf);
+    // Signal the compaction task with the lowest amount of pending jobs.
+    // This function is called when a cf is submitted for compaction and we need
+    // to wake up a handler.
+    void signal_less_busy_task();
+    // Returns if this compaction manager is accepting new requests.
+    // It will not accept new requests in case the manager was stopped and/or there
+    // is no task to handle them.
+    bool can_submit();
 public:
     compaction_manager();
     ~compaction_manager();

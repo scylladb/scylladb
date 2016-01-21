@@ -64,7 +64,7 @@
 #include "mutation_reader.hh"
 #include "row_cache.hh"
 #include "compaction_strategy.hh"
-#include "utils/compaction_manager.hh"
+#include "sstables/compaction_manager.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram.hh"
 #include "sstables/estimated_histogram.hh"
