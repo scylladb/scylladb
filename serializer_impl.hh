@@ -105,6 +105,20 @@ bytes deserialize(Input& in, rpc::type<bytes>) {
     return v;
 }
 
+template<typename Output>
+void serialize(Output& out, const bytes_ostream& v) {
+    safe_serialize_as_uint32(out, uint32_t(v.size()));
+    for (bytes_view frag : v.fragments()) {
+        out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
+    }
+}
+template<typename Input>
+bytes_ostream deserialize(Input& in, rpc::type<bytes_ostream>) {
+    bytes_ostream v;
+    v.write(deserialize(in, rpc::type<bytes>()));
+    return v;
+}
+
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::experimental::optional<T>& v) {
     serialize(out, bool(v));

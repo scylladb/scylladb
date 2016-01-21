@@ -169,6 +169,11 @@ template<typename Output>
 void serialize(Output& out, const bytes& v);
 template<typename Input>
 bytes deserialize(Input& in, rpc::type<bytes>);
+// For bytes_ostream
+template<typename Output>
+void serialize(Output& out, const bytes_ostream& v);
+template<typename Input>
+bytes_ostream deserialize(Input& in, rpc::type<bytes_ostream>);
 
 template<typename T>
 void set_size(rpc::simple_output_stream& os, const T& obj);
