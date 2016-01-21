@@ -99,6 +99,7 @@ private:
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
+    future<> _callback_running = make_ready_future<>();
 public:
     sstring get_cluster_name();
     sstring get_partitioner_name();

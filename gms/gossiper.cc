@@ -478,7 +478,7 @@ void gossiper::do_status_check() {
 }
 
 void gossiper::run() {
-    seastar::async([this, g = this->shared_from_this()] {
+    _callback_running = seastar::async([this, g = this->shared_from_this()] {
         logger.trace("=== Gossip round START");
 
         //wait on messaging service to start listening
@@ -588,7 +588,10 @@ void gossiper::run() {
                 logger.trace("ep={}, eps={}", x.first, x.second);
             }
         }
-        _scheduled_gossip_task.arm(INTERVAL);
+        if (_enabled) {
+            _scheduled_gossip_task.arm(INTERVAL);
+        }
+        return make_ready_future<>();
     });
 }
 
@@ -1435,6 +1438,7 @@ future<> gossiper::do_stop_gossiping() {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
         _scheduled_gossip_task.cancel();
+        _callback_running.get();
         get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
                 get_local_failure_detector().unregister_failure_detection_event_listener(&g);
