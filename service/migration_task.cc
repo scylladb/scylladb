@@ -49,7 +49,7 @@
 
 namespace service {
 
-static logging::logger logger("Migration Task");
+static logging::logger logger("migration_task");
 
 future<> migration_task::run_may_throw(distributed<service::storage_proxy>& proxy, const gms::inet_address& endpoint)
 {
