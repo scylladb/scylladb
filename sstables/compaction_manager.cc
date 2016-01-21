@@ -247,6 +247,13 @@ future<> compaction_manager::stop() {
     });
 }
 
+void compaction_manager::signal_less_busy_task() {
+    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
+        return i->compaction_sem.current() < j->compaction_sem.current();
+    });
+    (*result)->compaction_sem.signal();
+}
+
 void compaction_manager::submit(column_family* cf) {
     if (_stopped || _tasks.empty()) {
         return;
@@ -255,13 +262,9 @@ void compaction_manager::submit(column_family* cf) {
     if (cf->compaction_manager_queued()) {
         return;
     }
-    // Signal the compaction task with the lowest amount of pending jobs.
-    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
-        return i->compaction_sem.current() < j->compaction_sem.current();
-    });
     cf->set_compaction_manager_queued(true);
     add_column_family(cf);
-    (*result)->compaction_sem.signal();
+    signal_less_busy_task();
 }
 
 void compaction_manager::submit_cleanup_job(column_family* cf) {
@@ -272,13 +275,9 @@ void compaction_manager::submit_cleanup_job(column_family* cf) {
     if (std::find(_cfs_to_cleanup.begin(), _cfs_to_cleanup.end(), cf) != _cfs_to_cleanup.end()) {
         return;
     }
-    // Signal the compaction task with the lowest amount of pending jobs.
-    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
-        return i->compaction_sem.current() < j->compaction_sem.current();
-    });
     _cfs_to_cleanup.push_back(cf);
     _stats.pending_tasks++;
-    (*result)->compaction_sem.signal();
+    signal_less_busy_task();
 }
 
 future<> compaction_manager::remove(column_family* cf) {
