@@ -254,8 +254,12 @@ void compaction_manager::signal_less_busy_task() {
     (*result)->compaction_sem.signal();
 }
 
+bool compaction_manager::can_submit() {
+    return !_stopped && !_tasks.empty();
+}
+
 void compaction_manager::submit(column_family* cf) {
-    if (_stopped || _tasks.empty()) {
+    if (!can_submit()) {
         return;
     }
     // To avoid having two or more entries of the same cf stored in the queue.
@@ -268,7 +272,7 @@ void compaction_manager::submit(column_family* cf) {
 }
 
 void compaction_manager::submit_cleanup_job(column_family* cf) {
-    if (_stopped || _tasks.empty()) {
+    if (!can_submit()) {
         return;
     }
     // To avoid having two or more entries of the same cf stored in the queue.
