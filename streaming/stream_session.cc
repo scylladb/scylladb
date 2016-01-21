@@ -420,20 +420,6 @@ void stream_session::file_sent(const messages::file_message_header& header) {
     }
 }
 
-void stream_session::receive(messages::incoming_file_message message) {
-#if 0
-    auto header_size = message.header.size();
-    StreamingMetrics.totalIncomingBytes.inc(headerSize);
-    metrics.incomingBytes.inc(headerSize);
-#endif
-    // send back file received message
-    // handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
-    auto cf_id = message.header.cf_id;
-    auto it = _receivers.find(cf_id);
-    assert(it != _receivers.end());
-    it->second.received(std::move(message));
-}
-
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
     auto progress = progress_info(peer, _index, "", dir, bytes, total);
     _stream_result->handle_progress(std::move(progress));

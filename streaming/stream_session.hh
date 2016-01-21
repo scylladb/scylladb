@@ -47,7 +47,6 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
-#include "streaming/messages/incoming_file_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/session_info.hh"
@@ -344,13 +343,6 @@ public:
      * @param header sent header
      */
     void file_sent(const messages::file_message_header& header);
-
-    /**
-     * Call back after receiving FileMessageHeader.
-     *
-     * @param message received file
-     */
-    void receive(messages::incoming_file_message message);
 
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 
