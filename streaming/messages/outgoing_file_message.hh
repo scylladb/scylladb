@@ -65,7 +65,7 @@ public:
     semaphore mutations_done{0};
 
     outgoing_file_message() = default;
-    outgoing_file_message(int32_t sequence_number, stream_detail d, bool keep_ss_table_level)
+    outgoing_file_message(int32_t sequence_number, stream_detail d)
         : stream_message(stream_message::Type::FILE) {
 #if 0
         CompressionInfo compressionInfo = null;
@@ -78,10 +78,9 @@ public:
         // FIXME:
         sstring version; // sstable.descriptor.version.toString()
         format_types format = format_types::big; // sstable.descriptor.formatType
-        int32_t level = 0; // keepSSTableLevel ? sstable.getSSTableLevel() : 0
         compression_info comp_info;
         header = file_message_header(d.cf_id, sequence_number, version, format, d.estimated_keys,
-                                     {}, comp_info, d.repaired_at, level);
+                                     {}, comp_info);
         detail = std::move(d);
     }
 

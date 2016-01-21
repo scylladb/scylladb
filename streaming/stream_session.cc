@@ -208,10 +208,8 @@ distributed<database>* stream_session::_db;
 
 stream_session::stream_session() = default;
 
-stream_session::stream_session(inet_address peer_, int index_, bool keep_ss_table_level_)
-    : peer(peer_)
-    , _index(index_)
-    , _keep_ss_table_level(keep_ss_table_level_) {
+stream_session::stream_session(inet_address peer_)
+    : peer(peer_) {
     //this.metrics = StreamingMetrics.get(connecting);
 }
 
@@ -379,7 +377,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
                 throw std::runtime_error(err);
             }
         }
-        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
+        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true);
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
@@ -595,7 +593,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     return stores;
 }
 
-void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables) {
     std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
     if (flush_tables) {
@@ -613,7 +611,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys);
     }
     if (!stream_details.empty()) {
         add_transfer_files(std::move(ranges), std::move(stream_details));

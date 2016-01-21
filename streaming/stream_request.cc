@@ -53,8 +53,6 @@ void stream_request::serialize(bytes::iterator& out) const {
     for (auto& x : column_families) {
         serialize_string(out, x);
     }
-
-    serialize_int64(out, repaired_at);
 }
 
 stream_request stream_request::deserialize(bytes_view& v) {
@@ -73,9 +71,7 @@ stream_request stream_request::deserialize(bytes_view& v) {
         column_families_.push_back(std::move(s));
     }
 
-    auto repaired_at_ = read_simple<int64_t>(v);
-
-    return stream_request(std::move(keyspace_), std::move(ranges_), std::move(column_families_), repaired_at_);
+    return stream_request(std::move(keyspace_), std::move(ranges_), std::move(column_families_));
 }
 
 size_t stream_request::serialized_size() const {
@@ -90,8 +86,6 @@ size_t stream_request::serialized_size() const {
     for (auto& x : column_families) {
         size += serialize_string_size(x);
     }
-
-    size += serialize_int64_size;
 
     return size;
 }

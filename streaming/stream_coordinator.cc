@@ -102,7 +102,7 @@ stream_coordinator::host_streaming_data& stream_coordinator::get_host_data(inet_
 stream_coordinator::host_streaming_data& stream_coordinator::get_or_create_host_data(inet_address peer) {
     auto it = _peer_sessions.find(peer);
     if (it == _peer_sessions.end()) {
-        it = _peer_sessions.emplace(peer, host_streaming_data(_connections_per_host, _keep_ss_table_level)).first;
+        it = _peer_sessions.emplace(peer, host_streaming_data()).first;
     }
     return it->second;
 }
@@ -120,8 +120,8 @@ bool stream_coordinator::host_streaming_data::has_active_sessions() {
 shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_next_session(inet_address peer) {
     // create
     int size = _stream_sessions.size();
-    if (size < _connections_per_host) {
-        auto session = make_shared<stream_session>(peer, size, _keep_ss_table_level);
+    if (size < 1) {
+        auto session = make_shared<stream_session>(peer);
         _stream_sessions.emplace(++_last_returned, session);
         return _stream_sessions[_last_returned];
     // get
@@ -145,7 +145,7 @@ shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_creat
     int id) {
     auto it = _stream_sessions.find(id);
     if (it == _stream_sessions.end()) {
-        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer, id, _keep_ss_table_level)).first;
+        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer)).first;
     }
     return it->second;
 }

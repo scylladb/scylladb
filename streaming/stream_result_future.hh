@@ -73,8 +73,8 @@ private:
     std::vector<stream_event_handler*> _event_listeners;
     promise<stream_state> _done;
 public:
-    stream_result_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_, bool is_receiving)
-        : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(1, keep_ss_table_levels_, is_receiving)) {
+    stream_result_future(UUID plan_id_, sstring description_, bool is_receiving)
+        : stream_result_future(plan_id_, description_, make_shared<stream_coordinator>(is_receiving)) {
         // Note: Origin sets connections_per_host = 0 on receiving side, We set 1 to
         // refelct the fact that we actaully create one conncetion to the initiator.
     }

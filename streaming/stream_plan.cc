@@ -51,7 +51,7 @@ stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, st
 stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     _range_added = true;
     auto session = _coordinator->get_or_create_next_session(from);
-    session->add_stream_request(keyspace, ranges, std::move(column_families), _repaired_at);
+    session->add_stream_request(keyspace, ranges, std::move(column_families));
     return *this;
 }
 
@@ -62,7 +62,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std
 stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     _range_added = true;
     auto session = _coordinator->get_or_create_next_session(to);
-    session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer, _repaired_at);
+    session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer);
     return *this;
 }
 

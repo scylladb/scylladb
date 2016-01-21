@@ -194,7 +194,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_, int index_, bool keep_ss_table_level_);
+    stream_session(inet_address peer_);
     ~stream_session();
 
     UUID plan_id();
@@ -233,8 +233,8 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, long repaired_at) {
-        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families), repaired_at);
+    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families));
     }
 
     /**
@@ -248,7 +248,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at);
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 

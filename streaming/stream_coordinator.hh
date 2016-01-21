@@ -60,15 +60,11 @@ public:
 private:
     class host_streaming_data;
     std::map<inet_address, host_streaming_data> _peer_sessions;
-    int _connections_per_host;
-    bool _keep_ss_table_level;
     bool _is_receiving;
 
 public:
-    stream_coordinator(int connections_per_host, bool keep_ss_table_level, bool is_receiving = false)
-        : _connections_per_host(connections_per_host)
-        , _keep_ss_table_level(keep_ss_table_level)
-        , _is_receiving(is_receiving) {
+    stream_coordinator(bool is_receiving = false)
+        : _is_receiving(is_receiving) {
     }
 #if 0
     public void setConnectionFactory(StreamConnectionFactory factory)
@@ -146,16 +142,9 @@ private:
         std::map<int, shared_ptr<stream_session>> _stream_sessions;
         std::map<int, session_info> _session_infos;
         int _last_returned = -1;
-        int _connections_per_host;
-        bool _keep_ss_table_level;
 
     public:
         host_streaming_data() = default;
-
-        host_streaming_data(int connections_per_host, bool keep_ss_table_level)
-            : _connections_per_host(connections_per_host)
-            , _keep_ss_table_level(keep_ss_table_level) {
-        }
 
         bool has_active_sessions();
 
