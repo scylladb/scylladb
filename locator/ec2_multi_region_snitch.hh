@@ -47,6 +47,9 @@ public:
     virtual future<> gossiper_starting() override;
     virtual future<> start() override;
     virtual void set_local_private_addr(const sstring& addr_str) override;
+    virtual sstring get_name() const override {
+        return "org.apache.cassandra.locator.Ec2MultiRegionSnitch";
+    }
 private:
     static constexpr const char* PUBLIC_IP_QUERY_REQ  = "/latest/meta-data/public-ipv4";
     static constexpr const char* PRIVATE_IP_QUERY_REQ = "/latest/meta-data/local-ipv4";
