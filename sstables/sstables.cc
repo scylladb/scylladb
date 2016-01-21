@@ -1393,15 +1393,15 @@ void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_
     }
 }
 
-future<> sstable::write_components(memtable& mt) {
+future<> sstable::write_components(memtable& mt, bool backup) {
     _collector.set_replay_position(mt.replay_position());
     return write_components(mt.make_reader(mt.schema()),
-            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max());
+            mt.partition_count(), mt.schema(), std::numeric_limits<uint64_t>::max(), backup);
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size) {
-    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size] () mutable {
+        uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup) {
+    return seastar::async([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema), max_sstable_size, backup] () mutable {
         generate_toc(schema->get_compressor_params().get_compressor(), schema->bloom_filter_fp_chance());
         write_toc();
         create_data().get();
@@ -1412,6 +1412,12 @@ future<> sstable::write_components(::mutation_reader mr,
         // NOTE: write_compression means maybe_write_compression.
         write_compression();
         seal_sstable();
+
+        if (backup) {
+            auto dir = get_dir() + "/backups/";
+            touch_directory(dir).get();
+            create_links(dir).get();
+        }
     });
 }
 

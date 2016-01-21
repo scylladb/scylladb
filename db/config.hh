@@ -268,7 +268,7 @@ public:
             "Counter writes read the current values before incrementing and writing them back. The recommended value is (16 × number_of_drives) ."  \
     )                                                   \
     /* Common automatic backup settings */  \
-    val(incremental_backups, bool, false, Unused,     \
+    val(incremental_backups, bool, false, Used,     \
             "Backs up data updated since the last snapshot was taken. When enabled, Cassandra creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"  \
             "Related information: Enabling incremental backups" \
     )                                                   \

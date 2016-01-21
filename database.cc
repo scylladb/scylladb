@@ -586,27 +586,19 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
     newtab->set_unshared();
     dblog.debug("Flushing to {}", newtab->get_filename());
-    return newtab->write_components(*old).then([this, newtab, old] {
-        return newtab->open_data().then([this, newtab] {
-            // Note that due to our sharded architecture, it is possible that
-            // in the face of a value change some shards will backup sstables
-            // while others won't.
-            //
-            // This is, in theory, possible to mitigate through a rwlock.
-            // However, this doesn't differ from the situation where all tables
-            // are coming from a single shard and the toggle happens in the
-            // middle of them.
-            //
-            // The code as is guarantees that we'll never partially backup a
-            // single sstable, so that is enough of a guarantee.
-            if (!incremental_backups_enabled()) {
-                return make_ready_future<>();
-            }
-            auto dir = newtab->get_dir() + "/backups/";
-            return touch_directory(dir).then([dir, newtab] {
-                return newtab->create_links(dir);
-            });
-        });
+    // Note that due to our sharded architecture, it is possible that
+    // in the face of a value change some shards will backup sstables
+    // while others won't.
+    //
+    // This is, in theory, possible to mitigate through a rwlock.
+    // However, this doesn't differ from the situation where all tables
+    // are coming from a single shard and the toggle happens in the
+    // middle of them.
+    //
+    // The code as is guarantees that we'll never partially backup a
+    // single sstable, so that is enough of a guarantee.
+    return newtab->write_components(*old, incremental_backups_enabled()).then([this, newtab, old] {
+        return newtab->open_data();
     }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {
         _config.cf_stats->pending_memtables_flushes_count--;
         _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
