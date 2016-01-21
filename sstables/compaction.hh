@@ -46,7 +46,16 @@ namespace sstables {
             : sstables(std::move(sstables)) {}
     };
 
-    struct compaction_stats {
+    enum class compaction_type {
+        Compaction = 0,
+        Cleanup = 1,
+        Validation = 2,
+        Scrub = 3,
+        Index_build = 4,
+    };
+
+    struct compaction_info {
+        compaction_type type;
         sstring ks;
         sstring cf;
         size_t sstables = 0;
@@ -55,6 +64,15 @@ namespace sstables {
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
         std::vector<shared_sstable> new_sstables;
+        bool stop_requested = false;
+
+        bool is_stop_requested() const {
+            return stop_requested;
+        }
+
+        void stop() {
+            stop_requested = true;
+        }
     };
 
     // Compact a list of N sstables into M sstables.

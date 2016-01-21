@@ -72,7 +72,7 @@ private:
     stats _stats;
     std::vector<scollectd::registration> _registrations;
 
-    std::list<lw_shared_ptr<sstables::compaction_stats>> _compactions;
+    std::list<lw_shared_ptr<sstables::compaction_info>> _compactions;
 private:
     void task_start(lw_shared_ptr<task>& task);
     future<> task_stop(lw_shared_ptr<task>& task);
@@ -105,16 +105,19 @@ public:
         return _stats;
     }
 
-    void register_compaction(lw_shared_ptr<sstables::compaction_stats> c) {
+    void register_compaction(lw_shared_ptr<sstables::compaction_info> c) {
         _compactions.push_back(c);
     }
 
-    void deregister_compaction(lw_shared_ptr<sstables::compaction_stats> c) {
+    void deregister_compaction(lw_shared_ptr<sstables::compaction_info> c) {
         _compactions.remove(c);
     }
 
-    const std::list<lw_shared_ptr<sstables::compaction_stats>>& get_compactions() const {
+    const std::list<lw_shared_ptr<sstables::compaction_info>>& get_compactions() const {
         return _compactions;
     }
+
+    // Stops ongoing compaction of a given type.
+    void stop_compaction(sstring type);
 };
 

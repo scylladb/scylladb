@@ -106,7 +106,7 @@
                      "required":true,
                      "allowMultiple":false,
                      "type":"string",
-                     "paramType":"string"
+                     "paramType":"query"
                   }
                ]
             }
