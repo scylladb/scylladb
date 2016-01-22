@@ -87,7 +87,7 @@ public:
 
 public:
     shared_ptr<stream_session> get_or_create_next_session(inet_address peer) {
-        return get_or_create_host_data(peer).get_or_create_next_session(peer);
+        return get_or_create_host_data(peer).get_or_create_session(peer);
     }
 
     void update_progress(progress_info info) {
@@ -133,28 +133,23 @@ private:
 
 private:
     class host_streaming_data {
-        using inet_address = gms::inet_address;
-    private:
-        std::map<int, shared_ptr<stream_session>> _stream_sessions;
-        std::map<int, session_info> _session_infos;
-        int _last_returned = -1;
-
     public:
+        using inet_address = gms::inet_address;
+        shared_ptr<stream_session> _stream_session;
+        session_info _session_info;
+
         host_streaming_data() = default;
 
-        bool has_active_sessions();
+        bool is_active_session();
 
-        shared_ptr<stream_session> get_or_create_next_session(inet_address peer);
+        shared_ptr<stream_session> get_or_create_session(inet_address peer);
 
-        void connect_all_stream_sessions();
-
-        std::vector<shared_ptr<stream_session>> get_all_stream_sessions();
+        void connect();
 
         void update_progress(progress_info info);
 
         void add_session_info(session_info info);
 
-        std::vector<session_info> get_all_session_info();
     };
 };
 
