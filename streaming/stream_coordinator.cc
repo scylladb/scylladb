@@ -141,15 +141,6 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::host_streaming_data:
     return sessions;
 }
 
-shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_session_by_id(inet_address peer,
-    int id) {
-    auto it = _stream_sessions.find(id);
-    if (it == _stream_sessions.end()) {
-        it = _stream_sessions.emplace(id, make_shared<stream_session>(peer)).first;
-    }
-    return it->second;
-}
-
 void stream_coordinator::host_streaming_data::update_progress(progress_info info) {
     auto it = _session_infos.find(info.session_index);
     if (it != _session_infos.end()) {
