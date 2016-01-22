@@ -86,7 +86,7 @@ public:
     std::set<inet_address> get_peers();
 
 public:
-    shared_ptr<stream_session> get_or_create_next_session(inet_address peer) {
+    shared_ptr<stream_session> get_or_create_session(inet_address peer) {
         return get_or_create_host_data(peer).get_or_create_session(peer);
     }
 

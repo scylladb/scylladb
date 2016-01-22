@@ -94,7 +94,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->init(f);
                 session->dst_cpu_id = src_cpu_id;
@@ -117,7 +117,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->follower_start_sent();
@@ -140,7 +140,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from.addr);
+                auto session = coordinator->get_or_create_session(from.addr);
                 assert(session);
                 session->start_keep_alive_timer();
                 return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
@@ -161,7 +161,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->receive_task_completed(cf_id);
@@ -186,7 +186,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->complete();
