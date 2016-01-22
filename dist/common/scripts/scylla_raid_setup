@@ -43,6 +43,13 @@ if [ "`mount|grep /var/lib/scylla`" != "" ]; then
     echo "/var/lib/scylla is already mounted"
     exit 1
 fi
+
+. /etc/os-release
+if [ "$NAME" = "Ubuntu" ]; then
+    apt-get -y install mdadm xfsprogs
+else
+    yum -y install mdadm xfsprogs
+fi
 mdadm --create --verbose --force --run $RAID --level=0 -c256 --raid-devices=$NR_DISK $DISKS
 blockdev --setra 65536 $RAID
 mkfs.xfs $RAID -f
