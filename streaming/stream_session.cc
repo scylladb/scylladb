@@ -79,10 +79,9 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), from, src_cpu_id, dst_cpu_id] () mutable {
-            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE from {}, src_cpu_id={}, dst_cpu_id={}",
-                    msg.plan_id, from, src_cpu_id, dst_cpu_id);
-            stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
-                msg.description, msg.from, msg.keep_ss_table_level);
+            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE from {} for {}, src_cpu_id={}, dst_cpu_id={}",
+                    msg.plan_id, from, msg.description, src_cpu_id, dst_cpu_id);
+            stream_result_future::init_receiving_side(msg.plan_id, msg.description, from);
             return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
@@ -281,10 +280,7 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
 
 future<> stream_session::initiate() {
     sslog.debug("[Stream #{}] Sending stream init for incoming stream", plan_id());
-    auto from = utils::fb_utilities::get_broadcast_address();
-    bool is_for_outgoing = true;
-    messages::stream_init_message msg(from, session_index(), plan_id(), description(),
-            is_for_outgoing, keep_ss_table_level());
+    messages::stream_init_message msg(plan_id(), description());
     auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND SENDSTREAM_INIT_MESSAGE to {}", plan_id(), id);
     return ms().send_stream_init_message(std::move(id), std::move(msg)).then_wrapped([this, id] (auto&& f) {

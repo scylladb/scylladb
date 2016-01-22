@@ -44,27 +44,18 @@ namespace streaming {
 namespace messages {
 
     void stream_init_message::serialize(bytes::iterator& out) const {
-       from.serialize(out);
-       serialize_int32(out, session_index);
        plan_id.serialize(out);
        serialize_string(out, description);
-       serialize_int8(out, is_for_outgoing);
-       serialize_int8(out, keep_ss_table_level);
     }
 
     stream_init_message stream_init_message::deserialize(bytes_view& v) {
-        auto from_ = inet_address::deserialize(v);
-        auto session_index_ = read_simple<int32_t>(v);
         auto plan_id_ = UUID::deserialize(v);
         auto description_ = read_simple_short_string(v);
-        auto is_for_outgoing_ = read_simple<int8_t>(v);
-        auto keep_ss_table_level_ = read_simple<int8_t>(v);
-        return stream_init_message(from_, session_index_, plan_id_, std::move(description_), is_for_outgoing_, keep_ss_table_level_);
+        return stream_init_message(plan_id_, std::move(description_));
     }
 
     size_t stream_init_message::serialized_size() const {
-        return from.serialized_size() + serialize_int32_size + plan_id.serialized_size() +
-               serialize_string_size(description) + serialize_int8_size + serialize_int8_size;
+        return plan_id.serialized_size() + serialize_string_size(description);
     }
 
 } // namespace messages

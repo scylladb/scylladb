@@ -102,8 +102,7 @@ public:
 
 public:
     static future<stream_state> init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
-    static void init_receiving_side(int session_index, UUID plan_id,
-        sstring description, inet_address from, bool keep_ss_table_level);
+    static void init_receiving_side(UUID plan_id, sstring description, inet_address from);
 
 private:
     static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_);

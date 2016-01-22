@@ -55,24 +55,14 @@ class stream_init_message {
 public:
     using inet_address = gms::inet_address;
     using UUID = utils::UUID;
-    inet_address from;
-    int session_index;
     UUID plan_id;
     sstring description;
 
-    // true if this init message is to connect for outgoing message on receiving side
-    bool is_for_outgoing;
-    bool keep_ss_table_level;
-
     stream_init_message() = default;
 
-    stream_init_message(inet_address _from, int _session_index, UUID _plan_id, sstring _description, bool _is_for_outgoing, bool _keep_ss_table_level)
-        : from(_from)
-        , session_index(_session_index)
-        , plan_id(_plan_id)
-        , description(_description)
-        , is_for_outgoing(_is_for_outgoing)
-        , keep_ss_table_level(_keep_ss_table_level) {
+    stream_init_message(UUID _plan_id, sstring _description)
+        : plan_id(_plan_id)
+        , description(_description) {
     }
 
 #if 0
