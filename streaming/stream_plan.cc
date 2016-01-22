@@ -72,7 +72,7 @@ future<stream_state> stream_plan::execute() {
         stream_state state(_plan_id, _description, std::vector<session_info>());
         return make_ready_future<stream_state>(std::move(state));
     }
-    return stream_result_future::init(_plan_id, _description, _handlers, _coordinator);
+    return stream_result_future::init_sending_side(_plan_id, _description, _handlers, _coordinator);
 }
 
 stream_plan& stream_plan::flush_before_transfer(bool flush_before_transfer_) {

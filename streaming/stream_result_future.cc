@@ -44,7 +44,7 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-future<stream_state> stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
+future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
     auto future = create_and_register(plan_id_, description_, coordinator_);
     for (auto& listener : listeners_) {
         future->add_event_listener(listener);
