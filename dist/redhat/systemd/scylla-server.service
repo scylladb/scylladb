@@ -1,6 +1,6 @@
 [Unit]
 Description=Scylla Server
-After=network.target libvirtd.service
+After=network.target
 
 [Service]
 Type=notify
