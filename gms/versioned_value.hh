@@ -46,7 +46,6 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "to_string.hh"
-#include "message/messaging_service.hh"
 #include "version.hh"
 #include <unordered_set>
 #include <vector>
@@ -96,7 +95,7 @@ public:
                value   == other.value;
     }
 
-private:
+public:
     versioned_value(const sstring& value, int version = version_generator::get_next_version())
         : version(version), value(value) {
 #if 0
@@ -112,8 +111,10 @@ private:
         : version(version), value(std::move(value)) {
     }
 
+    versioned_value()
+        : version(-1) {
+    }
 
-public:
     int compare_to(const versioned_value &value) {
         return version - value.version;
     }
@@ -228,9 +229,7 @@ public:
             return versioned_value(version::release());
         }
 
-        versioned_value network_version() {
-            return versioned_value(sprint("%s",net::messaging_service::current_version));
-        }
+        versioned_value network_version();
 
         versioned_value internal_ip(const sstring &private_ip) {
             return versioned_value(private_ip);
