@@ -118,26 +118,3 @@ std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) 
 frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
 }
-
-template class db::serializer<frozen_mutation>;
-
-template<>
-db::serializer<frozen_mutation>::serializer(const frozen_mutation& mutation)
-        : _item(mutation), _size(sizeof(uint32_t) /* size */ + mutation.representation().size()) {
-}
-
-template<>
-void db::serializer<frozen_mutation>::write(output& out, const frozen_mutation& mutation) {
-    bytes_view v = mutation.representation();
-    out.write(v);
-}
-
-template<>
-void db::serializer<frozen_mutation>::read(frozen_mutation& m, input& in) {
-    m = read(in);
-}
-
-template<>
-frozen_mutation db::serializer<frozen_mutation>::read(input& in) {
-    return frozen_mutation(bytes_serializer::read(in));
-}
