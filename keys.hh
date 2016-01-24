@@ -538,11 +538,9 @@ public:
 class partition_key : public compound_wrapper<partition_key, partition_key_view> {
 public:
     using c_type = compound_type<allow_prefixes::no>;
-private:
-    partition_key(bytes&& b)
+    explicit partition_key(bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
-public:
     partition_key(const partition_key_view& key)
         : partition_key(bytes(key.representation().begin(), key.representation().end()))
     { }
@@ -613,10 +611,10 @@ public:
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
-    clustering_key_prefix(bytes&& b)
+public:
+    explicit clustering_key_prefix(bytes&& b)
         : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
-public:
     clustering_key_prefix(clustering_key_prefix_view v)
         : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
     { }

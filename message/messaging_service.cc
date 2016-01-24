@@ -40,6 +40,34 @@
 
 namespace net {
 
+template <typename Output, typename T>
+void write(serializer s, Output& out, const foreign_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+foreign_ptr<T> read(serializer s, Input& in, rpc::type<foreign_ptr<T>>) {
+    return make_foreign(read(s, in, rpc::type<T>()));
+}
+
+template <typename Output, typename T>
+void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+lw_shared_ptr<T> read(serializer s, Input& in, rpc::type<lw_shared_ptr<T>>) {
+    return make_lw_shared(read(s, in, rpc::type<T>()));
+}
+
+// For vectors
+template <typename T, typename Output>
+void write(serializer, Output& out, const std::vector<T>& data) {
+    ser::serialize(out, data);
+}
+template <typename T, typename Input>
+std::vector<T> read(serializer, Input& in, rpc::type<std::vector<T>> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
     ser::serialize(out, data);
@@ -48,6 +76,61 @@ void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
 template <typename Input>
 gms::gossip_digest_ack
 read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::read_command& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::read_command
+read(serializer, Input& in, rpc::type<query::read_command> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::partition_range& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::partition_range
+read(serializer, Input& in, rpc::type<query::partition_range> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::result
+read(serializer, Input& in, rpc::type<query::result> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const frozen_mutation& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+frozen_mutation
+read(serializer, Input& in, rpc::type<frozen_mutation> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const reconcilable_result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+reconcilable_result
+read(serializer, Input& in, rpc::type<reconcilable_result> type) {
     return ser::deserialize(in, type);
 }
 

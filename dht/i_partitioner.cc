@@ -251,39 +251,6 @@ std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
     return out << "}";
 }
 
-size_t ring_position::serialized_size() const {
-    size_t size = serialize_int32_size; /* _key length */
-    if (_key) {
-        size += _key.value().representation().size();
-    } else {
-        size += sizeof(int8_t); /* _token_bund */
-    }
-    return size + _token.serialized_size();
-}
-
-void ring_position::serialize(bytes::iterator& out) const {
-    _token.serialize(out);
-    if (_key) {
-        auto v = _key.value().representation();
-        serialize_int32(out, v.size());
-        out = std::copy(v.begin(), v.end(), out);
-    } else {
-        serialize_int32(out, 0);
-        serialize_int8(out, static_cast<int8_t>(_token_bound));
-    }
-}
-
-ring_position ring_position::deserialize(bytes_view& in) {
-    auto token = token::deserialize(in);
-    auto size = read_simple<uint32_t>(in);
-    if (size == 0) {
-        auto bound = dht::ring_position::token_bound(read_simple<int8_t>(in));
-        return ring_position(std::move(token), bound);
-    } else {
-        return ring_position(std::move(token), partition_key::from_bytes(to_bytes(read_simple_bytes(in, size))));
-    }
-}
-
 unsigned shard_of(const token& t) {
     return global_partitioner().shard_of(t);
 }

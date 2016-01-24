@@ -92,16 +92,6 @@ public:
 
 query::result to_data_query_result(const reconcilable_result&, schema_ptr, const query::partition_slice&);
 
-namespace db {
-
-template<> serializer<reconcilable_result>::serializer(const reconcilable_result&);
-template<> void serializer<reconcilable_result>::write(output&, const reconcilable_result&);
-template<> void serializer<reconcilable_result>::read(reconcilable_result&, input&);
-
-extern template class serializer<reconcilable_result>;
-
-}
-
 // Performs a query on given data source returning data in reconcilable form.
 //
 // Reads at most row_limit rows. If less rows are returned, the data source

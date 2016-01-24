@@ -67,14 +67,3 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
-
-namespace db {
-
-typedef serializer<frozen_mutation> frozen_mutation_serializer;
-
-template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
-template<> void serializer<frozen_mutation>::write(output&, const type&);
-template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&);
-template<> frozen_mutation serializer<frozen_mutation>::read(input&);
-
-}

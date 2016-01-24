@@ -23,6 +23,8 @@
 #include <vector>
 #include "core/sstring.hh"
 #include <unordered_map>
+#include <experimental/optional>
+
 namespace rpc {
     class simple_output_stream;
     class measuring_output_stream;
@@ -47,16 +49,16 @@ inline void serialize_integral(Output& output, T data) {
 
 // For integer type
 template<typename Input>
-bool deserialize(Input& input, rpc::type<bool>) {
-    return deserialize(input, rpc::type<uint8_t>());
-}
-template<typename Input>
 int8_t deserialize(Input& input, rpc::type<int8_t>) {
     return deserialize_integral<int8_t>(input);
 }
 template<typename Input>
 uint8_t deserialize(Input& input, rpc::type<uint8_t>) {
     return deserialize_integral<uint8_t>(input);
+}
+template<typename Input>
+bool deserialize(Input& input, rpc::type<bool>) {
+    return deserialize(input, rpc::type<uint8_t>());
 }
 template<typename Input>
 int16_t deserialize(Input& input, rpc::type<int16_t>) {
@@ -84,16 +86,16 @@ uint64_t deserialize(Input& input, rpc::type<uint64_t>) {
 }
 
 template<typename Output>
-void serialize(Output& output, bool data) {
-    serialize(output, uint8_t(data));
-}
-template<typename Output>
 void serialize(Output& output, int8_t data) {
     serialize_integral(output, data);
 }
 template<typename Output>
 void serialize(Output& output, uint8_t data) {
     serialize_integral(output, data);
+}
+template<typename Output>
+void serialize(Output& output, bool data) {
+    serialize(output, uint8_t(data));
 }
 template<typename Output>
 void serialize(Output& output, int16_t data) {
@@ -140,6 +142,38 @@ template<typename Output>
 void serialize(Output& out, const sstring& v);
 template<typename Input>
 sstring deserialize(Input& in, rpc::type<sstring>);
+// For optional
+template<typename T, typename Output>
+inline void serialize(Output& out, const std::experimental::optional<T>& v);
+template<typename T, typename Input>
+inline std::experimental::optional<T> deserialize(Input& in, rpc::type<std::experimental::optional<T>>);
+template<typename T, typename Output>
+// For unique_ptr
+inline void serialize(Output& out, const std::unique_ptr<T>& v);
+template<typename T, typename Input>
+inline std::unique_ptr<T> deserialize(Input& in, rpc::type<std::unique_ptr<T>>);
+// For time_point
+template<typename Clock, typename Duration, typename Output>
+inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v);
+template<typename Clock, typename Duration, typename Input>
+inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, rpc::type<std::chrono::time_point<Clock, Duration>>);
+// For enum_set
+template<typename Enum, typename Output>
+inline void serialize(Output& out, const enum_set<Enum>& v);
+template<typename Enum, typename Input>
+inline enum_set<Enum> deserialize(Input& in, rpc::type<enum_set<Enum>>);
+// For bytes/bytes_view
+template<typename Output>
+void serialize(Output& out, const bytes_view& v);
+template<typename Output>
+void serialize(Output& out, const bytes& v);
+template<typename Input>
+bytes deserialize(Input& in, rpc::type<bytes>);
+// For bytes_ostream
+template<typename Output>
+void serialize(Output& out, const bytes_ostream& v);
+template<typename Input>
+bytes_ostream deserialize(Input& in, rpc::type<bytes_ostream>);
 
 template<typename T>
 void set_size(rpc::simple_output_stream& os, const T& obj);

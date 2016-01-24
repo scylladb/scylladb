@@ -147,13 +147,3 @@ public:
 };
 
 }
-
-namespace db {
-
-template<> serializer<query::result>::serializer(const query::result&);
-template<> void serializer<query::result>::write(output&, const query::result&);
-template<> query::result serializer<query::result>::read(input&);
-
-extern template class serializer<query::result>;
-
-}

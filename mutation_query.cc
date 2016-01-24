@@ -24,8 +24,6 @@
 #include "db/serializer.hh"
 #include "mutation_partition_serializer.hh"
 
-template class db::serializer<reconcilable_result>;
-
 reconcilable_result::~reconcilable_result() {}
 
 reconcilable_result::reconcilable_result()
@@ -62,49 +60,6 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
         p.mut().unfreeze(s).partition().query(pb, *s, gc_clock::time_point::min(), query::max_rows);
     }
     return builder.build();
-}
-
-static
-size_t serialized_size(const reconcilable_result& v) {
-    size_t s = 0;
-    s += sizeof(uint32_t); /* row_count */
-    s += sizeof(uint32_t); /* partition count */
-    for (const partition& p : v.partitions()) {
-        s += sizeof(uint32_t) /* row_count */;
-        s += db::frozen_mutation_serializer(p.mut()).size();
-    }
-    return s;
-}
-
-template<>
-db::serializer<reconcilable_result>::serializer(const reconcilable_result& v)
-    : _item(v)
-    , _size(serialized_size(v))
-{ }
-
-template<>
-void
-db::serializer<reconcilable_result>::write(output& out, const reconcilable_result& v) {
-    out.write<uint32_t>(v.row_count());
-    out.write<uint32_t>(v.partitions().size());
-    for (const partition& p : v.partitions()) {
-        out.write<uint32_t>(p.row_count());
-        db::frozen_mutation_serializer(p.mut()).write(out);
-    }
-}
-
-template<>
-void db::serializer<reconcilable_result>::read(reconcilable_result& v, input& in) {
-    auto row_count = in.read<uint32_t>();
-    auto partition_count = in.read<uint32_t>();
-    std::vector<partition> partitions;
-    partitions.reserve(partition_count);
-    while (partition_count--) {
-        auto p_row_count = in.read<uint32_t>();
-        auto fm = db::frozen_mutation_serializer::read(in);
-        partitions.emplace_back(partition(p_row_count, std::move(fm)));
-    }
-    v = reconcilable_result(row_count, std::move(partitions));
 }
 
 future<reconcilable_result>
