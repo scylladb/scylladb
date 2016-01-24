@@ -473,6 +473,8 @@ idls = ['idl/gossip_digest.idl.hh',
                   'idl/token.idl.hh',
                   'idl/ring_position.idl.hh',
                   'idl/result.idl.hh',
+                  'idl/frozen_mutation.idl.hh',
+                  'idl/reconcilable_result.idl.hh',
           ]
 
 serialize = idls + ['serializer.inc.hh']

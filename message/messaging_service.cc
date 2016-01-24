@@ -112,6 +112,28 @@ read(serializer, Input& in, rpc::type<query::result> type) {
     return ser::deserialize(in, type);
 }
 
+template<typename Output>
+void write(serializer, Output& out, const frozen_mutation& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+frozen_mutation
+read(serializer, Input& in, rpc::type<frozen_mutation> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const reconcilable_result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+reconcilable_result
+read(serializer, Input& in, rpc::type<reconcilable_result> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
 
 using inet_address = gms::inet_address;

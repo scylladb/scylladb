@@ -53,8 +53,6 @@ namespace gms {
     class gossip_digest_ack2;
 }
 
-class frozen_mutation;
-
 namespace utils {
     class UUID;
 }
@@ -209,16 +207,6 @@ struct serializer {
         return v;
     }
 
-    // For frozen_mutation
-    template <typename Output>
-    void write(Output& out, const frozen_mutation& v) const{
-        return write_serializable(out, v);
-    }
-    template <typename Input>
-    frozen_mutation read(Input& in, rpc::type<frozen_mutation>) const {
-        return read_serializable<frozen_mutation>(in);
-    }
-
     // For frozen_schema
     template <typename Output>
     void write(Output& out, const frozen_schema& v) const{
@@ -227,16 +215,6 @@ struct serializer {
     template <typename Input>
     frozen_schema read(Input& in, rpc::type<frozen_schema>) const {
         return read_serializable<frozen_schema>(in);
-    }
-
-    // For reconcilable_result
-    template <typename Output>
-    void write(Output& out, const reconcilable_result& v) const{
-        return write_serializable(out, v);
-    }
-    template <typename Input>
-    reconcilable_result read(Input& in, rpc::type<reconcilable_result>) const {
-        return read_serializable<reconcilable_result>(in);
     }
 
     template <typename Output>
