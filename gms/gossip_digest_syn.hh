@@ -72,16 +72,17 @@ public:
         return _partioner;
     }
 
+    sstring get_cluster_id() const {
+        return cluster_id();
+    }
+
+    sstring get_partioner() const {
+        return partioner();
+    }
+
     std::vector<gossip_digest> get_gossip_digests() const {
         return _digests;
     }
-
-    // The following replaces GossipDigestSynSerializer from the Java code
-    void serialize(bytes::iterator& out) const;
-
-    static gossip_digest_syn deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
 
     friend std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn);
 };

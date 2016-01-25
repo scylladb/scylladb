@@ -97,50 +97,6 @@ public:
     friend inline std::ostream& operator<<(std::ostream& os, const gossip_digest& d) {
         return os << d._endpoint << ":" << d._generation << ":" << d._max_version;
     }
-
-    // The following replaces GossipDigestSerializer from the Java code
-    void serialize(bytes::iterator& out) const {
-        _endpoint.serialize(out);
-        serialize_int32(out, _generation);
-        serialize_int32(out, _max_version);
-    }
-
-    static gossip_digest deserialize(bytes_view& v) {
-        auto endpoint = inet_address::deserialize(v);
-        auto generation = read_simple<int32_t>(v);
-        auto max_version = read_simple<int32_t>(v);
-        return gossip_digest(endpoint, generation, max_version);
-    }
-
-    size_t serialized_size() const {
-        return _endpoint.serialized_size() + serialize_int32_size + serialize_int32_size;
-    }
 }; // class gossip_digest
-
-// serialization helper for std::vector<gossip_digest>
-class gossip_digest_serialization_helper {
-public:
-    static void serialize(bytes::iterator& out, const std::vector<gossip_digest>& digests) {
-        serialize_int32(out, int32_t(digests.size()));
-        for (auto& digest : digests) {
-           digest.serialize(out);
-        }
-    }
-
-    static std::vector<gossip_digest> deserialize(bytes_view& v) {
-        int32_t size = read_simple<int32_t>(v);
-        std::vector<gossip_digest> digests;
-        for (int32_t i = 0; i < size; ++i)
-            digests.push_back(gossip_digest::deserialize(v));
-        return digests;
-    }
-
-    static size_t serialized_size(const std::vector<gossip_digest>& digests) {
-        size_t size = serialize_int32_size;
-        for (auto& digest : digests)
-            size += digest.serialized_size();
-        return size;
-    }
-};
 
 } // namespace gms

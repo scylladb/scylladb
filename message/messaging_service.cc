@@ -68,6 +68,19 @@ std::vector<T> read(serializer, Input& in, rpc::type<std::vector<T>> type) {
     return ser::deserialize(in, type);
 }
 
+// Gossip syn
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_syn& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_syn
+read(serializer, Input& in, rpc::type<gms::gossip_digest_syn> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip ack
 template<typename Output>
 void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
     ser::serialize(out, data);
@@ -76,6 +89,66 @@ void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
 template <typename Input>
 gms::gossip_digest_ack
 read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip ack2
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_ack2& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_ack2
+read(serializer, Input& in, rpc::type<gms::gossip_digest_ack2> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip digest
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest
+read(serializer, Input& in, rpc::type<gms::gossip_digest> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip versioned_value
+template<typename Output>
+void write(serializer, Output& out, const gms::versioned_value& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::versioned_value
+read(serializer, Input& in, rpc::type<gms::versioned_value> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip endpoint_state
+template<typename Output>
+void write(serializer, Output& out, const gms::endpoint_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::endpoint_state
+read(serializer, Input& in, rpc::type<gms::endpoint_state> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip heart_beat_state
+template<typename Output>
+void write(serializer, Output& out, const gms::heart_beat_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::heart_beat_state
+read(serializer, Input& in, rpc::type<gms::heart_beat_state> type) {
     return ser::deserialize(in, type);
 }
 

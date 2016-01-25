@@ -90,22 +90,6 @@ public:
     friend inline std::ostream& operator<<(std::ostream& os, const heart_beat_state& h) {
         return os << "{ generation = " << h._generation << ", version = " << h._version << " }";
     }
-
-    // The following replaces HeartBeatStateSerializer from the Java code
-    void serialize(bytes::iterator& out) const {
-        serialize_int32(out, _generation);
-        serialize_int32(out, _version);
-    }
-
-    static heart_beat_state deserialize(bytes_view& v) {
-        auto generation = read_simple<int32_t>(v);
-        auto version = read_simple<int32_t>(v);
-        return heart_beat_state(generation, version);
-    }
-
-    size_t serialized_size() const {
-        return serialize_int32_size + serialize_int32_size;
-    }
 };
 
 } // gms

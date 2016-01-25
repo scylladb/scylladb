@@ -61,42 +61,4 @@ std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
     return os;
 }
 
-void endpoint_state::serialize(bytes::iterator& out) const {
-    /* serialize the HeartBeatState */
-    _heart_beat_state.serialize(out);
-
-    /* serialize the map of ApplicationState objects */
-    int32_t app_state_size = _application_state.size();
-    serialize_int32(out, app_state_size);
-    for (auto& entry : _application_state) {
-        const application_state& state = entry.first;
-        const versioned_value& value = entry.second;
-        serialize_int32(out, int32_t(state));
-        value.serialize(out);
-    }
-}
-
-endpoint_state endpoint_state::deserialize(bytes_view& v) {
-    heart_beat_state hbs = heart_beat_state::deserialize(v);
-    endpoint_state es = endpoint_state(hbs);
-    int32_t app_state_size = read_simple<int32_t>(v);
-    for (int32_t i = 0; i < app_state_size; ++i) {
-        auto state = static_cast<application_state>(read_simple<int32_t>(v));
-        auto value = versioned_value::deserialize(v);
-        es.add_application_state(state, value);
-    }
-    return es;
-}
-
-size_t endpoint_state::serialized_size() const {
-    long size = _heart_beat_state.serialized_size();
-    size += serialize_int32_size;
-    for (auto& entry : _application_state) {
-        const versioned_value& value = entry.second;
-        size += serialize_int32_size;
-        size += value.serialized_size();
-    }
-    return size;
-}
-
 }
