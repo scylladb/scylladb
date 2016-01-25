@@ -243,6 +243,7 @@ read(serializer, Input& in, rpc::type<streaming::messages::prepare_message> type
 }
 
 static logging::logger logger("messaging_service");
+static logging::logger rpc_logger("rpc");
 
 using inet_address = gms::inet_address;
 using gossip_digest_syn = gms::gossip_digest_syn;
@@ -401,6 +402,9 @@ messaging_service::messaging_service(gms::inet_address ip
         );
     }())
 {
+    _rpc->set_logger([] (const sstring& log) {
+            rpc_logger.info("{}", log);
+    });
     register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id) {
         ci.attach_auxiliary("baddr", broadcast_address);
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
