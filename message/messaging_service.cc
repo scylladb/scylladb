@@ -140,6 +140,18 @@ read(serializer, Input& in, rpc::type<gms::endpoint_state> type) {
     return ser::deserialize(in, type);
 }
 
+// Gossip heart_beat_state
+template<typename Output>
+void write(serializer, Output& out, const gms::heart_beat_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::heart_beat_state
+read(serializer, Input& in, rpc::type<gms::heart_beat_state> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const query::read_command& data) {
     ser::serialize(out, data);
