@@ -234,12 +234,12 @@
                "type":"string",
                "enum":[
                  "CLIENT_ID",
-                 "ECHO",
                  "MUTATION",
                  "MUTATION_DONE",
                  "READ_DATA",
                  "READ_MUTATION_DATA",
                  "READ_DIGEST",
+                 "GOSSIP_ECHO",
                  "GOSSIP_DIGEST_SYN",
                  "GOSSIP_DIGEST_ACK2",
                  "GOSSIP_SHUTDOWN",

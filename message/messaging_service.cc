@@ -414,7 +414,7 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
     if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
         verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
         verb == messaging_verb::GOSSIP_SHUTDOWN ||
-        verb == messaging_verb::ECHO ||
+        verb == messaging_verb::GOSSIP_ECHO ||
         verb == messaging_verb::GET_SCHEMA_VERSION) {
         idx = 1;
     }
@@ -715,14 +715,14 @@ future<> messaging_service::send_complete_message(msg_addr id, UUID plan_id, uns
         plan_id, dst_cpu_id);
 }
 
-void messaging_service::register_echo(std::function<future<> ()>&& func) {
-    register_handler(this, messaging_verb::ECHO, std::move(func));
+void messaging_service::register_gossip_echo(std::function<future<> ()>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_ECHO, std::move(func));
 }
-void messaging_service::unregister_echo() {
-    _rpc->unregister_handler(net::messaging_verb::ECHO);
+void messaging_service::unregister_gossip_echo() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_ECHO);
 }
-future<> messaging_service::send_echo(msg_addr id) {
-    return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 3000ms);
+future<> messaging_service::send_gossip_echo(msg_addr id) {
+    return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 3000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {

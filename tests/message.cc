@@ -136,7 +136,7 @@ public:
     future<> test_echo() {
         print("=== %s ===\n", __func__);
         auto id = get_msg_addr();
-        return ms.send_echo(id).then_wrapped([] (auto&& f) {
+        return ms.send_gossip_echo(id).then_wrapped([] (auto&& f) {
             try {
                 f.get();
                 return make_ready_future<>();

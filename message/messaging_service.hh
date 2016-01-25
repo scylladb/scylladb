@@ -66,15 +66,17 @@ namespace net {
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
     CLIENT_ID = 0,
-    ECHO = 1,
-    MUTATION = 2,
-    MUTATION_DONE = 3,
-    READ_DATA = 4,
-    READ_MUTATION_DATA = 5,
-    READ_DIGEST = 6,
+    MUTATION = 1,
+    MUTATION_DONE = 2,
+    READ_DATA = 3,
+    READ_MUTATION_DATA = 4,
+    READ_DIGEST = 5,
+    // Used by gossip
+    GOSSIP_ECHO = 6,
     GOSSIP_DIGEST_SYN = 7,
     GOSSIP_DIGEST_ACK2 = 8,
     GOSSIP_SHUTDOWN = 9,
+    // end of gossip verb
     DEFINITIONS_UPDATE = 10,
     TRUNCATE = 11,
     REPLICATION_FINISHED = 12,
@@ -384,10 +386,10 @@ public:
     void unregister_repair_checksum_range();
     future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, query::range<dht::token> range);
 
-    // Wrapper for ECHO verb
-    void register_echo(std::function<future<> ()>&& func);
-    void unregister_echo();
-    future<> send_echo(msg_addr id);
+    // Wrapper for GOSSIP_ECHO verb
+    void register_gossip_echo(std::function<future<> ()>&& func);
+    void unregister_gossip_echo();
+    future<> send_gossip_echo(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);
