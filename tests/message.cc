@@ -87,8 +87,8 @@ public:
             return messaging_service::no_wait();
         });
 
-        ms.register_echo([] {
-            print("Server got echo msg\n");
+        ms.register_gossip_echo([] {
+            print("Server got gossip echo msg\n");
             throw std::runtime_error("I'm throwing runtime_error exception");
             return make_ready_future<>();
         });
