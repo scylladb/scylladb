@@ -60,15 +60,11 @@ public:
 private:
     class host_streaming_data;
     std::map<inet_address, host_streaming_data> _peer_sessions;
-    int _connections_per_host;
-    bool _keep_ss_table_level;
     bool _is_receiving;
 
 public:
-    stream_coordinator(int connections_per_host, bool keep_ss_table_level, bool is_receiving = false)
-        : _connections_per_host(connections_per_host)
-        , _keep_ss_table_level(keep_ss_table_level)
-        , _is_receiving(is_receiving) {
+    stream_coordinator(bool is_receiving = false)
+        : _is_receiving(is_receiving) {
     }
 #if 0
     public void setConnectionFactory(StreamConnectionFactory factory)
@@ -90,12 +86,8 @@ public:
     std::set<inet_address> get_peers();
 
 public:
-    shared_ptr<stream_session> get_or_create_next_session(inet_address peer) {
-        return get_or_create_host_data(peer).get_or_create_next_session(peer);
-    }
-
-    shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id) {
-        return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id);
+    shared_ptr<stream_session> get_or_create_session(inet_address peer) {
+        return get_or_create_host_data(peer).get_or_create_session(peer);
     }
 
     void update_progress(progress_info info) {
@@ -141,37 +133,23 @@ private:
 
 private:
     class host_streaming_data {
-        using inet_address = gms::inet_address;
-    private:
-        std::map<int, shared_ptr<stream_session>> _stream_sessions;
-        std::map<int, session_info> _session_infos;
-        int _last_returned = -1;
-        int _connections_per_host;
-        bool _keep_ss_table_level;
-
     public:
+        using inet_address = gms::inet_address;
+        shared_ptr<stream_session> _stream_session;
+        session_info _session_info;
+
         host_streaming_data() = default;
 
-        host_streaming_data(int connections_per_host, bool keep_ss_table_level)
-            : _connections_per_host(connections_per_host)
-            , _keep_ss_table_level(keep_ss_table_level) {
-        }
+        bool is_active_session();
 
-        bool has_active_sessions();
+        shared_ptr<stream_session> get_or_create_session(inet_address peer);
 
-        shared_ptr<stream_session> get_or_create_next_session(inet_address peer);
-
-        void connect_all_stream_sessions();
-
-        std::vector<shared_ptr<stream_session>> get_all_stream_sessions();
-
-        shared_ptr<stream_session> get_or_create_session_by_id(inet_address peer, int id);
+        void connect();
 
         void update_progress(progress_info info);
 
         void add_session_info(session_info info);
 
-        std::vector<session_info> get_all_session_info();
     };
 };
 

@@ -30,6 +30,7 @@
 #include "repair/repair.hh"
 #include "locator/snitch_base.hh"
 #include "column_family.hh"
+#include "log.hh"
 
 namespace api {
 
@@ -404,9 +405,13 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_logging_levels.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
         std::vector<ss::mapper> res;
+        for (auto i : logging::logger_registry().get_all_logger_names()) {
+            ss::mapper log;
+            log.key = i;
+            log.value = logging::level_name(logging::logger_registry().get_logger_level(i));
+            res.push_back(log);
+        }
         return make_ready_future<json::json_return_type>(res);
     });
 

@@ -320,6 +320,9 @@ public:
 
     virtual future<> stop() override {
         return seastar::async([this] {
+            // Started by storage_service::init_server()
+            gms::get_local_gossiper().stop_gossiping().get();
+
             _core_local.stop().get();
             db::system_keyspace::deinit_local_cache().get();
 

@@ -91,6 +91,62 @@ class auth_migration_listener : public service::migration_listener {
 
 static auth_migration_listener auth_migration;
 
+/**
+ * Poor mans job schedule. For maximum 2 jobs. Sic.
+ * Still does nothing more clever than waiting 10 seconds
+ * like origin, then runs the submitted tasks.
+ *
+ * Only difference compared to sleep (from which this
+ * borrows _heavily_) is that if tasks have not run by the time
+ * we exit (and do static clean up) we delete the promise + cont
+ *
+ * Should be abstracted to some sort of global server function
+ * probably.
+ */
+void auth::auth::schedule_when_up(scheduled_func f) {
+    struct waiter {
+        promise<> done;
+        timer<> tmr;
+        waiter() : tmr([this] {done.set_value();})
+        {
+            tmr.arm(SUPERUSER_SETUP_DELAY);
+        }
+        ~waiter() {
+            if (tmr.armed()) {
+                tmr.cancel();
+                done.set_exception(std::runtime_error("shutting down"));
+            }
+            logger.trace("Deleting scheduled task");
+        }
+        void kill() {
+        }
+    };
+
+    typedef std::unique_ptr<waiter> waiter_ptr;
+
+    static thread_local std::vector<waiter_ptr> waiters;
+
+    logger.trace("Adding scheduled task");
+
+    waiters.emplace_back(std::make_unique<waiter>());
+    auto* w = waiters.back().get();
+
+    w->done.get_future().finally([w] {
+        auto i = std::find_if(waiters.begin(), waiters.end(), [w](const waiter_ptr& p) {
+                            return p.get() == w;
+                        });
+        if (i != waiters.end()) {
+            waiters.erase(i);
+        }
+    }).then([f = std::move(f)] {
+        logger.trace("Running scheduled task");
+        return f();
+    }).handle_exception([](auto ep) {
+        return make_ready_future();
+    });
+}
+
+
 bool auth::auth::is_class_type(const sstring& type, const sstring& classname) {
     if (type == classname) {
         return true;
@@ -128,7 +184,7 @@ future<> auth::auth::setup() {
     }).then([] {
         service::get_local_migration_manager().register_listener(&auth_migration); // again, only one shard...
         // instead of once-timer, just schedule this later
-        sleep(SUPERUSER_SETUP_DELAY).then([] {
+        schedule_when_up([] {
             // setup default super user
             return has_existing_users(USERS_CF, DEFAULT_SUPERUSER_NAME, USER_NAME).then([](bool exists) {
                 if (!exists) {

@@ -62,7 +62,7 @@ stream_transfer_task::~stream_transfer_task() = default;
 
 void stream_transfer_task::add_transfer_file(stream_detail detail) {
     assert(cf_id == detail.cf_id);
-    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail), session->keep_ss_table_level());
+    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail));
     auto size = message.header.size();
     auto seq = message.header.sequence_number;
     files.emplace(seq, std::move(message));
@@ -100,7 +100,7 @@ void stream_transfer_task::start() {
                     try {
                         f.get();
                         session->start_keep_alive_timer();
-                        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply", plan_id);
+                        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", plan_id, id.addr);
                         msg.mutations_done.signal();
                     } catch (std::exception& e) {
                         auto err = std::string(e.what());
@@ -155,7 +155,7 @@ void stream_transfer_task::complete(int sequence_number) {
             try {
                 f.get();
                 session->start_keep_alive_timer();
-                sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply", plan_id);
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
                 session->transfer_task_completed(this->cf_id);
             } catch (...) {
                 sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, std::current_exception());

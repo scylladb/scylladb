@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Cloudius Systems, Ltd.
+ * Copyright 2016 ScyllaDB
  */
 
 /*
@@ -19,11 +19,15 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "streaming/messages/incoming_file_message.hh"
+template<typename T>
+class range_bound {
+    T value();
+    bool is_inclusive();
+};
 
-namespace streaming {
-namespace messages {
-
-
-} // namespace messages
-} // namespace streaming
+template<typename T>
+class range {
+    std::experimental::optional<range_bound<T>> start();
+    std::experimental::optional<range_bound<T>> end();
+    bool is_singular();
+};

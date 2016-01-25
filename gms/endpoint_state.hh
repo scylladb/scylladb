@@ -81,6 +81,14 @@ public:
         , _is_alive(true) {
     }
 
+    endpoint_state(heart_beat_state&& initial_hb_state,
+            const std::map<application_state, versioned_value>& application_state)
+        : _heart_beat_state(std::move(initial_hb_state))
+          ,_application_state(application_state)
+        , _update_timestamp(clk::now())
+        , _is_alive(true) {
+    }
+
     heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
@@ -141,13 +149,6 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
-
-    // The following replaces EndpointStateSerializer from the Java code
-    void serialize(bytes::iterator& out) const;
-
-    static endpoint_state deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
 };
 
 } // gms

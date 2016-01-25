@@ -66,12 +66,9 @@ private:
     UUID _plan_id;
     sstring _description;
     std::vector<stream_event_handler*> _handlers;
-    long _repaired_at;
     shared_ptr<stream_coordinator> _coordinator;
 
     bool _flush_before_transfer = true;
-    // FIXME: ActiveRepairService.UNREPAIRED_SSTABLE
-    long UNREPAIRED_SSTABLE = 0;
     bool _range_added = false;
 public:
 
@@ -81,18 +78,9 @@ public:
      * @param description Stream type that describes this StreamPlan
      */
     stream_plan(sstring description)
-        : stream_plan(description, UNREPAIRED_SSTABLE, 1, false) {
-    }
-
-    stream_plan(sstring description, bool keep_ss_table_levels)
-        : stream_plan(description, UNREPAIRED_SSTABLE, 1, keep_ss_table_levels) {
-    }
-
-    stream_plan(sstring description, long repaired_at, int connections_per_host, bool keep_ss_table_levels)
         : _plan_id(utils::UUID_gen::get_time_UUID())
         , _description(description)
-        , _repaired_at(repaired_at)
-        , _coordinator(make_shared<stream_coordinator>(connections_per_host, keep_ss_table_levels)) {
+        , _coordinator(make_shared<stream_coordinator>()) {
     }
 
     /**

@@ -247,38 +247,41 @@ future<> compaction_manager::stop() {
     });
 }
 
+void compaction_manager::signal_less_busy_task() {
+    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
+        return i->compaction_sem.current() < j->compaction_sem.current();
+    });
+    (*result)->compaction_sem.signal();
+}
+
+bool compaction_manager::can_submit() {
+    return !_stopped && !_tasks.empty();
+}
+
 void compaction_manager::submit(column_family* cf) {
-    if (_stopped || _tasks.empty()) {
+    if (!can_submit()) {
         return;
     }
     // To avoid having two or more entries of the same cf stored in the queue.
     if (cf->compaction_manager_queued()) {
         return;
     }
-    // Signal the compaction task with the lowest amount of pending jobs.
-    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
-        return i->compaction_sem.current() < j->compaction_sem.current();
-    });
     cf->set_compaction_manager_queued(true);
     add_column_family(cf);
-    (*result)->compaction_sem.signal();
+    signal_less_busy_task();
 }
 
 void compaction_manager::submit_cleanup_job(column_family* cf) {
-    if (_stopped || _tasks.empty()) {
+    if (!can_submit()) {
         return;
     }
     // To avoid having two or more entries of the same cf stored in the queue.
     if (std::find(_cfs_to_cleanup.begin(), _cfs_to_cleanup.end(), cf) != _cfs_to_cleanup.end()) {
         return;
     }
-    // Signal the compaction task with the lowest amount of pending jobs.
-    auto result = std::min_element(std::begin(_tasks), std::end(_tasks), [] (auto& i, auto& j) {
-        return i->compaction_sem.current() < j->compaction_sem.current();
-    });
     _cfs_to_cleanup.push_back(cf);
     _stats.pending_tasks++;
-    (*result)->compaction_sem.signal();
+    signal_less_busy_task();
 }
 
 future<> compaction_manager::remove(column_family* cf) {
@@ -321,4 +324,22 @@ future<> compaction_manager::remove(column_family* cf) {
             return make_ready_future<>();
         });
     }).then([tasks_to_stop] {});
+}
+
+void compaction_manager::stop_compaction(sstring type) {
+    // TODO: this method only works for compaction of type compaction and cleanup.
+    // Other types are: validation, scrub, index_build.
+    sstables::compaction_type target_type;
+    if (type == "COMPACTION") {
+        target_type = sstables::compaction_type::Compaction;
+    } else if (type == "CLEANUP") {
+        target_type = sstables::compaction_type::Cleanup;
+    } else {
+        throw std::runtime_error(sprint("Compaction of type %s cannot be stopped by compaction manager", type.c_str()));
+    }
+    for (auto& info : _compactions) {
+        if (target_type == info->type) {
+            info->stop();
+        }
+    }
 }

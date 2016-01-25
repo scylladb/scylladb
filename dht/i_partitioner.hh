@@ -338,6 +338,12 @@ public:
         , _key(std::experimental::make_optional(std::move(key)))
     { }
 
+    ring_position(dht::token token, token_bound bound, std::experimental::optional<partition_key> key)
+        : _token(std::move(token))
+        , _token_bound(bound)
+        , _key(std::move(key))
+    { }
+
     ring_position(const dht::decorated_key& dk)
         : _token(dk._token)
         , _key(std::experimental::make_optional(dk._key))
@@ -378,10 +384,6 @@ public:
 
     // "less" comparator corresponding to tri_compare()
     bool less_compare(const schema&, const ring_position&) const;
-
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static ring_position deserialize(bytes_view& in);
 
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };

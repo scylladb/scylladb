@@ -54,6 +54,7 @@
 
 logging::logger startlog("init");
 
+static bool started_by_upstart = false;
 void
 supervisor_notify(sstring msg, bool ready = false) {
     startlog.trace("{}", msg);
@@ -61,6 +62,9 @@ supervisor_notify(sstring msg, bool ready = false) {
     auto ready_msg = ready ? "READY=1\n" : "";
     sd_notify(0, sprint("%sSTATUS=%s\n", ready_msg, msg).c_str());
 #endif
+    if (started_by_upstart) {
+        raise(SIGSTOP);
+    }
 }
 
 namespace bpo = boost::program_options;
@@ -227,6 +231,7 @@ int main(int ac, char** av) {
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "configuration file (i.e. <SCYLLA_HOME>/conf/scylla.yaml)")
         ("help-loggers", bpo::bool_switch(&help_loggers), "print a list of logger names and exit")
+        ("started-by-upstart", bpo::bool_switch(&started_by_upstart), "specify init type as upstart")
         ;
 
     distributed<database> db;

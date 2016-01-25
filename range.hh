@@ -25,31 +25,34 @@
 #include <iostream>
 #include <boost/range/algorithm/copy.hpp>
 
+template<typename T>
+class range_bound {
+    T _value;
+    bool _inclusive;
+public:
+    range_bound(T value, bool inclusive = true)
+              : _value(std::move(value))
+              , _inclusive(inclusive)
+    { }
+    const T& value() const & { return _value; }
+    T&& value() && { return std::move(_value); }
+    bool is_inclusive() const { return _inclusive; }
+    bool operator==(const range_bound& other) const {
+        return (_value == other._value) && (_inclusive == other._inclusive);
+    }
+    template<typename Comparator>
+    bool equal(const range_bound& other, Comparator&& cmp) const {
+        return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
+    }
+};
+
 // A range which can have inclusive, exclusive or open-ended bounds on each end.
 template<typename T>
 class range {
     template <typename U>
     using optional = std::experimental::optional<U>;
 public:
-    class bound {
-        T _value;
-        bool _inclusive;
-    public:
-        bound(T value, bool inclusive = true)
-            : _value(std::move(value))
-            , _inclusive(inclusive)
-        { }
-        const T& value() const & { return _value; }
-        T&& value() && { return std::move(_value); }
-        bool is_inclusive() const { return _inclusive; }
-        bool operator==(const bound& other) const {
-            return (_value == other._value) && (_inclusive == other._inclusive);
-        }
-        template<typename Comparator>
-        bool equal(const bound& other, Comparator&& cmp) const {
-            return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
-        }
-    };
+    using bound = range_bound<T>;
 private:
     optional<bound> _start;
     optional<bound> _end;

@@ -1,11 +1,11 @@
---- ragel.spec	2014-08-18 11:55:49.000000000 +0000
-+++ ragel.spec.1	2015-10-18 12:18:23.000000000 +0000
+--- ragel.spec.orig	2015-06-18 22:12:28.000000000 +0000
++++ ragel.spec	2016-01-20 14:49:53.980327766 +0000
 @@ -1,17 +1,20 @@
 -Name:           ragel   
 +Name:           scylla-ragel   
 +%define orig_name ragel
  Version:        6.8
- Release:        3%{?dist}
+ Release:        5%{?dist}
  Summary:        Finite state machine compiler
  
  Group:          Development/Tools

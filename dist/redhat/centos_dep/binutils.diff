@@ -1,5 +1,5 @@
---- binutils.spec	2015-10-19 05:45:55.106745163 +0000
-+++ binutils.spec.1	2015-10-19 05:45:55.807742899 +0000
+--- binutils.spec.orig	2015-09-30 14:48:25.000000000 +0000
++++ binutils.spec	2016-01-20 14:42:17.856037134 +0000
 @@ -17,7 +17,7 @@
  %define enable_deterministic_archives 1
  
@@ -7,7 +7,7 @@
 -Name: %{?cross}binutils%{?_with_debug:-debug}
 +Name: scylla-%{?cross}binutils%{?_with_debug:-debug}
  Version: 2.25
- Release: 5%{?dist}
+ Release: 15%{?dist}
  License: GPLv3+
 @@ -29,6 +29,7 @@
  # instead.
@@ -17,7 +17,7 @@
  
  Source2: binutils-2.19.50.0.1-output-format.sed
  Patch01: binutils-2.20.51.0.2-libtool-lib64.patch
-@@ -82,6 +83,9 @@
+@@ -89,6 +90,9 @@
  BuildRequires: texinfo >= 4.0, gettext, flex, bison, zlib-devel
  # BZ 920545: We need pod2man in order to build the manual pages.
  BuildRequires: /usr/bin/pod2man
@@ -27,7 +27,7 @@
  # Required for: ld-bootstrap/bootstrap.exp bootstrap with --static
  # It should not be required for: ld-elf/elf.exp static {preinit,init,fini} array
  %if %{run_testsuite}
-@@ -105,8 +109,8 @@
+@@ -112,8 +116,8 @@
  
  %if "%{build_gold}" == "both"
  Requires(post): coreutils
@@ -38,7 +38,7 @@
  %endif
  
  # On ARM EABI systems, we do want -gnueabi to be part of the
-@@ -131,11 +135,12 @@
+@@ -138,11 +142,12 @@
  %package devel
  Summary: BFD and opcodes static and dynamic libraries and header files
  Group: System Environment/Libraries
@@ -50,10 +50,10 @@
  Requires: zlib-devel
 -Requires: binutils = %{version}-%{release}
 +Requires: scylla-binutils = %{version}-%{release}
+ # BZ 1215242: We need touch...
+ Requires: coreutils
  
- %description devel
- This package contains BFD and opcodes static and dynamic libraries.
-@@ -411,11 +416,11 @@
+@@ -426,11 +431,11 @@
  %post
  %if "%{build_gold}" == "both"
  %__rm -f %{_bindir}/%{?cross}ld
@@ -68,7 +68,7 @@
  %endif
  %if %{isnative}
  /sbin/ldconfig
-@@ -433,8 +438,8 @@
+@@ -448,8 +453,8 @@
  %preun
  %if "%{build_gold}" == "both"
  if [ $1 = 0 ]; then

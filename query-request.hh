@@ -55,6 +55,45 @@ bool is_single_partition(const query::partition_range& range) {
 
 typedef std::vector<clustering_range> clustering_row_ranges;
 
+class specific_ranges {
+public:
+    specific_ranges(partition_key pk, clustering_row_ranges ranges)
+            : _pk(std::move(pk)), _ranges(std::move(ranges)) {
+    }
+    specific_ranges(const specific_ranges&) = default;
+
+    void add(const schema& s, partition_key pk, clustering_row_ranges ranges) {
+        if (!_pk.equal(s, pk)) {
+            throw std::runtime_error("Only single specific range supported currently");
+        }
+        _pk = std::move(pk);
+        _ranges = std::move(ranges);
+    }
+    bool contains(const schema& s, const partition_key& pk) {
+        return _pk.equal(s, pk);
+    }
+    size_t size() const {
+        return 1;
+    }
+    const clustering_row_ranges* range_for(const schema& s, const partition_key& key) const {
+        if (_pk.equal(s, key)) {
+            return &_ranges;
+        }
+        return nullptr;
+    }
+    const partition_key& pk() const {
+        return _pk;
+    }
+    const clustering_row_ranges& ranges() const {
+        return _ranges;
+    }
+private:
+    friend std::ostream& operator<<(std::ostream& out, const specific_ranges& r);
+
+    partition_key _pk;
+    clustering_row_ranges _ranges;
+};
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 // Schema-dependent.
@@ -73,11 +112,11 @@ public:
     std::vector<column_id> regular_columns;  // TODO: consider using bitmap
     option_set options;
 private:
-    class specific_ranges;
     std::unique_ptr<specific_ranges> _specific_ranges;
 public:
     partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
-        std::vector<column_id> regular_columns, option_set options);
+        std::vector<column_id> regular_columns, option_set options,
+        std::unique_ptr<specific_ranges> specific_ranges = nullptr);
     partition_slice(const partition_slice&);
     partition_slice(partition_slice&&);
     ~partition_slice();
@@ -89,13 +128,12 @@ public:
     const clustering_row_ranges& default_row_ranges() const {
         return _row_ranges;
     }
-
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static partition_slice deserialize(bytes_view& v);
+    const std::unique_ptr<specific_ranges>& get_specific_ranges() const {
+        return _specific_ranges;
+    }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
-    friend std::ostream& operator<<(std::ostream& out, const partition_slice::specific_ranges& ps);
+    friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
 
 constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
@@ -111,21 +149,17 @@ public:
     uint32_t row_limit;
     gc_clock::time_point timestamp;
 public:
-    read_command(const utils::UUID& cf_id,
-                 const table_schema_version& schema_version,
+    read_command(utils::UUID cf_id,
+                 table_schema_version schema_version,
                  partition_slice slice,
                  uint32_t row_limit = max_rows,
                  gc_clock::time_point now = gc_clock::now())
-        : cf_id(cf_id)
-        , schema_version(schema_version)
+        : cf_id(std::move(cf_id))
+        , schema_version(std::move(schema_version))
         , slice(std::move(slice))
         , row_limit(row_limit)
         , timestamp(now)
     { }
-
-    size_t serialized_size() const;
-    void serialize(bytes::iterator& out) const;
-    static read_command deserialize(bytes_view& v);
 
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };

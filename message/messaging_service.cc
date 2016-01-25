@@ -36,8 +36,176 @@
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "frozen_schema.hh"
+#include "serializer_impl.hh"
 
 namespace net {
+
+template <typename Output, typename T>
+void write(serializer s, Output& out, const foreign_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+foreign_ptr<T> read(serializer s, Input& in, rpc::type<foreign_ptr<T>>) {
+    return make_foreign(read(s, in, rpc::type<T>()));
+}
+
+template <typename Output, typename T>
+void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
+    return write(s, out, *v);
+}
+template <typename Input, typename T>
+lw_shared_ptr<T> read(serializer s, Input& in, rpc::type<lw_shared_ptr<T>>) {
+    return make_lw_shared(read(s, in, rpc::type<T>()));
+}
+
+// For vectors
+template <typename T, typename Output>
+void write(serializer, Output& out, const std::vector<T>& data) {
+    ser::serialize(out, data);
+}
+template <typename T, typename Input>
+std::vector<T> read(serializer, Input& in, rpc::type<std::vector<T>> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip syn
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_syn& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_syn
+read(serializer, Input& in, rpc::type<gms::gossip_digest_syn> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip ack
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_ack
+read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip ack2
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest_ack2& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest_ack2
+read(serializer, Input& in, rpc::type<gms::gossip_digest_ack2> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip digest
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest
+read(serializer, Input& in, rpc::type<gms::gossip_digest> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip versioned_value
+template<typename Output>
+void write(serializer, Output& out, const gms::versioned_value& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::versioned_value
+read(serializer, Input& in, rpc::type<gms::versioned_value> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip endpoint_state
+template<typename Output>
+void write(serializer, Output& out, const gms::endpoint_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::endpoint_state
+read(serializer, Input& in, rpc::type<gms::endpoint_state> type) {
+    return ser::deserialize(in, type);
+}
+
+// Gossip heart_beat_state
+template<typename Output>
+void write(serializer, Output& out, const gms::heart_beat_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::heart_beat_state
+read(serializer, Input& in, rpc::type<gms::heart_beat_state> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::read_command& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::read_command
+read(serializer, Input& in, rpc::type<query::read_command> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::partition_range& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::partition_range
+read(serializer, Input& in, rpc::type<query::partition_range> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const query::result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::result
+read(serializer, Input& in, rpc::type<query::result> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const frozen_mutation& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+frozen_mutation
+read(serializer, Input& in, rpc::type<frozen_mutation> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const reconcilable_result& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+reconcilable_result
+read(serializer, Input& in, rpc::type<reconcilable_result> type) {
+    return ser::deserialize(in, type);
+}
 
 static logging::logger logger("messaging_service");
 
@@ -434,14 +602,17 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
     return do_with(int(nr_retry), std::move(msg)..., [ms, verb, id, timeout, wait, nr_retry] (auto& retry, const auto&... messages) {
         return repeat_until_value([ms, verb, id, timeout, wait, nr_retry, &retry, &messages...] {
             return send_message_timeout<MsgIn>(ms, verb, id, timeout, messages...).then_wrapped(
-                    [verb, id, wait, nr_retry, &retry] (auto&& f) mutable {
+                    [verb, id, timeout, wait, nr_retry, &retry] (auto&& f) mutable {
                 try {
                     MsgInTuple ret = f.get();
                     if (retry != nr_retry) {
                         logger.info("Retry verb={} to {}, retry={}: OK", int(verb), id, retry);
                     }
                     return make_ready_future<stdx::optional<MsgInTuple>>(std::move(ret));
-                } catch (...) {
+                } catch (rpc::timeout_error) {
+                    logger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", int(verb), id, retry, timeout.count());
+                    throw;
+                } catch (rpc::closed_error) {
                     logger.info("Retry verb={} to {}, retry={}: {}", int(verb), id, retry, std::current_exception());
                     if (--retry == 0) {
                         throw;
@@ -449,6 +620,8 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                     return sleep(wait).then([] {
                         return make_ready_future<stdx::optional<MsgInTuple>>(stdx::nullopt);
                     });
+                } catch (...) {
+                    throw;
                 }
             });
         }).then([] (MsgInTuple result) {
@@ -471,10 +644,11 @@ auto send_message_oneway_timeout(messaging_service* ms, Timeout timeout, messagi
 
 // Wrappers for verbs
 
-// Retransmission parameters for streaming verbs
-// A stream plan gives up retrying in 10 minutes at most, 5 minutes at least
+// Retransmission parameters for streaming verbs.
+// A stream plan gives up retrying in 10*30 + 10*60 seconds (15 minutes) at
+// most, 10*30 seconds (5 minutes) at least.
 static constexpr int streaming_nr_retry = 10;
-static constexpr std::chrono::seconds streaming_timeout{30};
+static constexpr std::chrono::seconds streaming_timeout{10*60};
 static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
 // STREAM_INIT_MESSAGE

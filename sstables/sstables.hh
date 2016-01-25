@@ -221,9 +221,9 @@ public:
     mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
-    future<> write_components(memtable& mt);
+    future<> write_components(memtable& mt, bool backup = false);
     future<> write_components(::mutation_reader mr,
-            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size);
+            uint64_t estimated_partitions, schema_ptr schema, uint64_t max_sstable_size, bool backup = false);
 
     uint64_t get_estimated_key_count() const {
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *

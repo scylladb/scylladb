@@ -61,23 +61,20 @@ public:
     int64_t estimated_keys;
     std::map<int64_t, int64_t> sections;
     compression_info comp_info;
-    int64_t repaired_at;
     int32_t sstable_level;
 
     file_message_header() = default;
 
     file_message_header(UUID cf_id_, int32_t sequence_number_, sstring version_, format_types format_,
                         int64_t estimated_keys_, std::map<int64_t, int64_t> sections_,
-                        compression_info comp_info_, int64_t repaired_at_, int32_t sstable_level_)
+                        compression_info comp_info_)
         : cf_id(cf_id_)
         , sequence_number(sequence_number_)
         , version(version_)
         , format(format_)
         , estimated_keys(estimated_keys_)
         , sections(std::move(sections_))
-        , comp_info(std::move(comp_info_))
-        , repaired_at(repaired_at_)
-        , sstable_level(sstable_level_) {
+        , comp_info(std::move(comp_info_)) {
     }
 
     /**

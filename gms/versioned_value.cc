@@ -36,6 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "gms/versioned_value.hh"
+#include "message/messaging_service.hh"
 
 namespace gms {
 
@@ -52,19 +53,8 @@ constexpr const char* versioned_value::HIBERNATE;
 constexpr const char* versioned_value::SHUTDOWN;
 constexpr const char* versioned_value::REMOVAL_COORDINATOR;
 
-void versioned_value::serialize(bytes::iterator& out) const {
-    serialize_string(out, value);
-    serialize_int32(out, version);
-}
-
-versioned_value versioned_value::deserialize(bytes_view& v) {
-    auto value = read_simple_short_string(v);
-    auto version = read_simple<int32_t>(v);
-    return versioned_value(std::move(value), version);
-}
-
-size_t versioned_value::serialized_size() const {
-    return serialize_string_size(value) + serialize_int32_size;
+versioned_value versioned_value::factory::network_version() {
+    return versioned_value(sprint("%s",net::messaging_service::current_version));
 }
 
 }

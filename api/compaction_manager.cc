@@ -67,11 +67,14 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(json_void());
     });
 
-    cm::stop_compaction.set(r, [] (std::unique_ptr<request> req) {
-        //TBD
-        // FIXME
-        warn(unimplemented::cause::API);
-        return make_ready_future<json::json_return_type>("");
+    cm::stop_compaction.set(r, [&ctx] (std::unique_ptr<request> req) {
+        auto type = req->get_query_param("type");
+        return ctx.db.invoke_on_all([type] (database& db) {
+            auto& cm = db.get_compaction_manager();
+            cm.stop_compaction(type);
+        }).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<request> req) {

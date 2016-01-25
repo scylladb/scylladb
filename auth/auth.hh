@@ -112,5 +112,9 @@ public:
     static future<> setup_table(const sstring& name, const sstring& cql);
 
     static future<bool> has_existing_users(const sstring& cfname, const sstring& def_user_name, const sstring& name_column_name);
+
+    // For internal use. Run function "when system is up".
+    typedef std::function<future<>()> scheduled_func;
+    static void schedule_when_up(scheduled_func);
 };
 }

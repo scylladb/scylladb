@@ -11,6 +11,8 @@ umask 022
 
 console log
 
+expect stop
+
 pre-start script
     cd /var/lib/scylla
     . /etc/default/scylla-server

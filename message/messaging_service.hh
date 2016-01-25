@@ -53,8 +53,6 @@ namespace gms {
     class gossip_digest_ack2;
 }
 
-class frozen_mutation;
-
 namespace utils {
     class UUID;
 }
@@ -185,25 +183,6 @@ struct serializer {
     template <typename Output>
     void write(Output& output, uint64_t data) const { write_integral(output, data); }
 
-    // For vectors
-    template <typename T, typename Output>
-    inline void write(Output& out, const std::vector<T>& v) const {
-        write(out, uint32_t(v.size()));
-        for (auto&& e : v) {
-            write(out, e);
-        }
-    }
-    template <typename T, typename Input>
-    inline std::vector<T> read(Input& in, rpc::type<std::vector<T>>) const {
-        auto sz = read(in, rpc::type<uint32_t>());
-        std::vector<T> v;
-        v.reserve(sz);
-        while (sz--) {
-            v.push_back(read(in, rpc::type<T>()));
-        }
-        return v;
-    }
-
     // For messaging_verb
     template <typename Output>
     void write(Output& out, messaging_verb v) const {
@@ -228,16 +207,6 @@ struct serializer {
         return v;
     }
 
-    // For frozen_mutation
-    template <typename Output>
-    void write(Output& out, const frozen_mutation& v) const{
-        return write_serializable(out, v);
-    }
-    template <typename Input>
-    frozen_mutation read(Input& in, rpc::type<frozen_mutation>) const {
-        return read_serializable<frozen_mutation>(in);
-    }
-
     // For frozen_schema
     template <typename Output>
     void write(Output& out, const frozen_schema& v) const{
@@ -246,16 +215,6 @@ struct serializer {
     template <typename Input>
     frozen_schema read(Input& in, rpc::type<frozen_schema>) const {
         return read_serializable<frozen_schema>(in);
-    }
-
-    // For reconcilable_result
-    template <typename Output>
-    void write(Output& out, const reconcilable_result& v) const{
-        return write_serializable(out, v);
-    }
-    template <typename Input>
-    reconcilable_result read(Input& in, rpc::type<reconcilable_result>) const {
-        return read_serializable<reconcilable_result>(in);
     }
 
     template <typename Output>
@@ -297,23 +256,6 @@ struct serializer {
         return T::deserialize(bv);
     }
 
-    template <typename Output, typename T>
-    void write(Output& out, const foreign_ptr<T>& v) const {
-        return write(out, *v);
-    }
-    template <typename Input, typename T>
-    foreign_ptr<T> read(Input& in, rpc::type<foreign_ptr<T>>) const {
-        return make_foreign(read(in, rpc::type<T>()));
-    }
-
-    template <typename Output, typename T>
-    void write(Output& out, const lw_shared_ptr<T>& v) const {
-        return write(out, *v);
-    }
-    template <typename Input, typename T>
-    lw_shared_ptr<T> read(Input& in, rpc::type<lw_shared_ptr<T>>) const {
-        return make_lw_shared(read(in, rpc::type<T>()));
-    }
 };
 
 // thunk from new-style free function serialization to old-style member function

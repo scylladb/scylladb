@@ -160,8 +160,8 @@ future<> auth::password_authenticator::init() {
 
     return auth::setup_table(CREDENTIALS_CF, create_table).then([this] {
         // instead of once-timer, just schedule this later
-        sleep(auth::SUPERUSER_SETUP_DELAY).then([] {
-            auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([](bool exists) {
+        auth::schedule_when_up([] {
+            return auth::has_existing_users(CREDENTIALS_CF, DEFAULT_USER_NAME, USER_NAME).then([](bool exists) {
                 if (!exists) {
                     cql3::get_local_query_processor().process(sprint("INSERT INTO %s.%s (%s, %s) VALUES (?, ?) USING TIMESTAMP 0",
                                                     auth::AUTH_KS,
