@@ -60,6 +60,12 @@ class gossip_digest {
     int32_t get_max_version();
 };
 
+class gossip_digest_syn {
+    sstring get_cluster_id();
+    sstring get_partioner();
+    std::vector<gms::gossip_digest> get_gossip_digests();
+};
+
 class gossip_digest_ack {
     std::vector<gms::gossip_digest> get_gossip_digest_list();
     std::map<gms::inet_address, gms::endpoint_state> get_endpoint_state_map();

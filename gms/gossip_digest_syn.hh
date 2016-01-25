@@ -72,6 +72,14 @@ public:
         return _partioner;
     }
 
+    sstring get_cluster_id() const {
+        return cluster_id();
+    }
+
+    sstring get_partioner() const {
+        return partioner();
+    }
+
     std::vector<gossip_digest> get_gossip_digests() const {
         return _digests;
     }
