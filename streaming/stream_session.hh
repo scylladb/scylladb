@@ -156,7 +156,6 @@ public:
     inet_address peer;
     unsigned dst_cpu_id;
 private:
-    int _index;
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
 
@@ -197,10 +196,6 @@ public:
     ~stream_session();
 
     UUID plan_id();
-
-    int session_index() {
-        return _index;
-    }
 
     sstring description();
 

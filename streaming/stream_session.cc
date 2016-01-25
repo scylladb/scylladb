@@ -388,7 +388,7 @@ void stream_session::file_sent(const messages::file_message_header& header) {
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    auto progress = progress_info(peer, _index, "", dir, bytes, total);
+    auto progress = progress_info(peer, "", dir, bytes, total);
     _stream_result->handle_progress(std::move(progress));
 }
 
@@ -431,7 +431,7 @@ session_info stream_session::get_session_info() {
     for (auto& transfer : _transfers) {
         transfer_summaries.emplace_back(transfer.second.get_summary());
     }
-    return session_info(peer, _index, std::move(receiving_summaries), std::move(transfer_summaries), _state);
+    return session_info(peer, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
 void stream_session::receive_task_completed(UUID cf_id) {
