@@ -128,10 +128,6 @@ public:
         return result;
     }
 #endif
-public:
-    void serialize(bytes::iterator& out) const;
-    static file_message_header deserialize(bytes_view& v);
-    size_t serialized_size() const;
 };
 
 } // namespace messages
