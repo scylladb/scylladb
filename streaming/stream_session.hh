@@ -328,13 +328,6 @@ public:
 
     void follower_start_sent();
 
-    /**
-     * Call back after sending FileMessageHeader.
-     *
-     * @param header sent header
-     */
-    void file_sent(const messages::file_message_header& header);
-
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 
     void received(UUID cf_id, int sequence_number);

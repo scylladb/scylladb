@@ -374,19 +374,6 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::file_sent(const messages::file_message_header& header) {
-#if 0
-    auto header_size = header.size();
-    StreamingMetrics.totalOutgoingBytes.inc(headerSize);
-    metrics.outgoingBytes.inc(headerSize);
-#endif
-    // schedule timeout for receiving ACK
-    auto it = _transfers.find(header.cf_id);
-    if (it != _transfers.end()) {
-        //task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
-    }
-}
-
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
     auto progress = progress_info(peer, "", dir, bytes, total);
     _stream_result->handle_progress(std::move(progress));
