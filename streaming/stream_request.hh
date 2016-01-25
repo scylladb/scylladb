@@ -51,7 +51,6 @@ public:
     sstring keyspace;
     std::vector<query::range<token>> ranges;
     std::vector<sstring> column_families;
-    long repaired_at;
     stream_request() = default;
     stream_request(sstring _keyspace, std::vector<query::range<token>> _ranges, std::vector<sstring> _column_families)
         : keyspace(std::move(_keyspace))
