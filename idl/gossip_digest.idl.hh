@@ -64,4 +64,9 @@ class gossip_digest_ack {
     std::vector<gms::gossip_digest> get_gossip_digest_list();
     std::map<gms::inet_address, gms::endpoint_state> get_endpoint_state_map();
 };
+
+class gossip_digest_ack2 {
+    std::map<gms::inet_address, gms::endpoint_state> get_endpoint_state_map();
+};
+
 }
