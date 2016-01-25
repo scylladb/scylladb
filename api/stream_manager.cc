@@ -47,7 +47,7 @@ static hs::progress_info get_progress_info(const streaming::progress_info& info)
     res.direction = info.dir;
     res.file_name = info.file_name;
     res.peer = boost::lexical_cast<std::string>(info.peer);
-    res.session_index = info.session_index;
+    res.session_index = 0;
     res.total_bytes = info.total_bytes;
     return res;
 }
@@ -70,7 +70,7 @@ static hs::stream_state get_state(
     for (auto info : result_future.get_coordinator().get()->get_all_session_info()) {
         hs::stream_info si;
         si.peer = boost::lexical_cast<std::string>(info.peer);
-        si.session_index = info.session_index;
+        si.session_index = 0;
         si.state = info.state;
         si.connecting = si.peer;
         set_summaries(info.receiving_summaries, si.receiving_summaries);
