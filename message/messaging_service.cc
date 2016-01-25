@@ -206,6 +206,42 @@ read(serializer, Input& in, rpc::type<reconcilable_result> type) {
     return ser::deserialize(in, type);
 }
 
+// streaming reqeust
+template<typename Output>
+void write(serializer, Output& out, const streaming::stream_request& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::stream_request
+read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+    return ser::deserialize(in, type);
+}
+
+// streaming summary
+template<typename Output>
+void write(serializer, Output& out, const streaming::stream_summary& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::stream_summary
+read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+    return ser::deserialize(in, type);
+}
+
+// streaming prepare_message
+template<typename Output>
+void write(serializer, Output& out, const streaming::messages::prepare_message& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::messages::prepare_message
+read(serializer, Input& in, rpc::type<streaming::messages::prepare_message> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
 
 using inet_address = gms::inet_address;
