@@ -214,6 +214,18 @@ public:
         if (cfg.commit_log_location.empty()) {
             cfg.commit_log_location = "/var/lib/scylla/commitlog";
         }
+
+        if (cfg.max_active_writes == 0) {
+            cfg.max_active_writes = // TODO: call someone to get an idea...
+                            25 * smp::count;
+        }
+        cfg.max_active_writes = std::max(uint64_t(1), cfg.max_active_writes / smp::count);
+        if (cfg.max_active_flushes == 0) {
+            cfg.max_active_flushes = // TODO: call someone to get an idea...
+                            5 * smp::count;
+        }
+        cfg.max_active_flushes = std::max(uint64_t(1), cfg.max_active_flushes / smp::count);
+
         logger.trace("Commitlog {} maximum disk size: {} MB / cpu ({} cpus)",
                 cfg.commit_log_location, max_disk_size / (1024 * 1024),
                 smp::count);
@@ -250,6 +262,8 @@ public:
     }
 
     std::vector<sstring> get_active_names() const;
+    uint64_t get_num_dirty_segments() const;
+    uint64_t get_num_active_segments() const;
 
     using buffer_type = temporary_buffer<char>;
 
@@ -1117,6 +1131,19 @@ std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
     return res;
 }
 
+uint64_t db::commitlog::segment_manager::get_num_dirty_segments() const {
+    return std::count_if(_segments.begin(), _segments.end(), [](sseg_ptr s) {
+        return !s->is_still_allocating() && !s->is_clean();
+    });
+}
+
+uint64_t db::commitlog::segment_manager::get_num_active_segments() const {
+    return std::count_if(_segments.begin(), _segments.end(), [](sseg_ptr s) {
+        return s->is_still_allocating();
+    });
+}
+
+
 db::commitlog::segment_manager::buffer_type db::commitlog::segment_manager::acquire_buffer(size_t s) {
     auto i = _temp_buffers.begin();
     auto e = _temp_buffers.end();
@@ -1267,9 +1294,16 @@ future<> db::commitlog::shutdown() {
     return _segment_manager->shutdown();
 }
 
-
 size_t db::commitlog::max_record_size() const {
     return _segment_manager->max_mutation_size - segment::entry_overhead_size;
+}
+
+uint64_t db::commitlog::max_active_writes() const {
+    return _segment_manager->cfg.max_active_writes;
+}
+
+uint64_t db::commitlog::max_active_flushes() const {
+    return _segment_manager->cfg.max_active_flushes;
 }
 
 future<> db::commitlog::clear() {
@@ -1526,12 +1560,28 @@ uint64_t db::commitlog::get_pending_tasks() const {
                     + _segment_manager->totals.pending_flushes;
 }
 
+uint64_t db::commitlog::get_pending_writes() const {
+    return _segment_manager->totals.pending_writes;
+}
+
+uint64_t db::commitlog::get_pending_flushes() const {
+    return _segment_manager->totals.pending_flushes;
+}
+
 uint64_t db::commitlog::get_num_segments_created() const {
     return _segment_manager->totals.segments_created;
 }
 
 uint64_t db::commitlog::get_num_segments_destroyed() const {
     return _segment_manager->totals.segments_destroyed;
+}
+
+uint64_t db::commitlog::get_num_dirty_segments() const {
+    return _segment_manager->get_num_dirty_segments();
+}
+
+uint64_t db::commitlog::get_num_active_segments() const {
+    return _segment_manager->get_num_active_segments();
 }
 
 future<std::vector<db::commitlog::descriptor>> db::commitlog::list_existing_descriptors() const {
