@@ -50,7 +50,7 @@ sudo yum install -y flex bison dejagnu zlib-static glibc-static sharutils bc lib
 sudo yum install -y gcc-objc
 sudo yum install -y asciidoc
 sudo yum install -y gettext
-sudo yum install -y rpm-devel python34-devel guile-devel readline-devel ncurses-devel expat-devel texlive-collection-latexrecommended
+sudo yum install -y rpm-devel python34-devel guile-devel readline-devel ncurses-devel expat-devel texlive-collection-latexrecommended xz-devel libselinux-devel
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
     cd dist/redhat/centos_dep
