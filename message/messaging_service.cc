@@ -128,6 +128,18 @@ read(serializer, Input& in, rpc::type<gms::versioned_value> type) {
     return ser::deserialize(in, type);
 }
 
+// Gossip endpoint_state
+template<typename Output>
+void write(serializer, Output& out, const gms::endpoint_state& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::endpoint_state
+read(serializer, Input& in, rpc::type<gms::endpoint_state> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const query::read_command& data) {
     ser::serialize(out, data);
