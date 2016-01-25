@@ -79,9 +79,8 @@ void stream_result_future::init_receiving_side(UUID plan_id, sstring description
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
     auto si = session->get_session_info();
-    sslog.info("[Stream #{} ID#{}] Prepare completed with {}. Receiving {}, sending {}",
+    sslog.info("[Stream #{}] Prepare completed with {}. Receiving {}, sending {}",
                session->plan_id(),
-               session->session_index(),
                session->peer,
                si.get_total_files_to_receive(),
                si.get_total_files_to_send());
