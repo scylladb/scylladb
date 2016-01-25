@@ -171,7 +171,6 @@ private:
 
     int _retries;
     bool _is_aborted =  false;
-    bool _keep_ss_table_level;
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
@@ -200,9 +199,6 @@ public:
     sstring description();
 
 public:
-    bool keep_ss_table_level() {
-        return _keep_ss_table_level;
-    }
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
