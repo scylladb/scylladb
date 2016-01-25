@@ -431,7 +431,7 @@ public:
             logger.trace("Sync not needed {}: ({} / {})", *this, position(), _flush_pos);
             return make_ready_future<sseg_ptr>(shared_from_this());
         }
-        return cycle().then([](auto seg) {
+        return cycle().then([](sseg_ptr seg) {
             return seg->flush();
         });
     }
@@ -619,7 +619,7 @@ public:
             if (position() + s > _segment_manager->max_size) {
                 // do this in next segment instead.
                 return finish_and_get_new().then(
-                        [id, writer = std::move(writer)] (auto new_seg) mutable {
+                        [id, writer = std::move(writer)] (sseg_ptr new_seg) mutable {
                             return new_seg->allocate(id, std::move(writer));
                         });
             }
@@ -664,7 +664,7 @@ public:
 
         // finally, check if we're required to sync.
         if (must_sync()) {
-            return sync().then([rp](auto seg) {
+            return sync().then([rp](sseg_ptr seg) {
                 return make_ready_future<replay_position>(rp);
             });
         }
@@ -753,7 +753,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
                 }
                 return make_ready_future<std::experimental::optional<directory_entry_type>>(de.type);
             };
-            return entry_type(de).then([this, de](auto type) {
+            return entry_type(de).then([this, de](std::experimental::optional<directory_entry_type> type) {
                 if (type == directory_entry_type::regular && de.name[0] != '.') {
                     try {
                         _result.emplace_back(de.name);
@@ -770,7 +770,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         }
     };
 
-    return engine().open_directory(dirname).then([this, dirname](auto dir) {
+    return engine().open_directory(dirname).then([this, dirname](file dir) {
         auto h = make_lw_shared<helper>(std::move(dirname), std::move(dir));
         return h->done().then([h]() {
             return make_ready_future<std::vector<db::commitlog::descriptor>>(std::move(h->_result));
@@ -779,7 +779,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
 }
 
 future<> db::commitlog::segment_manager::init() {
-    return list_descriptors(cfg.commit_log_location).then([this](auto descs) {
+    return list_descriptors(cfg.commit_log_location).then([this](std::vector<descriptor> descs) {
         segment_id_type id = std::chrono::duration_cast<std::chrono::milliseconds>(runtime::get_boot_time().time_since_epoch()).count() + 1;
         for (auto& d : descs) {
             id = std::max(id, replay_position(d.id).base_id());
@@ -980,7 +980,7 @@ std::ostream& db::operator<<(std::ostream& out, const db::replay_position& p) {
 void db::commitlog::segment_manager::discard_unused_segments() {
     logger.trace("Checking for unused segments ({} active)", _segments.size());
 
-    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto s) {
+    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](sseg_ptr s) {
         if (s->can_delete()) {
             logger.debug("Segment {} is unused", *s);
             return true;
@@ -1074,7 +1074,7 @@ void db::commitlog::segment_manager::on_timer() {
             return this->allocate_segment(false).then([this](sseg_ptr s) {
                 if (!_shutdown) {
                     // insertion sort.
-                    auto i = std::upper_bound(_reserve_segments.begin(), _reserve_segments.end(), s, [](auto s1, auto s2) {
+                    auto i = std::upper_bound(_reserve_segments.begin(), _reserve_segments.end(), s, [](sseg_ptr s1, sseg_ptr s2) {
                         const descriptor& d1 = s1->_desc;
                         const descriptor& d2 = s2->_desc;
                         return d1.id < d2.id;
@@ -1086,7 +1086,7 @@ void db::commitlog::segment_manager::on_timer() {
                 --_reserve_allocating;
             });
         });
-    }).handle_exception([](auto ep) {
+    }).handle_exception([](std::exception_ptr ep) {
         logger.warn("Exception in segment reservation: {}", ep);
     });
     arm();
