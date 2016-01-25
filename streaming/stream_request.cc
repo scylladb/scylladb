@@ -41,55 +41,6 @@
 
 namespace streaming {
 
-void stream_request::serialize(bytes::iterator& out) const {
-    serialize_string(out, keyspace);
-
-    serialize_int32(out, uint32_t(ranges.size()));
-    for (auto& x : ranges) {
-        x.serialize(out);
-    }
-
-    serialize_int32(out, uint32_t(column_families.size()));
-    for (auto& x : column_families) {
-        serialize_string(out, x);
-    }
-}
-
-stream_request stream_request::deserialize(bytes_view& v) {
-    auto keyspace_ = read_simple_short_string(v);
-
-    auto num = read_simple<int32_t>(v);
-    std::vector<query::range<token>> ranges_;
-    for (int32_t i = 0; i < num; i++) {
-        ranges_.push_back(query::range<token>::deserialize(v));
-    }
-
-    num = read_simple<int32_t>(v);
-    std::vector<sstring> column_families_;
-    for (int32_t i = 0; i < num; i++) {
-        auto s = read_simple_short_string(v);
-        column_families_.push_back(std::move(s));
-    }
-
-    return stream_request(std::move(keyspace_), std::move(ranges_), std::move(column_families_));
-}
-
-size_t stream_request::serialized_size() const {
-    size_t size = serialize_string_size(keyspace);
-
-    size += serialize_int32_size;
-    for (auto& x : ranges) {
-        size += x.serialized_size();
-    }
-
-    size += serialize_int32_size;
-    for (auto& x : column_families) {
-        size += serialize_string_size(x);
-    }
-
-    return size;
-}
-
 std::ostream& operator<<(std::ostream& os, const stream_request& sr) {
     os << "[ ks = " << sr.keyspace << " cf =  ";
     for (auto& cf : sr.column_families) {

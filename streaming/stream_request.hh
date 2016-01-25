@@ -58,10 +58,6 @@ public:
         , column_families(std::move(_column_families)) {
     }
     friend std::ostream& operator<<(std::ostream& os, const stream_request& r);
-public:
-    void serialize(bytes::iterator& out) const;
-    static stream_request deserialize(bytes_view& v);
-    size_t serialized_size() const;
 };
 
 } // namespace streaming

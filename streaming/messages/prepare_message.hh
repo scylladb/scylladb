@@ -81,10 +81,6 @@ public:
         return sb.toString();
     }
 #endif
-public:
-    void serialize(bytes::iterator& out) const;
-    static prepare_message deserialize(bytes_view& v);
-    size_t serialized_size() const;
 };
 
 } // namespace messages
