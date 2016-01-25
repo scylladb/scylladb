@@ -44,35 +44,37 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-future<stream_state> stream_result_future::init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
-    auto future = create_and_register(plan_id_, description_, coordinator_);
+future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstring description_,
+        std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_) {
+    auto sr = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
+    get_local_stream_manager().register_sending(sr);
+
     for (auto& listener : listeners_) {
-        future->add_event_listener(listener);
+        sr->add_event_listener(listener);
     }
 
     sslog.info("[Stream #{}] Executing streaming plan for {}", plan_id_,  description_);
 
     // Initialize and start all sessions
     for (auto& session : coordinator_->get_all_stream_sessions()) {
-        session->init(future);
+        session->init(sr);
     }
     coordinator_->connect_all_stream_sessions();
 
-    return future->_done.get_future();
+    return sr->_done.get_future();
 }
 
-void stream_result_future::init_receiving_side(int session_index, UUID plan_id,
-    sstring description, inet_address from, bool keep_ss_table_level) {
+void stream_result_future::init_receiving_side(UUID plan_id, sstring description, inet_address from) {
     auto& sm = get_local_stream_manager();
-    auto f = sm.get_receiving_stream(plan_id);
-    if (f == nullptr) {
-        sslog.info("[Stream #{} ID#{}] Creating new streaming plan for {}, with {}", plan_id, session_index, description, from);
+    auto sr = sm.get_receiving_stream(plan_id);
+    if (sr == nullptr) {
+        sslog.info("[Stream #{}] Creating new streaming plan for {}, with {}", plan_id, description, from);
         // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
         // TODO: stream_result_future needs a ref to stream_coordinator.
         bool is_receiving = true;
-        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, keep_ss_table_level, is_receiving));
+        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, is_receiving));
     }
-    sslog.info("[Stream #{} ID#{}] Received streaming plan for {}, with {}", plan_id, session_index, description, from);
+    sslog.info("[Stream #{}] Received streaming plan for {}, with {}", plan_id, description, from);
 }
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
@@ -132,13 +134,6 @@ stream_state stream_result_future::get_current_state() {
 void stream_result_future::handle_progress(progress_info progress) {
     _coordinator->update_progress(progress);
     fire_stream_event(progress_event(plan_id, std::move(progress)));
-}
-
-shared_ptr<stream_result_future> stream_result_future::create_and_register(UUID plan_id_, sstring description_, shared_ptr<stream_coordinator> coordinator_) {
-    auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
-    auto& sm = get_local_stream_manager();
-    sm.register_sending(future);
-    return future;
 }
 
 } // namespace streaming

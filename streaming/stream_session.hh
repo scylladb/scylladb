@@ -47,7 +47,6 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
-#include "streaming/messages/incoming_file_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/session_info.hh"
@@ -194,7 +193,7 @@ public:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    stream_session(inet_address peer_, int index_, bool keep_ss_table_level_);
+    stream_session(inet_address peer_);
     ~stream_session();
 
     UUID plan_id();
@@ -233,8 +232,8 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, long repaired_at) {
-        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families), repaired_at);
+    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families));
     }
 
     /**
@@ -248,7 +247,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at);
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
@@ -344,13 +343,6 @@ public:
      * @param header sent header
      */
     void file_sent(const messages::file_message_header& header);
-
-    /**
-     * Call back after receiving FileMessageHeader.
-     *
-     * @param message received file
-     */
-    void receive(messages::incoming_file_message message);
 
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 

@@ -107,7 +107,7 @@ public:
         , _tokens(std::move(tokens))
         , _address(address)
         , _description(std::move(description))
-        , _stream_plan(_description, true) {
+        , _stream_plan(_description) {
     }
 
     range_streamer(distributed<database>& db, token_metadata& tm, inet_address address, sstring description)

@@ -54,8 +54,6 @@ void file_message_header::serialize(bytes::iterator& out) const {
         serialize_int64(out, x.second);
     }
     comp_info.serialize(out);
-    serialize_int64(out, repaired_at);
-    serialize_int32(out, sstable_level);
 }
 
 file_message_header file_message_header::deserialize(bytes_view& v) {
@@ -72,13 +70,9 @@ file_message_header file_message_header::deserialize(bytes_view& v) {
         sections_.emplace(key, val);
     }
     auto comp_info_ = compression_info::deserialize(v);
-    auto repaired_at_ = read_simple<int64_t>(v);
-    auto sstable_level_ = read_simple<int32_t>(v);
-
     return file_message_header(std::move(cf_id_), std::move(sequence_number_),
                                std::move(version_), format_, estimated_keys_,
-                               std::move(sections_), std::move(comp_info_),
-                               repaired_at_, sstable_level_);
+                               std::move(sections_), std::move(comp_info_));
 }
 
 size_t file_message_header::serialized_size() const {
@@ -90,8 +84,6 @@ size_t file_message_header::serialized_size() const {
     size += serialize_int32_size; // sections;
     size += (serialize_int64_size + serialize_int64_size) * sections.size();
     size += comp_info.serialized_size();
-    size += serialize_int64_size;
-    size += serialize_int32_size;
     return size;
 }
 

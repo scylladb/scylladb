@@ -40,7 +40,6 @@
 
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
-#include "streaming/messages/incoming_file_message.hh"
 #include <memory>
 
 namespace streaming {
@@ -65,28 +64,6 @@ private:
 public:
     stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();
-
-    /**
-     * Process received file.
-     *
-     * @param sstable SSTable file received.
-     */
-    void received(messages::incoming_file_message message) {
-        // TODO: Iterate message.mr and write each mutation
-#if 0
-        if (done)
-            return;
-
-        assert cfId.equals(sstable.metadata.cfId);
-
-        sstables.add(sstable);
-        if (sstables.size() == totalFiles)
-        {
-            done = true;
-            executor.submit(new OnCompletionRunnable(this));
-        }
-#endif
-    }
 
     virtual int get_total_number_of_files() override {
         return total_files;

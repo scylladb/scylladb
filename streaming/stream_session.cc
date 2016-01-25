@@ -42,10 +42,6 @@
 #include "streaming/messages/stream_init_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/messages/outgoing_file_message.hh"
-#include "streaming/messages/received_message.hh"
-#include "streaming/messages/retry_message.hh"
-#include "streaming/messages/complete_message.hh"
-#include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "mutation_reader.hh"
@@ -83,10 +79,9 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), from, src_cpu_id, dst_cpu_id] () mutable {
-            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE from {}, src_cpu_id={}, dst_cpu_id={}",
-                    msg.plan_id, from, src_cpu_id, dst_cpu_id);
-            stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
-                msg.description, msg.from, msg.keep_ss_table_level);
+            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE from {} for {}, src_cpu_id={}, dst_cpu_id={}",
+                    msg.plan_id, from, msg.description, src_cpu_id, dst_cpu_id);
+            stream_result_future::init_receiving_side(msg.plan_id, msg.description, from);
             return make_ready_future<unsigned>(dst_cpu_id);
         });
     });
@@ -99,7 +94,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->init(f);
                 session->dst_cpu_id = src_cpu_id;
@@ -122,7 +117,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->follower_start_sent();
@@ -145,7 +140,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from.addr);
+                auto session = coordinator->get_or_create_session(from.addr);
                 assert(session);
                 session->start_keep_alive_timer();
                 return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
@@ -166,7 +161,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->receive_task_completed(cf_id);
@@ -191,7 +186,7 @@ void stream_session::init_messaging_service_handler() {
             if (f) {
                 auto coordinator = f->get_coordinator();
                 assert(coordinator);
-                auto session = coordinator->get_or_create_next_session(from);
+                auto session = coordinator->get_or_create_session(from);
                 assert(session);
                 session->start_keep_alive_timer();
                 session->complete();
@@ -208,10 +203,8 @@ distributed<database>* stream_session::_db;
 
 stream_session::stream_session() = default;
 
-stream_session::stream_session(inet_address peer_, int index_, bool keep_ss_table_level_)
-    : peer(peer_)
-    , _index(index_)
-    , _keep_ss_table_level(keep_ss_table_level_) {
+stream_session::stream_session(inet_address peer_)
+    : peer(peer_) {
     //this.metrics = StreamingMetrics.get(connecting);
 }
 
@@ -287,10 +280,7 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
 
 future<> stream_session::initiate() {
     sslog.debug("[Stream #{}] Sending stream init for incoming stream", plan_id());
-    auto from = utils::fb_utilities::get_broadcast_address();
-    bool is_for_outgoing = true;
-    messages::stream_init_message msg(from, session_index(), plan_id(), description(),
-            is_for_outgoing, keep_ss_table_level());
+    messages::stream_init_message msg(plan_id(), description());
     auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND SENDSTREAM_INIT_MESSAGE to {}", plan_id(), id);
     return ms().send_stream_init_message(std::move(id), std::move(msg)).then_wrapped([this, id] (auto&& f) {
@@ -379,7 +369,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
                 throw std::runtime_error(err);
             }
         }
-        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
+        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true);
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
@@ -423,20 +413,6 @@ void stream_session::file_sent(const messages::file_message_header& header) {
     if (it != _transfers.end()) {
         //task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
     }
-}
-
-void stream_session::receive(messages::incoming_file_message message) {
-#if 0
-    auto header_size = message.header.size();
-    StreamingMetrics.totalIncomingBytes.inc(headerSize);
-    metrics.incomingBytes.inc(headerSize);
-#endif
-    // send back file received message
-    // handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
-    auto cf_id = message.header.cf_id;
-    auto it = _receivers.find(cf_id);
-    assert(it != _receivers.end());
-    it->second.received(std::move(message));
 }
 
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
@@ -595,7 +571,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     return stores;
 }
 
-void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables) {
     std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
     if (flush_tables) {
@@ -613,7 +589,7 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
         mutation_reader mr = make_combined_reader(std::move(readers));
         // FIXME: sstable.estimatedKeysForRanges(ranges)
         long estimated_keys = 0;
-        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys, repaired_at);
+        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys);
     }
     if (!stream_details.empty()) {
         add_transfer_files(std::move(ranges), std::move(stream_details));
