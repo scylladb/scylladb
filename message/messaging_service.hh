@@ -82,16 +82,15 @@ enum class messaging_verb : int32_t {
     REPLICATION_FINISHED = 12,
     MIGRATION_REQUEST = 13,
     // Used by streaming
-    STREAM_INIT_MESSAGE = 14,
-    PREPARE_MESSAGE = 15,
-    PREPARE_DONE_MESSAGE = 16,
-    STREAM_MUTATION = 17,
-    STREAM_MUTATION_DONE = 18,
-    COMPLETE_MESSAGE = 19,
+    PREPARE_MESSAGE = 14,
+    PREPARE_DONE_MESSAGE = 15,
+    STREAM_MUTATION = 16,
+    STREAM_MUTATION_DONE = 17,
+    COMPLETE_MESSAGE = 18,
     // end of streaming verbs
-    REPAIR_CHECKSUM_RANGE = 20,
-    GET_SCHEMA_VERSION = 21,
-    LAST = 22,
+    REPAIR_CHECKSUM_RANGE = 19,
+    GET_SCHEMA_VERSION = 20,
+    LAST = 21,
 };
 
 } // namespace net
