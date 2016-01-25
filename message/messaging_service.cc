@@ -24,7 +24,6 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
-#include "streaming/messages/stream_init_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -651,27 +650,16 @@ static constexpr int streaming_nr_retry = 10;
 static constexpr std::chrono::seconds streaming_timeout{10*60};
 static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
-// STREAM_INIT_MESSAGE
-void messaging_service::register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo,
-        streaming::messages::stream_init_message msg)>&& func) {
-    register_handler(this, messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
-}
-future<unsigned> messaging_service::send_stream_init_message(msg_addr id, streaming::messages::stream_init_message msg) {
-    return send_message_timeout_and_retry<unsigned>(this, messaging_verb::STREAM_INIT_MESSAGE, id,
-        streaming_timeout, streaming_nr_retry, streaming_wait_before_retry, std::move(msg));
-}
-
 // PREPARE_MESSAGE
 void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-        streaming::messages::prepare_message msg, UUID plan_id,
-        unsigned dst_cpu_id)>&& func) {
+        streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func) {
     register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
 }
 future<streaming::messages::prepare_message> messaging_service::send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
-        unsigned dst_cpu_id) {
+        sstring description) {
     return send_message_timeout_and_retry<streaming::messages::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        std::move(msg), plan_id, dst_cpu_id);
+        std::move(msg), plan_id, std::move(description));
 }
 
 // PREPARE_DONE_MESSAGE

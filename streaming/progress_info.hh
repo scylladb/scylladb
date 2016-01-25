@@ -55,16 +55,14 @@ public:
     enum class direction { OUT, IN };
 
     inet_address peer;
-    int session_index;
     sstring file_name;
     direction dir;
     long current_bytes;
     long total_bytes;
 
     progress_info() = default;
-    progress_info(inet_address _peer, int _session_index, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
+    progress_info(inet_address _peer, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
         : peer(_peer)
-        , session_index(_session_index)
         , file_name(_file_name)
         , dir(_dir)
         , current_bytes(_current_bytes)

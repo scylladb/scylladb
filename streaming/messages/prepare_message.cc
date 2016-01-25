@@ -54,6 +54,8 @@ void prepare_message::serialize(bytes::iterator& out) const {
     for (auto& x : summaries) {
         x.serialize(out);
     }
+
+    serialize_int32(out, dst_cpu_id);
 }
 
 prepare_message prepare_message::deserialize(bytes_view& v) {
@@ -71,7 +73,9 @@ prepare_message prepare_message::deserialize(bytes_view& v) {
         summaries_.push_back(std::move(s));
     }
 
-    return prepare_message(std::move(requests_), std::move(summaries_));
+    auto dst_cpu_id = read_simple<int32_t>(v);
+
+    return prepare_message(std::move(requests_), std::move(summaries_), dst_cpu_id);
 }
 
 size_t prepare_message::serialized_size() const {
@@ -84,6 +88,8 @@ size_t prepare_message::serialized_size() const {
     for (auto& x : summaries) {
         size += x.serialized_size();
     }
+
+    size += serialize_int32_size;
     return size;
 }
 

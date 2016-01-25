@@ -39,7 +39,6 @@
 #include "log.hh"
 #include "message/messaging_service.hh"
 #include "streaming/stream_session.hh"
-#include "streaming/messages/stream_init_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/messages/outgoing_file_message.hh"
 #include "streaming/stream_result_future.hh"
@@ -74,39 +73,31 @@ static auto get_stream_result_future(utils::UUID plan_id) {
 }
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_stream_init_message([] (const rpc::client_info& cinfo, messages::stream_init_message msg) {
+    ms().register_prepare_message([] (const rpc::client_info& cinfo, messages::prepare_message msg, UUID plan_id, sstring description) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), from, src_cpu_id, dst_cpu_id] () mutable {
-            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE from {} for {}, src_cpu_id={}, dst_cpu_id={}",
-                    msg.plan_id, from, msg.description, src_cpu_id, dst_cpu_id);
-            stream_result_future::init_receiving_side(msg.plan_id, msg.description, from);
-            return make_ready_future<unsigned>(dst_cpu_id);
-        });
-    });
-    ms().register_prepare_message([] (const rpc::client_info& cinfo, messages::prepare_message msg, UUID plan_id, unsigned dst_cpu_id) {
-        const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
-        const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, from, src_cpu_id] () mutable {
-            auto f = get_stream_result_future(plan_id);
+        return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id] () mutable {
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}", plan_id, from);
+            auto& sm = get_local_stream_manager();
+            auto f = sm.get_receiving_stream(plan_id);
             if (f) {
-                auto coordinator = f->get_coordinator();
-                assert(coordinator);
-                auto session = coordinator->get_or_create_session(from);
-                assert(session);
-                session->init(f);
-                session->dst_cpu_id = src_cpu_id;
-                session->start_keep_alive_timer();
-                sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
-                    session->plan_id(), from, session->peer, session->dst_cpu_id);
-                return session->prepare(std::move(msg.requests), std::move(msg.summaries));
+                sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}, stream_plan exists, duplicated message received?", plan_id, from);
+                throw std::runtime_error("stream_plan exists");
             } else {
-                auto err = sprint("[Stream #%s] GOT PREPARE_MESSAGE from %s: Can not find stream_manager", plan_id, from);
-                sslog.warn(err.c_str());
-                throw std::runtime_error(err);
+                stream_result_future::init_receiving_side(plan_id, description, from);
+                f = sm.get_receiving_stream(plan_id);
             }
+            auto coordinator = f->get_coordinator();
+            assert(coordinator);
+            auto session = coordinator->get_or_create_session(from);
+            assert(session);
+            session->init(f);
+            session->dst_cpu_id = src_cpu_id;
+            session->start_keep_alive_timer();
+            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
+                session->plan_id(), from, session->peer, session->dst_cpu_id);
+            return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
     ms().register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
@@ -278,25 +269,6 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
     return make_ready_future<>();
 }
 
-future<> stream_session::initiate() {
-    sslog.debug("[Stream #{}] Sending stream init for incoming stream", plan_id());
-    messages::stream_init_message msg(plan_id(), description());
-    auto id = msg_addr{this->peer, 0};
-    sslog.debug("[Stream #{}] SEND SENDSTREAM_INIT_MESSAGE to {}", plan_id(), id);
-    return ms().send_stream_init_message(std::move(id), std::move(msg)).then_wrapped([this, id] (auto&& f) {
-        try {
-            unsigned dst_cpu_id = f.get0();
-            this->start_keep_alive_timer();
-            sslog.debug("[Stream #{}] GOT STREAM_INIT_MESSAGE Reply from {}: dst_cpu_id={}", this->plan_id(), this->peer, dst_cpu_id);
-            this->dst_cpu_id = dst_cpu_id;
-        } catch (...) {
-            sslog.error("[Stream #{}] Fail to send STREAM_INIT_MESSAGE to {}: {}", this->plan_id(), id, std::current_exception());
-            throw;
-        }
-        return make_ready_future<>();
-    });
-}
-
 
 future<> stream_session::on_initialization_complete() {
     // send prepare message
@@ -306,14 +278,14 @@ future<> stream_session::on_initialization_complete() {
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
-    auto id = msg_addr{this->peer, this->dst_cpu_id};
+    auto id = msg_addr{this->peer, 0};
     sslog.debug("[Stream #{}] SEND PREPARE_MESSAGE to {}", plan_id(), id);
-    return ms().send_prepare_message(id, std::move(prepare), plan_id(),
-        this->dst_cpu_id).then_wrapped([this, id] (auto&& f) {
+    return ms().send_prepare_message(id, std::move(prepare), plan_id(), description()).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
             this->start_keep_alive_timer();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);
+            this->dst_cpu_id = msg.dst_cpu_id;
             for (auto& summary : msg.summaries) {
                 this->prepare_receiving(summary);
             }
@@ -393,7 +365,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
             prepare.summaries.emplace_back(task.get_summary());
         }
     }
-
+    prepare.dst_cpu_id = engine().cpu_id();;
     return make_ready_future<messages::prepare_message>(std::move(prepare));
 }
 
@@ -402,21 +374,8 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::file_sent(const messages::file_message_header& header) {
-#if 0
-    auto header_size = header.size();
-    StreamingMetrics.totalOutgoingBytes.inc(headerSize);
-    metrics.outgoingBytes.inc(headerSize);
-#endif
-    // schedule timeout for receiving ACK
-    auto it = _transfers.find(header.cf_id);
-    if (it != _transfers.end()) {
-        //task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
-    }
-}
-
 void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    auto progress = progress_info(peer, _index, "", dir, bytes, total);
+    auto progress = progress_info(peer, "", dir, bytes, total);
     _stream_result->handle_progress(std::move(progress));
 }
 
@@ -459,7 +418,7 @@ session_info stream_session::get_session_info() {
     for (auto& transfer : _transfers) {
         transfer_summaries.emplace_back(transfer.second.get_summary());
     }
-    return session_info(peer, _index, std::move(receiving_summaries), std::move(transfer_summaries), _state);
+    return session_info(peer, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
 void stream_session::receive_task_completed(UUID cf_id) {
@@ -656,14 +615,8 @@ void stream_session::start() {
     } else {
         sslog.info("[Stream #{}] Starting streaming to {} through {}", plan_id(), peer, connecting);
     }
-    initiate().then([this] {
-        return on_initialization_complete();
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            this->on_error();
-        }
+    on_initialization_complete().handle_exception([this] (auto ep) {
+        this->on_error();
     });
 }
 

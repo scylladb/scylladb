@@ -156,7 +156,6 @@ public:
     inet_address peer;
     unsigned dst_cpu_id;
 private:
-    int _index;
     // should not be null when session is started
     shared_ptr<stream_result_future> _stream_result;
 
@@ -172,7 +171,6 @@ private:
 
     int _retries;
     bool _is_aborted =  false;
-    bool _keep_ss_table_level;
 
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
@@ -198,16 +196,9 @@ public:
 
     UUID plan_id();
 
-    int session_index() {
-        return _index;
-    }
-
     sstring description();
 
 public:
-    bool keep_ss_table_level() {
-        return _keep_ss_table_level;
-    }
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
@@ -336,13 +327,6 @@ public:
     future<messages::prepare_message> prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
     void follower_start_sent();
-
-    /**
-     * Call back after sending FileMessageHeader.
-     *
-     * @param header sent header
-     */
-    void file_sent(const messages::file_message_header& header);
 
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 
