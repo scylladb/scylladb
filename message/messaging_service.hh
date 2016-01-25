@@ -354,16 +354,11 @@ public:
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
-    // Wrapper for STREAM_INIT_MESSAGE verb
-    void register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo, streaming::messages::stream_init_message msg)>&& func);
-    future<unsigned> send_stream_init_message(msg_addr id, streaming::messages::stream_init_message msg);
-
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-            streaming::messages::prepare_message msg, UUID plan_id,
-            unsigned dst_cpu_id)>&& func);
+            streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func);
     future<streaming::messages::prepare_message> send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
-            unsigned dst_cpu_id);
+            sstring description);
 
     // Wrapper for PREPARE_DONE_MESSAGE verb
     void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
