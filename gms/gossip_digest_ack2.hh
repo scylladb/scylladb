@@ -69,13 +69,6 @@ public:
         return _map;
     }
 
-    // The following replaces GossipDigestAck2Serializer from the Java code
-    void serialize(bytes::iterator& out) const;
-
-    static gossip_digest_ack2 deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
-
     friend std::ostream& operator<<(std::ostream& os, const gossip_digest_ack2& ack2);
 };
 

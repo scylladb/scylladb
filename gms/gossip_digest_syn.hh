@@ -84,13 +84,6 @@ public:
         return _digests;
     }
 
-    // The following replaces GossipDigestSynSerializer from the Java code
-    void serialize(bytes::iterator& out) const;
-
-    static gossip_digest_syn deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
-
     friend std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn);
 };
 
