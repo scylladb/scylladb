@@ -239,14 +239,6 @@ public:
             return versioned_value(to_sstring(value));
         }
     };
-
-    // The following replaces VersionedValueSerializer from the Java code
-public:
-    void serialize(bytes::iterator& out) const;
-
-    static versioned_value deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
 }; // class versioned_value
 
 } // namespace gms
