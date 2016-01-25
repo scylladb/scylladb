@@ -72,9 +72,9 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
         row_cache cache(s, mutation_source([m] (schema_ptr s, const query::partition_range&) {
             assert(m.schema() == s);
             return make_reader_returning(m);
-        }), [m] (auto&&) {
+        }), key_source([m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }, tracker);
+        }), tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
@@ -91,9 +91,9 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
         row_cache cache(s, mutation_source([m] (schema_ptr s, const query::partition_range&) {
             assert(m.schema() == s);
             return make_reader_returning(m);
-        }), [m] (auto&&) {
+        }), key_source([m] (auto&&) {
             return make_key_from_mutation_reader(make_reader_returning(m));
-        }, tracker);
+        }), tracker);
 
         assert_that(cache.make_reader(s, query::full_partition_range))
             .produces(m)
@@ -458,13 +458,13 @@ SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
             }
             return make_combined_reader(std::move(readers));
         });
-        auto memtables_key_source = [&] (const query::partition_range& pr) {
+        auto memtables_key_source = key_source([&] (const query::partition_range& pr) {
             std::vector<key_reader> readers;
             for (auto&& mt : memtables) {
                 readers.emplace_back(mt->as_key_source()(pr));
             }
             return make_combined_reader(s, std::move(readers));
-        };
+        });
         throttled_mutation_source cache_source(memtables_data_source);
         cache_tracker tracker;
         row_cache cache(s, cache_source, memtables_key_source, tracker);

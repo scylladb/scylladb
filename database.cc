@@ -222,7 +222,7 @@ column_family::make_sstable_reader(schema_ptr s, const query::partition_range& p
 }
 
 key_source column_family::sstables_as_key_source() const {
-    return [this] (const query::partition_range& range) {
+    return key_source([this] (const query::partition_range& range) {
         std::vector<key_reader> readers;
         readers.reserve(_sstables->size());
         std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& entry) {
@@ -236,7 +236,7 @@ key_source column_family::sstables_as_key_source() const {
             return rd;
         });
         return make_combined_reader(_schema, std::move(readers));
-    };
+    });
 }
 
 // Exposed for testing, not performance critical.

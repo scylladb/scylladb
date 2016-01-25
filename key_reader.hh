@@ -82,4 +82,11 @@ key_reader make_filtering_reader(key_reader&& reader, Filter&& filter) {
     return make_key_reader<filtering_key_reader<Filter>>(std::move(reader), std::forward<Filter>(filter));
 }
 
-using key_source = std::function<key_reader(const query::partition_range& range)>;
+class key_source {
+    std::function<key_reader(const query::partition_range& range)> _fn;
+public:
+    key_source(std::function<key_reader(const query::partition_range& range)> fn) : _fn(std::move(fn)) {}
+    key_reader operator()(const query::partition_range& range) {
+        return _fn(range);
+    }
+};
