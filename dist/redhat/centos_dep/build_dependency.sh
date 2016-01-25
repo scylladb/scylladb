@@ -40,6 +40,10 @@ if [ ! -f gdb-7.10.1-30.fc23.src.rpm ]; then
    wget https://kojipkgs.fedoraproject.org//packages/gdb/7.10.1/30.fc23/src/gdb-7.10.1-30.fc23.src.rpm
 fi
 
+if [ ! -f pyparsing-2.0.3-2.fc23.src.rpm ]; then
+   wget https://kojipkgs.fedoraproject.org//packages/pyparsing/2.0.3/2.fc23/src/pyparsing-2.0.3-2.fc23.src.rpm
+fi
+
 cd -
 
 sudo yum install -y cryptopp cryptopp-devel jsoncpp jsoncpp-devel lz4 lz4-devel yaml-cpp yaml-cpp-devel thrift thrift-devel scons gtest gtest-devel python34
@@ -51,6 +55,7 @@ sudo yum install -y gcc-objc
 sudo yum install -y asciidoc
 sudo yum install -y gettext
 sudo yum install -y rpm-devel python34-devel guile-devel readline-devel ncurses-devel expat-devel texlive-collection-latexrecommended xz-devel libselinux-devel
+sudo yum install -y dos2unix
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
     cd dist/redhat/centos_dep
@@ -109,6 +114,13 @@ if [ ! -f $RPMBUILD/RPMS/x86_64/scylla-gdb-7.10.1-30.el7.centos.x86_64.rpm ]; th
     rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/gdb.spec
 fi
 do_install scylla-gdb-7.10.1-30.el7.centos.x86_64.rpm
+
+if [ ! -f $RPMBUILD/RPMS/noarch/python34-pyparsing-2.0.3-2.el7.centos.noarch.rpm ]; then
+    rpm --define "_topdir $RPMBUILD" -ivh build/srpms/pyparsing-2.0.3-2.fc23.src.rpm
+    patch $RPMBUILD/SPECS/pyparsing.spec < dist/redhat/centos_dep/pyparsing.diff
+    rpmbuild --define "_topdir $RPMBUILD" -ba $RPMBUILD/SPECS/pyparsing.spec
+fi
+do_install python34-pyparsing-2.0.3-2.el7.centos.noarch.rpm
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-antlr3-tool-3.5.2-1.el7.centos.noarch.rpm ]; then
    mkdir build/scylla-antlr3-tool-3.5.2
