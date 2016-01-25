@@ -149,13 +149,6 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const endpoint_state& x);
-
-    // The following replaces EndpointStateSerializer from the Java code
-    void serialize(bytes::iterator& out) const;
-
-    static endpoint_state deserialize(bytes_view& v);
-
-    size_t serialized_size() const;
 };
 
 } // gms
