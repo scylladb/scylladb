@@ -104,6 +104,18 @@ read(serializer, Input& in, rpc::type<gms::gossip_digest_ack2> type) {
     return ser::deserialize(in, type);
 }
 
+// Gossip digest
+template<typename Output>
+void write(serializer, Output& out, const gms::gossip_digest& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::gossip_digest
+read(serializer, Input& in, rpc::type<gms::gossip_digest> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const query::read_command& data) {
     ser::serialize(out, data);
