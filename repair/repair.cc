@@ -463,6 +463,10 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                 when_all(checksums.begin(), checksums.end()).then(
                         [&db, &keyspace, &cf, &range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
+                    // If only some of the replicas of this range are alive,
+                    // we set success=false so repair will fail, but we can
+                    // still do our best to repair available replicas.
+                    std::vector<gms::inet_address> live_neighbors;
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
                             logger.warn(
@@ -474,16 +478,22 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                             success = false;
                             // Do not break out of the loop here, so we can log
                             // (and discard) all the exceptions.
+                        } else if (i > 0) {
+                            live_neighbors.push_back(neighbors[i - 1]);
                         }
                     }
-                    if (!success) {
+                    if (!checksums[0].available() || live_neighbors.empty()) {
                         return make_ready_future<>();
                     }
+                    // If one of the available checksums is different, repair
+                    // all the neighbors which returned a checksum.
                     auto checksum0 = checksums[0].get();
                     for (unsigned i = 1; i < checksums.size(); i++) {
-                        if (checksum0 != checksums[i].get()) {
-                            logger.info("Found differing range {}", range);
-                            return sync_range(db, keyspace, cf, range, neighbors);
+                        if (checksums[i].available() && checksum0 != checksums[i].get()) {
+                            logger.info("Found differing range {} on nodes {}", range, live_neighbors);
+                            return do_with(std::move(live_neighbors), [&db, &keyspace, &cf, &range] (auto& live_neighbors) {
+                                return sync_range(db, keyspace, cf, range, live_neighbors);
+                            });
                         }
                     }
                     return make_ready_future<>();
