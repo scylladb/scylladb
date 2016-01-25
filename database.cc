@@ -128,9 +128,9 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
 
 mutation_source
 column_family::sstables_as_mutation_source() {
-    return [this] (schema_ptr s, const query::partition_range& r) {
+    return mutation_source([this] (schema_ptr s, const query::partition_range& r) {
         return make_sstable_reader(std::move(s), r);
-    };
+    });
 }
 
 // define in .cc, since sstable is forward-declared in .hh
@@ -1563,9 +1563,9 @@ column_family::query(schema_ptr s, const query::read_command& cmd, const std::ve
 
 mutation_source
 column_family::as_mutation_source() const {
-    return [this] (schema_ptr s, const query::partition_range& range) {
+    return mutation_source([this] (schema_ptr s, const query::partition_range& range) {
         return this->make_reader(std::move(s), range);
-    };
+    });
 }
 
 future<lw_shared_ptr<query::result>>

@@ -152,7 +152,14 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 // independent mutation_reader.
 // The reader returns mutations having all the same schema, the one passed
 // when invoking the source.
-using mutation_source = std::function<mutation_reader(schema_ptr, const query::partition_range& range)>;
+class mutation_source {
+    std::function<mutation_reader(schema_ptr, const query::partition_range& range)> _fn;
+public:
+    mutation_source(std::function<mutation_reader(schema_ptr, const query::partition_range& range)> fn) : _fn(std::move(fn)) {}
+    mutation_reader operator()(schema_ptr s, const query::partition_range& range) const {
+        return _fn(std::move(s), range);
+    }
+};
 
 /// A partition_presence_checker quickly returns whether a key is known not to exist
 /// in a data source (it may return false positives, but not false negatives).

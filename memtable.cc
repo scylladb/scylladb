@@ -246,9 +246,9 @@ logalloc::occupancy_stats memtable::occupancy() const {
 }
 
 mutation_source memtable::as_data_source() {
-    return [mt = shared_from_this()] (schema_ptr s, const query::partition_range& range) {
+    return mutation_source([mt = shared_from_this()] (schema_ptr s, const query::partition_range& range) {
         return mt->make_reader(std::move(s), range);
-    };
+    });
 }
 
 key_source memtable::as_key_source() {
