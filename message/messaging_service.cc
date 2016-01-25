@@ -116,6 +116,18 @@ read(serializer, Input& in, rpc::type<gms::gossip_digest> type) {
     return ser::deserialize(in, type);
 }
 
+// Gossip versioned_value
+template<typename Output>
+void write(serializer, Output& out, const gms::versioned_value& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+gms::versioned_value
+read(serializer, Input& in, rpc::type<gms::versioned_value> type) {
+    return ser::deserialize(in, type);
+}
+
 template<typename Output>
 void write(serializer, Output& out, const query::read_command& data) {
     ser::serialize(out, data);
