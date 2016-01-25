@@ -44,54 +44,5 @@
 namespace streaming {
 namespace messages {
 
-void prepare_message::serialize(bytes::iterator& out) const {
-    serialize_int32(out, uint32_t(requests.size()));
-    for (auto& x : requests) {
-        x.serialize(out);
-    }
-
-    serialize_int32(out, uint32_t(summaries.size()));
-    for (auto& x : summaries) {
-        x.serialize(out);
-    }
-
-    serialize_int32(out, dst_cpu_id);
-}
-
-prepare_message prepare_message::deserialize(bytes_view& v) {
-    auto num = read_simple<int32_t>(v);
-    std::vector<stream_request> requests_;
-    for (int32_t i = 0; i < num; i++) {
-        auto r = stream_request::deserialize(v);
-        requests_.push_back(std::move(r));
-    }
-
-    num = read_simple<int32_t>(v);
-    std::vector<stream_summary> summaries_;
-    for (int32_t i = 0; i < num; i++) {
-        auto s = stream_summary::deserialize(v);
-        summaries_.push_back(std::move(s));
-    }
-
-    auto dst_cpu_id = read_simple<int32_t>(v);
-
-    return prepare_message(std::move(requests_), std::move(summaries_), dst_cpu_id);
-}
-
-size_t prepare_message::serialized_size() const {
-    size_t size = serialize_int32_size;
-    for (auto& x : requests) {
-        size += x.serialized_size();
-    }
-
-    size += serialize_int32_size;
-    for (auto& x : summaries) {
-        size += x.serialized_size();
-    }
-
-    size += serialize_int32_size;
-    return size;
-}
-
 } // namespace messages
 } // namespace streaming
