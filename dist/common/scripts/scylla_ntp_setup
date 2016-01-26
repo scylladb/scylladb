@@ -29,7 +29,7 @@ if [ "$NAME" = "Ubuntu" ]; then
 else
     yum install -y ntp ntpdate || true
     if [ $AMI -eq 1 ]; then
-        sed -e s#fedora.pool.ntp.org#amazon.pool.ntp.org# /etc/ntp.conf > /tmp/ntp.conf
+        sed -e s#centos.pool.ntp.org#amazon.pool.ntp.org# /etc/ntp.conf > /tmp/ntp.conf
         mv /tmp/ntp.conf /etc/ntp.conf
     fi
     if [ "`systemctl is-active ntpd`" = "active" ]; then
