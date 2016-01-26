@@ -74,7 +74,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
             auto old_node_version = e.db().local().get_version();
 
             {
-                BOOST_MESSAGE("Applying a no-op tombstone to v1 column definition");
+                BOOST_TEST_MESSAGE("Applying a no-op tombstone to v1 column definition");
                 auto s = db::schema_tables::columns();
                 auto pkey = partition_key::from_singular(*s, table_schema->ks_name());
                 mutation m(pkey, s);

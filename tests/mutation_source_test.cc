@@ -36,7 +36,7 @@ static void require_no_token_duplicates(const std::vector<mutation>& partitions)
 }
 
 static void test_range_queries(populate_fn populate) {
-    BOOST_MESSAGE("Testing range queries");
+    BOOST_TEST_MESSAGE("Testing range queries");
 
     auto s = schema_builder("ks", "cf")
         .with_column("key", bytes_type, column_kind::partition_key)
@@ -69,7 +69,7 @@ static void test_range_queries(populate_fn populate) {
     auto ds = populate(s, partitions);
 
     auto test_slice = [&] (query::range<dht::ring_position> r) {
-        BOOST_MESSAGE(sprint("Testing range %s", r));
+        BOOST_TEST_MESSAGE(sprint("Testing range %s", r));
         assert_that(ds(s, r))
             .produces(slice(partitions, r))
             .produces_end_of_stream();

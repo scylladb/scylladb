@@ -274,7 +274,7 @@ SEASTAR_TEST_CASE(test_update) {
         cache_tracker tracker;
         row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), tracker);
 
-        BOOST_MESSAGE("Check cache miss with populate");
+        BOOST_TEST_MESSAGE("Check cache miss with populate");
 
         int partition_count = 1000;
 
@@ -310,7 +310,7 @@ SEASTAR_TEST_CASE(test_update) {
         std::copy(keys_not_in_cache.begin(), keys_not_in_cache.end(), std::back_inserter(keys_in_cache));
         keys_not_in_cache.clear();
 
-        BOOST_MESSAGE("Check cache miss with drop");
+        BOOST_TEST_MESSAGE("Check cache miss with drop");
 
         auto mt2 = make_lw_shared<memtable>(s);
 
@@ -329,7 +329,7 @@ SEASTAR_TEST_CASE(test_update) {
             verify_does_not_have(cache, key);
         }
 
-        BOOST_MESSAGE("Check cache hit with merge");
+        BOOST_TEST_MESSAGE("Check cache hit with merge");
 
         auto mt3 = make_lw_shared<memtable>(s);
 
