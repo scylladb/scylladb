@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Cloudius Systems
+ * Copyright 2015 ScyllaDB
  */
 
 /*
@@ -21,30 +21,16 @@
 
 #pragma once
 
-#include "http/httpd.hh"
 #include "json/json_elements.hh"
-#include "database.hh"
-#include "service/storage_proxy.hh"
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include "api/api-doc/utils.json.hh"
 #include "utils/histogram.hh"
 #include "http/exception.hh"
+#include "api_init.hh"
 
 namespace api {
-
-struct http_context {
-    sstring api_dir;
-    sstring api_doc;
-    httpd::http_server_control http_server;
-    distributed<database>& db;
-    distributed<service::storage_proxy>& sp;
-    http_context(distributed<database>& _db, distributed<service::storage_proxy>&
-            _sp) : db(_db), sp(_sp) {}
-};
-
-future<> set_server(http_context& ctx);
 
 template<class T>
 std::vector<sstring> container_to_vec(const T& container) {

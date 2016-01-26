@@ -26,7 +26,7 @@
 #include "thrift/server.hh"
 #include "transport/server.hh"
 #include "http/httpd.hh"
-#include "api/api.hh"
+#include "api/api_init.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
@@ -329,10 +329,26 @@ int main(int ac, char** av) {
                 return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch());
                 // #293 - do not stop anything
                 // engine().at_exit([] { return i_endpoint_snitch::stop_snitch(); });
+            }).then([api_address] {
+                supervisor_notify("determining DNS name");
+                return dns::gethostbyname(api_address);
+            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
+                supervisor_notify("starting API server");
+                auto ip = e.addresses[0].in.s_addr;
+                return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
+                    return api::set_server_init(ctx);
+                }).then([api_address, api_port, ip, &ctx] {
+                    return ctx.http_server.listen(ipv4_addr{ip, api_port});
+                }).then([api_address, api_port] {
+                    print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
+                });
             }).then([&db] {
                 supervisor_notify("initializing storage service");
                 return init_storage_service(db);
+            }).then([&ctx] {
+                return api::set_server_storage_service(ctx);
             }).then([&db, cfg] {
+
                 supervisor_notify("starting per-shard database core");
                 // Note: changed from using a move here, because we want the config object intact.
                 return db.start(std::ref(*cfg)).then([&db] {
@@ -374,9 +390,13 @@ int main(int ac, char** av) {
                                 , seed_provider
                                 , cluster_name
                                 , phi);
+            }).then([&ctx] {
+                return api::set_server_gossip(ctx);
             }).then([&db] {
                 supervisor_notify("starting streaming service");
                 return streaming::stream_session::init_streaming_service(db);
+            }).then([&ctx] {
+                return api::set_server_stream_manager(ctx);
             }).then([&db] {
                 supervisor_notify("starting messaging service");
                 // Start handling REPAIR_CHECKSUM_RANGE messages
@@ -388,12 +408,16 @@ int main(int ac, char** av) {
                        });
                     });
                 });
+            }).then([&ctx](){
+                return api::set_server_messaging_service(ctx);
             }).then([&proxy, &db] {
                 supervisor_notify("starting storage proxy");
                 return proxy.start(std::ref(db)).then([&proxy] {
                     // #293 - do not stop anything
                     // engine().at_exit([&proxy] { return proxy.stop(); });
                 });
+            }).then([&ctx]() {
+                return api::set_server_storage_proxy(ctx);
             }).then([&mm] {
                 supervisor_notify("starting migration manager");
                 return mm.start().then([&mm] {
@@ -445,6 +469,8 @@ int main(int ac, char** av) {
                 return db.invoke_on_all([&proxy] (database& db) {
                     return db.load_sstables(proxy);
                 });
+            }).then([&ctx] {
+                return api::set_server_load_sstable(ctx);
             }).then([&db, &qp] {
                 supervisor_notify("setting up system keyspace");
                 return db::system_keyspace::setup(db, qp);
@@ -479,6 +505,8 @@ int main(int ac, char** av) {
                 supervisor_notify("starting storage service");
                 auto& ss = service::get_local_storage_service();
                 return ss.init_server();
+            }).then([&ctx] {
+                return api::set_server_storage_service(ctx);
             }).then([] {
                 supervisor_notify("starting batchlog manager");
                 return db::get_batchlog_manager().invoke_on_all([] (db::batchlog_manager& b) {
@@ -494,6 +522,8 @@ int main(int ac, char** av) {
                 engine().at_exit([lb = std::move(lb)] () mutable { return lb->stop_broadcasting(); });
             }).then([] {
                 return gms::get_local_gossiper().wait_for_gossip_to_settle();
+            }).then([&ctx] {
+                return api::set_server_gossip_settle(ctx);
             }).then([start_thrift] () {
                 supervisor_notify("starting native transport");
                 return service::get_local_storage_service().start_native_transport().then([start_thrift] () {
@@ -502,19 +532,8 @@ int main(int ac, char** av) {
                     }
                     return make_ready_future<>();
                 });
-            }).then([api_address] {
-                supervisor_notify("determining DNS name");
-                return dns::gethostbyname(api_address);
-            }).then([&db, api_address, api_port, &ctx] (dns::hostent e){
-                supervisor_notify("starting API server");
-                auto ip = e.addresses[0].in.s_addr;
-                return ctx.http_server.start().then([api_address, api_port, ip, &ctx] {
-                    return set_server(ctx);
-                }).then([api_address, api_port, ip, &ctx] {
-                    return ctx.http_server.listen(ipv4_addr{ip, api_port});
-                }).then([api_address, api_port] {
-                    print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
-                });
+            }).then([&ctx] {
+                return api::set_server_done(ctx);
             });
         }).then([] {
             supervisor_notify("serving", true);

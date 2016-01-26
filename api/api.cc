@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Cloudius Systems
+ * Copyright 2015 ScyllaDB
  */
 
 /*
@@ -52,67 +52,98 @@ static std::unique_ptr<reply> exception_reply(std::exception_ptr eptr) {
     return std::make_unique<reply>();
 }
 
-future<> set_server(http_context& ctx) {
+future<> set_server_init(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
         r.register_exeption_handler(exception_reply);
-        httpd::directory_handler* dir = new httpd::directory_handler(ctx.api_dir,
-                new content_replace("html"));
         r.put(GET, "/ui", new httpd::file_handler(ctx.api_dir + "/index.html",
                 new content_replace("html")));
-        r.add(GET, url("/ui").remainder("path"), dir);
-
-        rb->set_api_doc(r);
-        rb->register_function(r, "storage_service",
-                                "The storage service API");
-        set_storage_service(ctx,r);
-        rb->register_function(r, "commitlog",
-                                "The commit log API");
-        set_commitlog(ctx,r);
-        rb->register_function(r, "gossiper",
-                                "The gossiper API");
-        set_gossiper(ctx,r);
-        rb->register_function(r, "column_family",
-                                        "The column family API");
-        set_column_family(ctx, r);
-
-        rb->register_function(r, "lsa", "Log-structured allocator API");
-        set_lsa(ctx, r);
-
-        rb->register_function(r, "failure_detector",
-                                "The failure detector API");
-        set_failure_detector(ctx,r);
-
-        rb->register_function(r, "messaging_service",
-                "The messaging service API");
-        set_messaging_service(ctx, r);
-        rb->register_function(r, "storage_proxy",
-                                        "The storage proxy API");
-        set_storage_proxy(ctx, r);
-
-        rb->register_function(r, "cache_service",
-                                                "The cache service API");
-        set_cache_service(ctx,r);
-        rb->register_function(r, "collectd",
-                "The collectd API");
-        set_collectd(ctx, r);
-        rb->register_function(r, "endpoint_snitch_info",
-                        "The endpoint snitch info API");
-        set_endpoint_snitch(ctx, r);
-        rb->register_function(r, "compaction_manager",
-                        "The Compaction manager API");
-        set_compaction_manager(ctx, r);
-        rb->register_function(r, "hinted_handoff",
-                        "The hinted handoff API");
-        set_hinted_handoff(ctx, r);
-        rb->register_function(r, "stream_manager",
-                "The stream manager API");
-        set_stream_manager(ctx, r);
+        r.add(GET, url("/ui").remainder("path"), new httpd::directory_handler(ctx.api_dir,
+                new content_replace("html")));
         rb->register_function(r, "system",
                 "The system related API");
         set_system(ctx, r);
+        rb->set_api_doc(r);
+    });
+}
 
+static future<> register_api(http_context& ctx, const sstring& api_name,
+        const sstring api_desc,
+        std::function<void(http_context& ctx, routes& r)> f) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx, api_name, api_desc](routes& r) {
+        rb->register_function(r, api_name, api_desc);
+        set_storage_service(ctx,r);
+    });
+}
+
+future<> set_server_storage_service(http_context& ctx) {
+    return register_api(ctx, "storage_service", "The storage service API", set_storage_service);
+}
+
+future<> set_server_gossip(http_context& ctx) {
+    return register_api(ctx, "gossiper",
+                "The gossiper API", set_gossiper);
+}
+
+future<> set_server_load_sstable(http_context& ctx) {
+    return register_api(ctx, "column_family",
+                "The column family API", set_column_family);
+}
+
+future<> set_server_messaging_service(http_context& ctx) {
+    return register_api(ctx, "messaging_service",
+                "The messaging service API", set_messaging_service);
+}
+
+future<> set_server_storage_proxy(http_context& ctx) {
+    return register_api(ctx, "storage_proxy",
+                "The storage proxy API", set_storage_proxy);
+}
+
+future<> set_server_stream_manager(http_context& ctx) {
+    return register_api(ctx, "stream_manager",
+                "The stream manager API", set_stream_manager);
+}
+
+future<> set_server_gossip_settle(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        rb->register_function(r, "failure_detector",
+                "The failure detector API");
+        set_failure_detector(ctx,r);
+        rb->register_function(r, "cache_service",
+                "The cache service API");
+        set_cache_service(ctx,r);
+
+        rb->register_function(r, "endpoint_snitch_info",
+                "The endpoint snitch info API");
+        set_endpoint_snitch(ctx, r);
+    });
+}
+
+future<> set_server_done(http_context& ctx) {
+    auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
+
+    return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        rb->register_function(r, "compaction_manager",
+                "The Compaction manager API");
+        set_compaction_manager(ctx, r);
+        rb->register_function(r, "lsa", "Log-structured allocator API");
+        set_lsa(ctx, r);
+
+        rb->register_function(r, "commitlog",
+                "The commit log API");
+        set_commitlog(ctx,r);
+        rb->register_function(r, "hinted_handoff",
+                "The hinted handoff API");
+        set_hinted_handoff(ctx, r);
+        rb->register_function(r, "collectd",
+                "The collectd API");
+        set_collectd(ctx, r);
     });
 }
 
