@@ -40,7 +40,7 @@
 
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
-#include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/outgoing_file_message.hh"
 #include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include <map>
@@ -59,7 +59,7 @@ private:
 
     // A stream_transfer_task always contains the same range to stream
     std::vector<range<dht::token>> _ranges;
-    std::map<int32_t, messages::outgoing_file_message> files;
+    std::map<int32_t, outgoing_file_message> files;
     //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
 
     long total_size;
@@ -102,11 +102,11 @@ public:
         return total_size;
     }
 
-    std::map<int32_t, messages::outgoing_file_message>& get_file_messages() {
+    std::map<int32_t, outgoing_file_message>& get_file_messages() {
         return files;
     }
 
-    messages::outgoing_file_message& create_message_for_retry(int sequence_number) {
+    outgoing_file_message& create_message_for_retry(int sequence_number) {
 #if 0
         // remove previous time out task to be rescheduled later
         ScheduledFuture future = timeoutTasks.remove(sequenceNumber);

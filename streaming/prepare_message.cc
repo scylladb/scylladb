@@ -1,3 +1,4 @@
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -36,50 +37,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
-
-#include "streaming/stream_request.hh"
-#include "streaming/stream_summary.hh"
+#include "streaming/prepare_message.hh"
+#include "types.hh"
+#include "utils/serialization.hh"
 
 namespace streaming {
 namespace messages {
-
-class prepare_message {
-public:
-    /**
-     * Streaming requests
-     */
-    std::vector<stream_request> requests;
-
-    /**
-     * Summaries of streaming out
-     */
-    std::vector<stream_summary> summaries;
-
-    uint32_t dst_cpu_id;
-
-    prepare_message() = default;
-    prepare_message(std::vector<stream_request> reqs, std::vector<stream_summary> sums, uint32_t dst_cpu_id_ = -1)
-        : requests(std::move(reqs))
-        , summaries(std::move(sums))
-        , dst_cpu_id(dst_cpu_id_) {
-    }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        final StringBuilder sb = new StringBuilder("Prepare (");
-        sb.append(requests.size()).append(" requests, ");
-        int totalFile = 0;
-        for (StreamSummary summary : summaries)
-            totalFile += summary.files;
-        sb.append(" ").append(totalFile).append(" files");
-        sb.append('}');
-        return sb.toString();
-    }
-#endif
-};
 
 } // namespace messages
 } // namespace streaming

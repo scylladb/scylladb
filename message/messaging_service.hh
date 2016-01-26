@@ -42,10 +42,9 @@
 #include <seastar/net/tls.hh>
 
 // forward declarations
-namespace streaming { namespace messages {
-    class stream_init_message;
+namespace streaming {
     class prepare_message;
-}}
+}
 
 namespace gms {
     class gossip_digest_syn;
@@ -356,9 +355,9 @@ public:
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
     // Wrapper for PREPARE_MESSAGE verb
-    void register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-            streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func);
-    future<streaming::messages::prepare_message> send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
+    void register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
+            streaming::prepare_message msg, UUID plan_id, sstring description)>&& func);
+    future<streaming::prepare_message> send_prepare_message(msg_addr id, streaming::prepare_message msg, UUID plan_id,
             sstring description);
 
     // Wrapper for PREPARE_DONE_MESSAGE verb

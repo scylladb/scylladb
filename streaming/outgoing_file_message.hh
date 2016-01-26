@@ -1,4 +1,3 @@
-
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -37,12 +36,42 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "streaming/messages/prepare_message.hh"
-#include "types.hh"
-#include "utils/serialization.hh"
+#pragma once
+
+#include "utils/UUID.hh"
+#include "streaming/stream_detail.hh"
+#include "sstables/sstables.hh"
+#include <seastar/core/semaphore.hh>
 
 namespace streaming {
-namespace messages {
 
-} // namespace messages
+/**
+ * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
+ */
+class outgoing_file_message {
+    using UUID = utils::UUID;
+    using format_types = sstables::sstable::format_types;
+public:
+    int32_t sequence_number;
+    stream_detail detail;
+
+    size_t mutations_nr{0};
+    semaphore mutations_done{0};
+
+    outgoing_file_message() = default;
+    outgoing_file_message(int32_t sequence_number_, stream_detail detail_)
+        : sequence_number(sequence_number_)
+        , detail(std::move(detail_)) {
+    }
+
+#if 0
+    @Override
+    public String toString()
+    {
+        return "File (" + header + ", file: " + sstable.getFilename() + ")";
+    }
+#endif
+};
+
 } // namespace streaming
+

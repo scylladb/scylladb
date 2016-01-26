@@ -19,11 +19,8 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/outgoing_file_message.hh"
 
 namespace streaming {
-namespace messages {
 
-
-} // namespace messages
 } // namespace streaming

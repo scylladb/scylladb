@@ -33,14 +33,11 @@ class stream_summary {
     long total_size;
 };
 
-namespace messages {
 
 class prepare_message {
     std::vector<streaming::stream_request> requests;
     std::vector<streaming::stream_summary> summaries;
     uint32_t dst_cpu_id;
 };
-
-}
 
 }

@@ -41,7 +41,7 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/stream_manager.hh"
-#include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/outgoing_file_message.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"
@@ -62,7 +62,7 @@ stream_transfer_task::~stream_transfer_task() = default;
 
 void stream_transfer_task::add_transfer_file(stream_detail detail) {
     assert(cf_id == detail.cf_id);
-    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail));
+    auto message = outgoing_file_message(sequence_number++, std::move(detail));
     auto seq = message.sequence_number;
     files.emplace(seq, std::move(message));
 }
