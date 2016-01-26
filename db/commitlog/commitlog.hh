@@ -247,6 +247,9 @@ public:
     uint64_t get_pending_tasks() const;
     uint64_t get_pending_writes() const;
     uint64_t get_pending_flushes() const;
+    uint64_t get_pending_allocations() const;
+    uint64_t get_write_limit_exceeded_count() const;
+    uint64_t get_flush_limit_exceeded_count() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
     /**
@@ -269,18 +272,9 @@ public:
      */
     uint64_t max_active_writes() const;
     /**
-     * Set max allowed pending writes (per this shard)
-     */
-    void max_active_writes(uint64_t);
-
-    /**
      * Return max allowed pending flushes (per this shard)
      */
     uint64_t max_active_flushes() const;
-    /**
-     * Set max allowed pending flushes (per this shard)
-     */
-    void max_active_flushes(uint64_t);
 
     future<> clear();
 
