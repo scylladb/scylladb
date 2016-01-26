@@ -12,6 +12,11 @@ umask 022
 console log
 
 expect stop
+limit core unlimited unlimited
+limit memlock unlimited unlimited
+limit nofile 200000 200000
+limit as unlimited unlimited
+limit nproc 8096 8096
 
 pre-start script
     cd /var/lib/scylla
