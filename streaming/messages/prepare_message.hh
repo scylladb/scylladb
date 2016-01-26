@@ -38,14 +38,13 @@
 
 #pragma once
 
-#include "streaming/messages/stream_message.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/stream_summary.hh"
 
 namespace streaming {
 namespace messages {
 
-class prepare_message : public stream_message {
+class prepare_message {
 public:
     /**
      * Streaming requests
@@ -61,8 +60,7 @@ public:
 
     prepare_message() = default;
     prepare_message(std::vector<stream_request> reqs, std::vector<stream_summary> sums, uint32_t dst_cpu_id_ = -1)
-        : stream_message(stream_message::Type::PREPARE)
-        , requests(std::move(reqs))
+        : requests(std::move(reqs))
         , summaries(std::move(sums))
         , dst_cpu_id(dst_cpu_id_) {
     }
