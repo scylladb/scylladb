@@ -63,10 +63,20 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessi
     }
     return results;
 }
+
 std::vector<session_info> stream_coordinator::get_all_session_info() {
     std::vector<session_info> results;
     for (auto& x : _peer_sessions) {
         results.push_back(x.second._session_info);
+    }
+    return results;
+}
+
+std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address peer) {
+    std::vector<session_info> results;
+    auto it = _peer_sessions.find(peer);
+    if (it != _peer_sessions.end()) {
+        results.push_back(it->second._session_info);
     }
     return results;
 }
