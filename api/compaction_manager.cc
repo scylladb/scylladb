@@ -49,7 +49,7 @@ void set_compaction_manager(http_context& ctx, routes& r) {
                 s.ks = c->ks;
                 s.cf = c->cf;
                 s.unit = "keys";
-                s.task_type = "compaction";
+                s.task_type = sstables::compaction_name(c->type);
                 s.completed = c->total_keys_written;
                 s.total = c->total_partitions;
                 summaries.push_back(std::move(s));

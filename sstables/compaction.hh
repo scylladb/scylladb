@@ -54,6 +54,23 @@ namespace sstables {
         Index_build = 4,
     };
 
+    static inline sstring compaction_name(compaction_type type) {
+        switch (type) {
+        case compaction_type::Compaction:
+            return "COMPACTION";
+        case compaction_type::Cleanup:
+            return "CLEANUP";
+        case compaction_type::Validation:
+            return "VALIDATION";
+        case compaction_type::Scrub:
+            return "SCRUB";
+        case compaction_type::Index_build:
+            return "INDEX_BUILD";
+        default:
+            throw std::runtime_error("Invalid Compaction Type");
+        }
+    }
+
     struct compaction_info {
         compaction_type type;
         sstring ks;
