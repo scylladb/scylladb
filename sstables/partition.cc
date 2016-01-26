@@ -99,6 +99,7 @@ static inline bytes pop_back(std::vector<bytes>& vec) {
 class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
     key_view _key;
+    const io_priority_class* _pc = nullptr;
     std::function<future<> (mutation&& m)> _mutation_to_subscription;
 
     struct column {
@@ -251,20 +252,26 @@ class mp_row_consumer : public row_consumer {
 public:
     mutation_opt mut;
 
-    mp_row_consumer(const key& key, const schema_ptr _schema)
+    mp_row_consumer(const key& key, const schema_ptr _schema, const io_priority_class& pc)
             : _schema(_schema)
             , _key(key_view(key))
+            , _pc(&pc)
             , mut(mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
     { }
 
-    mp_row_consumer(const schema_ptr _schema)
+    mp_row_consumer(const schema_ptr _schema, const io_priority_class& pc)
             : _schema(_schema)
+            , _pc(&pc)
     { }
 
-    mp_row_consumer(const schema_ptr _schema, std::function<future<> (mutation&& m)> sub_fn)
+    mp_row_consumer(const schema_ptr _schema, std::function<future<> (mutation&& m)> sub_fn,
+                    const io_priority_class& pc)
             : _schema(_schema)
+            , _pc(&pc)
             , _mutation_to_subscription(sub_fn)
     { }
+
+    mp_row_consumer() {}
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty()) {
@@ -408,6 +415,10 @@ public:
             }
         }
     }
+    virtual const io_priority_class& io_priority() override {
+        assert (_pc != nullptr);
+        return *_pc;
+    }
 };
 
 static int adjust_binary_search_index(int idx) {
@@ -420,15 +431,16 @@ static int adjust_binary_search_index(int idx) {
     return idx;
 }
 
-future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il) {
+future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, uint64_t index_idx, const index_list& il,
+                                                      const io_priority_class& pc) {
     if (uint64_t(index_idx + 1) < il.size()) {
         return make_ready_future<uint64_t>(il[index_idx + 1].position());
     }
 
-    return data_end_position(summary_idx);
+    return data_end_position(summary_idx, pc);
 }
 
-future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx) {
+future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, const io_priority_class& pc) {
     // We should only go to the end of the file if we are in the last summary group.
     // Otherwise, we will determine the end position of the current data read by looking
     // at the first index in the next summary group.
@@ -436,13 +448,13 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx) {
         return make_ready_future<uint64_t>(data_size());
     }
 
-    return read_indexes(summary_idx + 1).then([] (auto next_il) {
+    return read_indexes(summary_idx + 1, pc).then([] (auto next_il) {
         return next_il.front().position();
     });
 }
 
 future<mutation_opt>
-sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
+sstables::sstable::read_row(schema_ptr schema, const sstables::key& key, const io_priority_class& pc) {
 
     assert(schema);
 
@@ -460,7 +472,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         return make_ready_future<mutation_opt>();
     }
 
-    return read_indexes(summary_idx).then([this, schema, &key, token, summary_idx] (auto index_list) {
+    return read_indexes(summary_idx, pc).then([this, schema, &key, token, summary_idx, &pc] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             _filter_tracker.add_false_positive();
@@ -469,8 +481,8 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         _filter_tracker.add_true_positive();
 
         auto position = index_list[index_idx].position();
-        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (uint64_t end) {
-            return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
+        return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, this, position, &pc] (uint64_t end) {
+            return do_with(mp_row_consumer(key, schema, pc), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
                     return make_ready_future<mutation_opt>(std::move(c.mut));
                 });
@@ -485,20 +497,22 @@ private:
     std::experimental::optional<data_consume_context> _context;
     std::experimental::optional<future<data_consume_context>> _context_future;
 public:
-    impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end)
-        : _consumer(schema)
+    impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end,
+         const io_priority_class &pc)
+        : _consumer(schema, pc)
         , _context(sst.data_consume_rows(_consumer, start, end)) { }
-    impl(sstable& sst, schema_ptr schema)
-        : _consumer(schema)
+    impl(sstable& sst, schema_ptr schema,
+         const io_priority_class &pc)
+        : _consumer(schema, pc)
         , _context(sst.data_consume_rows(_consumer)) { }
-    impl(sstable& sst, schema_ptr schema, future<uint64_t> start, future<uint64_t> end)
-        : _consumer(schema)
+    impl(sstable& sst, schema_ptr schema, future<uint64_t> start, future<uint64_t> end, const io_priority_class& pc)
+        : _consumer(schema, pc)
         , _context_future(start.then([this, &sst, end = std::move(end)] (uint64_t start) mutable {
                       return end.then([this, &sst, start] (uint64_t end) mutable {
                           return sst.data_consume_rows(_consumer, start, end);
                       });
                     })) { }
-    impl() : _consumer({}) { }
+    impl() : _consumer() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
@@ -539,8 +553,8 @@ future<mutation_opt> mutation_reader::read() {
     return _pimpl->read();
 }
 
-mutation_reader sstable::read_rows(schema_ptr schema) {
-    return std::make_unique<mutation_reader::impl>(*this, schema);
+mutation_reader sstable::read_rows(schema_ptr schema, const io_priority_class& pc) {
+    return std::make_unique<mutation_reader::impl>(*this, schema, pc);
 }
 
 // Less-comparator for lookups in the partition index.
@@ -580,7 +594,7 @@ public:
     }
 };
 
-future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos) {
+future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
     uint64_t summary_idx = std::distance(std::begin(_summary.entries),
         std::lower_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
 
@@ -590,16 +604,16 @@ future<uint64_t> sstable::lower_bound(schema_ptr s, const dht::ring_position& po
 
     --summary_idx;
 
-    return read_indexes(summary_idx).then([this, s, pos, summary_idx] (index_list il) {
+    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
         auto i = std::lower_bound(il.begin(), il.end(), pos, index_comparator(*s));
         if (i == il.end()) {
-            return this->data_end_position(summary_idx);
+            return this->data_end_position(summary_idx, pc);
         }
         return make_ready_future<uint64_t>(i->position());
     });
 }
 
-future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos) {
+future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& pos, const io_priority_class& pc) {
     uint64_t summary_idx = std::distance(std::begin(_summary.entries),
         std::upper_bound(_summary.entries.begin(), _summary.entries.end(), pos, index_comparator(*s)));
 
@@ -609,46 +623,46 @@ future<uint64_t> sstable::upper_bound(schema_ptr s, const dht::ring_position& po
 
     --summary_idx;
 
-    return read_indexes(summary_idx).then([this, s, pos, summary_idx] (index_list il) {
+    return read_indexes(summary_idx, pc).then([this, s, pos, summary_idx, &pc] (index_list il) {
         auto i = std::upper_bound(il.begin(), il.end(), pos, index_comparator(*s));
         if (i == il.end()) {
-            return this->data_end_position(summary_idx);
+            return this->data_end_position(summary_idx, pc);
         }
         return make_ready_future<uint64_t>(i->position());
     });
 }
 
 mutation_reader sstable::read_range_rows(schema_ptr schema,
-        const dht::token& min_token, const dht::token& max_token) {
+        const dht::token& min_token, const dht::token& max_token, const io_priority_class& pc) {
     if (max_token < min_token) {
         return std::make_unique<mutation_reader::impl>();
     }
     return read_range_rows(std::move(schema),
         query::range<dht::ring_position>::make(
             dht::ring_position::starting_at(min_token),
-            dht::ring_position::ending_at(max_token)));
+            dht::ring_position::ending_at(max_token)), pc);
 }
 
 mutation_reader
-sstable::read_range_rows(schema_ptr schema, const query::partition_range& range) {
+sstable::read_range_rows(schema_ptr schema, const query::partition_range& range, const io_priority_class& pc) {
     if (query::is_wrap_around(range, *schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
 
     future<uint64_t> start = range.start()
         ? (range.start()->is_inclusive()
-                 ? lower_bound(schema, range.start()->value())
-                 : upper_bound(schema, range.start()->value()))
+                 ? lower_bound(schema, range.start()->value(), pc)
+                 : upper_bound(schema, range.start()->value(), pc))
         : make_ready_future<uint64_t>(0);
 
     future<uint64_t> end = range.end()
         ? (range.end()->is_inclusive()
-                 ? upper_bound(schema, range.end()->value())
-                 : lower_bound(schema, range.end()->value()))
+                 ? upper_bound(schema, range.end()->value(), pc)
+                 : lower_bound(schema, range.end()->value(), pc))
         : make_ready_future<uint64_t>(data_size());
 
     return std::make_unique<mutation_reader::impl>(
-        *this, std::move(schema), std::move(start), std::move(end));
+        *this, std::move(schema), std::move(start), std::move(end), pc);
 }
 
 
@@ -662,14 +676,15 @@ class key_reader final : public ::key_reader::impl {
     int64_t _position_in_bucket = 0;
     int64_t _end_of_bucket = 0;
     query::partition_range _range;
+    const io_priority_class& _pc;
 private:
     dht::decorated_key decorate(const index_entry& ie) {
         auto pk = partition_key::from_exploded(*_s, ie.get_key().explode(*_s));
         return dht::global_partitioner().decorate_key(*_s, std::move(pk));
     }
 public:
-    key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range)
-        : _s(s), _sst(std::move(sst)), _range(range)
+    key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
+        : _s(s), _sst(std::move(sst)), _range(range), _pc(pc)
     {
         auto& summary = _sst->_summary;
         using summary_entries_type = std::decay_t<decltype(summary.entries)>;
@@ -720,7 +735,7 @@ future<dht::decorated_key_opt> key_reader::operator()()
     if (_current_bucket_id == _end_bucket_id) {
         return make_ready_future<dht::decorated_key_opt>();
     }
-    return _sst->read_indexes(++_current_bucket_id).then([this] (index_list il) mutable {
+    return _sst->read_indexes(++_current_bucket_id, _pc).then([this] (index_list il) mutable {
         _bucket = std::move(il);
 
         if (_range.start() && _current_bucket_id == _begin_bucket_id) {
@@ -751,9 +766,9 @@ future<dht::decorated_key_opt> key_reader::operator()()
     });
 }
 
-::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range)
+::key_reader make_key_reader(schema_ptr s, shared_sstable sst, const query::partition_range& range, const io_priority_class& pc)
 {
-    return ::make_key_reader<key_reader>(std::move(s), std::move(sst), range);
+    return ::make_key_reader<key_reader>(std::move(s), std::move(sst), range, pc);
 }
 
 }

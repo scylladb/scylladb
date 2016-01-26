@@ -229,7 +229,8 @@ public:
      * which combines data from all shards.
      * Uses schema current at the time of invocation.
      */
-    mutation_reader make_local_reader(utils::UUID cf_id, const query::partition_range&);
+    mutation_reader make_local_reader(utils::UUID cf_id, const query::partition_range&,
+                                      const io_priority_class& pc = default_priority_class());
 
     future<> stop();
 

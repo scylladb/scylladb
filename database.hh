@@ -201,7 +201,7 @@ private:
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_sstable_reader(schema_ptr schema, const query::partition_range& range) const;
+    mutation_reader make_sstable_reader(schema_ptr schema, const query::partition_range& range, const io_priority_class& pc) const;
 
     mutation_source sstables_as_mutation_source();
     key_source sstables_as_key_source() const;
@@ -213,7 +213,11 @@ public:
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_reader(schema_ptr schema, const query::partition_range& range = query::full_partition_range) const;
+    // If I/O needs to be issued to read anything in the specified range, the operations
+    // will be scheduled under the priority class given by pc.
+    mutation_reader make_reader(schema_ptr schema,
+            const query::partition_range& range = query::full_partition_range,
+            const io_priority_class& pc = default_priority_class()) const;
 
     mutation_source as_mutation_source() const;
 

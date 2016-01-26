@@ -68,13 +68,11 @@ struct session_complete_event : public stream_event {
     using inet_address = gms::inet_address;
     inet_address peer;
     bool success;
-    int session_index;
 
     session_complete_event(shared_ptr<stream_session> session)
         : stream_event(stream_event::type::STREAM_COMPLETE, session->plan_id())
         , peer(session->peer)
-        , success(session->is_success())
-        , session_index(session->session_index()) {
+        , success(session->is_success()) {
     }
 };
 

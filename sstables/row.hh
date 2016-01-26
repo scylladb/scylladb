@@ -80,5 +80,8 @@ public:
     // proceed consuming more data.
     virtual proceed consume_row_end() = 0;
 
+    // Under which priority class to place I/O coming from this consumer
+    virtual const io_priority_class& io_priority() = 0;
+
     virtual ~row_consumer() { }
 };

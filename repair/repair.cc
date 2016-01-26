@@ -26,6 +26,7 @@
 #include "gms/inet_address.hh"
 #include "db/config.hh"
 #include "service/storage_service.hh"
+#include "service/priority_manager.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -304,7 +305,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const ::range<dht::token>& range) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     return do_with(query::to_partition_range(range), [&cf] (const auto& partition_range) {
-        return do_with(cf.make_reader(cf.schema(), partition_range), partition_checksum(),
+        return do_with(cf.make_reader(cf.schema(), partition_range, service::get_local_mutation_stream_priority()), partition_checksum(),
             [] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum] () {
                 return reader().then([&checksum] (auto mopt) {
@@ -463,6 +464,10 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                 when_all(checksums.begin(), checksums.end()).then(
                         [&db, &keyspace, &cf, &range, &neighbors, &success]
                         (std::vector<future<partition_checksum>> checksums) {
+                    // If only some of the replicas of this range are alive,
+                    // we set success=false so repair will fail, but we can
+                    // still do our best to repair available replicas.
+                    std::vector<gms::inet_address> live_neighbors;
                     for (unsigned i = 0; i < checksums.size(); i++) {
                         if (checksums[i].failed()) {
                             logger.warn(
@@ -474,16 +479,22 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
                             success = false;
                             // Do not break out of the loop here, so we can log
                             // (and discard) all the exceptions.
+                        } else if (i > 0) {
+                            live_neighbors.push_back(neighbors[i - 1]);
                         }
                     }
-                    if (!success) {
+                    if (!checksums[0].available() || live_neighbors.empty()) {
                         return make_ready_future<>();
                     }
+                    // If one of the available checksums is different, repair
+                    // all the neighbors which returned a checksum.
                     auto checksum0 = checksums[0].get();
                     for (unsigned i = 1; i < checksums.size(); i++) {
-                        if (checksum0 != checksums[i].get()) {
-                            logger.info("Found differing range {}", range);
-                            return sync_range(db, keyspace, cf, range, neighbors);
+                        if (checksums[i].available() && checksum0 != checksums[i].get()) {
+                            logger.info("Found differing range {} on nodes {}", range, live_neighbors);
+                            return do_with(std::move(live_neighbors), [&db, &keyspace, &cf, &range] (auto& live_neighbors) {
+                                return sync_range(db, keyspace, cf, range, live_neighbors);
+                            });
                         }
                     }
                     return make_ready_future<>();

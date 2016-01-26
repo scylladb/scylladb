@@ -24,7 +24,6 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
-#include "streaming/messages/stream_init_message.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -207,7 +206,44 @@ read(serializer, Input& in, rpc::type<reconcilable_result> type) {
     return ser::deserialize(in, type);
 }
 
+// streaming reqeust
+template<typename Output>
+void write(serializer, Output& out, const streaming::stream_request& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::stream_request
+read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+    return ser::deserialize(in, type);
+}
+
+// streaming summary
+template<typename Output>
+void write(serializer, Output& out, const streaming::stream_summary& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::stream_summary
+read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+    return ser::deserialize(in, type);
+}
+
+// streaming prepare_message
+template<typename Output>
+void write(serializer, Output& out, const streaming::messages::prepare_message& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+streaming::messages::prepare_message
+read(serializer, Input& in, rpc::type<streaming::messages::prepare_message> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
+static logging::logger rpc_logger("rpc");
 
 using inet_address = gms::inet_address;
 using gossip_digest_syn = gms::gossip_digest_syn;
@@ -366,6 +402,9 @@ messaging_service::messaging_service(gms::inet_address ip
         );
     }())
 {
+    _rpc->set_logger([] (const sstring& log) {
+            rpc_logger.info("{}", log);
+    });
     register_handler(this, messaging_verb::CLIENT_ID, [] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id) {
         ci.attach_auxiliary("baddr", broadcast_address);
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
@@ -414,7 +453,7 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
     if (verb == messaging_verb::GOSSIP_DIGEST_SYN ||
         verb == messaging_verb::GOSSIP_DIGEST_ACK2 ||
         verb == messaging_verb::GOSSIP_SHUTDOWN ||
-        verb == messaging_verb::ECHO ||
+        verb == messaging_verb::GOSSIP_ECHO ||
         verb == messaging_verb::GET_SCHEMA_VERSION) {
         idx = 1;
     }
@@ -651,27 +690,16 @@ static constexpr int streaming_nr_retry = 10;
 static constexpr std::chrono::seconds streaming_timeout{10*60};
 static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
-// STREAM_INIT_MESSAGE
-void messaging_service::register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo,
-        streaming::messages::stream_init_message msg)>&& func) {
-    register_handler(this, messaging_verb::STREAM_INIT_MESSAGE, std::move(func));
-}
-future<unsigned> messaging_service::send_stream_init_message(msg_addr id, streaming::messages::stream_init_message msg) {
-    return send_message_timeout_and_retry<unsigned>(this, messaging_verb::STREAM_INIT_MESSAGE, id,
-        streaming_timeout, streaming_nr_retry, streaming_wait_before_retry, std::move(msg));
-}
-
 // PREPARE_MESSAGE
 void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-        streaming::messages::prepare_message msg, UUID plan_id,
-        unsigned dst_cpu_id)>&& func) {
+        streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func) {
     register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
 }
 future<streaming::messages::prepare_message> messaging_service::send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
-        unsigned dst_cpu_id) {
+        sstring description) {
     return send_message_timeout_and_retry<streaming::messages::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
-        std::move(msg), plan_id, dst_cpu_id);
+        std::move(msg), plan_id, std::move(description));
 }
 
 // PREPARE_DONE_MESSAGE
@@ -715,14 +743,14 @@ future<> messaging_service::send_complete_message(msg_addr id, UUID plan_id, uns
         plan_id, dst_cpu_id);
 }
 
-void messaging_service::register_echo(std::function<future<> ()>&& func) {
-    register_handler(this, messaging_verb::ECHO, std::move(func));
+void messaging_service::register_gossip_echo(std::function<future<> ()>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_ECHO, std::move(func));
 }
-void messaging_service::unregister_echo() {
-    _rpc->unregister_handler(net::messaging_verb::ECHO);
+void messaging_service::unregister_gossip_echo() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_ECHO);
 }
-future<> messaging_service::send_echo(msg_addr id) {
-    return send_message_timeout<void>(this, messaging_verb::ECHO, std::move(id), 3000ms);
+future<> messaging_service::send_gossip_echo(msg_addr id) {
+    return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 3000ms);
 }
 
 void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {

@@ -63,10 +63,8 @@ stream_transfer_task::~stream_transfer_task() = default;
 void stream_transfer_task::add_transfer_file(stream_detail detail) {
     assert(cf_id == detail.cf_id);
     auto message = messages::outgoing_file_message(sequence_number++, std::move(detail));
-    auto size = message.header.size();
-    auto seq = message.header.sequence_number;
+    auto seq = message.sequence_number;
     files.emplace(seq, std::move(message));
-    total_size += size;
 }
 
 void stream_transfer_task::start() {

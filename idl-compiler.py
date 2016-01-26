@@ -264,7 +264,7 @@ $name$temp_param $func(Input& buf, rpc::type<$name$temp_param>) {""").substitute
             continue
         local_param = "__local_" + str(index)
         if "attribute" in param:
-            deflt = param["default"] if param["default"] else param["type"] + "()"
+            deflt = param["default"][0] if "default" in param else param["type"] + "()"
             fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
     $func(in, rpc::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:

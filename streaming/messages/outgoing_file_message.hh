@@ -40,8 +40,6 @@
 
 #include "utils/UUID.hh"
 #include "streaming/messages/stream_message.hh"
-#include "streaming/messages/file_message_header.hh"
-#include "streaming/compress/compression_info.hh"
 #include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include <seastar/core/semaphore.hh>
@@ -54,34 +52,19 @@ namespace messages {
  */
 class outgoing_file_message : public stream_message {
     using UUID = utils::UUID;
-    using compression_info = compress::compression_info;
     using format_types = sstables::sstable::format_types;
 public:
-
-    file_message_header header;
+    int32_t sequence_number;
     stream_detail detail;
 
     size_t mutations_nr{0};
     semaphore mutations_done{0};
 
     outgoing_file_message() = default;
-    outgoing_file_message(int32_t sequence_number, stream_detail d)
-        : stream_message(stream_message::Type::FILE) {
-#if 0
-        CompressionInfo compressionInfo = null;
-        if (sstable.compression)
-        {
-            CompressionMetadata meta = sstable.getCompressionMetadata();
-            compressionInfo = new CompressionInfo(meta.getChunksForSections(sections), meta.parameters);
-        }
-#endif
-        // FIXME:
-        sstring version; // sstable.descriptor.version.toString()
-        format_types format = format_types::big; // sstable.descriptor.formatType
-        compression_info comp_info;
-        header = file_message_header(d.cf_id, sequence_number, version, format, d.estimated_keys,
-                                     {}, comp_info);
-        detail = std::move(d);
+    outgoing_file_message(int32_t sequence_number_, stream_detail detail_)
+        : stream_message(stream_message::Type::FILE)
+        , sequence_number(sequence_number_)
+        , detail(std::move(detail_)) {
     }
 
 #if 0

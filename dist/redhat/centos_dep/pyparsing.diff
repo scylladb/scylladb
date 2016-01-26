@@ -1,0 +1,40 @@
+--- pyparsing.spec.orig	2016-01-25 19:11:14.663651658 +0900
++++ pyparsing.spec	2016-01-25 19:12:49.853875369 +0900
+@@ -1,4 +1,4 @@
+-%if 0%{?fedora}
++%if 0%{?centos}
+ %global with_python3 1
+ %endif
+ 
+@@ -15,7 +15,7 @@
+ BuildRequires:  dos2unix
+ BuildRequires:  glibc-common
+ %if 0%{?with_python3}
+-BuildRequires: python3-devel
++BuildRequires: python34-devel
+ %endif # if with_python3
+ 
+ %description
+@@ -30,11 +30,11 @@
+ The package contains documentation for pyparsing.
+ 
+ %if 0%{?with_python3}
+-%package -n python3-pyparsing
++%package -n python34-pyparsing
+ Summary:        An object-oriented approach to text processing (Python 3 version)
+ Group:          Development/Libraries
+ 
+-%description -n python3-pyparsing
++%description -n python34-pyparsing
+ pyparsing is a module that can be used to easily and directly configure syntax
+ definitions for any number of text parsing applications.
+ 
+@@ -90,7 +90,7 @@
+ %{python_sitelib}/pyparsing.py*
+ 
+ %if 0%{?with_python3}
+-%files -n python3-pyparsing
++%files -n python34-pyparsing
+ %doc CHANGES README LICENSE
+ %{python3_sitelib}/pyparsing*egg-info
+ %{python3_sitelib}/pyparsing.py*

@@ -92,10 +92,6 @@ public:
     }
 
 #endif
-public:
-    void serialize(bytes::iterator& out) const;
-    static stream_summary deserialize(bytes_view& v);
-    size_t serialized_size() const;
 };
 
 } // namespace streaming

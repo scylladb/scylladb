@@ -367,6 +367,9 @@ public:
         count_row_end++;
         return proceed::yes;
     }
+    virtual const io_priority_class& io_priority() override {
+        return default_priority_class();
+    }
 };
 
 SEASTAR_TEST_CASE(uncompressed_row_read_at_once) {
@@ -461,7 +464,9 @@ public:
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
     }
-
+    virtual const io_priority_class& io_priority() override {
+        return default_priority_class();
+    }
 };
 
 

@@ -66,30 +66,31 @@ namespace net {
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
     CLIENT_ID = 0,
-    ECHO = 1,
-    MUTATION = 2,
-    MUTATION_DONE = 3,
-    READ_DATA = 4,
-    READ_MUTATION_DATA = 5,
-    READ_DIGEST = 6,
+    MUTATION = 1,
+    MUTATION_DONE = 2,
+    READ_DATA = 3,
+    READ_MUTATION_DATA = 4,
+    READ_DIGEST = 5,
+    // Used by gossip
+    GOSSIP_ECHO = 6,
     GOSSIP_DIGEST_SYN = 7,
     GOSSIP_DIGEST_ACK2 = 8,
     GOSSIP_SHUTDOWN = 9,
+    // end of gossip verb
     DEFINITIONS_UPDATE = 10,
     TRUNCATE = 11,
     REPLICATION_FINISHED = 12,
     MIGRATION_REQUEST = 13,
     // Used by streaming
-    STREAM_INIT_MESSAGE = 14,
-    PREPARE_MESSAGE = 15,
-    PREPARE_DONE_MESSAGE = 16,
-    STREAM_MUTATION = 17,
-    STREAM_MUTATION_DONE = 18,
-    COMPLETE_MESSAGE = 19,
+    PREPARE_MESSAGE = 14,
+    PREPARE_DONE_MESSAGE = 15,
+    STREAM_MUTATION = 16,
+    STREAM_MUTATION_DONE = 17,
+    COMPLETE_MESSAGE = 18,
     // end of streaming verbs
-    REPAIR_CHECKSUM_RANGE = 20,
-    GET_SCHEMA_VERSION = 21,
-    LAST = 22,
+    REPAIR_CHECKSUM_RANGE = 19,
+    GET_SCHEMA_VERSION = 20,
+    LAST = 21,
 };
 
 } // namespace net
@@ -354,16 +355,11 @@ public:
     future<> init_local_preferred_ip_cache();
     void cache_preferred_ip(gms::inet_address ep, gms::inet_address ip);
 
-    // Wrapper for STREAM_INIT_MESSAGE verb
-    void register_stream_init_message(std::function<future<unsigned> (const rpc::client_info& cinfo, streaming::messages::stream_init_message msg)>&& func);
-    future<unsigned> send_stream_init_message(msg_addr id, streaming::messages::stream_init_message msg);
-
     // Wrapper for PREPARE_MESSAGE verb
     void register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-            streaming::messages::prepare_message msg, UUID plan_id,
-            unsigned dst_cpu_id)>&& func);
+            streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func);
     future<streaming::messages::prepare_message> send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
-            unsigned dst_cpu_id);
+            sstring description);
 
     // Wrapper for PREPARE_DONE_MESSAGE verb
     void register_prepare_done_message(std::function<future<> (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id)>&& func);
@@ -384,10 +380,10 @@ public:
     void unregister_repair_checksum_range();
     future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, query::range<dht::token> range);
 
-    // Wrapper for ECHO verb
-    void register_echo(std::function<future<> ()>&& func);
-    void unregister_echo();
-    future<> send_echo(msg_addr id);
+    // Wrapper for GOSSIP_ECHO verb
+    void register_gossip_echo(std::function<future<> ()>&& func);
+    void unregister_gossip_echo();
+    future<> send_gossip_echo(msg_addr id);
 
     // Wrapper for GOSSIP_SHUTDOWN
     void register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func);

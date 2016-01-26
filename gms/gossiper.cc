@@ -233,7 +233,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 }
 
 void gossiper::init_messaging_service_handler() {
-    ms().register_echo([] {
+    ms().register_gossip_echo([] {
         return smp::submit_to(0, [] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at();
@@ -279,7 +279,7 @@ void gossiper::init_messaging_service_handler() {
 
 void gossiper::uninit_messaging_service_handler() {
     auto& ms = net::get_local_messaging_service();
-    ms.unregister_echo();
+    ms.unregister_gossip_echo();
     ms.unregister_gossip_shutdown();
     ms.unregister_gossip_digest_syn();
     ms.unregister_gossip_digest_ack2();
@@ -1051,7 +1051,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
     auto ok = make_shared<bool>(false);
-    ms().send_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
+    ms().send_gossip_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");

@@ -65,6 +65,7 @@
 #include "utils/runtime.hh"
 #include "log.hh"
 #include "commitlog_entry.hh"
+#include "service/priority_manager.hh"
 
 static logging::logger logger("commitlog");
 
@@ -566,7 +567,8 @@ public:
             auto p = buf.get();
             _segment_manager->begin_op();
             return repeat([this, size, off, written, p]() mutable {
-                return _file.dma_write(off + *written, p + *written, size - *written).then_wrapped([this, size, written](auto&& f) {
+                auto& priority_class = service::get_local_commitlog_priority();
+                return _file.dma_write(off + *written, p + *written, size - *written, priority_class).then_wrapped([this, size, written](auto&& f) {
                     try {
                         auto bytes = std::get<0>(f.get());
                         *written += bytes;
