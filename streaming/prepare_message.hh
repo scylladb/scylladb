@@ -63,21 +63,6 @@ public:
         , summaries(std::move(sums))
         , dst_cpu_id(dst_cpu_id_) {
     }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        final StringBuilder sb = new StringBuilder("Prepare (");
-        sb.append(requests.size()).append(" requests, ");
-        int totalFile = 0;
-        for (StreamSummary summary : summaries)
-            totalFile += summary.files;
-        sb.append(" ").append(totalFile).append(" files");
-        sb.append('}');
-        return sb.toString();
-    }
-#endif
 };
 
 } // namespace streaming
