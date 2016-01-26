@@ -423,7 +423,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
       auto cleanup = defer([&] {
           with_allocator(_tracker.allocator(), [&m, this] () {
-            m.partitions.clear_and_dispose(current_deleter<partition_entry>());
+            m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>()] (partition_entry* entry) {
+                invalidate(entry->key());
+                deleter(entry);
+            });
           });
       });
       _populate_phaser.advance_and_await().get();

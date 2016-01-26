@@ -43,12 +43,29 @@ static schema_ptr make_schema() {
         .build();
 }
 
+static thread_local api::timestamp_type next_timestamp = 1;
+
 static
 mutation make_new_mutation(schema_ptr s, partition_key key) {
     mutation m(key, s);
     static thread_local int next_value = 1;
-    static thread_local api::timestamp_type next_timestamp = 1;
     m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(to_bytes(sprint("v%d", next_value++))), next_timestamp++);
+    return m;
+}
+
+static inline
+mutation make_new_large_mutation(schema_ptr s, partition_key key) {
+    mutation m(key, s);
+    static thread_local int next_value = 1;
+    static constexpr size_t blob_size = 64 * 1024;
+    std::vector<int> data;
+    data.reserve(blob_size);
+    for (unsigned i = 0; i < blob_size; i++) {
+        data.push_back(next_value);
+    }
+    next_value++;
+    bytes b(reinterpret_cast<int8_t*>(data.data()), data.size() * sizeof(int));
+    m.set_clustered_cell(clustering_key::make_empty(*s), "v", data_value(std::move(b)), next_timestamp++);
     return m;
 }
 
@@ -61,6 +78,16 @@ partition_key new_key(schema_ptr s) {
 static
 mutation make_new_mutation(schema_ptr s) {
     return make_new_mutation(s, new_key(s));
+}
+
+static inline
+mutation make_new_large_mutation(schema_ptr s, int key) {
+    return make_new_large_mutation(s, partition_key::from_single_value(*s, to_bytes(sprint("key%d", key))));
+}
+
+static inline
+mutation make_new_mutation(schema_ptr s, int key) {
+    return make_new_mutation(s, partition_key::from_single_value(*s, to_bytes(sprint("key%d", key))));
 }
 
 SEASTAR_TEST_CASE(test_cache_delegates_to_underlying) {
@@ -349,6 +376,73 @@ SEASTAR_TEST_CASE(test_update) {
         }
     });
 }
+
+#ifndef DEFAULT_ALLOCATOR
+SEASTAR_TEST_CASE(test_update_failure) {
+    return seastar::async([] {
+        auto s = make_schema();
+        auto cache_mt = make_lw_shared<memtable>(s);
+
+        cache_tracker tracker;
+        row_cache cache(s, cache_mt->as_data_source(), cache_mt->as_key_source(), tracker);
+
+        int partition_count = 1000;
+
+        // populate cache with some partitions
+        for (int i = 0; i < partition_count / 2; i++) {
+            auto m = make_new_mutation(s, i + partition_count / 2);
+            cache.populate(m);
+        }
+
+        // populate memtable with more updated partitions
+        auto mt = make_lw_shared<memtable>(s);
+        using partitions_type = std::map<partition_key, mutation_partition, partition_key::less_compare>;
+        auto updated_partitions = partitions_type(partition_key::less_compare(*s));
+        for (int i = 0; i < partition_count; i++) {
+            auto m = make_new_large_mutation(s, i);
+            updated_partitions.emplace(m.key(), m.partition());
+            mt->apply(m);
+        }
+
+        // fill all transient memory
+        std::vector<bytes> memory_hog;
+        {
+            logalloc::reclaim_lock _(tracker.region());
+            try {
+                while (true) {
+                    memory_hog.emplace_back(bytes(bytes::initialized_later(), 4 * 1024));
+                }
+            } catch (const std::bad_alloc&) {
+                // expected
+            }
+        }
+
+        try {
+            cache.update(*mt, [] (auto&& key) {
+                return partition_presence_checker_result::definitely_doesnt_exist;
+            }).get();
+            BOOST_FAIL("updating cache should have failed");
+        } catch (const std::bad_alloc&) {
+            // expected
+        }
+
+        memory_hog.clear();
+
+        // verify that there are no stale partitions
+        auto reader = cache.make_reader(s, query::partition_range::make_open_ended_both_sides());
+        for (int i = 0; i < partition_count; i++) {
+            auto mopt = reader().get0();
+            if (!mopt) {
+                break;
+            }
+            auto it = updated_partitions.find(mopt->key());
+            BOOST_REQUIRE(it != updated_partitions.end());
+            BOOST_REQUIRE(it->second.equal(*s, mopt->partition()));
+        }
+        BOOST_REQUIRE(!reader().get0());
+    });
+}
+#endif
 
 class throttle {
     unsigned _block_counter = 0;
