@@ -24,7 +24,7 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
-#include "streaming/messages/prepare_message.hh"
+#include "streaming/prepare_message.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
@@ -232,13 +232,13 @@ read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
 
 // streaming prepare_message
 template<typename Output>
-void write(serializer, Output& out, const streaming::messages::prepare_message& data) {
+void write(serializer, Output& out, const streaming::prepare_message& data) {
     ser::serialize(out, data);
 }
 
 template <typename Input>
-streaming::messages::prepare_message
-read(serializer, Input& in, rpc::type<streaming::messages::prepare_message> type) {
+streaming::prepare_message
+read(serializer, Input& in, rpc::type<streaming::prepare_message> type) {
     return ser::deserialize(in, type);
 }
 
@@ -691,13 +691,13 @@ static constexpr std::chrono::seconds streaming_timeout{10*60};
 static constexpr std::chrono::seconds streaming_wait_before_retry{30};
 
 // PREPARE_MESSAGE
-void messaging_service::register_prepare_message(std::function<future<streaming::messages::prepare_message> (const rpc::client_info& cinfo,
-        streaming::messages::prepare_message msg, UUID plan_id, sstring description)>&& func) {
+void messaging_service::register_prepare_message(std::function<future<streaming::prepare_message> (const rpc::client_info& cinfo,
+        streaming::prepare_message msg, UUID plan_id, sstring description)>&& func) {
     register_handler(this, messaging_verb::PREPARE_MESSAGE, std::move(func));
 }
-future<streaming::messages::prepare_message> messaging_service::send_prepare_message(msg_addr id, streaming::messages::prepare_message msg, UUID plan_id,
+future<streaming::prepare_message> messaging_service::send_prepare_message(msg_addr id, streaming::prepare_message msg, UUID plan_id,
         sstring description) {
-    return send_message_timeout_and_retry<streaming::messages::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
+    return send_message_timeout_and_retry<streaming::prepare_message>(this, messaging_verb::PREPARE_MESSAGE, id,
         streaming_timeout, streaming_nr_retry, streaming_wait_before_retry,
         std::move(msg), plan_id, std::move(description));
 }

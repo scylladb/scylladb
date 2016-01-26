@@ -39,8 +39,8 @@
 #include "log.hh"
 #include "message/messaging_service.hh"
 #include "streaming/stream_session.hh"
-#include "streaming/messages/prepare_message.hh"
-#include "streaming/messages/outgoing_file_message.hh"
+#include "streaming/prepare_message.hh"
+#include "streaming/outgoing_file_message.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "mutation_reader.hh"
@@ -74,7 +74,7 @@ static auto get_stream_result_future(utils::UUID plan_id) {
 }
 
 void stream_session::init_messaging_service_handler() {
-    ms().register_prepare_message([] (const rpc::client_info& cinfo, messages::prepare_message msg, UUID plan_id, sstring description) {
+    ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
@@ -274,7 +274,7 @@ future<> stream_session::test(distributed<cql3::query_processor>& qp) {
 future<> stream_session::on_initialization_complete() {
     // send prepare message
     set_state(stream_session_state::PREPARING);
-    auto prepare = messages::prepare_message();
+    auto prepare = prepare_message();
     std::copy(_requests.begin(), _requests.end(), std::back_inserter(prepare.requests));
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
@@ -322,7 +322,7 @@ void stream_session::on_error() {
 }
 
 // Only follower calls this function upon receiving of prepare_message from initiator
-future<messages::prepare_message> stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+future<prepare_message> stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     auto plan_id = this->plan_id();
     sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, requests.size(), summaries.size());
     // prepare tasks
@@ -359,7 +359,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
     }
 
     // Always send a prepare_message back to follower
-    messages::prepare_message prepare;
+    prepare_message prepare;
     if (!requests.empty()) {
         for (auto& x: _transfers) {
             auto& task = x.second;
@@ -367,7 +367,7 @@ future<messages::prepare_message> stream_session::prepare(std::vector<stream_req
         }
     }
     prepare.dst_cpu_id = engine().cpu_id();;
-    return make_ready_future<messages::prepare_message>(std::move(prepare));
+    return make_ready_future<prepare_message>(std::move(prepare));
 }
 
 void stream_session::follower_start_sent() {

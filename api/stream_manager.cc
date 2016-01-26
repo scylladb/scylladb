@@ -109,14 +109,14 @@ void set_stream_manager(http_context& ctx, routes& r) {
     });
 
     hs::get_total_incoming_bytes.set(r, [](std::unique_ptr<request> req) {
-        gms::inet_address ep(req->param["peer"]);
-        utils::UUID plan_id = gms::get_local_gossiper().get_host_id(ep);
-        return streaming::get_stream_manager().map_reduce0([plan_id](streaming::stream_manager& stream) {
+        gms::inet_address peer(req->param["peer"]);
+        return streaming::get_stream_manager().map_reduce0([peer](streaming::stream_manager& stream) {
             int64_t res = 0;
-            streaming::stream_result_future* s = stream.get_receiving_stream(plan_id).get();
-            if (s != nullptr) {
-                for (auto si: s->get_coordinator()->get_all_session_info()) {
-                    res += si.get_total_size_received();
+            for (auto s : stream.get_receiving_streams()) {
+                if (s.second.get() != nullptr) {
+                    for (auto si: s.second.get()->get_coordinator()->get_peer_session_info(peer)) {
+                        res += si.get_total_size_received();
+                    }
                 }
             }
             return res;
@@ -142,14 +142,14 @@ void set_stream_manager(http_context& ctx, routes& r) {
     });
 
     hs::get_total_outgoing_bytes.set(r, [](std::unique_ptr<request> req) {
-        gms::inet_address ep(req->param["peer"]);
-        utils::UUID plan_id = gms::get_local_gossiper().get_host_id(ep);
-        return streaming::get_stream_manager().map_reduce0([plan_id](streaming::stream_manager& stream) {
+        gms::inet_address peer(req->param["peer"]);
+        return streaming::get_stream_manager().map_reduce0([peer](streaming::stream_manager& stream) {
             int64_t res = 0;
-            streaming::stream_result_future* s = stream.get_sending_stream(plan_id).get();
-            if (s != nullptr) {
-                for (auto si: s->get_coordinator()->get_all_session_info()) {
-                    res += si.get_total_size_received();
+            for (auto s : stream.get_initiated_streams()) {
+                if (s.second.get() != nullptr) {
+                    for (auto si: s.second.get()->get_coordinator()->get_peer_session_info(peer)) {
+                        res += si.get_total_size_sent();
+                    }
                 }
             }
             return res;
@@ -164,7 +164,7 @@ void set_stream_manager(http_context& ctx, routes& r) {
             for (auto s : stream.get_initiated_streams()) {
                 if (s.second.get() != nullptr) {
                     for (auto si: s.second.get()->get_coordinator()->get_all_session_info()) {
-                        res += si.get_total_size_received();
+                        res += si.get_total_size_sent();
                     }
                 }
             }

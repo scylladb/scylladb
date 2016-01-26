@@ -38,54 +38,31 @@
 
 #pragma once
 
+#include "streaming/stream_request.hh"
+#include "streaming/stream_summary.hh"
+
 namespace streaming {
-namespace messages {
 
-/**
- * StreamMessage is an abstract base class that every messages in streaming protocol inherit.
- *
- * Every message carries message type({@link Type}) and streaming protocol version byte.
- */
-class stream_message {
+class prepare_message {
 public:
-    enum class Type {
-        PREPARE,
-        FILE,
-        RECEIVED,
-        RETRY,
-        COMPLETE,
-        SESSION_FAILED,
-    };
-
-    Type type;
-    int priority;
-
-    stream_message() = default;
-
-    stream_message(Type type_)
-        : type(type_) {
-        if (type == Type::PREPARE) {
-            priority = 5;
-        } else if (type == Type::FILE) {
-            priority = 0;
-        } else if (type == Type::RECEIVED) {
-            priority = 4;
-        } else if (type == Type::RETRY) {
-            priority = 4;
-        } else if (type == Type::COMPLETE) {
-            priority = 1;
-        } else if (type == Type::SESSION_FAILED) {
-            priority = 5;
-        }
-    }
+    /**
+     * Streaming requests
+     */
+    std::vector<stream_request> requests;
 
     /**
-     * @return priority of this message. higher value, higher priority.
+     * Summaries of streaming out
      */
-    int get_priority() {
-        return priority;
+    std::vector<stream_summary> summaries;
+
+    uint32_t dst_cpu_id;
+
+    prepare_message() = default;
+    prepare_message(std::vector<stream_request> reqs, std::vector<stream_summary> sums, uint32_t dst_cpu_id_ = -1)
+        : requests(std::move(reqs))
+        , summaries(std::move(sums))
+        , dst_cpu_id(dst_cpu_id_) {
     }
 };
 
-} // namespace messages
 } // namespace streaming

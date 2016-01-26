@@ -47,7 +47,7 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
-#include "streaming/messages/prepare_message.hh"
+#include "streaming/prepare_message.hh"
 #include "streaming/stream_detail.hh"
 #include "streaming/session_info.hh"
 #include "sstables/sstables.hh"
@@ -324,7 +324,7 @@ public:
     /**
      * Prepare this session for sending/receiving files.
      */
-    future<messages::prepare_message> prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
+    future<prepare_message> prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
     void follower_start_sent();
 

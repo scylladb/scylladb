@@ -97,6 +97,7 @@ public:
     void add_session_info(session_info session);
 
     std::vector<session_info> get_all_session_info();
+    std::vector<session_info> get_peer_session_info(inet_address peer);
 
 private:
 #if 0

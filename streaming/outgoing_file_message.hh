@@ -38,50 +38,28 @@
 
 #pragma once
 
-#include "streaming/messages/stream_message.hh"
-#include "streaming/stream_request.hh"
-#include "streaming/stream_summary.hh"
+#include "streaming/stream_detail.hh"
+#include <seastar/core/semaphore.hh>
 
 namespace streaming {
-namespace messages {
 
-class prepare_message : public stream_message {
+/**
+ * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
+ */
+class outgoing_file_message {
 public:
-    /**
-     * Streaming requests
-     */
-    std::vector<stream_request> requests;
+    int32_t sequence_number;
+    stream_detail detail;
 
-    /**
-     * Summaries of streaming out
-     */
-    std::vector<stream_summary> summaries;
+    size_t mutations_nr{0};
+    semaphore mutations_done{0};
 
-    uint32_t dst_cpu_id;
-
-    prepare_message() = default;
-    prepare_message(std::vector<stream_request> reqs, std::vector<stream_summary> sums, uint32_t dst_cpu_id_ = -1)
-        : stream_message(stream_message::Type::PREPARE)
-        , requests(std::move(reqs))
-        , summaries(std::move(sums))
-        , dst_cpu_id(dst_cpu_id_) {
+    outgoing_file_message() = default;
+    outgoing_file_message(int32_t sequence_number_, stream_detail detail_)
+        : sequence_number(sequence_number_)
+        , detail(std::move(detail_)) {
     }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        final StringBuilder sb = new StringBuilder("Prepare (");
-        sb.append(requests.size()).append(" requests, ");
-        int totalFile = 0;
-        for (StreamSummary summary : summaries)
-            totalFile += summary.files;
-        sb.append(" ").append(totalFile).append(" files");
-        sb.append('}');
-        return sb.toString();
-    }
-#endif
 };
 
-} // namespace messages
 } // namespace streaming
+
