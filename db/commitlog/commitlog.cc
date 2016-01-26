@@ -492,8 +492,9 @@ public:
      */
     future<sseg_ptr> finish_and_get_new() {
         _closed = true;
-        sync();
-        return _segment_manager->active_segment();
+        return maybe_wait_for_write(sync()).then([](sseg_ptr s) {
+            return s->_segment_manager->active_segment();
+        });
     }
     void reset_sync_time() {
         _sync_time = clock_type::now();
@@ -738,7 +739,7 @@ public:
             op = sync();
         } else if (must_wait_for_alloc()) {
             op = wait_for_alloc();
-        } else if (position() + s > _segment_manager->max_size) { // would we make the file too big?
+        } else if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
             // do this in next segment instead.
             op = finish_and_get_new();
         } else if (_buffer.empty()) {
