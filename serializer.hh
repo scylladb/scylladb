@@ -24,6 +24,7 @@
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <experimental/optional>
+#include "enum_set.hh"
 #include "core/simple-stream.hh"
 
 namespace ser {
