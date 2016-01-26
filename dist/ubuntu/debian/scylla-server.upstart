@@ -12,6 +12,8 @@ umask 022
 console log
 
 expect stop
+setuid scylla
+setgid scylla
 limit core unlimited unlimited
 limit memlock unlimited unlimited
 limit nofile 200000 200000
@@ -22,7 +24,7 @@ pre-start script
     cd /var/lib/scylla
     . /etc/default/scylla-server
     export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
-    /usr/lib/scylla/scylla_prepare
+    sudo /usr/lib/scylla/scylla_prepare
 end script
 
 script
@@ -36,5 +38,5 @@ post-stop script
     cd /var/lib/scylla
     . /etc/default/scylla-server
     export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
-    /usr/lib/scylla/scylla_stop
+    sudo /usr/lib/scylla/scylla_stop
 end script
