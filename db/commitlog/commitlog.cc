@@ -476,7 +476,7 @@ public:
 
     bool must_sync() {
         if (_segment_manager->cfg.mode == sync_mode::BATCH) {
-            return true;
+            return false;
         }
         auto now = clock_type::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -782,6 +782,12 @@ public:
         ++_segment_manager->totals.allocation_count;
 
         _gate.leave();
+
+        if (_segment_manager->cfg.mode == sync_mode::BATCH) {
+            return sync().then([rp](sseg_ptr) {
+                return make_ready_future<replay_position>(rp);
+            });
+        }
 
         return make_ready_future<replay_position>(rp);
     }
