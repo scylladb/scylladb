@@ -101,6 +101,7 @@ public:
     replication_strategy_type get_type() const { return _my_type; }
 
     // get_ranges() returns the list of ranges held by the given endpoint.
+    // The list is sorted, and its elements are non overlapping and non wrap-around.
     // It the analogue of Origin's getAddressRanges().get(endpoint).
     // This function is not efficient, and not meant for the fast path.
     std::vector<range<token>> get_ranges(inet_address ep) const;

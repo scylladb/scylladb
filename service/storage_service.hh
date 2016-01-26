@@ -1609,6 +1609,7 @@ public:
 #endif
     /**
      * Get all ranges an endpoint is responsible for (by keyspace)
+     * Replication strategy's get_ranges() guarantees that no wrap-around range is returned.
      * @param ep endpoint we are interested in.
      * @return ranges for the specified endpoint.
      */

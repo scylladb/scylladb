@@ -123,6 +123,15 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
         }
         prev_tok = tok;
     }
+    if (!ret.empty()) {
+        // Make ret contain no wrap-around range by unwrapping the first element.
+        auto& r = ret.front();
+        if (r.is_wrap_around(dht::token_comparator())) {
+            auto split_ranges = r.unwrap();
+            r = split_ranges.first;
+            ret.push_back(split_ranges.second);
+        }
+    }
     return ret;
 }
 
