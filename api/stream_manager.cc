@@ -149,7 +149,7 @@ void set_stream_manager(http_context& ctx, routes& r) {
             streaming::stream_result_future* s = stream.get_sending_stream(plan_id).get();
             if (s != nullptr) {
                 for (auto si: s->get_coordinator()->get_all_session_info()) {
-                    res += si.get_total_size_received();
+                    res += si.get_total_size_sent();
                 }
             }
             return res;
@@ -164,7 +164,7 @@ void set_stream_manager(http_context& ctx, routes& r) {
             for (auto s : stream.get_initiated_streams()) {
                 if (s.second.get() != nullptr) {
                     for (auto si: s.second.get()->get_coordinator()->get_all_session_info()) {
-                        res += si.get_total_size_received();
+                        res += si.get_total_size_sent();
                     }
                 }
             }
