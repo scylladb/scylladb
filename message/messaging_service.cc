@@ -44,8 +44,8 @@ void write(serializer s, Output& out, const foreign_ptr<T>& v) {
     return write(s, out, *v);
 }
 template <typename Input, typename T>
-foreign_ptr<T> read(serializer s, Input& in, rpc::type<foreign_ptr<T>>) {
-    return make_foreign(read(s, in, rpc::type<T>()));
+foreign_ptr<T> read(serializer s, Input& in, boost::type<foreign_ptr<T>>) {
+    return make_foreign(read(s, in, boost::type<T>()));
 }
 
 template <typename Output, typename T>
@@ -53,8 +53,8 @@ void write(serializer s, Output& out, const lw_shared_ptr<T>& v) {
     return write(s, out, *v);
 }
 template <typename Input, typename T>
-lw_shared_ptr<T> read(serializer s, Input& in, rpc::type<lw_shared_ptr<T>>) {
-    return make_lw_shared(read(s, in, rpc::type<T>()));
+lw_shared_ptr<T> read(serializer s, Input& in, boost::type<lw_shared_ptr<T>>) {
+    return make_lw_shared(read(s, in, boost::type<T>()));
 }
 
 // For vectors
@@ -63,7 +63,7 @@ void write(serializer, Output& out, const std::vector<T>& data) {
     ser::serialize(out, data);
 }
 template <typename T, typename Input>
-std::vector<T> read(serializer, Input& in, rpc::type<std::vector<T>> type) {
+std::vector<T> read(serializer, Input& in, boost::type<std::vector<T>> type) {
     return ser::deserialize(in, type);
 }
 
@@ -75,7 +75,7 @@ void write(serializer, Output& out, const gms::gossip_digest_syn& data) {
 
 template <typename Input>
 gms::gossip_digest_syn
-read(serializer, Input& in, rpc::type<gms::gossip_digest_syn> type) {
+read(serializer, Input& in, boost::type<gms::gossip_digest_syn> type) {
     return ser::deserialize(in, type);
 }
 
@@ -87,7 +87,7 @@ void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
 
 template <typename Input>
 gms::gossip_digest_ack
-read(serializer, Input& in, rpc::type<gms::gossip_digest_ack> type) {
+read(serializer, Input& in, boost::type<gms::gossip_digest_ack> type) {
     return ser::deserialize(in, type);
 }
 
@@ -99,7 +99,7 @@ void write(serializer, Output& out, const gms::gossip_digest_ack2& data) {
 
 template <typename Input>
 gms::gossip_digest_ack2
-read(serializer, Input& in, rpc::type<gms::gossip_digest_ack2> type) {
+read(serializer, Input& in, boost::type<gms::gossip_digest_ack2> type) {
     return ser::deserialize(in, type);
 }
 
@@ -111,7 +111,7 @@ void write(serializer, Output& out, const gms::gossip_digest& data) {
 
 template <typename Input>
 gms::gossip_digest
-read(serializer, Input& in, rpc::type<gms::gossip_digest> type) {
+read(serializer, Input& in, boost::type<gms::gossip_digest> type) {
     return ser::deserialize(in, type);
 }
 
@@ -123,7 +123,7 @@ void write(serializer, Output& out, const gms::versioned_value& data) {
 
 template <typename Input>
 gms::versioned_value
-read(serializer, Input& in, rpc::type<gms::versioned_value> type) {
+read(serializer, Input& in, boost::type<gms::versioned_value> type) {
     return ser::deserialize(in, type);
 }
 
@@ -135,7 +135,7 @@ void write(serializer, Output& out, const gms::endpoint_state& data) {
 
 template <typename Input>
 gms::endpoint_state
-read(serializer, Input& in, rpc::type<gms::endpoint_state> type) {
+read(serializer, Input& in, boost::type<gms::endpoint_state> type) {
     return ser::deserialize(in, type);
 }
 
@@ -147,7 +147,7 @@ void write(serializer, Output& out, const gms::heart_beat_state& data) {
 
 template <typename Input>
 gms::heart_beat_state
-read(serializer, Input& in, rpc::type<gms::heart_beat_state> type) {
+read(serializer, Input& in, boost::type<gms::heart_beat_state> type) {
     return ser::deserialize(in, type);
 }
 
@@ -158,7 +158,7 @@ void write(serializer, Output& out, const query::read_command& data) {
 
 template <typename Input>
 query::read_command
-read(serializer, Input& in, rpc::type<query::read_command> type) {
+read(serializer, Input& in, boost::type<query::read_command> type) {
     return ser::deserialize(in, type);
 }
 
@@ -169,7 +169,7 @@ void write(serializer, Output& out, const query::partition_range& data) {
 
 template <typename Input>
 query::partition_range
-read(serializer, Input& in, rpc::type<query::partition_range> type) {
+read(serializer, Input& in, boost::type<query::partition_range> type) {
     return ser::deserialize(in, type);
 }
 
@@ -180,7 +180,7 @@ void write(serializer, Output& out, const query::result& data) {
 
 template <typename Input>
 query::result
-read(serializer, Input& in, rpc::type<query::result> type) {
+read(serializer, Input& in, boost::type<query::result> type) {
     return ser::deserialize(in, type);
 }
 
@@ -191,7 +191,7 @@ void write(serializer, Output& out, const frozen_mutation& data) {
 
 template <typename Input>
 frozen_mutation
-read(serializer, Input& in, rpc::type<frozen_mutation> type) {
+read(serializer, Input& in, boost::type<frozen_mutation> type) {
     return ser::deserialize(in, type);
 }
 
@@ -202,7 +202,7 @@ void write(serializer, Output& out, const reconcilable_result& data) {
 
 template <typename Input>
 reconcilable_result
-read(serializer, Input& in, rpc::type<reconcilable_result> type) {
+read(serializer, Input& in, boost::type<reconcilable_result> type) {
     return ser::deserialize(in, type);
 }
 
@@ -214,7 +214,7 @@ void write(serializer, Output& out, const streaming::stream_request& data) {
 
 template <typename Input>
 streaming::stream_request
-read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+read(serializer, Input& in, boost::type<streaming::stream_request> type) {
     return ser::deserialize(in, type);
 }
 
@@ -226,7 +226,7 @@ void write(serializer, Output& out, const streaming::stream_summary& data) {
 
 template <typename Input>
 streaming::stream_summary
-read(serializer, Input& in, rpc::type<streaming::stream_request> type) {
+read(serializer, Input& in, boost::type<streaming::stream_request> type) {
     return ser::deserialize(in, type);
 }
 
@@ -238,7 +238,7 @@ void write(serializer, Output& out, const streaming::prepare_message& data) {
 
 template <typename Input>
 streaming::prepare_message
-read(serializer, Input& in, rpc::type<streaming::prepare_message> type) {
+read(serializer, Input& in, boost::type<streaming::prepare_message> type) {
     return ser::deserialize(in, type);
 }
 
@@ -256,7 +256,7 @@ void net::serializer::write(Output& out, const query::result& v) const {
     write_serializable(out, v);
 }
 template <typename Input>
-query::result net::serializer::read(Input& in, rpc::type<query::result>) const {
+query::result net::serializer::read(Input& in, boost::type<query::result>) const {
     return read_serializable<query::result>(in);
 }
 

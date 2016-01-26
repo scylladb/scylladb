@@ -147,23 +147,23 @@ struct serializer {
 
     // For integer type
     template <typename Input>
-    bool read(Input& input, rpc::type<bool>) const { return read(input, rpc::type<uint8_t>()); }
+    bool read(Input& input, boost::type<bool>) const { return read(input, boost::type<uint8_t>()); }
     template <typename Input>
-    int8_t read(Input& input, rpc::type<int8_t>) const { return read_integral<int8_t>(input); }
+    int8_t read(Input& input, boost::type<int8_t>) const { return read_integral<int8_t>(input); }
     template <typename Input>
-    uint8_t read(Input& input, rpc::type<uint8_t>) const { return read_integral<uint8_t>(input); }
+    uint8_t read(Input& input, boost::type<uint8_t>) const { return read_integral<uint8_t>(input); }
     template <typename Input>
-    int16_t read(Input& input, rpc::type<int16_t>) const { return read_integral<int16_t>(input); }
+    int16_t read(Input& input, boost::type<int16_t>) const { return read_integral<int16_t>(input); }
     template <typename Input>
-    uint16_t read(Input& input, rpc::type<uint16_t>) const { return read_integral<uint16_t>(input); }
+    uint16_t read(Input& input, boost::type<uint16_t>) const { return read_integral<uint16_t>(input); }
     template <typename Input>
-    int32_t read(Input& input, rpc::type<int32_t>) const { return read_integral<int32_t>(input); }
+    int32_t read(Input& input, boost::type<int32_t>) const { return read_integral<int32_t>(input); }
     template <typename Input>
-    uint32_t read(Input& input, rpc::type<uint32_t>) const { return read_integral<uint32_t>(input); }
+    uint32_t read(Input& input, boost::type<uint32_t>) const { return read_integral<uint32_t>(input); }
     template <typename Input>
-    int64_t read(Input& input, rpc::type<int64_t>) const { return read_integral<int64_t>(input); }
+    int64_t read(Input& input, boost::type<int64_t>) const { return read_integral<int64_t>(input); }
     template <typename Input>
-    uint64_t read(Input& input, rpc::type<uint64_t>) const { return read_integral<uint64_t>(input); }
+    uint64_t read(Input& input, boost::type<uint64_t>) const { return read_integral<uint64_t>(input); }
     template <typename Output>
     void write(Output& output, bool data) const { write(output, uint8_t(data)); }
     template <typename Output>
@@ -189,8 +189,8 @@ struct serializer {
         return write(out, std::underlying_type_t<messaging_verb>(v));
     }
     template <typename Input>
-    messaging_verb operator()(Input& in, rpc::type<messaging_verb>) const {
-        return messaging_verb(read(in, rpc::type<std::underlying_type_t<messaging_verb>>()));
+    messaging_verb operator()(Input& in, boost::type<messaging_verb>) const {
+        return messaging_verb(read(in, boost::type<std::underlying_type_t<messaging_verb>>()));
     }
 
     // For sstring
@@ -200,8 +200,8 @@ struct serializer {
         out.write(v.begin(), v.size());
     }
     template <typename Input>
-    sstring read(Input& in, rpc::type<sstring>) const {
-        auto sz = read(in, rpc::type<uint32_t>());
+    sstring read(Input& in, boost::type<sstring>) const {
+        auto sz = read(in, boost::type<uint32_t>());
         sstring v(sstring::initialized_later(), sz);
         in.read(v.begin(), sz);
         return v;
@@ -213,14 +213,14 @@ struct serializer {
         return write_serializable(out, v);
     }
     template <typename Input>
-    frozen_schema read(Input& in, rpc::type<frozen_schema>) const {
+    frozen_schema read(Input& in, boost::type<frozen_schema>) const {
         return read_serializable<frozen_schema>(in);
     }
 
     template <typename Output>
     void write(Output& out, const query::result& v) const;
     template <typename Input>
-    query::result read(Input& in, rpc::type<query::result>) const;
+    query::result read(Input& in, boost::type<query::result>) const;
 
 
     // Default implementation for any type which knows how to serialize itself
@@ -248,8 +248,8 @@ struct serializer {
         out.write(reinterpret_cast<const char*>(b.c_str()), sz);
     }
     template <typename T, typename Input>
-    T read(Input& in, rpc::type<T>) const {
-        auto sz = read(in, rpc::type<uint32_t>());
+    T read(Input& in, boost::type<T>) const {
+        auto sz = read(in, boost::type<uint32_t>());
         bytes b(bytes::initialized_later(), sz);
         in.read(reinterpret_cast<char*>(b.begin()), sz);
         bytes_view bv(b);
@@ -269,7 +269,7 @@ write(serializer s, Output& out, const T& data) {
 template <typename Input, typename T>
 inline
 T
-read(serializer s, Input& in, rpc::type<T> type) {
+read(serializer s, Input& in, boost::type<T> type) {
     return s.read(in, type);
 }
 

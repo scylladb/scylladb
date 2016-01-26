@@ -175,7 +175,7 @@ template <typename Output$tmp_param>
 void $ser_func(Output& buf, const $name& v);
 
 template <typename Input$tmp_param>
-$name $deser_func(Input& buf, rpc::type<$name>);""").substitute({'ser_func': SERIALIZER, 'deser_func' : DESERIALIZER, 'name' : name, 'sizetype' : SIZETYPE, 'tmp_param' : template_param }))
+$name $deser_func(Input& buf, boost::type<$name>);""").substitute({'ser_func': SERIALIZER, 'deser_func' : DESERIALIZER, 'name' : name, 'sizetype' : SIZETYPE, 'tmp_param' : template_param }))
     if config.ns != '':
         fprintln(hout, "}")
 
@@ -191,8 +191,8 @@ void $ser_func(Output& buf, const $name& v) {
 }
 
 template<typename Input$temp_def>
-$name $deser_func(Input& buf, rpc::type<$name>) {
-  return  static_cast<$name>(deserialize(buf, rpc::type<$type>()));
+$name $deser_func(Input& buf, boost::type<$name>) {
+  return  static_cast<$name>(deserialize(buf, boost::type<$type>()));
 }""").substitute({'ser_func': SERIALIZER, 'deser_func' : DESERIALIZER, 'name' : name, 'size_type' : SIZETYPE, 'type': enum['underline_type'], 'temp_def' : temp_def}))
 
 
@@ -252,9 +252,9 @@ void $func(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER,
 
     fprintln(cout, Template("""
 template<typename Input$temp_def>
-$name$temp_param $func(Input& buf, rpc::type<$name$temp_param>) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'temp_def': temp_def, 'temp_param' : template_class_param}))
+$name$temp_param $func(Input& buf, boost::type<$name$temp_param>) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'temp_def': temp_def, 'temp_param' : template_class_param}))
     if not modifier:
-        fprintln(cout, Template("""  $size_type size = $func(buf, rpc::type<$size_type>());
+        fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
   Input in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
     else:
         fprintln(cout, """  Input& in = buf;""")
@@ -266,9 +266,9 @@ $name$temp_param $func(Input& buf, rpc::type<$name$temp_param>) {""").substitute
         if "attribute" in param:
             deflt = param["default"][0] if "default" in param else param["type"] + "()"
             fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
-    $func(in, rpc::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
+    $func(in, boost::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:
-            fprintln(cout, Template("""  $typ $local = $func(in, rpc::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
+            fprintln(cout, Template("""  $typ $local = $func(in, boost::type<$typ>());""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param}))
         params.append("std::move(" + local_param + ")")
     fprintln(cout, Template("""
   $name$temp_param res {$params};

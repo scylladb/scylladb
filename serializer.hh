@@ -46,39 +46,39 @@ inline void serialize_integral(Output& output, T data) {
 
 // For integer type
 template<typename Input>
-int8_t deserialize(Input& input, rpc::type<int8_t>) {
+int8_t deserialize(Input& input, boost::type<int8_t>) {
     return deserialize_integral<int8_t>(input);
 }
 template<typename Input>
-uint8_t deserialize(Input& input, rpc::type<uint8_t>) {
+uint8_t deserialize(Input& input, boost::type<uint8_t>) {
     return deserialize_integral<uint8_t>(input);
 }
 template<typename Input>
-bool deserialize(Input& input, rpc::type<bool>) {
-    return deserialize(input, rpc::type<uint8_t>());
+bool deserialize(Input& input, boost::type<bool>) {
+    return deserialize(input, boost::type<uint8_t>());
 }
 template<typename Input>
-int16_t deserialize(Input& input, rpc::type<int16_t>) {
+int16_t deserialize(Input& input, boost::type<int16_t>) {
     return deserialize_integral<int16_t>(input);
 }
 template<typename Input>
-uint16_t deserialize(Input& input, rpc::type<uint16_t>) {
+uint16_t deserialize(Input& input, boost::type<uint16_t>) {
     return deserialize_integral<uint16_t>(input);
 }
 template<typename Input>
-int32_t deserialize(Input& input, rpc::type<int32_t>) {
+int32_t deserialize(Input& input, boost::type<int32_t>) {
     return deserialize_integral<int32_t>(input);
 }
 template<typename Input>
-uint32_t deserialize(Input& input, rpc::type<uint32_t>) {
+uint32_t deserialize(Input& input, boost::type<uint32_t>) {
     return deserialize_integral<uint32_t>(input);
 }
 template<typename Input>
-int64_t deserialize(Input& input, rpc::type<int64_t>) {
+int64_t deserialize(Input& input, boost::type<int64_t>) {
     return deserialize_integral<int64_t>(input);
 }
 template<typename Input>
-uint64_t deserialize(Input& input, rpc::type<uint64_t>) {
+uint64_t deserialize(Input& input, boost::type<uint64_t>) {
     return deserialize_integral<uint64_t>(input);
 }
 
@@ -126,51 +126,51 @@ void safe_serialize_as_uint32(Output& output, uint64_t data);
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::vector<T>& v);
 template<typename T, typename Input>
-inline std::vector<T> deserialize(Input& in, rpc::type<std::vector<T>>);
+inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>);
 
 template<typename K, typename V, typename Output>
 inline void serialize(Output& out, const std::map<K, V>& v);
 template<typename K, typename V, typename Input>
-inline std::map<K, V> deserialize(Input& in, rpc::type<std::map<K, V>>);
+inline std::map<K, V> deserialize(Input& in, boost::type<std::map<K, V>>);
 template<typename T>
 size_type get_sizeof(const T& obj);
 // For sstring
 template<typename Output>
 void serialize(Output& out, const sstring& v);
 template<typename Input>
-sstring deserialize(Input& in, rpc::type<sstring>);
+sstring deserialize(Input& in, boost::type<sstring>);
 // For optional
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::experimental::optional<T>& v);
 template<typename T, typename Input>
-inline std::experimental::optional<T> deserialize(Input& in, rpc::type<std::experimental::optional<T>>);
+inline std::experimental::optional<T> deserialize(Input& in, boost::type<std::experimental::optional<T>>);
 template<typename T, typename Output>
 // For unique_ptr
 inline void serialize(Output& out, const std::unique_ptr<T>& v);
 template<typename T, typename Input>
-inline std::unique_ptr<T> deserialize(Input& in, rpc::type<std::unique_ptr<T>>);
+inline std::unique_ptr<T> deserialize(Input& in, boost::type<std::unique_ptr<T>>);
 // For time_point
 template<typename Clock, typename Duration, typename Output>
 inline void serialize(Output& out, const std::chrono::time_point<Clock, Duration>& v);
 template<typename Clock, typename Duration, typename Input>
-inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, rpc::type<std::chrono::time_point<Clock, Duration>>);
+inline std::chrono::time_point<Clock, Duration> deserialize(Input& in, boost::type<std::chrono::time_point<Clock, Duration>>);
 // For enum_set
 template<typename Enum, typename Output>
 inline void serialize(Output& out, const enum_set<Enum>& v);
 template<typename Enum, typename Input>
-inline enum_set<Enum> deserialize(Input& in, rpc::type<enum_set<Enum>>);
+inline enum_set<Enum> deserialize(Input& in, boost::type<enum_set<Enum>>);
 // For bytes/bytes_view
 template<typename Output>
 void serialize(Output& out, const bytes_view& v);
 template<typename Output>
 void serialize(Output& out, const bytes& v);
 template<typename Input>
-bytes deserialize(Input& in, rpc::type<bytes>);
+bytes deserialize(Input& in, boost::type<bytes>);
 // For bytes_ostream
 template<typename Output>
 void serialize(Output& out, const bytes_ostream& v);
 template<typename Input>
-bytes_ostream deserialize(Input& in, rpc::type<bytes_ostream>);
+bytes_ostream deserialize(Input& in, boost::type<bytes_ostream>);
 
 template<typename T>
 void set_size(seastar::simple_output_stream& os, const T& obj);
