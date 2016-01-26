@@ -38,9 +38,7 @@
 
 #pragma once
 
-#include "utils/UUID.hh"
 #include "streaming/stream_detail.hh"
-#include "sstables/sstables.hh"
 #include <seastar/core/semaphore.hh>
 
 namespace streaming {
@@ -49,8 +47,6 @@ namespace streaming {
  * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
  */
 class outgoing_file_message {
-    using UUID = utils::UUID;
-    using format_types = sstables::sstable::format_types;
 public:
     int32_t sequence_number;
     stream_detail detail;
@@ -63,14 +59,6 @@ public:
         : sequence_number(sequence_number_)
         , detail(std::move(detail_)) {
     }
-
-#if 0
-    @Override
-    public String toString()
-    {
-        return "File (" + header + ", file: " + sstable.getFilename() + ")";
-    }
-#endif
 };
 
 } // namespace streaming
