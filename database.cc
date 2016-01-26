@@ -59,6 +59,7 @@
 #include "utils/latency.hh"
 #include "utils/flush_queue.hh"
 #include "schema_registry.hh"
+#include "service/priority_manager.hh"
 
 using namespace std::chrono_literals;
 
@@ -128,9 +129,9 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
 
 mutation_source
 column_family::sstables_as_mutation_source() {
-    return [this] (schema_ptr s, const query::partition_range& r) {
-        return make_sstable_reader(std::move(s), r);
-    };
+    return mutation_source([this] (schema_ptr s, const query::partition_range& r, const io_priority_class& pc) {
+        return make_sstable_reader(std::move(s), r, pc);
+    });
 }
 
 // define in .cc, since sstable is forward-declared in .hh
@@ -155,10 +156,14 @@ class range_sstable_reader final : public mutation_reader::impl {
     const query::partition_range& _pr;
     lw_shared_ptr<sstable_list> _sstables;
     mutation_reader _reader;
+    // Use a pointer instead of copying, so we don't need to regenerate the reader if
+    // the priority changes.
+    const io_priority_class* _pc;
 public:
-    range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr)
+    range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr, const io_priority_class& pc)
         : _pr(pr)
         , _sstables(std::move(sstables))
+        , _pc(&pc)
     {
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
@@ -185,11 +190,15 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     mutation_opt _m;
     bool _done = false;
     lw_shared_ptr<sstable_list> _sstables;
+    // Use a pointer instead of copying, so we don't need to regenerate the reader if
+    // the priority changes.
+    const io_priority_class* _pc;
 public:
-    single_key_sstable_reader(schema_ptr schema, lw_shared_ptr<sstable_list> sstables, const partition_key& key)
+    single_key_sstable_reader(schema_ptr schema, lw_shared_ptr<sstable_list> sstables, const partition_key& key, const io_priority_class& pc)
         : _schema(std::move(schema))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
+        , _pc(&pc)
     { }
 
     virtual future<mutation_opt> operator()() override {
@@ -208,26 +217,26 @@ public:
 };
 
 mutation_reader
-column_family::make_sstable_reader(schema_ptr s, const query::partition_range& pr) const {
+column_family::make_sstable_reader(schema_ptr s, const query::partition_range& pr, const io_priority_class& pc) const {
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key());
+        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key(), pc);
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr);
+        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, pc);
     }
 }
 
 key_source column_family::sstables_as_key_source() const {
-    return [this] (const query::partition_range& range) {
+    return key_source([this] (const query::partition_range& range, const io_priority_class& pc) {
         std::vector<key_reader> readers;
         readers.reserve(_sstables->size());
         std::transform(_sstables->begin(), _sstables->end(), std::back_inserter(readers), [&] (auto&& entry) {
             auto& sst = entry.second;
-            auto rd = sstables::make_key_reader(_schema, sst, range);
+            auto rd = sstables::make_key_reader(_schema, sst, range, pc);
             if (sst->is_shared()) {
                 rd = make_filtering_reader(std::move(rd), [] (const dht::decorated_key& dk) {
                     return dht::shard_of(dk.token()) == engine().cpu_id();
@@ -236,7 +245,7 @@ key_source column_family::sstables_as_key_source() const {
             return rd;
         });
         return make_combined_reader(_schema, std::move(readers));
-    };
+    });
 }
 
 // Exposed for testing, not performance critical.
@@ -276,7 +285,7 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
 }
 
 mutation_reader
-column_family::make_reader(schema_ptr s, const query::partition_range& range) const {
+column_family::make_reader(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) const {
     if (query::is_wrap_around(range, *s)) {
         // make_combined_reader() can't handle streams that wrap around yet.
         fail(unimplemented::cause::WRAP_AROUND);
@@ -310,14 +319,15 @@ column_family::make_reader(schema_ptr s, const query::partition_range& range) co
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_reader(s, range));
+        readers.emplace_back(_cache.make_reader(s, range, pc));
     } else {
-        readers.emplace_back(make_sstable_reader(s, range));
+        readers.emplace_back(make_sstable_reader(s, range, pc));
     }
 
     return make_combined_reader(std::move(readers));
 }
 
+// Not performance critical. Currently used for testing only.
 template <typename Func>
 future<bool>
 column_family::for_all_partitions(schema_ptr s, Func&& func) const {
@@ -597,7 +607,8 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    return newtab->write_components(*old, incremental_backups_enabled()).then([this, newtab, old] {
+    auto& priority = service::get_local_memtable_flush_priority();
+    return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {
         _config.cf_stats->pending_memtables_flushes_count--;
@@ -1534,7 +1545,7 @@ column_family::query(schema_ptr s, const query::read_command& cmd, const std::ve
     return do_with(query_state(std::move(s), cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            qs.reader = make_reader(qs.schema, range);
+            qs.reader = make_reader(qs.schema, range, service::get_local_sstable_query_read_priority());
             qs.range_empty = false;
             return do_until([&qs] { return !qs.limit || qs.range_empty; }, [&qs] {
                 return qs.reader().then([&qs](mutation_opt mo) {
@@ -1563,9 +1574,9 @@ column_family::query(schema_ptr s, const query::read_command& cmd, const std::ve
 
 mutation_source
 column_family::as_mutation_source() const {
-    return [this] (schema_ptr s, const query::partition_range& range) {
-        return this->make_reader(std::move(s), range);
-    };
+    return mutation_source([this] (schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
+        return this->make_reader(std::move(s), range, pc);
+    });
 }
 
 future<lw_shared_ptr<query::result>>

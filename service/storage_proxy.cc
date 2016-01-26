@@ -2906,6 +2906,7 @@ class shard_reader final : public mutation_reader::impl {
     const query::partition_range _range;
     global_schema_ptr _schema;
     schema_ptr _local_schema;
+    const io_priority_class *_pc;
     struct remote_state {
         mutation_reader reader;
         std::experimental::optional<frozen_mutation> _m;
@@ -2916,7 +2917,7 @@ private:
         return _db.invoke_on(_shard, [this] (database& db) {
             schema_ptr s = _schema;
             column_family& cf = db.find_column_family(s->id());
-            return make_foreign(std::make_unique<remote_state>(remote_state{cf.make_reader(std::move(s), _range)}));
+            return make_foreign(std::make_unique<remote_state>(remote_state{cf.make_reader(std::move(s), _range, *_pc)}));
         }).then([this] (auto&& ptr) {
             _remote = std::move(ptr);
         });
@@ -2925,12 +2926,14 @@ public:
     shard_reader(schema_ptr s,
                  distributed<database>& db,
                  unsigned shard,
-                 const query::partition_range& range)
+                 const query::partition_range& range,
+                 const io_priority_class& pc)
         : _db(db)
         , _shard(shard)
         , _range(range)
         , _schema(s)
         , _local_schema(std::move(s))
+        , _pc(&pc)
     { }
 
     virtual future<mutation_opt> operator()() override {
@@ -2959,7 +2962,8 @@ public:
 };
 
 mutation_reader
-storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range& range) {
+storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range& range,
+                                 const io_priority_class& pc) {
     // Split ranges which wrap around, because the individual readers created
     // by shard_reader do not support them:
     auto schema = _db.local().find_column_family(cf_id).schema();
@@ -2967,8 +2971,8 @@ storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range
         auto unwrapped = range.unwrap();
         std::vector<mutation_reader> both;
         both.reserve(2);
-        both.push_back(make_local_reader(cf_id, unwrapped.first));
-        both.push_back(make_local_reader(cf_id, unwrapped.second));
+        both.push_back(make_local_reader(cf_id, unwrapped.first, pc));
+        both.push_back(make_local_reader(cf_id, unwrapped.second, pc));
         return make_joining_reader(std::move(both));
     }
 
@@ -2976,7 +2980,7 @@ storage_proxy::make_local_reader(utils::UUID cf_id, const query::partition_range
     unsigned last_shard = range.end() ? dht::shard_of(range.end()->value().token()) : smp::count - 1;
     std::vector<mutation_reader> readers;
     for (auto cpu = first_shard; cpu <= last_shard; ++cpu) {
-        readers.emplace_back(make_mutation_reader<shard_reader>(schema, _db, cpu, range));
+        readers.emplace_back(make_mutation_reader<shard_reader>(schema, _db, cpu, range, pc));
     }
     return make_joining_reader(std::move(readers));
 }

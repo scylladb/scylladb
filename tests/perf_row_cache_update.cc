@@ -68,8 +68,8 @@ int main(int argc, char** argv) {
                 .build();
 
             cache_tracker tracker;
-            row_cache cache(s, [] (schema_ptr, auto&&) { return make_empty_reader(); },
-                [] (auto&&) { return key_reader(); }, tracker);
+            row_cache cache(s, mutation_source([] (schema_ptr, auto&&) { return make_empty_reader(); }),
+                key_source([] (auto&&) { return key_reader(); }), tracker);
 
             size_t partitions = app.configuration()["partitions"].as<unsigned>();
             size_t cell_size = app.configuration()["cell-size"].as<unsigned>();

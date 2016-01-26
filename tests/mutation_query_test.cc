@@ -59,13 +59,13 @@ struct mutation_less_cmp {
 };
 
 mutation_source make_source(std::vector<mutation> mutations) {
-    return [mutations = std::move(mutations)] (schema_ptr s, const query::partition_range& range) {
+    return mutation_source([mutations = std::move(mutations)] (schema_ptr s, const query::partition_range& range) {
         assert(range.is_full()); // slicing not implemented yet
         for (auto&& m : mutations) {
             assert(m.schema() == s);
         }
         return make_reader_returning_many(mutations);
-    };
+    });
 }
 
 static query::partition_slice make_full_slice(const schema& s) {

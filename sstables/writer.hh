@@ -192,8 +192,7 @@ public:
                 std::move(f), cm, options)) {}
 };
 
-static inline output_stream<char> make_compressed_file_output_stream(file f, sstables::compression* cm) {
-    file_output_stream_options options;
+static inline output_stream<char> make_compressed_file_output_stream(file f, file_output_stream_options options, sstables::compression* cm) {
     // buffer of output stream is set to chunk length, because flush must
     // happen every time a chunk was filled up.
     options.buffer_size = cm->uncompressed_chunk_length();

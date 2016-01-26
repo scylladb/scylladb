@@ -220,18 +220,20 @@ class compressed_file_data_source_impl : public data_source_impl {
     file _file;
     sstables::compression* _compression_metadata;
     uint64_t _pos = 0;
+    const io_priority_class* _pc;
 public:
-    compressed_file_data_source_impl(file f,
+    compressed_file_data_source_impl(file f, const io_priority_class& pc,
             sstables::compression* cm, uint64_t pos)
-            : _file(std::move(f)), _compression_metadata(cm),
-              _pos(pos)
+            : _file(std::move(f)), _compression_metadata(cm)
+            , _pos(pos)
+            , _pc(&pc)
             {}
     virtual future<temporary_buffer<char>> get() override {
         if (_pos >= _compression_metadata->data_len) {
             return make_ready_future<temporary_buffer<char>>();
         }
         auto addr = _compression_metadata->locate(_pos);
-        return _file.dma_read_exactly<char>(addr.chunk_start, addr.chunk_len).
+        return _file.dma_read_exactly<char>(addr.chunk_start, addr.chunk_len, *_pc).
             then([this, addr](temporary_buffer<char> buf) {
                 // The last 4 bytes of the chunk are the adler32 checksum
                 // of the rest of the (compressed) chunk.
@@ -263,16 +265,16 @@ public:
 
 class compressed_file_data_source : public data_source {
 public:
-    compressed_file_data_source(file f,
+    compressed_file_data_source(file f, const io_priority_class& pc,
             sstables::compression* cm, uint64_t offset)
         : data_source(std::make_unique<compressed_file_data_source_impl>(
-                std::move(f), cm, offset))
+                std::move(f), pc, cm, offset))
         {}
 };
 
 input_stream<char> make_compressed_file_input_stream(
-        file f, sstables::compression* cm, uint64_t offset)
+        file f, sstables::compression* cm, const io_priority_class& pc, uint64_t offset)
 {
     return input_stream<char>(compressed_file_data_source(
-            std::move(f), cm, offset));
+            std::move(f), pc, cm, offset));
 }
