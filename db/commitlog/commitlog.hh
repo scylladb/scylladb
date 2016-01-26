@@ -115,6 +115,10 @@ public:
         // Max number of segments to keep in pre-alloc reserve.
         // Not (yet) configurable from scylla.conf.
         uint64_t max_reserve_segments = 12;
+        // Max active writes/flushes. Default value
+        // zero means try to figure it out ourselves
+        uint64_t max_active_writes = 0;
+        uint64_t max_active_flushes = 0;
 
         sync_mode mode = sync_mode::PERIODIC;
     };
@@ -241,13 +245,36 @@ public:
     uint64_t get_completed_tasks() const;
     uint64_t get_flush_count() const;
     uint64_t get_pending_tasks() const;
+    uint64_t get_pending_writes() const;
+    uint64_t get_pending_flushes() const;
+    uint64_t get_pending_allocations() const;
+    uint64_t get_write_limit_exceeded_count() const;
+    uint64_t get_flush_limit_exceeded_count() const;
     uint64_t get_num_segments_created() const;
     uint64_t get_num_segments_destroyed() const;
+    /**
+     * Get number of inactive (finished), segments lingering
+     * due to still being dirty
+     */
+    uint64_t get_num_dirty_segments() const;
+    /**
+     * Get number of active segments, i.e. still being allocated to
+     */
+    uint64_t get_num_active_segments() const;
 
     /**
      * Returns the largest amount of data that can be written in a single "mutation".
      */
     size_t max_record_size() const;
+
+    /**
+     * Return max allowed pending writes (per this shard)
+     */
+    uint64_t max_active_writes() const;
+    /**
+     * Return max allowed pending flushes (per this shard)
+     */
+    uint64_t max_active_flushes() const;
 
     future<> clear();
 
