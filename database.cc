@@ -607,7 +607,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
     //
     // The code as is guarantees that we'll never partially backup a
     // single sstable, so that is enough of a guarantee.
-    auto& priority = service::get_local_memtable_flush_priority();
+    auto&& priority = service::get_local_memtable_flush_priority();
     return newtab->write_components(*old, incremental_backups_enabled(), priority).then([this, newtab, old] {
         return newtab->open_data();
     }).then_wrapped([this, old, newtab, memtable_size] (future<> ret) {

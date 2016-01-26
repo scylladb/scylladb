@@ -646,7 +646,7 @@ public:
             auto written = make_lw_shared<size_t>(0);
             auto p = buf.get();
             return repeat([this, size, off, written, p]() mutable {
-                auto& priority_class = service::get_local_commitlog_priority();
+                auto&& priority_class = service::get_local_commitlog_priority();
                 return _file.dma_write(off + *written, p + *written, size - *written, priority_class).then_wrapped([this, size, written](future<size_t>&& f) {
                     try {
                         auto bytes = std::get<0>(f.get());
