@@ -4,7 +4,6 @@
 
 . /etc/os-release
 
-. /etc/sysconfig/scylla-server
 if [ ! -f /etc/default/grub ]; then
     echo "Unsupported bootloader"
     exit 1
@@ -18,7 +17,7 @@ fi
 sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
 mv /tmp/grub /etc/default/grub
 if [ "$ID" = "ubuntu" ]; then
-    grub2-mkconfig -o /boot/grub/grub.cfg
+    grub-mkconfig -o /boot/grub/grub.cfg
 else
     grub2-mkconfig -o /boot/grub2/grub.cfg
 fi
