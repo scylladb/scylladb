@@ -144,16 +144,15 @@ if __name__ == "__main__":
         path = test[0]
         prefix = '[%d/%d]' % (n + 1, n_total)
         path += ' --collectd 0'
-        print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
             mode = 'release'
             if test[0].startswith(os.path.join('build', 'debug')):
                 mode = 'debug'
             xmlout = (args.jenkins + "." + mode + "." +
-                      os.path.basename(test[0]) + ".boost.xml")
+                      os.path.basename(test[0].split()[0]) + ".boost.xml")
             path = path + " --output_format=XML --log_level=test_suite --report_level=no --log_sink=" + xmlout
-            print(path)
+        print_status('%s RUNNING %s' % (prefix, path))
         proc = subprocess.Popen(shlex.split(path), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 env=env, preexec_fn=os.setsid)
