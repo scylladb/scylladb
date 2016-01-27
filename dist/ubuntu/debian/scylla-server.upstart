@@ -19,23 +19,22 @@ limit memlock unlimited unlimited
 limit nofile 200000 200000
 limit as unlimited unlimited
 limit nproc 8096 8096
+chdir /var/lib/scylla
+env HOME=/var/lib/scylla
 
 pre-start script
-    cd /var/lib/scylla
     . /etc/default/scylla-server
     export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
     sudo /usr/lib/scylla/scylla_prepare
 end script
 
 script
-    cd /var/lib/scylla
     . /etc/default/scylla-server
     export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
-    exec /usr/lib/scylla/scylla_run
+    exec /usr/bin/scylla $SCYLLA_ARGS
 end script
 
 post-stop script
-    cd /var/lib/scylla
     . /etc/default/scylla-server
     export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
     sudo /usr/lib/scylla/scylla_stop

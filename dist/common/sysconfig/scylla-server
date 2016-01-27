@@ -34,8 +34,11 @@ SCYLLA_HOME=/var/lib/scylla
 # scylla config dir
 SCYLLA_CONF=/etc/scylla
 
-# additional arguments
-SCYLLA_ARGS=""
+# scylla arguments (for posix mode)
+SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack posix"
+
+## scylla arguments (for dpdk mode)
+#SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack native --dpdk-pmd"
 
 # setup as AMI instance
 AMI=no

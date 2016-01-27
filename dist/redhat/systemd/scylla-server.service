@@ -8,9 +8,11 @@ LimitMEMLOCK=infinity
 LimitNOFILE=200000
 LimitAS=infinity
 LimitNPROC=8096
+WorkingDirectory=/var/lib/scylla
+Environment="HOME=/var/lib/scylla"
 EnvironmentFile=/etc/sysconfig/scylla-server
 ExecStartPre=/usr/bin/sudo -E /usr/lib/scylla/scylla_prepare
-ExecStart=/usr/lib/scylla/scylla_run
+ExecStart=/usr/bin/scylla $SCYLLA_ARGS
 ExecStopPost=/usr/bin/sudo -E /usr/lib/scylla/scylla_stop
 TimeoutStartSec=900
 KillMode=process
