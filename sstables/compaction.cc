@@ -94,7 +94,7 @@ static api::timestamp_type get_max_purgeable_timestamp(schema_ptr schema,
 
 static bool belongs_to_current_node(const dht::token& t, const std::vector<range<dht::token>>& sorted_owned_ranges) {
     auto low = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), t,
-            [] (const range<dht::token>& a, const dht::token b) {
+            [] (const range<dht::token>& a, const dht::token& b) {
         // check that range a is before token b.
         return a.after(b, dht::token_comparator());
     });
@@ -212,18 +212,6 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
     std::vector<range<dht::token>> owned_ranges;
     if (cleanup) {
         owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
-        // sort owned ranges
-        std::sort(owned_ranges.begin(), owned_ranges.end(), [](range<dht::token>& a, range<dht::token>& b) {
-            if (!a.start()) {
-                return true;
-            }
-            if (!b.start()) {
-                return false;
-            }
-            const dht::token& a_start = a.start()->value();
-            const dht::token& b_start = b.start()->value();
-            return a_start < b_start;
-        });
     }
     auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables),
         std::move(owned_ranges), cleanup);
