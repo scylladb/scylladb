@@ -43,7 +43,7 @@ if [ "$ID" = "centos" ]; then
     if [ $REBUILD = 1 ]; then
         ./dist/redhat/centos_dep/build_dependency.sh
     else
-        sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo -o /etc/yum.repos.d/scylla.repo
+        sudo curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/unstable/centos/master/latest/scylla.repo -o /etc/yum.repos.d/scylla.repo
     fi
 fi
 VERSION=$(./SCYLLA-VERSION-GEN)
