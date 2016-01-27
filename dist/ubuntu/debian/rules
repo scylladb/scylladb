@@ -5,6 +5,7 @@ SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
 SWAGGER = $(SCRIPTS)/swagger-ui
 API = $(SCRIPTS)/api
 SYSCTL = $(CURDIR)/debian/scylla-server/etc/sysctl.d
+SUDOERS =  $(CURDIR)/debian/scylla-server/etc/sudoers.d
 LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
 LIBS = $(CURDIR)/debian/scylla-server/usr/lib
 CONF = $(CURDIR)/debian/scylla-server/etc/scylla
@@ -24,6 +25,9 @@ override_dh_auto_install:
 
 	mkdir -p $(SYSCTL) && \
 	cp $(CURDIR)/dist/ubuntu/sysctl.d/99-scylla.conf $(SYSCTL)
+
+	mkdir -p $(SUDOERS) && \
+	cp $(CURDIR)/dist/common/sudoers.d/scylla $(SUDOERS)
 
 	mkdir -p $(CONF) && \
 	cp $(CURDIR)/conf/scylla.yaml $(CONF)
