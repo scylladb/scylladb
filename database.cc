@@ -777,6 +777,19 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         return sstables::compact_sstables(*sstables_to_compact, *this,
                 create_sstable, descriptor.max_sstable_bytes, descriptor.level, cleanup).then([this, new_tables, sstables_to_compact] {
             this->rebuild_sstable_list(*new_tables, *sstables_to_compact);
+        }).then_wrapped([this, new_tables] (future<> f) {
+            try {
+                f.get();
+            } catch (...) {
+                // Delete either partially or fully written sstables of a compaction that
+                // was either stopped abruptly (e.g. out of disk space) or deliberately
+                // (e.g. nodetool stop COMPACTION).
+                for (auto& sst : *new_tables) {
+                    dblog.debug("Deleting sstable {} of interrupted compaction for {}/{}", sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+                    sst->mark_for_deletion();
+                }
+                throw;
+            }
         });
     });
 }
