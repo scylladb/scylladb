@@ -212,18 +212,6 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
     std::vector<range<dht::token>> owned_ranges;
     if (cleanup) {
         owned_ranges = service::get_local_storage_service().get_local_ranges(schema->ks_name());
-        // sort owned ranges
-        std::sort(owned_ranges.begin(), owned_ranges.end(), [](range<dht::token>& a, range<dht::token>& b) {
-            if (!a.start()) {
-                return true;
-            }
-            if (!b.start()) {
-                return false;
-            }
-            const dht::token& a_start = a.start()->value();
-            const dht::token& b_start = b.start()->value();
-            return a_start < b_start;
-        });
     }
     auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables),
         std::move(owned_ranges), cleanup);
