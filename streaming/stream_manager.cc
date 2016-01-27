@@ -108,4 +108,15 @@ void stream_manager::show_streams() {
     }
 }
 
+std::vector<shared_ptr<stream_result_future>> stream_manager::get_all_streams() const {
+    std::vector<shared_ptr<stream_result_future>> result;
+    for (auto& x : _initiated_streams) {
+        result.push_back(x.second);
+    }
+    for (auto& x : _receiving_streams) {
+        result.push_back(x.second);
+    }
+    return result;
+}
+
 } // namespace streaming

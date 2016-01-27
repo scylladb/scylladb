@@ -142,6 +142,9 @@ public:
 
     shared_ptr<stream_result_future> get_receiving_stream(UUID plan_id);
 
+    std::vector<shared_ptr<stream_result_future>> get_all_streams() const ;
+
+
     const std::unordered_map<UUID, shared_ptr<stream_result_future>>& get_initiated_streams() const {
         return _initiated_streams;
     }
