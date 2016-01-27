@@ -1690,11 +1690,9 @@ future<> storage_service::decommission() {
             logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
             logger.debug("DECOMMISSIONING: stop_gossiping done");
-            try {
-                // MessagingService.instance().shutdown();
-            } catch (...) {
-                logger.info("failed to shutdown message service: {}", std::current_exception());
-            }
+            net::get_messaging_service().invoke_on_all([] (auto& ms) {
+                return ms.stop();
+            }).get();
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             logger.debug("DECOMMISSIONING: set_bootstrap_state done");
