@@ -194,4 +194,13 @@ size_type get_sizeof(const T& obj) {
     return size;
 }
 
+template<typename Buffer, typename T>
+Buffer serialize_to_buffer(const T& v, size_t head_space) {
+    seastar::measuring_output_stream measure;
+    ser::serialize(measure, v);
+    Buffer ret(typename Buffer::initialized_later(), measure.size() + head_space);
+    seastar::simple_output_stream out(reinterpret_cast<char*>(ret.begin()), head_space);
+    ser::serialize(out, v);
+    return ret;
+}
 }

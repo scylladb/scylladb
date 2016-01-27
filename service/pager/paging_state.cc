@@ -41,10 +41,13 @@
 
 #include "bytes.hh"
 #include "keys.hh"
-#include "utils/data_input.hh"
-#include "utils/data_output.hh"
-#include "db/serializer.hh"
 #include "paging_state.hh"
+#include "core/simple-stream.hh"
+#include "idl/keys.dist.hh"
+#include "idl/paging_state.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/paging_state.dist.impl.hh"
 
 service::pager::paging_state::paging_state(partition_key pk, std::experimental::optional<clustering_key> ck,
         uint32_t rem)
@@ -57,18 +60,16 @@ service::pager::paging_state::paging_state(partition_key pk, std::experimental::
         return nullptr;
     }
 
-    data_input in(*data);
+    if (data.value().size() < sizeof(uint32_t) || le_to_cpu(*unaligned_cast<uint32_t*>(data.value().begin())) != 0u) {
+        throw exceptions::protocol_exception("Invalid value for the paging state");
+    }
+
+
+    // skip 4 bytes that contain format id
+    seastar::simple_input_stream in(reinterpret_cast<char*>(data.value().begin() + sizeof(uint32_t)), data.value().size() - sizeof(uint32_t));
 
     try {
-        auto pk = db::serializer<partition_key_view>::read(in);
-        auto ckv = db::serializer<std::experimental::optional<clustering_key_view>>::read(in);
-        auto rem(in.read<uint32_t>());
-
-        std::experimental::optional<clustering_key> ck;
-        if (ckv) {
-            ck = clustering_key(*ckv);
-        }
-        return ::make_shared<paging_state>(std::move(pk), std::move(ck), rem);
+        return ::make_shared<paging_state>(ser::deserialize(in, boost::type<paging_state>()));
     } catch (...) {
         std::throw_with_nested(
                 exceptions::protocol_exception(
@@ -77,23 +78,8 @@ service::pager::paging_state::paging_state(partition_key pk, std::experimental::
 }
 
 bytes_opt service::pager::paging_state::serialize() const {
-    auto pkv = _partition_key.view();
-    auto ckv = _clustering_key ?
-                    std::experimental::optional<clustering_key_view>(
-                                    _clustering_key->view()) :
-                    std::experimental::optional<clustering_key_view> { };
-
-    db::serializer<partition_key_view> pks(pkv);
-    db::serializer<std::experimental::optional<clustering_key_view>> cks(ckv);
-
-    auto size = pks.size() + cks.size() + sizeof(uint32_t);
-
-    bytes res{bytes::initialized_later(), size};
-    data_output out(res);
-
-    pks.write(out);
-    cks.write(out);
-    out.write(_remaining);
-
-    return {std::move(res)};
+    bytes b = ser::serialize_to_buffer<bytes>(*this, sizeof(uint32_t));
+    // put serialization format id
+    *unaligned_cast<uint32_t*>(b.begin()) = cpu_to_le(0u);
+    return {std::move(b)};
 }

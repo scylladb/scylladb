@@ -24,6 +24,7 @@
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <experimental/optional>
+#include "enum_set.hh"
 #include "core/simple-stream.hh"
 
 namespace ser {
@@ -177,6 +178,9 @@ void set_size(seastar::simple_output_stream& os, const T& obj);
 
 template<typename T>
 void set_size(seastar::measuring_output_stream& os, const T& obj);
+
+template<typename Buffer, typename T>
+Buffer serialize_to_buffer(const T& v, size_t head_space = 0);
 }
 
 /*
