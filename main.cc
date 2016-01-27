@@ -63,7 +63,7 @@ supervisor_notify(sstring msg, bool ready = false) {
     auto ready_msg = ready ? "READY=1\n" : "";
     sd_notify(0, sprint("%sSTATUS=%s\n", ready_msg, msg).c_str());
 #endif
-    if (is_upstart != nullptr) {
+    if (is_upstart != nullptr && ready) {
         raise(SIGSTOP);
     }
 }
