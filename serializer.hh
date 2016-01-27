@@ -24,11 +24,8 @@
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <experimental/optional>
+#include "core/simple-stream.hh"
 
-namespace rpc {
-    class simple_output_stream;
-    class measuring_output_stream;
-}
 namespace ser {
 using size_type = uint32_t;
 
@@ -176,10 +173,10 @@ template<typename Input>
 bytes_ostream deserialize(Input& in, rpc::type<bytes_ostream>);
 
 template<typename T>
-void set_size(rpc::simple_output_stream& os, const T& obj);
+void set_size(seastar::simple_output_stream& os, const T& obj);
 
 template<typename T>
-void set_size(rpc::measuring_output_stream& os, const T& obj);
+void set_size(seastar::measuring_output_stream& os, const T& obj);
 }
 
 /*

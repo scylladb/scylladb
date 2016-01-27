@@ -27,12 +27,12 @@
 namespace ser {
 
 template<typename T>
-void set_size(rpc::simple_output_stream& os, const T& obj) {
+void set_size(seastar::simple_output_stream& os, const T& obj) {
     serialize(os, get_sizeof(obj));
 }
 
 template<typename T>
-void set_size(rpc::measuring_output_stream& os, const T& obj) {
+void set_size(seastar::measuring_output_stream& os, const T& obj) {
     serialize(os, uint32_t(0));
 }
 
@@ -186,7 +186,7 @@ inline enum_set<Enum> deserialize(Input& in, rpc::type<enum_set<Enum>>) {
 
 template<typename T>
 size_type get_sizeof(const T& obj) {
-    rpc::measuring_output_stream ms;
+    seastar::measuring_output_stream ms;
     serialize(ms, obj);
     auto size = ms.size();
     if (size > std::numeric_limits<size_type>::max()) {
