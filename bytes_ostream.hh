@@ -206,6 +206,10 @@ public:
         }
     }
 
+    void write(const char* ptr, size_t size) {
+        write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
+    }
+
     // Writes given sequence of bytes with a preceding length component encoded in big-endian format
     inline void write_blob(bytes_view v) {
         assert((size_type)v.size() == v.size());
