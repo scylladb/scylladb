@@ -669,7 +669,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
     if (endpoint == get_broadcast_address()) {
         logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
-            // drain();
+            drain().get();
         } catch (...) {
             logger.error("Fail to drain: {}", std::current_exception());
             throw;
@@ -923,58 +923,32 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
     _lifecycle_subscribers.erase(std::remove(_lifecycle_subscribers.begin(), _lifecycle_subscribers.end(), subscriber), _lifecycle_subscribers.end());
 }
 
-future<> storage_service::init_server(int delay) {
-    return seastar::async([this, delay] {
-        auto& gossiper = gms::get_local_gossiper();
-#if 0
-        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
-#endif
-        _initialized = true;
-#if 0
-        try
-        {
-            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-            Class.forName("org.apache.cassandra.service.StorageProxy");
-            // also IndexSummaryManager, which is otherwise unreferenced
-            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-        }
-        catch (ClassNotFoundException e)
-        {
-            throw new AssertionError(e);
-        }
-#endif
+future<> storage_service::drain_on_shutdown() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            logger.info("Drain on shutdown: starts");
 
-        if (get_property_load_ring_state()) {
-            logger.info("Loading persisted ring state");
-            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
-            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+            gms::get_local_gossiper().stop_gossiping().get();
+            logger.info("Drain on shutdown: stop_gossiping done");
 
-            for (auto& x : loaded_tokens) {
-                logger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
-            }
+            ss.shutdown_client_servers().get();
+            logger.info("Drain on shutdown: shutdown rpc and cql server done");
 
-            for (auto& x : loaded_host_ids) {
-                logger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
-            }
+            net::get_messaging_service().invoke_on_all([] (auto& ms) {
+                return ms.stop();
+            }).get();
+            logger.info("Drain on shutdown: shutdown messaging_service done");
 
-            for (auto x : loaded_tokens) {
-                auto ep = x.first;
-                auto tokens = x.second;
-                if (ep == get_broadcast_address()) {
-                    // entry has been mistakenly added, delete it
-                    db::system_keyspace::remove_endpoint(ep).get();
-                } else {
-                    _token_metadata.update_normal_tokens(tokens, ep);
-                    if (loaded_host_ids.count(ep)) {
-                        _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
-                    }
-                    gossiper.add_saved_endpoint(ep);
-                }
-            }
-        }
+            ss.flush_column_families();
+            logger.info("Drain on shutdown: flush column_families done");
 
+            ss.db().invoke_on_all([] (auto& db) {
+                return db.commitlog()->shutdown();
+            }).get();
+            logger.info("Drain on shutdown: shutdown commitlog done");
+            logger.info("Drain on shutdown: done");
+        });
+    });
 #if 0
         // daemon threads, like our executors', continue to run while shutdown hooks are invoked
         drainOnShutdown = new Thread(new WrappedRunnable()
@@ -1032,6 +1006,60 @@ future<> storage_service::init_server(int delay) {
         }, "StorageServiceShutdownHook");
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
+}
+
+future<> storage_service::init_server(int delay) {
+    return seastar::async([this, delay] {
+        auto& gossiper = gms::get_local_gossiper();
+#if 0
+        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
+        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
+        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
+#endif
+        _initialized = true;
+#if 0
+        try
+        {
+            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
+            Class.forName("org.apache.cassandra.service.StorageProxy");
+            // also IndexSummaryManager, which is otherwise unreferenced
+            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
+        }
+        catch (ClassNotFoundException e)
+        {
+            throw new AssertionError(e);
+        }
+#endif
+
+        if (get_property_load_ring_state()) {
+            logger.info("Loading persisted ring state");
+            auto loaded_tokens = db::system_keyspace::load_tokens().get0();
+            auto loaded_host_ids = db::system_keyspace::load_host_ids().get0();
+
+            for (auto& x : loaded_tokens) {
+                logger.debug("Loaded tokens: endpoint={}, tokens={}", x.first, x.second);
+            }
+
+            for (auto& x : loaded_host_ids) {
+                logger.debug("Loaded host_id: endpoint={}, uuid={}", x.first, x.second);
+            }
+
+            for (auto x : loaded_tokens) {
+                auto ep = x.first;
+                auto tokens = x.second;
+                if (ep == get_broadcast_address()) {
+                    // entry has been mistakenly added, delete it
+                    db::system_keyspace::remove_endpoint(ep).get();
+                } else {
+                    _token_metadata.update_normal_tokens(tokens, ep);
+                    if (loaded_host_ids.count(ep)) {
+                        _token_metadata.update_host_id(loaded_host_ids.at(ep), ep);
+                    }
+                    gossiper.add_saved_endpoint(ep);
+                }
+            }
+        }
+
         prepare_to_join();
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
@@ -1662,11 +1690,9 @@ future<> storage_service::decommission() {
             logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
             logger.debug("DECOMMISSIONING: stop_gossiping done");
-            try {
-                // MessagingService.instance().shutdown();
-            } catch (...) {
-                logger.info("failed to shutdown message service: {}", std::current_exception());
-            }
+            net::get_messaging_service().invoke_on_all([] (auto& ms) {
+                return ms.stop();
+            }).get();
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             logger.debug("DECOMMISSIONING: set_bootstrap_state done");
@@ -1764,6 +1790,41 @@ future<> storage_service::remove_node(sstring host_id_string) {
     });
 }
 
+// Runs inside seastar::async context
+void storage_service::flush_column_families() {
+    service::get_storage_service().invoke_on_all([] (auto& ss) {
+        auto& local_db = ss.db().local();
+        auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+            auto cf = uuid_and_cf.second;
+            return cf->schema()->ks_name() != db::system_keyspace::NAME;
+        });
+        // count CFs first
+        auto total_cfs = boost::distance(non_system_cfs);
+        ss._drain_progress.total_cfs = total_cfs;
+        ss._drain_progress.remaining_cfs = total_cfs;
+        // flush
+        return parallel_for_each(non_system_cfs, [&ss] (auto&& uuid_and_cf) {
+            auto cf = uuid_and_cf.second;
+            return cf->flush().then([&ss] {
+                ss._drain_progress.remaining_cfs--;
+            });
+        });
+    }).get();
+    // flush the system ones after all the rest are done, just in case flushing modifies any system state
+    // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
+    service::get_storage_service().invoke_on_all([] (auto& ss) {
+        auto& local_db = ss.db().local();
+        auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
+            auto cf = uuid_and_cf.second;
+            return cf->schema()->ks_name() == db::system_keyspace::NAME;
+        });
+        return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
+            auto cf = uuid_and_cf.second;
+            return cf->flush();
+        });
+    }).get();
+}
+
 future<> storage_service::drain() {
     return run_with_write_api_lock([] (storage_service& ss) {
         return seastar::async([&ss] {
@@ -1786,37 +1847,7 @@ future<> storage_service::drain() {
 #endif
 
             ss.set_mode(mode::DRAINING, "flushing column families", false);
-            service::get_storage_service().invoke_on_all([] (auto& ss) {
-                auto& local_db = ss.db().local();
-                auto non_system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-                    auto cf = uuid_and_cf.second;
-                    return cf->schema()->ks_name() != db::system_keyspace::NAME;
-                });
-                // count CFs first
-                auto total_cfs = boost::distance(non_system_cfs);
-                ss._drain_progress.total_cfs = total_cfs;
-                ss._drain_progress.remaining_cfs = total_cfs;
-                // flush
-                return parallel_for_each(non_system_cfs, [&ss] (auto&& uuid_and_cf) {
-                    auto cf = uuid_and_cf.second;
-                    return cf->flush().then([&ss] {
-                        ss._drain_progress.remaining_cfs--;
-                    });
-                });
-            }).get();
-            // flush the system ones after all the rest are done, just in case flushing modifies any system state
-            // like CASSANDRA-5151. don't bother with progress tracking since system data is tiny.
-            service::get_storage_service().invoke_on_all([] (auto& ss) {
-                auto& local_db = ss.db().local();
-                auto system_cfs = local_db.get_column_families() | boost::adaptors::filtered([] (auto& uuid_and_cf) {
-                    auto cf = uuid_and_cf.second;
-                    return cf->schema()->ks_name() == db::system_keyspace::NAME;
-                });
-                return parallel_for_each(system_cfs, [&ss] (auto&& uuid_and_cf) {
-                    auto cf = uuid_and_cf.second;
-                    return cf->flush();
-                });
-            }).get();
+            ss.flush_column_families();
 
             db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
                 return bm.stop();

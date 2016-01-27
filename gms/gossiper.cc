@@ -1432,8 +1432,8 @@ future<> gossiper::do_stop_gossiping() {
                     return make_ready_future<>();
                 }).get();
             }
-            // FIXME: Integer.getInteger("cassandra.shutdown_announce_in_ms", 2000)
-            sleep(INTERVAL * 2).get();
+            auto& cfg = service::get_local_storage_service().db().local().get_config();
+            sleep(std::chrono::milliseconds(cfg.shutdown_announce_in_ms())).get();
         } else {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }

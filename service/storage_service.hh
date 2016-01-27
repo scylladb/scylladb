@@ -355,6 +355,10 @@ public:
     }
 
     future<> init_server(int delay);
+
+    future<> drain_on_shutdown();
+
+    void flush_column_families();
 #if 0
     /**
      * In the event of forceful termination we need to remove the shutdown hook to prevent hanging (OOM for instance)
