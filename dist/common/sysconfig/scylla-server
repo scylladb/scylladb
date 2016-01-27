@@ -35,10 +35,10 @@ SCYLLA_HOME=/var/lib/scylla
 SCYLLA_CONF=/etc/scylla
 
 # scylla arguments (for posix mode)
-SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack posix"
+SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --collectd-address=127.0.0.1:25826 --collectd=1 --collectd-poll-period 3000 --network-stack posix"
 
 ## scylla arguments (for dpdk mode)
-#SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --network-stack native --dpdk-pmd"
+#SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --collectd-address=127.0.0.1:25826 --collectd=1 --collectd-poll-period 3000 --network-stack native --dpdk-pmd"
 
 # setup as AMI instance
 AMI=no
