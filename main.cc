@@ -537,6 +537,10 @@ int main(int ac, char** av) {
             });
         }).then([] {
             supervisor_notify("serving", true);
+            // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
+            engine().at_exit([] {
+                return service::get_local_storage_service().drain_on_shutdown();
+            });
         }).or_terminate();
     });
 }
