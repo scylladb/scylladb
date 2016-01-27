@@ -669,7 +669,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
     if (endpoint == get_broadcast_address()) {
         logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
-            // drain();
+            drain().get();
         } catch (...) {
             logger.error("Fail to drain: {}", std::current_exception());
             throw;
