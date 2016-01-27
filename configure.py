@@ -458,6 +458,7 @@ api = ['api/api.cc',
        'api/api-doc/system.json',
        'api/system.cc'
        ]
+
 idls = ['idl/gossip_digest.idl.hh',
         'idl/uuid.idl.hh',
         'idl/range.idl.hh',
@@ -471,9 +472,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/streaming.idl.hh',
         ]
 
-serialize = idls + ['serializer.inc.hh']
-
-scylla_tests_dependencies = scylla_core + api + serialize + [
+scylla_tests_dependencies = scylla_core + api + idls + [
     'tests/cql_test_env.cc',
     'tests/cql_assertions.cc',
     'tests/result_set_assertions.cc',
@@ -486,7 +485,7 @@ scylla_tests_seastar_deps = [
 ]
 
 deps = {
-    'scylla': serialize + ['main.cc'] + scylla_core + api,
+    'scylla': idls + ['main.cc'] + scylla_core + api,
 }
 
 tests_not_using_seastar_test_framework = set([
@@ -666,9 +665,6 @@ with open(buildfile, 'w') as f:
         rule serializer
             command = ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
-        rule serializer_inc
-            command = ./idl-compiler.py $in -o $out
-            description = Combine IDLs $out
         rule ninja
             command = {ninja} -C $subdir $target
             restat = 1
@@ -706,7 +702,6 @@ with open(buildfile, 'w') as f:
         ragels = {}
         swaggers = {}
         serializers = {}
-        serializer_inc = {}
         thrifts = set()
         antlr3_grammars = set()
         for binary in build_artifacts:
@@ -763,9 +758,6 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.idl.hh'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.idl.hh', '.dist.hh')
                     serializers[hh] = src
-                elif src.endswith('.inc.hh'):
-                    hh = '$builddir/' + mode + '/gen/' + src
-                    serializer_inc[hh] = src
                 elif src.endswith('.json'):
                     hh = '$builddir/' + mode + '/gen/' + src + '.hh'
                     swaggers[hh] = src
@@ -785,7 +777,6 @@ with open(buildfile, 'w') as f:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             gen_headers += list(swaggers.keys())
             gen_headers += list(serializers.keys())
-            gen_headers += list(serializer_inc.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
             if src in extra_cxxflags:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode = mode, extra_cxxflags = extra_cxxflags[src], **modeval))
@@ -797,9 +788,7 @@ with open(buildfile, 'w') as f:
             f.write('build {}: swagger {}\n'.format(hh,src))
         for hh in serializers:
             src = serializers[hh]
-            f.write('build {}: serializer {}\n'.format(hh,src))
-        for hh in serializer_inc:
-            f.write('build {}: serializer_inc {}\n'.format(hh, " ".join(serializers.keys())))
+            f.write('build {}: serializer {} | idl-compiler.py\n'.format(hh,src))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))

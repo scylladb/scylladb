@@ -182,5 +182,3 @@ void set_size(seastar::measuring_output_stream& os, const T& obj);
 /*
  * Import the auto generated forward decleration code
  */
-
-#include "serializer.inc.hh"

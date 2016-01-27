@@ -22,7 +22,6 @@
 #pragma once
 
 #include "serializer.hh"
-#include "serializer.inc.impl.hh"
 
 namespace ser {
 
