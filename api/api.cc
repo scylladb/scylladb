@@ -73,9 +73,9 @@ static future<> register_api(http_context& ctx, const sstring& api_name,
         std::function<void(http_context& ctx, routes& r)> f) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx, api_name, api_desc](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, api_name, api_desc, f](routes& r) {
         rb->register_function(r, api_name, api_desc);
-        set_storage_service(ctx,r);
+        f(ctx,r);
     });
 }
 
