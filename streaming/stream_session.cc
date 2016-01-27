@@ -135,6 +135,7 @@ void stream_session::init_messaging_service_handler() {
                 auto session = coordinator->get_or_create_session(from.addr);
                 assert(session);
                 session->start_keep_alive_timer();
+                session->add_bytes_received(fm.representation().size());
                 return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
                     return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
                 });
