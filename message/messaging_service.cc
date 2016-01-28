@@ -41,6 +41,7 @@
 #include "idl/keys.dist.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/frozen_mutation.dist.hh"
+#include "idl/frozen_schema.dist.hh"
 #include "idl/streaming.dist.hh"
 #include "idl/token.dist.hh"
 #include "idl/gossip_digest.dist.hh"
@@ -53,6 +54,7 @@
 #include "idl/keys.dist.impl.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 #include "idl/streaming.dist.impl.hh"
 #include "idl/token.dist.impl.hh"
 #include "idl/gossip_digest.dist.impl.hh"
@@ -214,6 +216,17 @@ void write(serializer, Output& out, const frozen_mutation& data) {
 template <typename Input>
 frozen_mutation
 read(serializer, Input& in, boost::type<frozen_mutation> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const frozen_schema& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+frozen_schema
+read(serializer, Input& in, boost::type<frozen_schema> type) {
     return ser::deserialize(in, type);
 }
 

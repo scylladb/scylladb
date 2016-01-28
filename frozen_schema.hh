@@ -30,9 +30,8 @@
 // It's safe to access from another shard by const&.
 class frozen_schema {
     bytes _data;
-private:
-    frozen_schema(bytes);
 public:
+    explicit frozen_schema(bytes);
     frozen_schema(const schema_ptr&);
     frozen_schema(frozen_schema&&) = default;
     frozen_schema(const frozen_schema&) = default;
@@ -40,6 +39,7 @@ public:
     frozen_schema& operator=(frozen_schema&&) = default;
     schema_ptr unfreeze() const;
     friend class db::serializer<frozen_schema>;
+    bytes_view representation() const;
 };
 
 namespace db {

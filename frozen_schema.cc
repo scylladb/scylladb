@@ -46,6 +46,11 @@ frozen_schema::frozen_schema(bytes b)
     : _data(std::move(b))
 { }
 
+bytes_view frozen_schema::representation() const
+{
+    return _data;
+}
+
 template<>
 db::serializer<frozen_schema>::serializer(const frozen_schema& v)
         : _item(v)
