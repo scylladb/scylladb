@@ -1653,6 +1653,49 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
+void
+column_family::apply(const mutation& m, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
+    active_memtable().apply(m, rp);
+    seal_on_overflow();
+    _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
+    }
+}
+
+void
+column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
+    utils::latency_counter lc;
+    _stats.writes.set_latency(lc);
+    check_valid_rp(rp);
+    active_memtable().apply(m, m_schema, rp);
+    seal_on_overflow();
+    _stats.writes.mark(lc);
+    if (lc.is_start()) {
+        _stats.estimated_write.add(lc.latency(), _stats.writes.count);
+    }
+}
+
+void
+column_family::seal_on_overflow() {
+    ++_mutation_count;
+    if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
+        // FIXME: if sparse, do some in-memory compaction first
+        // FIXME: maybe merge with other in-memory memtables
+        _mutation_count = 0;
+        seal_active_memtable();
+    }
+}
+
+void
+column_family::check_valid_rp(const db::replay_position& rp) const {
+    if (rp < _highest_flushed_rp) {
+        throw replay_position_reordered_exception();
+    }
+}
+
 future<> database::apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
     try {
         auto& cf = find_column_family(m.column_family_id());
