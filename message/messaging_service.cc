@@ -290,6 +290,17 @@ read(serializer, Input& in, boost::type<partition_checksum> type) {
     return ser::deserialize(in, type);
 }
 
+template<typename T, typename Output>
+void write(serializer, Output& out, const range<T>& data) {
+    ser::serialize(out, data);
+}
+
+template <typename T, typename Input>
+range<T>
+read(serializer, Input& in, boost::type<range<T>> type) {
+    return ser::deserialize(in, type);
+}
+
 static logging::logger logger("messaging_service");
 static logging::logger rpc_logger("rpc");
 
