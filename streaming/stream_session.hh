@@ -169,6 +169,9 @@ private:
     /* can be null when session is created in remote */
     //private final StreamConnectionFactory factory;
 
+    int64_t _bytes_sent = 0;
+    int64_t _bytes_received = 0;
+
     int _retries;
     bool _is_aborted =  false;
 
@@ -182,6 +185,21 @@ public:
         _keep_alive.rearm(lowres_clock::now() + _keep_alive_timeout);
     }
 
+    void add_bytes_sent(int64_t bytes) {
+        _bytes_sent += bytes;
+    }
+
+    void add_bytes_received(int64_t bytes) {
+        _bytes_received += bytes;
+    }
+
+    int64_t get_bytes_sent() const {
+        return _bytes_sent;
+    }
+
+    int64_t get_bytes_received() const {
+        return _bytes_received;
+    }
 public:
     stream_session();
     /**
