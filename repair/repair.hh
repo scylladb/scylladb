@@ -78,11 +78,6 @@ public:
     bool operator!=(const partition_checksum& other) const { return !operator==(other); }
     friend std::ostream& operator<<(std::ostream&, const partition_checksum&);
     const std::array<uint8_t, 32>& digest() const;
-
-    // The following are used to send this object over messaging_service:
-    void serialize(bytes::iterator& out) const;
-    static partition_checksum deserialize(bytes_view& in);
-    size_t serialized_size() const;
 };
 
 // Calculate the checksum of the data held on all shards of a column family,
