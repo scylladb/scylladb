@@ -65,6 +65,16 @@
 
 namespace net {
 
+// thunk from rpc serializers to generate serializers
+template <typename T, typename Output>
+void write(serializer, Output& out, const T& data) {
+    ser::serialize(out, data);
+}
+template <typename T, typename Input>
+T read(serializer, Input& in, boost::type<T> type) {
+    return ser::deserialize(in, type);
+}
+
 template <typename Output, typename T>
 void write(serializer s, Output& out, const foreign_ptr<T>& v) {
     return write(s, out, *v);
@@ -83,235 +93,6 @@ lw_shared_ptr<T> read(serializer s, Input& in, boost::type<lw_shared_ptr<T>>) {
     return make_lw_shared(read(s, in, boost::type<T>()));
 }
 
-// For vectors
-template <typename T, typename Output>
-void write(serializer, Output& out, const std::vector<T>& data) {
-    ser::serialize(out, data);
-}
-template <typename T, typename Input>
-std::vector<T> read(serializer, Input& in, boost::type<std::vector<T>> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip syn
-template<typename Output>
-void write(serializer, Output& out, const gms::gossip_digest_syn& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::gossip_digest_syn
-read(serializer, Input& in, boost::type<gms::gossip_digest_syn> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip ack
-template<typename Output>
-void write(serializer, Output& out, const gms::gossip_digest_ack& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::gossip_digest_ack
-read(serializer, Input& in, boost::type<gms::gossip_digest_ack> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip ack2
-template<typename Output>
-void write(serializer, Output& out, const gms::gossip_digest_ack2& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::gossip_digest_ack2
-read(serializer, Input& in, boost::type<gms::gossip_digest_ack2> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip digest
-template<typename Output>
-void write(serializer, Output& out, const gms::gossip_digest& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::gossip_digest
-read(serializer, Input& in, boost::type<gms::gossip_digest> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip versioned_value
-template<typename Output>
-void write(serializer, Output& out, const gms::versioned_value& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::versioned_value
-read(serializer, Input& in, boost::type<gms::versioned_value> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip endpoint_state
-template<typename Output>
-void write(serializer, Output& out, const gms::endpoint_state& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::endpoint_state
-read(serializer, Input& in, boost::type<gms::endpoint_state> type) {
-    return ser::deserialize(in, type);
-}
-
-// Gossip heart_beat_state
-template<typename Output>
-void write(serializer, Output& out, const gms::heart_beat_state& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-gms::heart_beat_state
-read(serializer, Input& in, boost::type<gms::heart_beat_state> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const query::read_command& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-query::read_command
-read(serializer, Input& in, boost::type<query::read_command> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const query::partition_range& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-query::partition_range
-read(serializer, Input& in, boost::type<query::partition_range> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const query::result& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-query::result
-read(serializer, Input& in, boost::type<query::result> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const query::result_digest& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-query::result_digest
-read(serializer, Input& in, boost::type<query::result_digest> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const frozen_mutation& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-frozen_mutation
-read(serializer, Input& in, boost::type<frozen_mutation> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const frozen_schema& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-frozen_schema
-read(serializer, Input& in, boost::type<frozen_schema> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const reconcilable_result& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-reconcilable_result
-read(serializer, Input& in, boost::type<reconcilable_result> type) {
-    return ser::deserialize(in, type);
-}
-
-// streaming reqeust
-template<typename Output>
-void write(serializer, Output& out, const streaming::stream_request& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-streaming::stream_request
-read(serializer, Input& in, boost::type<streaming::stream_request> type) {
-    return ser::deserialize(in, type);
-}
-
-// streaming summary
-template<typename Output>
-void write(serializer, Output& out, const streaming::stream_summary& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-streaming::stream_summary
-read(serializer, Input& in, boost::type<streaming::stream_request> type) {
-    return ser::deserialize(in, type);
-}
-
-// streaming prepare_message
-template<typename Output>
-void write(serializer, Output& out, const streaming::prepare_message& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-streaming::prepare_message
-read(serializer, Input& in, boost::type<streaming::prepare_message> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename Output>
-void write(serializer, Output& out, const partition_checksum& data) {
-    ser::serialize(out, data);
-}
-
-template <typename Input>
-partition_checksum
-read(serializer, Input& in, boost::type<partition_checksum> type) {
-    return ser::deserialize(in, type);
-}
-
-template<typename T, typename Output>
-void write(serializer, Output& out, const range<T>& data) {
-    ser::serialize(out, data);
-}
-
-template <typename T, typename Input>
-range<T>
-read(serializer, Input& in, boost::type<range<T>> type) {
-    return ser::deserialize(in, type);
-}
-
 static logging::logger logger("messaging_service");
 static logging::logger rpc_logger("rpc");
 
@@ -321,15 +102,6 @@ using gossip_digest_ack = gms::gossip_digest_ack;
 using gossip_digest_ack2 = gms::gossip_digest_ack2;
 using rpc_protocol = rpc::protocol<serializer, messaging_verb>;
 using namespace std::chrono_literals;
-template <typename Output>
-void net::serializer::write(Output& out, const query::result& v) const {
-    write_serializable(out, v);
-}
-template <typename Input>
-query::result net::serializer::read(Input& in, boost::type<query::result>) const {
-    return read_serializable<query::result>(in);
-}
-
 
 struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc_protocol::rpc_protocol; };
 
