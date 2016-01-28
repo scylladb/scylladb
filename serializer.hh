@@ -21,6 +21,7 @@
 #pragma once
 
 #include <vector>
+#include <array>
 #include "core/sstring.hh"
 #include <unordered_map>
 #include <experimental/optional>
@@ -128,6 +129,11 @@ template<typename T, typename Output>
 inline void serialize(Output& out, const std::vector<T>& v);
 template<typename T, typename Input>
 inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>);
+
+template<size_t N, typename T, typename Output>
+inline void serialize(Output& out, const std::array<T, N>& v);
+template<size_t N, typename T, typename Input>
+inline std::array<T, N> deserialize(Input& in, boost::type<std::array<T, N>>);
 
 template<typename K, typename V, typename Output>
 inline void serialize(Output& out, const std::map<K, V>& v);
