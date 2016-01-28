@@ -99,11 +99,12 @@ private:
 // Schema-dependent.
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry, reversed, distinct };
+    enum class option { send_clustering_key, send_partition_key, send_timestamp, send_expiry, reversed, distinct };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
-        option::send_timestamp_and_expiry,
+        option::send_timestamp,
+        option::send_expiry,
         option::reversed,
         option::distinct>>;
     clustering_row_ranges _row_ranges;

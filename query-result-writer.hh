@@ -55,8 +55,10 @@ public:
         // FIXME: store this in a bitmap
         _w.write<int8_t>(true);
         assert(c.is_live());
-        if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
+        if (_slice.options.contains<partition_slice::option::send_timestamp>()) {
             _w.write(c.timestamp());
+        }
+        if (_slice.options.contains<partition_slice::option::send_expiry>()) {
             if (c.is_live_and_has_ttl()) {
                 _w.write<gc_clock::rep>(c.expiry().time_since_epoch().count());
             } else {

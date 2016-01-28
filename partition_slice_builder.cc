@@ -30,7 +30,8 @@ partition_slice_builder::partition_slice_builder(const schema& schema)
 {
     _options.set<query::partition_slice::option::send_partition_key>();
     _options.set<query::partition_slice::option::send_clustering_key>();
-    _options.set<query::partition_slice::option::send_timestamp_and_expiry>();
+    _options.set<query::partition_slice::option::send_timestamp>();
+    _options.set<query::partition_slice::option::send_expiry>();
 }
 
 query::partition_slice

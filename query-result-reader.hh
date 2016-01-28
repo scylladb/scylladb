@@ -73,8 +73,10 @@ public:
             }
             api::timestamp_type timestamp = api::missing_timestamp;
             expiry_opt expiry_;
-            if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
-                timestamp = _in.read <api::timestamp_type> ();
+            if (_slice.options.contains<partition_slice::option::send_timestamp>()) {
+                timestamp = _in.read<api::timestamp_type>();
+            }
+            if (_slice.options.contains<partition_slice::option::send_expiry>()) {
                 auto expiry_rep = _in.read<gc_clock::rep>();
                 if (expiry_rep != std::numeric_limits<gc_clock::rep>::max()) {
                     expiry_ = gc_clock::time_point(gc_clock::duration(expiry_rep));

@@ -63,7 +63,8 @@ selection::selection(schema_ptr schema,
 query::partition_slice::option_set selection::get_query_options() {
     query::partition_slice::option_set opts;
 
-    opts.set_if<query::partition_slice::option::send_timestamp_and_expiry>(_collect_timestamps || _collect_TTLs);
+    opts.set_if<query::partition_slice::option::send_timestamp>(_collect_timestamps);
+    opts.set_if<query::partition_slice::option::send_expiry>(_collect_TTLs);
 
     opts.set_if<query::partition_slice::option::send_partition_key>(
         std::any_of(_columns.begin(), _columns.end(),
