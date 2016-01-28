@@ -41,13 +41,3 @@ public:
     friend class db::serializer<frozen_schema>;
     bytes_view representation() const;
 };
-
-namespace db {
-
-template<> serializer<frozen_schema>::serializer(const frozen_schema&);
-template<> void serializer<frozen_schema>::write(output&, const frozen_schema&);
-template<> frozen_schema serializer<frozen_schema>::read(input&);
-
-extern template class serializer<frozen_schema>;
-
-}
