@@ -40,15 +40,6 @@ public:
     bool operator!=(const result_digest& rh) const {
         return _digest != rh._digest;
     }
-    size_t serialized_size() const { return _digest.size(); }
-    void serialize(bytes::iterator& out) const {
-        out = std::copy(_digest.begin(), _digest.end(), out);
-    }
-    static result_digest deserialize(bytes_view& in) {
-        auto result = result_digest(bytes(in.begin(), in.end()));
-        in.remove_prefix(in.size());
-        return result;
-    }
 };
 
 //
