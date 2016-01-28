@@ -33,7 +33,7 @@ class result_digest {
     bytes _digest;
 public:
     result_digest(bytes&& digest) : _digest(std::move(digest)) {}
-    const bytes& get() { return _digest; }
+    const bytes& get() const { return _digest; }
     bool operator==(const result_digest& rh) const {
         return _digest == rh._digest;
     }

@@ -211,6 +211,17 @@ read(serializer, Input& in, boost::type<query::result> type) {
 }
 
 template<typename Output>
+void write(serializer, Output& out, const query::result_digest& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+query::result_digest
+read(serializer, Input& in, boost::type<query::result_digest> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
 void write(serializer, Output& out, const frozen_mutation& data) {
     ser::serialize(out, data);
 }

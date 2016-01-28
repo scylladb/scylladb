@@ -23,4 +23,7 @@ namespace query {
 class result final {
     bytes_ostream buf();
 };
+class result_digest final {
+    bytes get();
+};
 }
