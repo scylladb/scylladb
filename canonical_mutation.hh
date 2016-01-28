@@ -53,14 +53,6 @@ public:
 
     friend class db::serializer<canonical_mutation>;
 };
-//
-//template<>
-//struct hash<canonical_mutation> {
-//    template<typename Hasher>
-//    void operator()(Hasher& h, const canonical_mutation& m) const {
-//        m.feed_hash(h);
-//    }
-//};
 
 namespace db {
 
