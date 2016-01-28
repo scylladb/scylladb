@@ -165,19 +165,3 @@ public:
 };
 
 }
-
-// Allow using query::range<T> in a hash table. The hash function 31 * left +
-// right is the same one used by Cassandra's AbstractBounds.hashCode().
-namespace std {
-template<typename T>
-struct hash<query::range<T>> {
-    using argument_type =  query::range<T>;
-    using result_type = decltype(std::hash<T>()(std::declval<T>()));
-    result_type operator()(argument_type const& s) const {
-        auto hash = std::hash<T>();
-        auto left = s.start() ? hash(s.start()->value()) : 0;
-        auto right = s.end() ? hash(s.end()->value()) : 0;
-        return 31 * left + right;
-    }
-};
-}
