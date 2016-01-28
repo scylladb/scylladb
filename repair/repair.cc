@@ -268,6 +268,10 @@ bool partition_checksum::operator==(const partition_checksum& other) const {
            qword(_digest, 3) == qword(other._digest, 3);
 }
 
+const std::array<uint8_t, 32>& partition_checksum::digest() const {
+    return _digest;
+}
+
 void partition_checksum::serialize(bytes::iterator& out) const {
     out = std::copy(
             reinterpret_cast<const char*>(_digest.data()),

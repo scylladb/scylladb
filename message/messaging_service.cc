@@ -47,6 +47,7 @@
 #include "idl/gossip_digest.dist.hh"
 #include "idl/read_command.dist.hh"
 #include "idl/range.dist.hh"
+#include "idl/partition_checksum.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/result.dist.impl.hh"
 #include "idl/reconcilable_result.dist.impl.hh"
@@ -60,6 +61,7 @@
 #include "idl/gossip_digest.dist.impl.hh"
 #include "idl/read_command.dist.impl.hh"
 #include "idl/range.dist.impl.hh"
+#include "idl/partition_checksum.dist.impl.hh"
 
 namespace net {
 
@@ -274,6 +276,17 @@ void write(serializer, Output& out, const streaming::prepare_message& data) {
 template <typename Input>
 streaming::prepare_message
 read(serializer, Input& in, boost::type<streaming::prepare_message> type) {
+    return ser::deserialize(in, type);
+}
+
+template<typename Output>
+void write(serializer, Output& out, const partition_checksum& data) {
+    ser::serialize(out, data);
+}
+
+template <typename Input>
+partition_checksum
+read(serializer, Input& in, boost::type<partition_checksum> type) {
     return ser::deserialize(in, type);
 }
 

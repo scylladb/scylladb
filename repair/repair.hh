@@ -71,11 +71,13 @@ private:
     std::array<uint8_t, 32> _digest; // 256 bits
 public:
     constexpr partition_checksum() : _digest{} { }
+    explicit partition_checksum(std::array<uint8_t, 32> digest) : _digest(std::move(digest)) { }
     partition_checksum(const mutation& m);
     void add(const partition_checksum& other);
     bool operator==(const partition_checksum& other) const;
     bool operator!=(const partition_checksum& other) const { return !operator==(other); }
     friend std::ostream& operator<<(std::ostream&, const partition_checksum&);
+    const std::array<uint8_t, 32>& digest() const;
 
     // The following are used to send this object over messaging_service:
     void serialize(bytes::iterator& out) const;

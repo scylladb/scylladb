@@ -472,6 +472,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/streaming.idl.hh',
         'idl/paging_state.idl.hh',
         'idl/frozen_schema.idl.hh',
+        'idl/partition_checksum.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [
