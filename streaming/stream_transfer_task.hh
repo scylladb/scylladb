@@ -91,12 +91,6 @@ public:
         return _files;
     }
 
-    outgoing_file_message& create_message_for_retry(int sequence_number) {
-        auto it = _files.find(sequence_number);
-        assert(it != _files.end());
-        return it->second;
-    }
-
     void start();
 };
 
