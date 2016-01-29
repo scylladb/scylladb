@@ -67,8 +67,6 @@ private:
     sstring _description;
     std::vector<stream_event_handler*> _handlers;
     shared_ptr<stream_coordinator> _coordinator;
-
-    bool _flush_before_transfer = true;
     bool _range_added = false;
 public:
 
@@ -157,15 +155,6 @@ public:
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
     future<stream_state> execute();
-
-    /**
-     * Set flushBeforeTransfer option.
-     * When it's true, will flush before streaming ranges. (Default: true)
-     *
-     * @param flushBeforeTransfer set to true when the node should flush before transfer
-     * @return this object for chaining
-     */
-    stream_plan& flush_before_transfer(bool flush_before_transfer_);
 };
 
 } // namespace streaming

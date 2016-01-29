@@ -257,7 +257,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables);
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
