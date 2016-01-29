@@ -254,7 +254,7 @@ public:
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
-    bool is_shared() {
+    bool is_shared() const {
         return _shared;
     }
 
@@ -262,15 +262,15 @@ public:
         _shared = false;
     }
 
-    uint64_t data_size();
-    uint64_t index_size() {
+    uint64_t data_size() const;
+    uint64_t index_size() const {
         return _index_file_size;
     }
-    uint64_t filter_size() {
+    uint64_t filter_size() const {
         return _filter_file_size;
     }
 
-    uint64_t filter_memory_size() {
+    uint64_t filter_memory_size() const {
         return _filter->memory_size();
     }
 

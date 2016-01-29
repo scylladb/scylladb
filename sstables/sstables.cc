@@ -1432,7 +1432,7 @@ future<> sstable::write_components(::mutation_reader mr,
     });
 }
 
-uint64_t sstable::data_size() {
+uint64_t sstable::data_size() const {
     if (has_component(sstable::component_type::CompressionInfo)) {
         return _compression.data_len;
     }
