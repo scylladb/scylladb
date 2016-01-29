@@ -180,6 +180,7 @@ private:
 
     std::chrono::seconds _keep_alive_timeout{600};
     timer<lowres_clock> _keep_alive;
+    session_info _session_info;
 public:
     void start_keep_alive_timer() {
         _keep_alive.rearm(lowres_clock::now() + _keep_alive_timeout);
@@ -384,7 +385,19 @@ public:
     /**
      * @return Current snapshot of this session info.
      */
-    session_info get_session_info();
+    session_info make_session_info();
+
+    session_info& get_session_info() {
+        return _session_info;
+    }
+
+    const session_info& get_session_info() const {
+        return _session_info;
+    }
+
+    void update_progress(const progress_info& info) {
+        _session_info.update_progress(info);
+    }
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);

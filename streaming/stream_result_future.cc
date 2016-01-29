@@ -78,14 +78,14 @@ void stream_result_future::init_receiving_side(UUID plan_id, sstring description
 }
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
-    auto si = session->get_session_info();
+    auto si = session->make_session_info();
     sslog.info("[Stream #{}] Prepare completed with {}. Receiving {}, sending {}",
                session->plan_id(),
                session->peer,
                si.get_total_files_to_receive(),
                si.get_total_files_to_send());
     auto event = session_prepared_event(plan_id, si);
-    _coordinator->add_session_info(std::move(si));
+    session->get_session_info() = si;
     fire_stream_event(std::move(event));
 }
 
@@ -93,8 +93,8 @@ void stream_result_future::handle_session_complete(shared_ptr<stream_session> se
     sslog.info("[Stream #{}] Session with {} is complete, state={}", session->plan_id(), session->peer, session->get_state());
     auto event = session_complete_event(session);
     fire_stream_event(std::move(event));
-    auto si = session->get_session_info();
-    _coordinator->add_session_info(std::move(si));
+    auto si = session->make_session_info();
+    session->get_session_info() = si;
     maybe_complete();
 }
 

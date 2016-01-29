@@ -421,7 +421,7 @@ void stream_session::session_failed() {
     close_session(stream_session_state::FAILED);
 }
 
-session_info stream_session::get_session_info() {
+session_info stream_session::make_session_info() {
     std::vector<stream_summary> receiving_summaries;
     for (auto& receiver : _receivers) {
         receiving_summaries.emplace_back(receiver.second.get_summary());

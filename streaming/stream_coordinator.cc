@@ -67,7 +67,7 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessi
 std::vector<session_info> stream_coordinator::get_all_session_info() {
     std::vector<session_info> results;
     for (auto& x : _peer_sessions) {
-        results.push_back(x.second._session_info);
+        results.push_back(x.second._stream_session->get_session_info());
     }
     return results;
 }
@@ -76,7 +76,7 @@ std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address
     std::vector<session_info> results;
     auto it = _peer_sessions.find(peer);
     if (it != _peer_sessions.end()) {
-        results.push_back(it->second._session_info);
+        results.push_back(it->second._stream_session->get_session_info());
     }
     return results;
 }
@@ -91,11 +91,6 @@ std::set<inet_address> stream_coordinator::get_peers() {
         results.insert(x.first);
     }
     return results;
-}
-
-void stream_coordinator::add_session_info(session_info session) {
-    auto& data = get_or_create_host_data(session.peer);
-    data.add_session_info(std::move(session));
 }
 
 stream_coordinator::host_streaming_data& stream_coordinator::get_host_data(inet_address peer) {
@@ -130,11 +125,7 @@ shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_creat
 }
 
 void stream_coordinator::host_streaming_data::update_progress(progress_info info) {
-    _session_info.update_progress(std::move(info));
-}
-
-void stream_coordinator::host_streaming_data::add_session_info(session_info info) {
-    _session_info = std::move(info);
+    _stream_session->update_progress(std::move(info));
 }
 
 void stream_coordinator::connect_all_stream_sessions() {

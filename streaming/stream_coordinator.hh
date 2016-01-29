@@ -94,8 +94,6 @@ public:
         get_host_data(info.peer).update_progress(info);
     }
 
-    void add_session_info(session_info session);
-
     std::vector<session_info> get_all_session_info();
     std::vector<session_info> get_peer_session_info(inet_address peer);
 
@@ -137,7 +135,6 @@ private:
     public:
         using inet_address = gms::inet_address;
         shared_ptr<stream_session> _stream_session;
-        session_info _session_info;
 
         host_streaming_data() = default;
 
@@ -148,9 +145,6 @@ private:
         void connect();
 
         void update_progress(progress_info info);
-
-        void add_session_info(session_info info);
-
     };
 };
 
