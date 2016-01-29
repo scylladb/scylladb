@@ -64,17 +64,20 @@ future<stream_state> stream_result_future::init_sending_side(UUID plan_id_, sstr
     return sr->_done.get_future();
 }
 
-void stream_result_future::init_receiving_side(UUID plan_id, sstring description, inet_address from) {
+shared_ptr<stream_result_future> stream_result_future::init_receiving_side(UUID plan_id, sstring description, inet_address from) {
     auto& sm = get_local_stream_manager();
     auto sr = sm.get_receiving_stream(plan_id);
-    if (sr == nullptr) {
-        sslog.info("[Stream #{}] Creating new streaming plan for {}, with {}", plan_id, description, from);
-        // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
-        // TODO: stream_result_future needs a ref to stream_coordinator.
-        bool is_receiving = true;
-        sm.register_receiving(make_shared<stream_result_future>(plan_id, description, is_receiving));
+    if (sr) {
+        auto err = sprint("[Stream #%s] GOT PREPARE_MESSAGE from %s, description=%s,"
+                          "stream_plan exists, duplicated message received?", plan_id, description, from);
+        sslog.warn(err.c_str());
+        throw std::runtime_error(err);
     }
-    sslog.info("[Stream #{}] Received streaming plan for {}, with {}", plan_id, description, from);
+    sslog.info("[Stream #{}] Creating new streaming plan for {}, with {}", plan_id, description, from);
+    bool is_receiving = true;
+    sr = make_shared<stream_result_future>(plan_id, description, is_receiving);
+    sm.register_receiving(sr);
+    return sr;
 }
 
 void stream_result_future::handle_session_prepared(shared_ptr<stream_session> session) {
