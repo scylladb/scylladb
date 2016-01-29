@@ -311,14 +311,6 @@ public:
     void received(UUID cf_id, int sequence_number);
 
     /**
-     * Call back on receiving {@code StreamMessage.Type.RETRY} message.
-     *
-     * @param cfId ColumnFamily ID
-     * @param sequenceNumber Sequence number to indicate which file to stream again
-     */
-    void retry(UUID cf_id, int sequence_number);
-
-    /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
     void complete();
