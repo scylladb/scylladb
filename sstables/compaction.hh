@@ -93,6 +93,8 @@ namespace sstables {
     };
 
     // Compact a list of N sstables into M sstables.
+    // Returns a vector with newly created sstables(s).
+    //
     // creator is used to get a sstable object for a new sstable that will be written.
     // max_sstable_size is a relaxed limit size for a sstable to be generated.
     // Example: It's okay for the size of a new sstable to go beyond max_sstable_size
@@ -101,7 +103,7 @@ namespace sstables {
     // If cleanup is true, mutation that doesn't belong to current node will be
     // cleaned up, log messages will inform the user that compact_sstables runs for
     // cleaning operation, and compaction history will not be updated.
-    future<> compact_sstables(std::vector<shared_sstable> sstables,
+    future<std::vector<shared_sstable>> compact_sstables(std::vector<shared_sstable> sstables,
             column_family& cf, std::function<shared_sstable()> creator,
             uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false);
 

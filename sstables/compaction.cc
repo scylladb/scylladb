@@ -110,8 +110,9 @@ static bool belongs_to_current_node(const dht::token& t, const std::vector<range
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
-future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
-                          uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup) {
+future<std::vector<shared_sstable>>
+compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::function<shared_sstable()> creator,
+                 uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup) {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_partitions = 0;
     auto ancestors = make_lw_shared<std::vector<unsigned long>>();
@@ -363,6 +364,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
         // for example, by adding a reducer method.
         return db::system_keyspace::update_compaction_history(info->ks, info->cf, compacted_at,
                 info->start_size, info->end_size, std::unordered_map<int32_t, int64_t>{});
+    }).then([info] {
+        // Return vector with newly created sstable(s).
+        return std::move(info->new_sstables);
     });
 }
 
