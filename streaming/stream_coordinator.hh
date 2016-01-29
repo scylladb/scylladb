@@ -94,15 +94,6 @@ public:
         return session;
     }
 
-    void update_progress(progress_info info) {
-        auto peer = info.peer;
-        auto it = _peer_sessions.find(peer);
-        if (it == _peer_sessions.end()) {
-            throw std::runtime_error(sprint("Unknown peer requested: %s", peer));
-        }
-        it->second->update_progress(info);
-    }
-
     std::vector<session_info> get_all_session_info();
     std::vector<session_info> get_peer_session_info(inet_address peer);
 

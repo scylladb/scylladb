@@ -131,7 +131,6 @@ stream_state stream_result_future::get_current_state() {
 }
 
 void stream_result_future::handle_progress(progress_info progress) {
-    _coordinator->update_progress(progress);
     fire_stream_event(progress_event(plan_id, std::move(progress)));
 }
 

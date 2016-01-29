@@ -388,7 +388,9 @@ void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t f
     // FIXME: we can not estimate total number of bytes for a
     // stream_transfer_task or stream_receive_task, since we don't know the
     // size of the frozen_mutation until we read it.
-    _stream_result->handle_progress(progress_info(peer, cf_id.to_sstring(), dir, bytes, bytes));
+    progress_info progress(peer, cf_id.to_sstring(), dir, bytes, bytes);
+    update_progress(progress);
+    _stream_result->handle_progress(progress);
 }
 
 void stream_session::received(UUID cf_id, int sequence_number) {
