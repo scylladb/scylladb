@@ -53,9 +53,10 @@ namespace streaming {
 
 extern logging::logger sslog;
 
-stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges)
+stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size)
     : stream_task(session, cf_id)
-    , _ranges(std::move(ranges)) {
+    , _ranges(std::move(ranges))
+    , _total_size(total_size) {
 }
 
 stream_transfer_task::~stream_transfer_task() = default;
@@ -64,15 +65,15 @@ void stream_transfer_task::add_transfer_file(stream_detail detail) {
     assert(cf_id == detail.cf_id);
     auto message = outgoing_file_message(sequence_number++, std::move(detail));
     auto seq = message.sequence_number;
-    files.emplace(seq, std::move(message));
+    _files.emplace(seq, std::move(message));
 }
 
 void stream_transfer_task::start() {
     using msg_addr = net::messaging_service::msg_addr;
     using net::messaging_verb;
     auto plan_id = session->plan_id();
-    sslog.debug("[Stream #{}] stream_transfer_task: {} outgoing_file_message to send", plan_id, files.size());
-    for (auto it = files.begin(); it != files.end();) {
+    sslog.debug("[Stream #{}] stream_transfer_task: {} outgoing_file_message to send", plan_id, _files.size());
+    for (auto it = _files.begin(); it != _files.end();) {
         auto seq = it->first;
         auto& msg = it->second;
         auto id = msg_addr{session->peer, session->dst_cpu_id};
@@ -138,13 +139,13 @@ void stream_transfer_task::complete(int sequence_number) {
     // if (timeout != null)
     //     timeout.cancel(false);
 
-    files.erase(sequence_number);
+    _files.erase(sequence_number);
 
     auto plan_id = session->plan_id();
 
     sslog.debug("[Stream #{}] stream_transfer_task: complete cf_id = {}, seq = {}", plan_id, this->cf_id, sequence_number);
 
-    auto signal_complete = files.empty();
+    auto signal_complete = _files.empty();
     // all file sent, notify session this task is complete.
     if (signal_complete) {
         using msg_addr = net::messaging_service::msg_addr;
