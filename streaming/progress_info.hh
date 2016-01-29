@@ -67,7 +67,6 @@ public:
         , dir(_dir)
         , current_bytes(_current_bytes)
         , total_bytes(_total_bytes) {
-        assert(_total_bytes > 0);
     }
 
     /**

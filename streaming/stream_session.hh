@@ -346,7 +346,7 @@ public:
 
     void follower_start_sent();
 
-    void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
+    void progress(UUID cf_id, progress_info::direction dir, size_t fm_size);
 
     void received(UUID cf_id, int sequence_number);
 

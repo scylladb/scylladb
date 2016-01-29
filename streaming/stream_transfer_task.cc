@@ -98,7 +98,7 @@ void stream_transfer_task::start() {
                     try {
                         f.get();
                         session->start_keep_alive_timer();
-                        session->add_bytes_sent(fm->representation().size());
+                        session->progress(cf_id, progress_info::direction::OUT, fm->representation().size());
                         sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", plan_id, id.addr);
                         msg.mutations_done.signal();
                     } catch (std::exception& e) {

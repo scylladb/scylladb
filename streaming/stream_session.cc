@@ -124,8 +124,8 @@ void stream_session::init_messaging_service_handler() {
     ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
         msg_addr from = net::messaging_service::get_source(cinfo);
         return smp::submit_to(dst_cpu_id, [plan_id, from, fm = std::move(fm)] () mutable {
+            auto cf_id = fm.column_family_id();
             if (sslog.is_enabled(logging::log_level::debug)) {
-                auto cf_id = fm.column_family_id();
                 sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
             }
             auto f = get_stream_result_future(plan_id);
@@ -135,7 +135,7 @@ void stream_session::init_messaging_service_handler() {
                 auto session = coordinator->get_or_create_session(from.addr);
                 assert(session);
                 session->start_keep_alive_timer();
-                session->add_bytes_received(fm.representation().size());
+                session->progress(cf_id, progress_info::direction::IN, fm.representation().size());
                 return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
                     return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
                 });
@@ -376,9 +376,19 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    auto progress = progress_info(peer, "", dir, bytes, total);
-    _stream_result->handle_progress(std::move(progress));
+void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t fm_size) {
+    int64_t bytes;
+    if (dir == progress_info::direction::OUT) {
+        add_bytes_sent(fm_size);
+        bytes = get_bytes_sent();
+    } else {
+        add_bytes_received(fm_size);
+        bytes = get_bytes_received();
+    }
+    // FIXME: we can not estimate total number of bytes for a
+    // stream_transfer_task or stream_receive_task, since we don't know the
+    // size of the frozen_mutation until we read it.
+    _stream_result->handle_progress(progress_info(peer, cf_id.to_sstring(), dir, bytes, bytes));
 }
 
 void stream_session::received(UUID cf_id, int sequence_number) {
