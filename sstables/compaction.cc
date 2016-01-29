@@ -272,6 +272,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
             output_reader->unread(std::move(*mut));
 
             auto newtab = creator();
+            info->new_sstables.push_back(newtab);
             newtab->get_metadata_collector().set_replay_position(rp);
             newtab->get_metadata_collector().sstable_level(sstable_level);
             for (auto ancestor : *ancestors) {
@@ -283,7 +284,6 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
             auto&& priority = service::get_local_compaction_priority();
             return newtab->write_components(std::move(mutation_queue_reader), partitions_per_sstable, schema, max_sstable_size, backup, priority).then([newtab, info] {
                 return newtab->open_data().then([newtab, info] {
-                    info->new_sstables.push_back(newtab);
                     info->end_size += newtab->data_size();
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 });
@@ -310,6 +310,14 @@ future<> compact_sstables(std::vector<shared_sstable> sstables, column_family& c
         }
 
         if (ex.size()) {
+            // Delete either partially or fully written sstables of a compaction that
+            // was either stopped abruptly (e.g. out of disk space) or deliberately
+            // (e.g. nodetool stop COMPACTION).
+            for (auto& sst : info->new_sstables) {
+                logger.debug("Deleting sstable {} of interrupted compaction for {}/{}", sst->get_filename(), info->ks, info->cf);
+                sst->mark_for_deletion();
+            }
+
             throw std::runtime_error(ex);
         }
     }).then([start_time, info, cleanup] {
