@@ -135,10 +135,6 @@ void stream_transfer_task::start() {
 }
 
 void stream_transfer_task::complete(int sequence_number) {
-    // ScheduledFuture timeout = timeoutTasks.remove(sequenceNumber);
-    // if (timeout != null)
-    //     timeout.cancel(false);
-
     _files.erase(sequence_number);
 
     auto plan_id = session->plan_id();

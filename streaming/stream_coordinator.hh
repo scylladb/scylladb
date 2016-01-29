@@ -66,12 +66,6 @@ public:
     stream_coordinator(bool is_receiving = false)
         : _is_receiving(is_receiving) {
     }
-#if 0
-    public void setConnectionFactory(StreamConnectionFactory factory)
-    {
-        this.factory = factory;
-    }
-#endif
 public:
     /**
      * @return true if any stream session is active
@@ -96,37 +90,6 @@ public:
 
     std::vector<session_info> get_all_session_info();
     std::vector<session_info> get_peer_session_info(inet_address peer);
-
-private:
-#if 0
-    private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails)
-    {
-        // There's no point in divvying things up into more buckets than we have sstableDetails
-        int targetSlices = Math.min(sstableDetails.size(), connectionsPerHost);
-        int step = Math.round((float) sstableDetails.size() / (float) targetSlices);
-        int index = 0;
-
-        List<List<StreamSession.SSTableStreamingSections>> result = new ArrayList<>();
-        List<StreamSession.SSTableStreamingSections> slice = null;
-        Iterator<StreamSession.SSTableStreamingSections> iter = sstableDetails.iterator();
-        while (iter.hasNext())
-        {
-            StreamSession.SSTableStreamingSections streamSession = iter.next();
-
-            if (index % step == 0)
-            {
-                slice = new ArrayList<>();
-                result.add(slice);
-            }
-            slice.add(streamSession);
-            ++index;
-            iter.remove();
-        }
-
-        return result;
-    }
-
-#endif
 };
 
 } // namespace streaming

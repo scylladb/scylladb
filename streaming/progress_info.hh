@@ -76,32 +76,6 @@ public:
         return current_bytes >= total_bytes;
     }
 
-#if 0
-    /**
-     * ProgressInfo is considered to be equal only when all attributes except currentBytes are equal.
-     */
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-
-        ProgressInfo that = (ProgressInfo) o;
-
-        if (totalBytes != that.totalBytes) return false;
-        if (direction != that.direction) return false;
-        if (!fileName.equals(that.fileName)) return false;
-        if (sessionIndex != that.sessionIndex) return false;
-        return peer.equals(that.peer);
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return Objects.hashCode(peer, sessionIndex, fileName, direction, totalBytes);
-    }
-
-#endif
     friend std::ostream& operator<<(std::ostream& os, const progress_info& x);
 };
 

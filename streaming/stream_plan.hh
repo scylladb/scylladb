@@ -128,19 +128,6 @@ public:
     stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     stream_plan& listeners(std::vector<stream_event_handler*> handlers);
-#if 0
-    /**
-     * Set custom StreamConnectionFactory to be used for establishing connection
-     *
-     * @param factory StreamConnectionFactory to use
-     * @return self
-     */
-    public StreamPlan connectionFactory(StreamConnectionFactory factory)
-    {
-        this.coordinator.setConnectionFactory(factory);
-        return this;
-    }
-#endif
 public:
     /**
      * @return true if this plan has no plan to execute

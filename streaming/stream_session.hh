@@ -227,13 +227,6 @@ public:
     void init(shared_ptr<stream_result_future> stream_result_);
 
     void start();
-#if 0
-    public Socket createConnection() throws IOException
-    {
-        assert factory != null;
-        return factory.createConnection(connecting);
-    }
-#endif
 
     /**
      * Request data fetch task to this session.
@@ -292,40 +285,6 @@ public:
         return _state == stream_session_state::COMPLETE;
     }
 
-#if 0
-    public void messageReceived(StreamMessage message)
-    {
-        switch (message.type)
-        {
-            case PREPARE:
-                PrepareMessage msg = (PrepareMessage) message;
-                prepare(msg.requests, msg.summaries);
-                break;
-
-            case FILE:
-                receive((IncomingFileMessage) message);
-                break;
-
-            case RECEIVED:
-                ReceivedMessage received = (ReceivedMessage) message;
-                received(received.cfId, received.sequenceNumber);
-                break;
-
-            case RETRY:
-                RetryMessage retry = (RetryMessage) message;
-                retry(retry.cfId, retry.sequenceNumber);
-                break;
-
-            case COMPLETE:
-                complete();
-                break;
-
-            case SESSION_FAILED:
-                sessionFailed();
-                break;
-        }
-    }
-#endif
     future<> initiate();
 
     /**
@@ -369,19 +328,6 @@ public:
      */
     void session_failed();
 
-#if 0
-    public void doRetry(FileMessageHeader header, Throwable e)
-    {
-        logger.warn("[Stream #{}] Retrying for following error", planId(), e);
-        // retry
-        retries++;
-        if (retries > DatabaseDescriptor.getMaxStreamingRetries())
-            onError(new IOException("Too many retries for " + header, e));
-        else
-            handler.sendMessage(new RetryMessage(header.cfId, header.sequenceNumber));
-    }
-#endif
-
     /**
      * @return Current snapshot of this session info.
      */
@@ -414,20 +360,6 @@ public:
 private:
     void send_complete_message();
     bool maybe_completed();
-#if 0
-
-    /**
-     * Flushes matching column families from the given keyspace, or all columnFamilies
-     * if the cf list is empty.
-     */
-    private void flushSSTables(Iterable<ColumnFamilyStore> stores)
-    {
-        List<Future<?>> flushes = new ArrayList<>();
-        for (ColumnFamilyStore cfs : stores)
-            flushes.add(cfs.forceFlush());
-        FBUtilities.waitOnFutures(flushes);
-    }
-#endif
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();
 };

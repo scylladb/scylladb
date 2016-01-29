@@ -312,12 +312,6 @@ future<> stream_session::on_initialization_complete() {
 
 void stream_session::on_error() {
     sslog.error("[Stream #{}] Streaming error occurred", plan_id());
-#if 0
-    // send session failure message
-    if (handler.is_outgoing_connected()) {
-       handler.sendMessage(session_failed_message());
-    }
-#endif
     // fail session
     close_session(stream_session_state::FAILED);
 }
@@ -493,17 +487,6 @@ void stream_session::prepare_receiving(stream_summary& summary) {
 
 void stream_session::start_streaming_files() {
     _stream_result->handle_session_prepared(shared_from_this());
-#if 0
-    state(State.STREAMING);
-    for (StreamTransferTask task : transfers.values())
-    {
-        Collection<OutgoingFileMessage> messages = task.getFileMessages();
-        if (messages.size() > 0)
-            handler.sendMessages(messages);
-        else
-            taskCompleted(task); // there is no file to send
-    }
-#endif
     sslog.debug("[Stream #{}] {}: {} transfers to send", plan_id(), __func__, _transfers.size());
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
@@ -568,14 +551,6 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
 
 void stream_session::add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details) {
     for (auto& detail : stream_details) {
-#if 0
-        if (details.sections.empty()) {
-            // A reference was acquired on the sstable and we won't stream it
-            // FIXME
-            // details.sstable.releaseReference();
-            continue;
-        }
-#endif
         UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {

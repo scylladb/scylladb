@@ -83,13 +83,6 @@ struct progress_event : public stream_event {
         : stream_event(stream_event::type::FILE_PROGRESS, plan_id_)
         , progress(std::move(progress_)) {
     }
-#if 0
-    @Override
-    public String toString()
-    {
-        return "<ProgressEvent " + progress + ">";
-    }
-#endif
 };
 
 struct session_prepared_event : public stream_event {
