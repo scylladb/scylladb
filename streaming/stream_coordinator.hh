@@ -59,7 +59,7 @@ public:
 
 private:
     class host_streaming_data;
-    std::map<inet_address, host_streaming_data> _peer_sessions;
+    std::map<inet_address, shared_ptr<stream_session>> _peer_sessions;
     bool _is_receiving;
 
 public:
@@ -87,11 +87,20 @@ public:
 
 public:
     shared_ptr<stream_session> get_or_create_session(inet_address peer) {
-        return get_or_create_host_data(peer).get_or_create_session(peer);
+        auto& session = _peer_sessions[peer];
+        if (!session) {
+            session = make_shared<stream_session>(peer);
+        }
+        return session;
     }
 
     void update_progress(progress_info info) {
-        get_host_data(info.peer).update_progress(info);
+        auto peer = info.peer;
+        auto it = _peer_sessions.find(peer);
+        if (it == _peer_sessions.end()) {
+            throw std::runtime_error(sprint("Unknown peer requested: %s", peer));
+        }
+        it->second->update_progress(info);
     }
 
     std::vector<session_info> get_all_session_info();
@@ -127,25 +136,6 @@ private:
     }
 
 #endif
-    host_streaming_data& get_host_data(inet_address peer);
-    host_streaming_data& get_or_create_host_data(inet_address peer);
-
-private:
-    class host_streaming_data {
-    public:
-        using inet_address = gms::inet_address;
-        shared_ptr<stream_session> _stream_session;
-
-        host_streaming_data() = default;
-
-        bool is_active_session();
-
-        shared_ptr<stream_session> get_or_create_session(inet_address peer);
-
-        void connect();
-
-        void update_progress(progress_info info);
-    };
 };
 
 } // namespace streaming

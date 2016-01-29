@@ -49,7 +49,8 @@ using gms::inet_address;
 
 bool stream_coordinator::has_active_sessions() {
     for (auto& x : _peer_sessions) {
-        if (x.second.is_active_session()) {
+        auto state = x.second->get_state();
+        if (state != stream_session_state::COMPLETE && state != stream_session_state::FAILED) {
             return true;
         }
     }
@@ -59,7 +60,7 @@ bool stream_coordinator::has_active_sessions() {
 std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessions() {
     std::vector<shared_ptr<stream_session>> results;
     for (auto& x : _peer_sessions) {
-        results.push_back(x.second._stream_session);
+        results.push_back(x.second);
     }
     return results;
 }
@@ -67,7 +68,8 @@ std::vector<shared_ptr<stream_session>> stream_coordinator::get_all_stream_sessi
 std::vector<session_info> stream_coordinator::get_all_session_info() {
     std::vector<session_info> results;
     for (auto& x : _peer_sessions) {
-        results.push_back(x.second._stream_session->get_session_info());
+        auto& session = x.second;
+        results.push_back(session->get_session_info());
     }
     return results;
 }
@@ -76,7 +78,8 @@ std::vector<session_info> stream_coordinator::get_peer_session_info(inet_address
     std::vector<session_info> results;
     auto it = _peer_sessions.find(peer);
     if (it != _peer_sessions.end()) {
-        results.push_back(it->second._stream_session->get_session_info());
+        auto& session = it->second;
+        results.push_back(session->get_session_info());
     }
     return results;
 }
@@ -93,50 +96,12 @@ std::set<inet_address> stream_coordinator::get_peers() {
     return results;
 }
 
-stream_coordinator::host_streaming_data& stream_coordinator::get_host_data(inet_address peer) {
-    auto it = _peer_sessions.find(peer);
-    if (it == _peer_sessions.end()) {
-        throw std::runtime_error(sprint("Unknown peer requested: %s", peer));
-    }
-    return it->second;
-}
-
-stream_coordinator::host_streaming_data& stream_coordinator::get_or_create_host_data(inet_address peer) {
-    auto it = _peer_sessions.find(peer);
-    if (it == _peer_sessions.end()) {
-        it = _peer_sessions.emplace(peer, host_streaming_data()).first;
-    }
-    return it->second;
-}
-
-bool stream_coordinator::host_streaming_data::is_active_session() {
-    auto state = _stream_session->get_state();
-    if (state != stream_session_state::COMPLETE && state != stream_session_state::FAILED) {
-        return true;
-    }
-    return false;
-}
-
-shared_ptr<stream_session> stream_coordinator::host_streaming_data::get_or_create_session(inet_address peer) {
-    if (!_stream_session) {
-        _stream_session = make_shared<stream_session>(peer);
-    }
-    return _stream_session;
-}
-
-void stream_coordinator::host_streaming_data::update_progress(progress_info info) {
-    _stream_session->update_progress(std::move(info));
-}
-
 void stream_coordinator::connect_all_stream_sessions() {
-    for (auto& data : _peer_sessions) {
-        data.second.connect();
+    for (auto& x : _peer_sessions) {
+        auto& session = x.second;
+        session->start();
+        sslog.info("[Stream #{}] Beginning stream session with {}", session->plan_id(), session->peer);
     }
-}
-
-void stream_coordinator::host_streaming_data::connect() {
-    _stream_session->start();
-    sslog.info("[Stream #{}] Beginning stream session with {}", _stream_session->plan_id(), _stream_session->peer);
 }
 
 } // namespace streaming
