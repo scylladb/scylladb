@@ -23,21 +23,8 @@ if [ "$ID" = "ubuntu" ]; then
 else
     SYSCONFIG=/etc/sysconfig
 fi
-
 . $SYSCONFIG/scylla-server
 
-NIC=eth0
-NETWORK_MODE=posix
-NR_HUGEPAGES=64
-USER=scylla
-GROUP=scylla
-SCYLLA_HOME=/var/lib/scylla
-SCYLLA_CONF=/etc/scylla
-SETUP_NIC=0
-SET_NIC="no"
-AMI=no
-AMI_KEEP_VERSION=no
-SCYLLA_ARGS=$SCYLLA_ARGS
 while getopts n:m:p:u:g:d:c:Nakh OPT; do
     case "$OPT" in
         "n")
@@ -81,7 +68,7 @@ echo Setting parameters on $SYSCONFIG/scylla-server
 ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
 ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
 NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
-if [ $NR_CPU -ge 8 ]; then
+if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
     NR=$((NR_CPU - 1))
     SET_NIC="yes"
     SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR  --smp $NR"
