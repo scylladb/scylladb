@@ -37,11 +37,12 @@ if [ ! -d packer ]; then
     cd -
 fi
 
+echo "sudo yum remove -y abrt" > scylla_deploy.sh
 if [ $LOCALRPM = 0 ]; then
-    echo "sudo yum remove -y abrt; sudo sh -x -e /home/centos/scylla_install_pkg; sudo sh -x -e /usr/lib/scylla/scylla_setup -a" > scylla_deploy.sh
+    echo "sudo sh -x -e /home/centos/scylla_install_pkg" >> scylla_deploy.sh
 else
-    echo "sudo yum remove -y abrt; sudo sh -x -e /home/centos/scylla_install_pkg -l /home/centos; sudo sh -x -e /usr/lib/scylla/scylla_setup -a" > scylla_deploy.sh
-
+    echo "sudo sh -x -e /home/centos/scylla_install_pkg -l /home/centos" >> scylla_deploy.sh
+echo "sudo sh -x -e /usr/lib/scylla/scylla_setup -a" >> scylla_deploy.sh
 fi
 
 chmod a+rx scylla_deploy.sh
