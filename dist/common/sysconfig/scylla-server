@@ -42,6 +42,3 @@ SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --coll
 
 # setup as AMI instance
 AMI=no
-
-# do not upgrade Scylla packages on AMI startup
-AMI_KEEP_VERSION=no

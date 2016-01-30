@@ -46,11 +46,6 @@ if [ "$ID" != "ubuntu" ]; then
     fi
     if [ $AMI -eq 1 ]; then
         SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -N -a"
-        if [ "$LOCAL_PKG" = "" ]; then
-            yum update -y
-        else
-            SYSCONFIG_SETUP_ARGS="$SYSCONFIG_SETUP_ARGS -k"
-        fi
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
         mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
