@@ -54,62 +54,6 @@ class stream_result_future;
  */
 class stream_manager {
     using UUID = utils::UUID;
-#if 0
-    /**
-     * Gets streaming rate limiter.
-     * When stream_throughput_outbound_megabits_per_sec is 0, this returns rate limiter
-     * with the rate of Double.MAX_VALUE bytes per second.
-     * Rate unit is bytes per sec.
-     *
-     * @return StreamRateLimiter with rate limit set based on peer location.
-     */
-    public static StreamRateLimiter getRateLimiter(InetAddress peer)
-    {
-        return new StreamRateLimiter(peer);
-    }
-
-    public static class StreamRateLimiter
-    {
-        private static final double ONE_MEGA_BIT = (1024 * 1024) / 8; // from bits
-        private static final RateLimiter limiter = RateLimiter.create(Double.MAX_VALUE);
-        private static final RateLimiter interDCLimiter = RateLimiter.create(Double.MAX_VALUE);
-        private final boolean isLocalDC;
-
-        public StreamRateLimiter(InetAddress peer)
-        {
-            double throughput = ((double) DatabaseDescriptor.getStreamThroughputOutboundMegabitsPerSec()) * ONE_MEGA_BIT;
-            mayUpdateThroughput(throughput, limiter);
-
-            double interDCThroughput = ((double) DatabaseDescriptor.getInterDCStreamThroughputOutboundMegabitsPerSec()) * ONE_MEGA_BIT;
-            mayUpdateThroughput(interDCThroughput, interDCLimiter);
-
-            if (DatabaseDescriptor.getLocalDataCenter() != null && DatabaseDescriptor.getEndpointSnitch() != null)
-                isLocalDC = DatabaseDescriptor.getLocalDataCenter().equals(
-                            DatabaseDescriptor.getEndpointSnitch().getDatacenter(peer));
-            else
-                isLocalDC = true;
-        }
-
-        private void mayUpdateThroughput(double limit, RateLimiter rateLimiter)
-        {
-            // if throughput is set to 0, throttling is disabled
-            if (limit == 0)
-                limit = Double.MAX_VALUE;
-            if (rateLimiter.getRate() != limit)
-                rateLimiter.setRate(limit);
-        }
-
-        public void acquire(int toTransfer)
-        {
-            limiter.acquire(toTransfer);
-            if (!isLocalDC)
-                interDCLimiter.acquire(toTransfer);
-        }
-    }
-
-    private final StreamEventJMXNotifier notifier = new StreamEventJMXNotifier();
-#endif
-
     /*
      * Currently running streams. Removed after completion/failure.
      * We manage them in two different maps to distinguish plan from initiated ones to
@@ -121,18 +65,6 @@ private:
     semaphore _mutation_send_limiter{10};
 public:
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
-#if  0
-    public Set<CompositeData> getCurrentStreams()
-    {
-        return Sets.newHashSet(Iterables.transform(Iterables.concat(initiatedStreams.values(), receivingStreams.values()), new Function<StreamResultFuture, CompositeData>()
-        {
-            public CompositeData apply(StreamResultFuture input)
-            {
-                return StreamStateCompositeData.toCompositeData(input.getCurrentState());
-            }
-        }));
-    }
-#endif
 
     void register_sending(shared_ptr<stream_result_future> result);
 
@@ -156,28 +88,7 @@ public:
     void remove_stream(UUID plan_id);
 
     void show_streams();
-#if 0
 
-    public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback)
-    {
-        notifier.addNotificationListener(listener, filter, handback);
-    }
-
-    public void removeNotificationListener(NotificationListener listener) throws ListenerNotFoundException
-    {
-        notifier.removeNotificationListener(listener);
-    }
-
-    public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) throws ListenerNotFoundException
-    {
-        notifier.removeNotificationListener(listener, filter, handback);
-    }
-
-    public MBeanNotificationInfo[] getNotificationInfo()
-    {
-        return notifier.getNotificationInfo();
-    }
-#endif
     future<> stop() {
         return make_ready_future<>();
     }

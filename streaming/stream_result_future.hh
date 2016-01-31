@@ -102,7 +102,7 @@ public:
 
 public:
     static future<stream_state> init_sending_side(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, shared_ptr<stream_coordinator> coordinator_);
-    static void init_receiving_side(UUID plan_id, sstring description, inet_address from);
+    static shared_ptr<stream_result_future> init_receiving_side(UUID plan_id, sstring description, inet_address from);
 
 public:
     void add_event_listener(stream_event_handler* listener) {
@@ -114,23 +114,6 @@ public:
      * @return Current snapshot of streaming progress.
      */
     stream_state get_current_state();
-#if 0
-
-    @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        StreamResultFuture that = (StreamResultFuture) o;
-        return planId.equals(that.planId);
-    }
-
-    @Override
-    public int hashCode()
-    {
-        return planId.hashCode();
-    }
-#endif
 
     void handle_session_prepared(shared_ptr<stream_session> session);
 

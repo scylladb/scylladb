@@ -62,7 +62,7 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std
 stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     _range_added = true;
     auto session = _coordinator->get_or_create_session(to);
-    session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer);
+    session->add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families));
     return *this;
 }
 
@@ -73,11 +73,6 @@ future<stream_state> stream_plan::execute() {
         return make_ready_future<stream_state>(std::move(state));
     }
     return stream_result_future::init_sending_side(_plan_id, _description, _handlers, _coordinator);
-}
-
-stream_plan& stream_plan::flush_before_transfer(bool flush_before_transfer_) {
-    _flush_before_transfer = flush_before_transfer_;
-    return *this;
 }
 
 stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers) {

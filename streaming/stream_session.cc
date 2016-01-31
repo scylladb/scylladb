@@ -73,27 +73,36 @@ static auto get_stream_result_future(utils::UUID plan_id) {
     return f;
 }
 
+static auto get_session(utils::UUID plan_id, gms::inet_address from, const char* verb, std::experimental::optional<utils::UUID> cf_id = {}) {
+    if (cf_id) {
+        sslog.debug("[Stream #{}] GOT {} from {}: cf_id={}", plan_id, verb, from, *cf_id);
+    } else {
+        sslog.debug("[Stream #{}] GOT {} from {}", plan_id, verb, from);
+    }
+    auto sr = get_stream_result_future(plan_id);
+    if (!sr) {
+        auto err = sprint("[Stream #%s] GOT %s from %s: Can not find stream_manager", plan_id, verb, from);
+        sslog.warn(err.c_str());
+        throw std::runtime_error(err);
+    }
+    auto coordinator = sr->get_coordinator();
+    if (!coordinator) {
+        auto err = sprint("[Stream #%s] GOT %s from %s: Can not find coordinator", plan_id, verb, from);
+        sslog.warn(err.c_str());
+        throw std::runtime_error(err);
+    }
+    return coordinator->get_or_create_session(from);
+}
+
 void stream_session::init_messaging_service_handler() {
     ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description) {
         const auto& src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         auto dst_cpu_id = engine().cpu_id();
         return smp::submit_to(dst_cpu_id, [msg = std::move(msg), plan_id, description = std::move(description), from, src_cpu_id, dst_cpu_id] () mutable {
-            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}", plan_id, from);
-            auto& sm = get_local_stream_manager();
-            auto f = sm.get_receiving_stream(plan_id);
-            if (f) {
-                sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}, stream_plan exists, duplicated message received?", plan_id, from);
-                throw std::runtime_error("stream_plan exists");
-            } else {
-                stream_result_future::init_receiving_side(plan_id, description, from);
-                f = sm.get_receiving_stream(plan_id);
-            }
-            auto coordinator = f->get_coordinator();
-            assert(coordinator);
-            auto session = coordinator->get_or_create_session(from);
-            assert(session);
-            session->init(f);
+            auto sr = stream_result_future::init_receiving_side(plan_id, description, from);
+            auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
+            session->init(sr);
             session->dst_cpu_id = src_cpu_id;
             session->start_keep_alive_timer();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
@@ -104,90 +113,45 @@ void stream_session::init_messaging_service_handler() {
     ms().register_prepare_done_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from] () mutable {
-            sslog.debug("[Stream #{}] GOT PREPARE_DONE_MESSAGE from {}", plan_id, from);
-            auto f = get_stream_result_future(plan_id);
-            if (f) {
-                auto coordinator = f->get_coordinator();
-                assert(coordinator);
-                auto session = coordinator->get_or_create_session(from);
-                assert(session);
-                session->start_keep_alive_timer();
-                session->follower_start_sent();
-                return make_ready_future<>();
-            } else {
-                auto err = sprint("[Stream #%s] GOT PREPARE_DONE_MESSAGE from %s: Can not find stream_manager", plan_id, from);
-                sslog.warn(err.c_str());
-                throw std::runtime_error(err);
-            }
+            auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
+            session->start_keep_alive_timer();
+            session->follower_start_sent();
+            return make_ready_future<>();
         });
     });
     ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
-        msg_addr from = net::messaging_service::get_source(cinfo);
-        return smp::submit_to(dst_cpu_id, [plan_id, from, fm = std::move(fm)] () mutable {
-            if (sslog.is_enabled(logging::log_level::debug)) {
-                auto cf_id = fm.column_family_id();
-                sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
-            }
-            auto f = get_stream_result_future(plan_id);
-            if (f) {
-                auto coordinator = f->get_coordinator();
-                assert(coordinator);
-                auto session = coordinator->get_or_create_session(from.addr);
-                assert(session);
-                session->start_keep_alive_timer();
-                session->add_bytes_received(fm.representation().size());
-                return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
-                    return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
-                });
-            } else {
-                auto err = sprint("[Stream #%s] GOT STREAM_MUTATION from %s: Can not find stream_manager", plan_id, from.addr);
-                sslog.warn(err.c_str());
-                throw std::runtime_error(err);
-            }
+        auto from_msg_addr = net::messaging_service::get_source(cinfo);
+        return smp::submit_to(dst_cpu_id, [plan_id, from_msg_addr, fm = std::move(fm)] () mutable {
+            auto& from = from_msg_addr.addr;
+            auto cf_id = fm.column_family_id();
+            auto session = get_session(plan_id, from, "STREAM_MUTATION", cf_id);
+            session->start_keep_alive_timer();
+            session->progress(cf_id, progress_info::direction::IN, fm.representation().size());
+            return service::get_schema_for_write(fm.schema_version(), from_msg_addr).then([&fm] (schema_ptr s) {
+                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
+            });
         });
     });
     ms().register_stream_mutation_done([] (const rpc::client_info& cinfo, UUID plan_id, std::vector<range<dht::token>> ranges, UUID cf_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
-            sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE from {}: cf_id={}", plan_id, from, cf_id);
-            auto f = get_stream_result_future(plan_id);
-            if (f) {
-                auto coordinator = f->get_coordinator();
-                assert(coordinator);
-                auto session = coordinator->get_or_create_session(from);
-                assert(session);
-                session->start_keep_alive_timer();
-                session->receive_task_completed(cf_id);
-                return session->get_db().invoke_on_all([ranges = std::move(ranges), cf_id] (database& db) {
-                    auto& cf = db.find_column_family(cf_id);
-                    for (auto& range : ranges) {
-                        cf.get_row_cache().invalidate(query::to_partition_range(range));
-                    }
-                });
-            } else {
-                auto err = sprint("[Stream #%s] GOT STREAM_MUTATION_DONE from %s: Can not find stream_manager", plan_id, from);
-                sslog.warn(err.c_str());
-                throw std::runtime_error(err);
-            }
+            auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
+            session->start_keep_alive_timer();
+            session->receive_task_completed(cf_id);
+            return session->get_db().invoke_on_all([ranges = std::move(ranges), cf_id] (database& db) {
+                auto& cf = db.find_column_family(cf_id);
+                for (auto& range : ranges) {
+                    cf.get_row_cache().invalidate(query::to_partition_range(range));
+                }
+            });
         });
     });
     ms().register_complete_message([] (const rpc::client_info& cinfo, UUID plan_id, unsigned dst_cpu_id) {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () mutable {
-            sslog.debug("[Stream #{}] GOT COMPLETE_MESSAGE from {}: dst_cpu_id={}", plan_id, from, dst_cpu_id);
-            auto f = get_stream_result_future(plan_id);
-            if (f) {
-                auto coordinator = f->get_coordinator();
-                assert(coordinator);
-                auto session = coordinator->get_or_create_session(from);
-                assert(session);
-                session->start_keep_alive_timer();
-                session->complete();
-            } else {
-                auto err = sprint("[Stream #%s] COMPLETE_MESSAGE from %s: Can not find stream_manager", plan_id, from);
-                sslog.warn(err.c_str());
-                throw std::runtime_error(err);
-            }
+            auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
+            session->start_keep_alive_timer();
+            session->complete();
         });
     });
 }
@@ -312,12 +276,6 @@ future<> stream_session::on_initialization_complete() {
 
 void stream_session::on_error() {
     sslog.error("[Stream #{}] Streaming error occurred", plan_id());
-#if 0
-    // send session failure message
-    if (handler.is_outgoing_connected()) {
-       handler.sendMessage(session_failed_message());
-    }
-#endif
     // fail session
     close_session(stream_session_state::FAILED);
 }
@@ -343,7 +301,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
                 throw std::runtime_error(err);
             }
         }
-        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true);
+        add_transfer_ranges(request.keyspace, request.ranges, request.column_families);
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
@@ -376,23 +334,27 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
-    auto progress = progress_info(peer, "", dir, bytes, total);
-    _stream_result->handle_progress(std::move(progress));
+void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t fm_size) {
+    int64_t bytes;
+    if (dir == progress_info::direction::OUT) {
+        add_bytes_sent(fm_size);
+        bytes = get_bytes_sent();
+    } else {
+        add_bytes_received(fm_size);
+        bytes = get_bytes_received();
+    }
+    // FIXME: we can not estimate total number of bytes for a
+    // stream_transfer_task or stream_receive_task, since we don't know the
+    // size of the frozen_mutation until we read it.
+    progress_info progress(peer, cf_id.to_sstring(), dir, bytes, bytes);
+    update_progress(progress);
+    _stream_result->handle_progress(progress);
 }
 
 void stream_session::received(UUID cf_id, int sequence_number) {
     auto it = _transfers.find(cf_id);
     if (it != _transfers.end()) {
         it->second.complete(sequence_number);
-    }
-}
-
-void stream_session::retry(UUID cf_id, int sequence_number) {
-    auto it = _transfers.find(cf_id);
-    if (it != _transfers.end()) {
-        //outgoing_file_message message = it->second.create_message_for_retry(sequence_number);
-        //handler.sendMessage(message);
     }
 }
 
@@ -411,7 +373,7 @@ void stream_session::session_failed() {
     close_session(stream_session_state::FAILED);
 }
 
-session_info stream_session::get_session_info() {
+session_info stream_session::make_session_info() {
     std::vector<stream_summary> receiving_summaries;
     for (auto& receiver : _receivers) {
         receiving_summaries.emplace_back(receiver.second.get_summary());
@@ -481,17 +443,6 @@ void stream_session::prepare_receiving(stream_summary& summary) {
 
 void stream_session::start_streaming_files() {
     _stream_result->handle_session_prepared(shared_from_this());
-#if 0
-    state(State.STREAMING);
-    for (StreamTransferTask task : transfers.values())
-    {
-        Collection<OutgoingFileMessage> messages = task.getFileMessages();
-        if (messages.size() > 0)
-            handler.sendMessages(messages);
-        else
-            taskCompleted(task); // there is no file to send
-    }
-#endif
     sslog.debug("[Stream #{}] {}: {} transfers to send", plan_id(), __func__, _transfers.size());
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
@@ -532,12 +483,9 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
     return stores;
 }
 
-void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables) {
+void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
-    if (flush_tables) {
-        // FIXME: flushSSTables(stores);
-    }
     for (auto& cf : cfs) {
         std::vector<mutation_reader> readers;
         auto cf_id = cf->schema()->id();
@@ -559,14 +507,6 @@ void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::ra
 
 void stream_session::add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details) {
     for (auto& detail : stream_details) {
-#if 0
-        if (details.sections.empty()) {
-            // A reference was acquired on the sstable and we won't stream it
-            // FIXME
-            // details.sstable.releaseReference();
-            continue;
-        }
-#endif
         UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {

@@ -55,12 +55,8 @@ private:
     int total_files;
     // total size of files to receive
     long total_size;
-
     // true if task is done (either completed or aborted)
     bool done = false;
-
-    // holds references to SSTables received
-    // protected Collection<SSTableWriter> sstables;
 public:
     stream_receive_task(shared_ptr<stream_session> _session, UUID _cf_id, int _total_files, long _total_size);
     ~stream_receive_task();
@@ -73,57 +69,6 @@ public:
         return total_size;
     }
 
-#if 0
-    private static class OnCompletionRunnable implements Runnable
-    {
-        private final StreamReceiveTask task;
-
-        public OnCompletionRunnable(StreamReceiveTask task)
-        {
-            this.task = task;
-        }
-
-        public void run()
-        {
-            Pair<String, String> kscf = Schema.instance.getCF(task.cfId);
-            if (kscf == null)
-            {
-                // schema was dropped during streaming
-                for (SSTableWriter writer : task.sstables)
-                    writer.abort();
-                task.sstables.clear();
-                return;
-            }
-            ColumnFamilyStore cfs = Keyspace.open(kscf.left).getColumnFamilyStore(kscf.right);
-
-            File lockfiledir = cfs.directories.getWriteableLocationAsFile(task.sstables.size() * 256);
-            if (lockfiledir == null)
-                throw new IOError(new IOException("All disks full"));
-            StreamLockfile lockfile = new StreamLockfile(lockfiledir, UUID.randomUUID());
-            lockfile.create(task.sstables);
-            List<SSTableReader> readers = new ArrayList<>();
-            for (SSTableWriter writer : task.sstables)
-                readers.add(writer.closeAndOpenReader());
-            lockfile.delete();
-            task.sstables.clear();
-
-            if (!SSTableReader.acquireReferences(readers))
-                throw new AssertionError("We shouldn't fail acquiring a reference on a sstable that has just been transferred");
-            try
-            {
-                // add sstables and build secondary indexes
-                cfs.addSSTables(readers);
-                cfs.indexManager.maybeBuildSecondaryIndexes(readers, cfs.indexManager.allIndexesNames());
-            }
-            finally
-            {
-                SSTableReader.releaseReferences(readers);
-            }
-
-            task.session.taskCompleted(task);
-        }
-    }
-#endif
 
     /**
      * Abort this task.
@@ -132,15 +77,6 @@ public:
      * then task cannot be aborted.
      */
     virtual void abort() override {
-#if 0
-        if (done)
-            return;
-
-        done = true;
-        for (SSTableWriter writer : sstables)
-            writer.abort();
-        sstables.clear();
-#endif
     }
 };
 

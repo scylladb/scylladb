@@ -180,6 +180,7 @@ private:
 
     std::chrono::seconds _keep_alive_timeout{600};
     timer<lowres_clock> _keep_alive;
+    session_info _session_info;
 public:
     void start_keep_alive_timer() {
         _keep_alive.rearm(lowres_clock::now() + _keep_alive_timeout);
@@ -226,13 +227,6 @@ public:
     void init(shared_ptr<stream_result_future> stream_result_);
 
     void start();
-#if 0
-    public Socket createConnection() throws IOException
-    {
-        assert factory != null;
-        return factory.createConnection(connecting);
-    }
-#endif
 
     /**
      * Request data fetch task to this session.
@@ -256,7 +250,7 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables);
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
@@ -291,40 +285,6 @@ public:
         return _state == stream_session_state::COMPLETE;
     }
 
-#if 0
-    public void messageReceived(StreamMessage message)
-    {
-        switch (message.type)
-        {
-            case PREPARE:
-                PrepareMessage msg = (PrepareMessage) message;
-                prepare(msg.requests, msg.summaries);
-                break;
-
-            case FILE:
-                receive((IncomingFileMessage) message);
-                break;
-
-            case RECEIVED:
-                ReceivedMessage received = (ReceivedMessage) message;
-                received(received.cfId, received.sequenceNumber);
-                break;
-
-            case RETRY:
-                RetryMessage retry = (RetryMessage) message;
-                retry(retry.cfId, retry.sequenceNumber);
-                break;
-
-            case COMPLETE:
-                complete();
-                break;
-
-            case SESSION_FAILED:
-                sessionFailed();
-                break;
-        }
-    }
-#endif
     future<> initiate();
 
     /**
@@ -346,17 +306,9 @@ public:
 
     void follower_start_sent();
 
-    void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
+    void progress(UUID cf_id, progress_info::direction dir, size_t fm_size);
 
     void received(UUID cf_id, int sequence_number);
-
-    /**
-     * Call back on receiving {@code StreamMessage.Type.RETRY} message.
-     *
-     * @param cfId ColumnFamily ID
-     * @param sequenceNumber Sequence number to indicate which file to stream again
-     */
-    void retry(UUID cf_id, int sequence_number);
 
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
@@ -368,23 +320,22 @@ public:
      */
     void session_failed();
 
-#if 0
-    public void doRetry(FileMessageHeader header, Throwable e)
-    {
-        logger.warn("[Stream #{}] Retrying for following error", planId(), e);
-        // retry
-        retries++;
-        if (retries > DatabaseDescriptor.getMaxStreamingRetries())
-            onError(new IOException("Too many retries for " + header, e));
-        else
-            handler.sendMessage(new RetryMessage(header.cfId, header.sequenceNumber));
-    }
-#endif
-
     /**
      * @return Current snapshot of this session info.
      */
-    session_info get_session_info();
+    session_info make_session_info();
+
+    session_info& get_session_info() {
+        return _session_info;
+    }
+
+    const session_info& get_session_info() const {
+        return _session_info;
+    }
+
+    void update_progress(const progress_info& info) {
+        _session_info.update_progress(info);
+    }
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);
@@ -401,20 +352,6 @@ public:
 private:
     void send_complete_message();
     bool maybe_completed();
-#if 0
-
-    /**
-     * Flushes matching column families from the given keyspace, or all columnFamilies
-     * if the cf list is empty.
-     */
-    private void flushSSTables(Iterable<ColumnFamilyStore> stores)
-    {
-        List<Future<?>> flushes = new ArrayList<>();
-        for (ColumnFamilyStore cfs : stores)
-            flushes.add(cfs.forceFlush());
-        FBUtilities.waitOnFutures(flushes);
-    }
-#endif
     void prepare_receiving(stream_summary& summary);
     void start_streaming_files();
 };

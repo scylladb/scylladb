@@ -67,8 +67,6 @@ private:
     sstring _description;
     std::vector<stream_event_handler*> _handlers;
     shared_ptr<stream_coordinator> _coordinator;
-
-    bool _flush_before_transfer = true;
     bool _range_added = false;
 public:
 
@@ -130,19 +128,6 @@ public:
     stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     stream_plan& listeners(std::vector<stream_event_handler*> handlers);
-#if 0
-    /**
-     * Set custom StreamConnectionFactory to be used for establishing connection
-     *
-     * @param factory StreamConnectionFactory to use
-     * @return self
-     */
-    public StreamPlan connectionFactory(StreamConnectionFactory factory)
-    {
-        this.coordinator.setConnectionFactory(factory);
-        return this;
-    }
-#endif
 public:
     /**
      * @return true if this plan has no plan to execute
@@ -157,15 +142,6 @@ public:
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
     future<stream_state> execute();
-
-    /**
-     * Set flushBeforeTransfer option.
-     * When it's true, will flush before streaming ranges. (Default: true)
-     *
-     * @param flushBeforeTransfer set to true when the node should flush before transfer
-     * @return this object for chaining
-     */
-    stream_plan& flush_before_transfer(bool flush_before_transfer_);
 };
 
 } // namespace streaming

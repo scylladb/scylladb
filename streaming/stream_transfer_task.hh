@@ -56,17 +56,14 @@ class stream_transfer_task : public stream_task {
 private:
     int32_t sequence_number = 0;
     bool aborted = false;
-
     // A stream_transfer_task always contains the same range to stream
     std::vector<range<dht::token>> _ranges;
-    std::map<int32_t, outgoing_file_message> files;
-    //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
-
-    long total_size;
+    std::map<int32_t, outgoing_file_message> _files;
+    long _total_size;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
-    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges);
+    stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size = 0);
     ~stream_transfer_task();
 
     void add_transfer_file(stream_detail detail);
@@ -80,78 +77,20 @@ public:
 
 public:
     virtual void abort() override {
-#if 0
-        if (aborted)
-            return;
-        aborted = true;
-
-        for (ScheduledFuture future : timeoutTasks.values())
-            future.cancel(false);
-        timeoutTasks.clear();
-
-        for (OutgoingFileMessage file : files.values())
-            file.sstable.releaseReference();
-#endif
     }
 
     virtual int get_total_number_of_files() override {
-        return files.size();
+        return _files.size();
     }
 
     virtual long get_total_size() override {
-        return total_size;
+        return _total_size;
     }
 
     std::map<int32_t, outgoing_file_message>& get_file_messages() {
-        return files;
+        return _files;
     }
 
-    outgoing_file_message& create_message_for_retry(int sequence_number) {
-#if 0
-        // remove previous time out task to be rescheduled later
-        ScheduledFuture future = timeoutTasks.remove(sequenceNumber);
-        if (future != null)
-            future.cancel(false);
-#endif
-        auto it = files.find(sequence_number);
-        assert(it != files.end());
-        return it->second;
-    }
-
-#if 0
-    /**
-     * Schedule timeout task to release reference for file sent.
-     * When not receiving ACK after sending to receiver in given time,
-     * the task will release reference.
-     *
-     * @param sequenceNumber sequence number of file sent.
-     * @param time time to timeout
-     * @param unit unit of given time
-     * @return scheduled future for timeout task
-     */
-    public synchronized ScheduledFuture scheduleTimeout(final int sequenceNumber, long time, TimeUnit unit)
-    {
-        if (!files.containsKey(sequenceNumber))
-            return null;
-
-        ScheduledFuture future = timeoutExecutor.schedule(new Runnable()
-        {
-            public void run()
-            {
-                synchronized (StreamTransferTask.this)
-                {
-                    // remove so we don't cancel ourselves
-                    timeoutTasks.remove(sequenceNumber);
-                    StreamTransferTask.this.complete(sequenceNumber);
-                }
-            }
-        }, time, unit);
-
-        ScheduledFuture prev = timeoutTasks.put(sequenceNumber, future);
-        assert prev == null;
-        return future;
-    }
-#endif
     void start();
 };
 
