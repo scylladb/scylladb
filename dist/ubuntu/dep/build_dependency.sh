@@ -46,7 +46,9 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     cd ../..
 fi
 
-sudo gdebi -n build/antlr3_*.deb
+if [ "$RELEASE" = "14.04" ]; then
+    sudo gdebi -n build/antlr3_*.deb
+fi
 sudo gdebi -n build/antlr3-c++-dev_*.deb
 sudo gdebi -n build/libthrift0_*.deb
 sudo gdebi -n build/libthrift-dev_*.deb

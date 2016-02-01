@@ -43,14 +43,24 @@ cp dist/ubuntu/changelog.in debian/changelog
 sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" debian/changelog
 sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
 sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
+cp dist/ubuntu/rules.in debian/rules
+cp dist/ubuntu/control.in debian/control
+if [ "$RELEASE" = "15.10" ]; then
+    sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++/g" debian/control
+else
+    sed -i -e "s/@@COMPILER@@/g++-4.9/g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++-4.9/g" debian/control
+fi
+
 
 ./dist/ubuntu/dep/build_dependency.sh
 
 if [ "$RELEASE" != "15.10" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
+    sudo apt-get -y install g++-4.9
 fi
-sudo apt-get -y install g++-4.9
 echo Y | sudo mk-build-deps -i -r
 
 debuild -r fakeroot -us -uc
