@@ -478,6 +478,12 @@ static unsigned get_rpc_client_idx(messaging_verb verb) {
         verb == messaging_verb::GOSSIP_ECHO ||
         verb == messaging_verb::GET_SCHEMA_VERSION) {
         idx = 1;
+    } else if (verb == messaging_verb::PREPARE_MESSAGE ||
+               verb == messaging_verb::PREPARE_DONE_MESSAGE ||
+               verb == messaging_verb::STREAM_MUTATION ||
+               verb == messaging_verb::STREAM_MUTATION_DONE ||
+               verb == messaging_verb::COMPLETE_MESSAGE) {
+        idx = 2;
     }
     return idx;
 }

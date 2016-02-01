@@ -335,7 +335,7 @@ private:
     std::unique_ptr<rpc_protocol_server_wrapper> _server;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
     std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
-    std::array<clients_map, 2> _clients;
+    std::array<clients_map, 3> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
 public:
     using clock_type = std::chrono::steady_clock;

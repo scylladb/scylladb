@@ -62,7 +62,7 @@ class stream_manager {
 private:
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
-    semaphore _mutation_send_limiter{10};
+    semaphore _mutation_send_limiter{256};
 public:
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
 
