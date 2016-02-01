@@ -258,16 +258,14 @@ sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, cons
         auto smut = set_type->serialize_mutation_form(mut);
 
         m.set_cell(row_key, column, std::move(smut));
-    } else {
+    } else if (set_value != nullptr) {
         // for frozen sets, we're overwriting the whole cell
         auto v = set_type->serialize_partially_deserialized_form(
                 {set_value->_elements.begin(), set_value->_elements.end()},
                 serialization_format::internal());
-        if (set_value->_elements.empty()) {
-            m.set_cell(row_key, column, params.make_dead_cell());
-        } else {
-            m.set_cell(row_key, column, params.make_cell(std::move(v)));
-        }
+        m.set_cell(row_key, column, params.make_cell(std::move(v)));
+    } else {
+        m.set_cell(row_key, column, params.make_dead_cell());
     }
 }
 
