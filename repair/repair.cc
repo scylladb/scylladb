@@ -235,54 +235,65 @@ partition_checksum::partition_checksum(const mutation& m) {
     auto frozen = freeze(m);
     auto bytes = frozen.representation();
     CryptoPP::SHA256 hash;
-    static_assert(CryptoPP::SHA256::DIGESTSIZE == sizeof(_digest),
+    static_assert(CryptoPP::SHA256::DIGESTSIZE == std::tuple_size<decltype(_digest)>::value * sizeof(_digest[0]),
             "digest size");
     static_assert(sizeof(char) == sizeof(decltype(*bytes.data())),
             "Assumed that chars are bytes");
-    hash.CalculateDigest(reinterpret_cast<unsigned char*>(_digest),
+    hash.CalculateDigest(reinterpret_cast<unsigned char*>(_digest.data()),
             reinterpret_cast<const unsigned char*>(bytes.data()),
             bytes.size());
 }
 
+static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
+    return *unaligned_cast<uint64_t>(b.data() + 8 * n);
+}
+static inline const unaligned<uint64_t>& qword(const std::array<uint8_t, 32>& b, int n) {
+    return *unaligned_cast<uint64_t>(b.data() + 8 * n);
+}
+
 void partition_checksum::add(const partition_checksum& other) {
-     static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
-     _digest[0] ^= other._digest[0];
-     _digest[1] ^= other._digest[1];
-     _digest[2] ^= other._digest[2];
-     _digest[3] ^= other._digest[3];
+     static_assert(std::tuple_size<decltype(_digest)>::value == 32, "digest size");
+     // Hopefully the following trickery is faster than XOR'ing 32 separate bytes
+     qword(_digest, 0) = qword(_digest, 0) ^ qword(other._digest, 0);
+     qword(_digest, 1) = qword(_digest, 1) ^ qword(other._digest, 1);
+     qword(_digest, 2) = qword(_digest, 2) ^ qword(other._digest, 2);
+     qword(_digest, 3) = qword(_digest, 3) ^ qword(other._digest, 3);
 }
 
 bool partition_checksum::operator==(const partition_checksum& other) const {
-    static_assert(sizeof(_digest) / sizeof(_digest[0]) == 4, "digest size");
-    return  _digest[0] == other._digest[0] &&
-            _digest[1] == other._digest[1] &&
-            _digest[2] == other._digest[2] &&
-            _digest[3] == other._digest[3];
+    static_assert(std::tuple_size<decltype(_digest)>::value == 32, "digest size");
+    return qword(_digest, 0) == qword(other._digest, 0) &&
+           qword(_digest, 1) == qword(other._digest, 1) &&
+           qword(_digest, 2) == qword(other._digest, 2) &&
+           qword(_digest, 3) == qword(other._digest, 3);
 }
 
 void partition_checksum::serialize(bytes::iterator& out) const {
     out = std::copy(
-            reinterpret_cast<const char*>(&_digest),
-            reinterpret_cast<const char*>(&_digest) + sizeof(_digest),
+            reinterpret_cast<const char*>(_digest.data()),
+            reinterpret_cast<const char*>(_digest.data()) + _digest.size(),
             out);
 }
 
 partition_checksum partition_checksum::deserialize(bytes_view& in) {
     partition_checksum ret;
-    auto v = read_simple_bytes(in, sizeof(ret._digest));
-    std::copy(v.begin(), v.end(), reinterpret_cast<char*>(ret._digest));
+    auto v = read_simple_bytes(in, ret._digest.size());
+    std::copy(v.begin(), v.end(), reinterpret_cast<char*>(ret._digest.data()));
     return ret;
 }
 
 size_t partition_checksum::serialized_size() const {
-    return sizeof(_digest);
+    static_assert(sizeof(_digest[0]) == 1, "_digest contains bytes");
+    return _digest.size();
 }
 
 std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {
-    out << std::hex;
-    std::copy(c._digest, c._digest + sizeof(c._digest)/sizeof(c._digest[0]),
-            std::ostream_iterator<decltype(c._digest[0])>(out, "-"));
-    out << std::dec;
+    auto save_flags = out.flags();
+    out << std::hex << std::setfill('0');
+    for (auto b : c._digest) {
+        out << std::setw(2) << (unsigned int)b;
+    }
+    out.flags(save_flags);
     return out;
 }
 

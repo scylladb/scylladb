@@ -68,7 +68,7 @@ future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
 // The hash of an individual partition uses both its key and value.
 class partition_checksum {
 private:
-    uint64_t _digest[4]; // 256 bits
+    std::array<uint8_t, 32> _digest; // 256 bits
 public:
     constexpr partition_checksum() : _digest{} { }
     partition_checksum(const mutation& m);
