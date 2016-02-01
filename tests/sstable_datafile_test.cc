@@ -1070,7 +1070,7 @@ SEASTAR_TEST_CASE(compact) {
                 return make_lw_shared<sstables::sstable>("ks", "cf", "tests/sstables/tests-temporary",
                         generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
             };
-            return sstables::compact_sstables(std::move(sstables), *cf, new_sstable, std::numeric_limits<uint64_t>::max(), 0).then([s, generation, cf, cm] (...) {
+            return sstables::compact_sstables(std::move(sstables), *cf, new_sstable, std::numeric_limits<uint64_t>::max(), 0).then([s, generation, cf, cm] (auto) {
                 // Verify that the compacted sstable has the right content. We expect to see:
                 //  name  | age | height
                 // -------+-----+--------
@@ -1217,7 +1217,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             // We do expect that all candidates were selected for compaction (in this case).
             BOOST_REQUIRE(sstables_to_compact.size() == sstables->size());
             return sstables::compact_sstables(std::move(sstables_to_compact), *cf, new_sstable,
-                std::numeric_limits<uint64_t>::max(), 0).then([generation] (...) {});
+                std::numeric_limits<uint64_t>::max(), 0).then([generation] (auto) {});
         } else if (strategy == compaction_strategy_type::leveled) {
             for (auto& sst : *sstables) {
                 BOOST_REQUIRE(sst->get_sstable_level() == 0);
@@ -1232,7 +1232,7 @@ static future<std::vector<unsigned long>> compact_sstables(std::vector<unsigned 
             BOOST_REQUIRE(candidate.max_sstable_bytes == 1024*1024);
 
             return sstables::compact_sstables(std::move(candidate.sstables), *cf, new_sstable,
-                1024*1024, candidate.level).then([generation] (...) {});
+                1024*1024, candidate.level).then([generation] (auto) {});
         } else {
             throw std::runtime_error("unexpected strategy");
         }
@@ -2163,7 +2163,7 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
             return make_lw_shared<sstable>("ks", "cf", tmp->path, 3, la, big);
         };
 
-        return sstables::compact_sstables(*sstables, *cf, create, std::numeric_limits<uint64_t>::max(), 0).then([s, tmp, sstables, cf, cm] (...) {
+        return sstables::compact_sstables(*sstables, *cf, create, std::numeric_limits<uint64_t>::max(), 0).then([s, tmp, sstables, cf, cm] (auto) {
             return open_sstable(tmp->path, 3).then([s] (shared_sstable sst) {
                 auto reader = make_lw_shared(sstable_reader(sst, s)); // reader holds sst and s alive.
                 return (*reader)().then([s, reader] (mutation_opt m) {
@@ -2263,7 +2263,7 @@ SEASTAR_TEST_CASE(sstable_rewrite) {
             sstables.push_back(std::move(sstp));
 
             return sstables::compact_sstables(std::move(sstables), *cf, creator,
-                    std::numeric_limits<uint64_t>::max(), 0).then([s, key, new_tables] (...) {
+                    std::numeric_limits<uint64_t>::max(), 0).then([s, key, new_tables] (auto) {
                 BOOST_REQUIRE(new_tables->size() == 1);
                 auto newsst = (*new_tables)[0];
                 BOOST_REQUIRE(newsst->generation() == 52);
