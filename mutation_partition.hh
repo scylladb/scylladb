@@ -593,8 +593,8 @@ public:
         , _row_tombstones(row_tombstones_entry::compare(*s))
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
-        : _rows(other._rows.comp())
-        , _row_tombstones(other._row_tombstones.comp())
+        : _rows(other._rows.key_comp())
+        , _row_tombstones(other._row_tombstones.key_comp())
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
