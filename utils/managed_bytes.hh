@@ -220,7 +220,42 @@ public:
     }
 
     bool operator==(const managed_bytes& o) const {
-        return static_cast<bytes_view>(*this) == static_cast<bytes_view>(o);
+        if (size() != o.size()) {
+            return false;
+        }
+        if (!external()) {
+            return bytes_view(*this) == bytes_view(o);
+        } else {
+            auto a = _u.ptr;
+            auto a_data = a->data;
+            auto a_remain = a->frag_size;
+            a = a->next;
+            auto b = o._u.ptr;
+            auto b_data = b->data;
+            auto b_remain = b->frag_size;
+            b = b->next;
+            while (a_remain || b_remain) {
+                auto now = std::min(a_remain, b_remain);
+                if (bytes_view(a_data, now) != bytes_view(b_data, now)) {
+                    return false;
+                }
+                a_data += now;
+                a_remain -= now;
+                if (!a_remain && a) {
+                    a_data = a->data;
+                    a_remain = a->frag_size;
+                    a = a->next;
+                }
+                b_data += now;
+                b_remain -= now;
+                if (!b_remain && b) {
+                    b_data = b->data;
+                    b_remain = b->frag_size;
+                    b = b->next;
+                }
+            }
+            return true;
+        }
     }
 
     bool operator!=(const managed_bytes& o) const {
