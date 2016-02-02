@@ -19,11 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-namespace query {
-class result final {
-    bytes_ostream buf();
+class partition_checksum {
+  std::array<uint8_t, 32> digest();
 };
-class result_digest final {
-    bytes get();
-};
-}

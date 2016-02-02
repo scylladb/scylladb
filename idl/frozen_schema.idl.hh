@@ -19,11 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-namespace query {
-class result final {
-    bytes_ostream buf();
+class frozen_schema final {
+    bytes representation();
 };
-class result_digest final {
-    bytes get();
-};
-}

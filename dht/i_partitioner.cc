@@ -263,29 +263,6 @@ int token_comparator::operator()(const token& t1, const token& t2) const {
     return tri_compare(t1, t2);
 }
 
-void token::serialize(bytes::iterator& out) const {
-    uint8_t kind = _kind == dht::token::kind::before_all_keys ? 0 :
-                   _kind == dht::token::kind::key ? 1 : 2;
-    serialize_int8(out, kind);
-    serialize_int16(out, _data.size());
-    out = std::copy(_data.begin(), _data.end(), out);
-}
-
-token token::deserialize(bytes_view& in) {
-    uint8_t kind = read_simple<uint8_t>(in);
-    size_t size = read_simple<uint16_t>(in);
-    return token(kind == 0 ? dht::token::kind::before_all_keys :
-                 kind == 1 ? dht::token::kind::key :
-                             dht::token::kind::after_all_keys,
-                 to_bytes(read_simple_bytes(in, size)));
-}
-
-size_t token::serialized_size() const {
-    return serialize_int8_size // token::kind;
-         + serialize_int16_size // token size
-         + _data.size();
-}
-
 bool ring_position::equal(const schema& s, const ring_position& other) const {
     return tri_compare(s, other) == 0;
 }

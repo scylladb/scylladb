@@ -268,23 +268,8 @@ bool partition_checksum::operator==(const partition_checksum& other) const {
            qword(_digest, 3) == qword(other._digest, 3);
 }
 
-void partition_checksum::serialize(bytes::iterator& out) const {
-    out = std::copy(
-            reinterpret_cast<const char*>(_digest.data()),
-            reinterpret_cast<const char*>(_digest.data()) + _digest.size(),
-            out);
-}
-
-partition_checksum partition_checksum::deserialize(bytes_view& in) {
-    partition_checksum ret;
-    auto v = read_simple_bytes(in, ret._digest.size());
-    std::copy(v.begin(), v.end(), reinterpret_cast<char*>(ret._digest.data()));
-    return ret;
-}
-
-size_t partition_checksum::serialized_size() const {
-    static_assert(sizeof(_digest[0]) == 1, "_digest contains bytes");
-    return _digest.size();
+const std::array<uint8_t, 32>& partition_checksum::digest() const {
+    return _digest;
 }
 
 std::ostream& operator<<(std::ostream& out, const partition_checksum& c) {

@@ -97,11 +97,6 @@ public:
     bool is_maximum() const {
         return _kind == kind::after_all_keys;
     }
-
-
-    void serialize(bytes::iterator& out) const;
-    static token deserialize(bytes_view& in);
-    size_t serialized_size() const;
 };
 
 token midpoint_unsigned(const token& t1, const token& t2);

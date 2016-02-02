@@ -60,19 +60,6 @@ public:
     bool is_broadcast_address() {
         return _addr == net::ipv4::broadcast_address();
     }
-    void serialize(bytes::iterator& out) const {
-        int8_t inet_address_size = sizeof(inet_address);
-        serialize_int8(out, inet_address_size);
-        serialize_int32(out, _addr.ip);
-    }
-    static inet_address deserialize(bytes_view& v) {
-        int8_t inet_address_size = read_simple<int8_t>(v);
-        assert(inet_address_size == sizeof(inet_address));
-        return inet_address(read_simple<int32_t>(v));
-    }
-    size_t serialized_size() const {
-        return serialize_int8_size + serialize_int32_size;
-    }
     friend inline bool operator==(const inet_address& x, const inet_address& y) {
         return x._addr == y._addr;
     }

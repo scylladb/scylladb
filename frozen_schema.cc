@@ -23,8 +23,6 @@
 #include "db/schema_tables.hh"
 #include "schema_mutations.hh"
 
-template class db::serializer<frozen_schema>;
-
 frozen_schema::frozen_schema(const schema_ptr& s)
     : _data([&s] {
         bytes_ostream out;
@@ -46,19 +44,7 @@ frozen_schema::frozen_schema(bytes b)
     : _data(std::move(b))
 { }
 
-template<>
-db::serializer<frozen_schema>::serializer(const frozen_schema& v)
-        : _item(v)
-        , _size(db::serializer<bytes>(v._data).size())
-{ }
-
-template<>
-void
-db::serializer<frozen_schema>::write(output& out, const frozen_schema& v) {
-    db::serializer<bytes>(v._data).write(out);
-}
-
-template<>
-frozen_schema db::serializer<frozen_schema>::read(input& in) {
-    return frozen_schema(db::serializer<bytes>::read(in));
+bytes_view frozen_schema::representation() const
+{
+    return _data;
 }

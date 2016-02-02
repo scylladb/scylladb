@@ -107,10 +107,6 @@ public:
         serialize_int64(i, least_sig_bits);
         return b;
     }
-
-    void serialize(bytes::iterator& out) const;
-    static UUID deserialize(bytes_view& v);
-    size_t serialized_size() const;
 };
 
 UUID make_random_uuid();

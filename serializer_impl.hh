@@ -61,6 +61,21 @@ inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>) {
     return v;
 }
 
+template<size_t N, typename T, typename Output>
+inline void serialize(Output& out, const std::array<T, N>& v) {
+    for (auto&& e : v) {
+        serialize(out, e);
+    }
+}
+template<size_t N, typename T, typename Input>
+inline std::array<T, N> deserialize(Input& in, boost::type<std::array<T, N>>) {
+    std::array<T, N> v;
+    for (auto&& e : v) {
+        e = deserialize(in, boost::type<T>());
+    }
+    return v;
+}
+
 template<typename K, typename V, typename Output>
 inline void serialize(Output& out, const std::map<K, V>& v) {
     safe_serialize_as_uint32(out, v.size());
