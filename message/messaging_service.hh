@@ -172,6 +172,7 @@ private:
     std::unique_ptr<rpc_protocol_server_wrapper> _server_tls;
     std::array<clients_map, 3> _clients;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
+    bool _stopping = false;
 public:
     using clock_type = std::chrono::steady_clock;
 public:
@@ -184,6 +185,7 @@ public:
     gms::inet_address listen_address();
     future<> stop();
     static rpc::no_wait_type no_wait();
+    bool is_stopping() { return _stopping; }
 public:
     gms::inet_address get_preferred_ip(gms::inet_address ep);
     future<> init_local_preferred_ip_cache();

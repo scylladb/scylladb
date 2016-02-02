@@ -272,6 +272,7 @@ gms::inet_address messaging_service::listen_address() {
 }
 
 future<> messaging_service::stop() {
+    _stopping = true;
     return when_all(
         _server->stop(),
         parallel_for_each(_clients, [] (auto& m) {
@@ -489,7 +490,7 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
     return do_with(int(nr_retry), std::move(msg)..., [ms, verb, id, timeout, wait, nr_retry] (auto& retry, const auto&... messages) {
         return repeat_until_value([ms, verb, id, timeout, wait, nr_retry, &retry, &messages...] {
             return send_message_timeout<MsgIn>(ms, verb, id, timeout, messages...).then_wrapped(
-                    [verb, id, timeout, wait, nr_retry, &retry] (auto&& f) mutable {
+                    [ms, verb, id, timeout, wait, nr_retry, &retry] (auto&& f) mutable {
                 try {
                     MsgInTuple ret = f.get();
                     if (retry != nr_retry) {
@@ -501,7 +502,7 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                     throw;
                 } catch (rpc::closed_error) {
                     logger.info("Retry verb={} to {}, retry={}: {}", int(verb), id, retry, std::current_exception());
-                    if (--retry == 0) {
+                    if (--retry == 0 || ms->is_stopping()) {
                         throw;
                     }
                     return sleep(wait).then([] {
