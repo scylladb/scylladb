@@ -245,7 +245,7 @@ public:
         return _bytes;
     }
 
-    bytes_view representation() const {
+    const managed_bytes& representation() const {
         return _bytes;
     }
 
