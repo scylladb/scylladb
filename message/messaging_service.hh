@@ -131,7 +131,7 @@ public:
     using UUID = utils::UUID;
     using clients_map = std::unordered_map<msg_addr, shard_info, msg_addr::hash>;
 
-    // FIXME: messaging service versioning
+    // This should change only if serialization format changes
     static constexpr int32_t current_version = 0;
 
     struct shard_info {
