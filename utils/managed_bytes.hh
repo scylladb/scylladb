@@ -351,7 +351,7 @@ namespace std {
 
 template <>
 struct hash<managed_bytes> {
-    size_t operator()(managed_bytes v) const {
+    size_t operator()(const managed_bytes& v) const {
         return hash<bytes_view>()(v);
     }
 };
