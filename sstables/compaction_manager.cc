@@ -35,7 +35,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
     task->compaction_done = keep_doing([this, task] {
         return task->compaction_sem.wait().then([this, task] {
             return seastar::with_gate(task->compaction_gate, [this, task] {
-                if (_cfs_to_compact.empty() && _cfs_to_cleanup.empty()) {
+                if (_stopped || (_cfs_to_compact.empty() && _cfs_to_cleanup.empty())) {
                     return make_ready_future<>();
                 }
 
@@ -231,11 +231,17 @@ void compaction_manager::start(int task_nr) {
 }
 
 future<> compaction_manager::stop() {
+    cmlog.info("Asked to stop");
     if (_stopped) {
         return make_ready_future<>();
     }
     _stopped = true;
     _registrations.clear();
+    // Stop all ongoing compaction.
+    for (auto& info : _compactions) {
+        info->stop();
+    }
+    // Wait for each task handler to stop.
     return do_for_each(_tasks, [this] (auto& task) {
         return this->task_stop(task);
     }).then([this] {
