@@ -27,6 +27,7 @@
 #include "bytes.hh"
 #include "utils/allocation_strategy.hh"
 #include <seastar/core/unaligned.hh>
+#include <unordered_map>
 
 struct blob_storage {
     using size_type = uint32_t;
@@ -64,6 +65,33 @@ struct blob_storage {
 
 // A managed version of "bytes" (can be used with LSA).
 class managed_bytes {
+    struct linearization_context {
+        unsigned _nesting = 0;
+        // Map from first blob_storage address to linearized version
+        // We use the blob_storage address to be insentive to moving
+        // a managed_bytes object.
+        std::unordered_map<const blob_storage*, std::unique_ptr<bytes_view::value_type[]>> _state;
+        void enter() {
+            ++_nesting;
+        }
+        void leave() {
+            if (!--_nesting) {
+                _state.clear();
+            }
+        }
+        void forget(const blob_storage* p);
+    };
+    static thread_local linearization_context _linearization_context;
+public:
+    struct linearization_context_guard {
+        linearization_context_guard() {
+            _linearization_context.enter();
+        }
+        ~linearization_context_guard() {
+            _linearization_context.leave();
+        }
+    };
+private:
     static constexpr size_t max_inline_size = 15;
     struct small_blob {
         bytes_view::value_type data[max_inline_size];
@@ -82,6 +110,9 @@ private:
         return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
     }
     void free_chain(blob_storage* p) {
+        if (p->next && _linearization_context._nesting) {
+            _linearization_context.forget(p);
+        }
         auto& alctr = current_allocator();
         while (p) {
             auto n = p->next;
@@ -89,6 +120,16 @@ private:
             p = n;
         }
     }
+    const bytes_view::value_type* read_linearize() const {
+        if (!external()) {
+            return _u.small.data;
+        } else  if (!_u.ptr->next) {
+            return _u.ptr->data;
+        } else {
+            return do_linearize();
+        }
+    }
+    const bytes_view::value_type* do_linearize() const;
 public:
     using size_type = blob_storage::size_type;
     struct initialized_later {};
@@ -312,7 +353,7 @@ public:
     }
 
     const blob_storage::char_type* data() const {
-        return const_cast<managed_bytes*>(this)->data();
+        return read_linearize();
     }
 
     void linearize() {
@@ -345,7 +386,20 @@ public:
         }
         *this = managed_bytes(*this);
     }
+
+    template <typename Func>
+    friend auto with_linearized_managed_bytes(Func&& func);
 };
+
+// Run func() while ensuring that reads of managed_bytes objects are
+// temporarlily linearized
+template <typename Func>
+inline
+decltype(auto)
+with_linearized_managed_bytes(Func&& func) {
+    managed_bytes::linearization_context_guard g;
+    return func();
+}
 
 namespace std {
 
