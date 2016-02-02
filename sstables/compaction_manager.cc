@@ -132,6 +132,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
             try {
                 f.get();
             } catch (seastar::gate_closed_exception& e) {
+                task->compacting_cf = nullptr;
                 cmlog.info("compaction task handler stopped due to shutdown");
                 throw;
             } catch (std::exception& e) {
