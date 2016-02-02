@@ -183,29 +183,30 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             fms->emplace_back(serializer<canonical_mutation>::read(in));
         }
 
-        auto mutations = make_lw_shared<std::vector<mutation>>();
         auto size = data.size();
 
-        return repeat([this, fms = std::move(fms), written_at, mutations]() mutable {
-            if (fms->empty()) {
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }
-            auto& fm = fms->front();
-            auto mid = fm.column_family_id();
-            return system_keyspace::get_truncated_at(mid).then([this, mid, &fm, written_at, mutations](db_clock::time_point t) {
-                schema_ptr s = _qp.db().local().find_schema(mid);
+        return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+            return system_keyspace::get_truncated_at(fm.column_family_id()).then([written_at, &fm] (db_clock::time_point t) ->
+                    std::experimental::optional<std::reference_wrapper<canonical_mutation>> {
                 if (written_at > t) {
-                    mutations->emplace_back(fm.to_mutation(s));
+                    return { std::ref(fm) };
+                } else {
+                    return {};
                 }
-            }).then([fms] {
-                fms->pop_front();
-                return make_ready_future<stop_iteration>(stop_iteration::no);
             });
-        }).then([this, id, mutations, limiter, written_at, size] {
-            if (mutations->empty()) {
+        },
+        std::vector<mutation>(),
+        [this] (std::vector<mutation> mutations, std::experimental::optional<std::reference_wrapper<canonical_mutation>> fm) {
+            if (fm) {
+                schema_ptr s = _qp.db().local().find_schema(fm.value().get().column_family_id());
+                mutations.emplace_back(fm.value().get().to_mutation(s));
+            }
+            return mutations;
+        }).then([this, id, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
+            if (mutations.empty()) {
                 return make_ready_future<>();
             }
-            const auto ttl = [this, mutations, written_at]() -> clock_type {
+            const auto ttl = [this, &mutations, written_at]() -> clock_type {
                 /*
                  * Calculate ttl for the mutations' hints (and reduce ttl by the time the mutations spent in the batchlog).
                  * This ensures that deletes aren't "undone" by an old batch replay.
@@ -227,8 +228,8 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
             // FIXME: verify that the above is reasonably true.
-            return limiter->reserve(size).then([this, mutations, id] {
-                return _qp.proxy().local().mutate(std::move(*mutations), db::consistency_level::ANY);
+            return limiter->reserve(size).then([this, mutations = std::move(mutations), id] {
+                return _qp.proxy().local().mutate(mutations, db::consistency_level::ANY);
             });
         }).then([this, id] {
             // delete batch
