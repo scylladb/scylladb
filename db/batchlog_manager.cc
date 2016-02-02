@@ -155,14 +155,24 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
-        // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             logger.debug("Skipping replay of {}, too fresh", id);
             return make_ready_future<>();
         }
-        // not used currently. ever?
-        //auto version = row.has("version") ? row.get_as<uint32_t>("version") : /*MessagingService.VERSION_12*/6u;
+
+        // check version of serialization format
+        if (!row.has("version")) {
+            logger.warn("Skipping logged batch because of unknown version");
+            return make_ready_future<>();
+        }
+
+        auto version = row.get_as<int32_t>("version");
+        if (version != net::messaging_service::current_version) {
+            logger.warn("Skipping logged batch because of incorrect version");
+            return make_ready_future<>();
+        }
+
         auto data = row.get_blob("data");
 
         logger.debug("Replaying batch {}", id);
