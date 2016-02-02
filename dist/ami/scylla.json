@@ -21,6 +21,40 @@
           "volume_size": 10,
           "delete_on_termination": true
         }
+      ],
+      "ami_block_device_mappings": [
+        {
+          "device_name": "/dev/sdb",
+          "virtual_name": "ephemeral0"
+        },
+        {
+          "device_name": "/dev/sdc",
+          "virtual_name": "ephemeral1"
+        },
+        {
+          "device_name": "/dev/sdd",
+          "virtual_name": "ephemeral2"
+        },
+        {
+          "device_name": "/dev/sde",
+          "virtual_name": "ephemeral3"
+        },
+        {
+          "device_name": "/dev/sdf",
+          "virtual_name": "ephemeral4"
+        },
+        {
+          "device_name": "/dev/sdg",
+          "virtual_name": "ephemeral5"
+        },
+        {
+          "device_name": "/dev/sdh",
+          "virtual_name": "ephemeral6"
+        },
+        {
+          "device_name": "/dev/sdi",
+          "virtual_name": "ephemeral7"
+        }
       ]
     }
   ],
