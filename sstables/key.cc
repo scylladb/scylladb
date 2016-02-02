@@ -140,7 +140,7 @@ key key::from_exploded(const schema& s, std::vector<bytes>&& v) {
     return from_components(v.begin(), v.end(), sstable_serializer());
 }
 
-key key::from_partition_key(const schema& s, const partition_key& pk) {
+key key::from_partition_key(const schema& s, partition_key_view pk) {
     auto &pt = s.partition_key_type()->types();
     bool composite = pt.size() > 1;
     return from_components(pk.begin(s), pk.end(s), sstable_serializer(), composite);

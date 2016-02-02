@@ -117,7 +117,7 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
 
 partition_presence_checker
 column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables) {
-    return [this, old_sstables = std::move(old_sstables)] (const partition_key& key) {
+    return [this, old_sstables = std::move(old_sstables)] (partition_key_view key) {
         for (auto&& s : *old_sstables) {
             if (s.second->filter_has_key(*_schema, key)) {
                 return partition_presence_checker_result::maybe_exists;

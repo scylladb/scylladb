@@ -179,5 +179,5 @@ using partition_presence_checker = std::function<partition_presence_checker_resu
 
 inline
 partition_presence_checker make_default_partition_presence_checker() {
-    return [] (const partition_key& key) { return partition_presence_checker_result::maybe_exists; };
+    return [] (partition_key_view key) { return partition_presence_checker_result::maybe_exists; };
 }
