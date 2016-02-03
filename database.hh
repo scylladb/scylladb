@@ -56,7 +56,6 @@
 #include "tombstone.hh"
 #include "atomic_cell.hh"
 #include "query-request.hh"
-#include "query-result.hh"
 #include "keys.hh"
 #include "mutation.hh"
 #include "memtable.hh"
