@@ -1,5 +1,10 @@
 #!/bin/sh -e
 
+if [ "$AMI" = "yes" ] && [ -f /etc/scylla/ami_disabled ]; then
+    rm /etc/scylla/ami_disabled
+    exit 1
+fi
+
 if [ "$NETWORK_MODE" = "virtio" ]; then
     ip tuntap del mode tap dev $TAP
     ip tuntap add mode tap dev $TAP user $USER one_queue vnet_hdr
