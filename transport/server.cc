@@ -770,7 +770,8 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
     auto q_state = std::make_unique<cql_query_state>(client_state);
     auto& query_state = q_state->query_state;
-    q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf)), std::move(values));
+    // #563. CQL v2 encodes query_options in v1 format for batch requests.
+    q_state->options = std::make_unique<cql3::query_options>(std::move(*read_options(buf, _version < 3 ? 1 : _version)), std::move(values));
     auto& options = *q_state->options;
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(-1, cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none());
@@ -1151,13 +1152,18 @@ using options_flag_enum = super_enum<options_flag,
 
 std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_view& buf)
 {
+    return read_options(buf, _version);
+}
+
+std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_view& buf, uint8_t version)
+{
     auto consistency = read_consistency(buf);
-    if (_version == 1) {
+    if (version == 1) {
         return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_view_opt>{},
-            false, cql3::query_options::specific_options::DEFAULT, 1, _serialization_format);
+            false, cql3::query_options::specific_options::DEFAULT, _version, _serialization_format);
     }
 
-    assert(_version >= 2);
+    assert(version >= 2);
 
     auto flags = enum_set<options_flag_enum>::from_mask(read_byte(buf));
     std::vector<bytes_view_opt> values;

@@ -192,6 +192,7 @@ private:
         db::consistency_level read_consistency(bytes_view& buf);
         std::unordered_map<sstring, sstring> read_string_map(bytes_view& buf);
         std::unique_ptr<cql3::query_options> read_options(bytes_view& buf);
+        std::unique_ptr<cql3::query_options> read_options(bytes_view& buf, uint8_t);
 
         void init_serialization_format();
 
