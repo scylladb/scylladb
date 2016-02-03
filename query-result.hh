@@ -30,10 +30,15 @@
 namespace query {
 
 class result_digest {
-    bytes _digest;
 public:
-    result_digest(bytes&& digest) : _digest(std::move(digest)) {}
-    const bytes& get() const { return _digest; }
+    static_assert(16 == CryptoPP::Weak::MD5::DIGESTSIZE, "MD5 digest size is all wrong");
+    using type = std::array<uint8_t, 16>;
+private:
+    type _digest;
+public:
+    result_digest() = default;
+    result_digest(type&& digest) : _digest(std::move(digest)) {}
+    const type& get() const { return _digest; }
     bool operator==(const result_digest& rh) const {
         return _digest == rh._digest;
     }
@@ -129,10 +134,10 @@ public:
 
     result_digest digest() {
         CryptoPP::Weak::MD5 hash;
-        bytes b(bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE);
+        result_digest::type digest;
         bytes_view v = _w.linearize();
-        hash.CalculateDigest(reinterpret_cast<unsigned char*>(b.begin()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
-        return result_digest(std::move(b));
+        hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest.data()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
+        return result_digest(std::move(digest));
     }
     sstring pretty_print(schema_ptr, const query::partition_slice&) const;
 };

@@ -1471,7 +1471,7 @@ public:
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
-            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest(bytes()) : result->digest());
+            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : result->digest());
             _data_results.emplace_back(std::move(result));
             got_response(from);
         }

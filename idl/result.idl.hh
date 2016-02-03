@@ -24,6 +24,6 @@ class result final {
     bytes_ostream buf();
 };
 class result_digest final {
-    bytes get();
+    std::array<uint8_t, 16> get();
 };
 }
