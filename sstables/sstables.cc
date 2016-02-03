@@ -55,12 +55,8 @@ logging::logger sstlog("sstable");
 thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
-    static thread_local lw_shared_ptr<utils::phased_barrier> gate = [] {
-        auto g = make_lw_shared<utils::phased_barrier>();
-        engine().at_exit([] { return await_background_jobs(); });
-        return g;
-    }();
-    return *gate;
+    static thread_local utils::phased_barrier gate;
+    return gate;
 }
 
 future<> await_background_jobs() {

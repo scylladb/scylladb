@@ -360,6 +360,8 @@ int main(int ac, char** av) {
                         return db.invoke_on_all([](auto& db) {
                             return db.stop();
                         }).then([] {
+                            return sstables::await_background_jobs_on_all_shards();
+                        }).then([] {
                             ::_exit(0);
                         });
                     });
