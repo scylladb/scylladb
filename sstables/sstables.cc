@@ -125,6 +125,7 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
 };
 
 static const sstring TOC_SUFFIX = "TOC.txt";
+static const sstring TEMPORARY_TOC_SUFFIX = "TOC.txt.tmp";
 
 // FIXME: this should be version-dependent
 std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
@@ -137,7 +138,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
     { component_type::CRC, "CRC.db" },
     { component_type::Filter, "Filter.db" },
     { component_type::Statistics, "Statistics.db" },
-    { component_type::TemporaryTOC, "TOC.txt.tmp" },
+    { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -1744,12 +1745,13 @@ remove_by_toc_name(sstring sstable_toc_name) {
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();
         in.close().get();
-        remove_file(sstable_toc_name).get();
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
+        auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
+        rename_file(sstable_toc_name, new_toc_name).get();
         fsync_directory(dir).get();
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
         parallel_for_each(components, [prefix] (sstring component) {
             if (component.empty()) {
                 // eof
@@ -1762,6 +1764,7 @@ remove_by_toc_name(sstring sstable_toc_name) {
             return remove_file(prefix + component);
         }).get();
         fsync_directory(dir).get();
+        remove_file(new_toc_name).get();
     });
 }
 
