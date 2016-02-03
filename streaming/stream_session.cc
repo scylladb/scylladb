@@ -255,6 +255,7 @@ future<> stream_session::on_initialization_complete() {
             for (auto& summary : msg.summaries) {
                 this->prepare_receiving(summary);
             }
+            _stream_result->handle_session_prepared(this->shared_from_this());
             this->start_streaming_files();
         } catch (...) {
             sslog.error("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
@@ -326,6 +327,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
         }
     }
     prepare.dst_cpu_id = engine().cpu_id();;
+    _stream_result->handle_session_prepared(shared_from_this());
     return make_ready_future<prepare_message>(std::move(prepare));
 }
 
@@ -442,7 +444,6 @@ void stream_session::prepare_receiving(stream_summary& summary) {
 }
 
 void stream_session::start_streaming_files() {
-    _stream_result->handle_session_prepared(shared_from_this());
     sslog.debug("[Stream #{}] {}: {} transfers to send", plan_id(), __func__, _transfers.size());
     if (!_transfers.empty()) {
         set_state(stream_session_state::STREAMING);
