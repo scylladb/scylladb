@@ -124,12 +124,14 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
     { sstable::format_types::big , "big" }
 };
 
+static const sstring TOC_SUFFIX = "TOC.txt";
+
 // FIXME: this should be version-dependent
 std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
     { component_type::Index, "Index.db"},
     { component_type::CompressionInfo, "CompressionInfo.db" },
     { component_type::Data, "Data.db" },
-    { component_type::TOC, "TOC.txt" },
+    { component_type::TOC, TOC_SUFFIX },
     { component_type::Summary, "Summary.db" },
     { component_type::Digest, "Digest.sha1" },
     { component_type::CRC, "CRC.db" },
@@ -1747,14 +1749,13 @@ remove_by_toc_name(sstring sstable_toc_name) {
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
-        auto toc_txt = sstring("TOC.txt");
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - toc_txt.size());
-        parallel_for_each(components, [prefix, toc_txt] (sstring component) {
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
+        parallel_for_each(components, [prefix] (sstring component) {
             if (component.empty()) {
                 // eof
                 return make_ready_future<>();
             }
-            if (component == toc_txt) {
+            if (component == TOC_SUFFIX) {
                 // already deleted
                 return make_ready_future<>();
             }
