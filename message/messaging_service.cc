@@ -35,6 +35,7 @@
 #include "dht/i_partitioner.hh"
 #include "range.hh"
 #include "frozen_schema.hh"
+#include "repair/repair.hh"
 #include "idl/result.dist.hh"
 #include "idl/reconcilable_result.dist.hh"
 #include "idl/ring_position.dist.hh"

@@ -43,6 +43,7 @@
 #include "debug.hh"
 #include "init.hh"
 #include "release.hh"
+#include "repair/repair.hh"
 #include <cstdio>
 #include <core/file.hh>
 #include <sys/time.h>

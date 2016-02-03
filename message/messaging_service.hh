@@ -22,22 +22,14 @@
 #pragma once
 
 #include "core/reactor.hh"
-#include "core/iostream.hh"
 #include "core/distributed.hh"
-#include "core/print.hh"
 #include "core/sstring.hh"
-#include "core/do_with.hh"
-#include "net/api.hh"
-#include "utils/serialization.hh"
 #include "gms/inet_address.hh"
 #include "rpc/rpc_types.hh"
 #include <unordered_map>
-#include "frozen_mutation.hh"
-#include "frozen_schema.hh"
 #include "query-request.hh"
-#include "db/serializer.hh"
 #include "mutation_query.hh"
-#include "repair/repair.hh"
+#include "range.hh"
 
 #include <seastar/net/tls.hh>
 
@@ -58,6 +50,20 @@ namespace utils {
 
 namespace db {
 class seed_provider_type;
+}
+
+class frozen_mutation;
+class frozen_schema;
+class partition_checksum;
+
+namespace dht {
+    class token;
+}
+
+namespace query {
+    using partition_range = range<ring_position>;
+    class read_command;
+    class result;
 }
 
 namespace net {
@@ -212,9 +218,9 @@ public:
     future<> send_complete_message(msg_addr id, UUID plan_id, unsigned dst_cpu_id);
 
     // Wrapper for REPAIR_CHECKSUM_RANGE verb
-    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, query::range<dht::token> range)>&& func);
+    void register_repair_checksum_range(std::function<future<partition_checksum> (sstring keyspace, sstring cf, range<dht::token> range)>&& func);
     void unregister_repair_checksum_range();
-    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, query::range<dht::token> range);
+    future<partition_checksum> send_repair_checksum_range(msg_addr id, sstring keyspace, sstring cf, range<dht::token> range);
 
     // Wrapper for GOSSIP_ECHO verb
     void register_gossip_echo(std::function<future<> ()>&& func);
