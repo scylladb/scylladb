@@ -529,9 +529,12 @@ select_statement::raw_statement::get_ordering_comparator(schema_ptr schema,
 }
 
 bool select_statement::raw_statement::is_reversed(schema_ptr schema) {
-    std::experimental::optional<bool> reversed_map[schema->clustering_key_size()];
 
-    uint32_t i = 0;
+    assert(_parameters->orderings().size() > 0);
+    parameters::orderings_type::size_type i = 0;
+    bool is_reversed_ = false;
+    bool relation_order_unsupported = false;
+
     for (auto&& e : _parameters->orderings()) {
         ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(schema);
         bool reversed = e.second;
@@ -551,32 +554,23 @@ bool select_statement::raw_statement::is_reversed(schema_ptr schema) {
                 "Order by currently only support the ordering of columns following their declared order in the PRIMARY KEY");
         }
 
-        reversed_map[i] = std::experimental::make_optional(reversed != def->type->is_reversed());
+        bool current_reverse_status = (reversed != def->type->is_reversed());
+
+        if (i == 0) {
+            is_reversed_ = current_reverse_status;
+        }
+
+        if (is_reversed_ != current_reverse_status) {
+            relation_order_unsupported = true;
+        }
         ++i;
     }
 
-    // GCC incorrenctly complains about "*is_reversed_" below
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-
-    // Check that all bool in reversedMap, if set, agrees
-    std::experimental::optional<bool> is_reversed_{};
-    for (auto&& b : reversed_map) {
-        if (b) {
-            if (!is_reversed_) {
-                is_reversed_ = b;
-            } else {
-                if ((*is_reversed_) != *b) {
-                    throw exceptions::invalid_request_exception("Unsupported order by relation");
-                }
-            }
-        }
+    if (relation_order_unsupported) {
+        throw exceptions::invalid_request_exception("Unsupported order by relation");
     }
 
-    assert(is_reversed_);
-    return *is_reversed_;
-
-#pragma GCC diagnostic pop
+    return is_reversed_;
 }
 
 /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
