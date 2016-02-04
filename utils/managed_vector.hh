@@ -49,7 +49,7 @@ private:
         }
     };
     union maybe_constructed {
-        constexpr maybe_constructed() { }
+        maybe_constructed() { }
         ~maybe_constructed() { }
         T object;
     };
