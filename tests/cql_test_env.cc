@@ -343,6 +343,9 @@ public:
             service::get_pending_range_calculator_service().stop().get();
 
             locator::i_endpoint_snitch::stop_snitch().get();
+
+            sstables::await_background_jobs_on_all_shards().get();
+
             bool old_active = true;
             assert(active.compare_exchange_strong(old_active, false));
         });

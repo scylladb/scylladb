@@ -474,7 +474,15 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     }
 
     update_sstables_known_generation(comps.generation);
-    assert(_sstables->count(comps.generation) == 0);
+
+    {
+        auto i = _sstables->find(comps.generation);
+        if (i != _sstables->end()) {
+            auto new_toc = sstdir + "/" + fname;
+            throw std::runtime_error(sprint("Attempted to add sstable generation %d twice: new=%s existing=%s",
+                                            comps.generation, new_toc, i->second->toc_filename()));
+        }
+    }
 
     auto fut = sstable::get_sstable_key_range(*_schema, _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
     return std::move(fut).then([this, sstdir = std::move(sstdir), comps] (range<partition_key> r) {
