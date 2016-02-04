@@ -22,7 +22,6 @@
 #pragma once
 
 #include "serializer.hh"
-
 namespace ser {
 
 template<typename T>
@@ -147,6 +146,17 @@ inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>) {
     deserialize_array<T>(in, v, sz);
     return v;
 }
+
+template<typename T, typename Ratio, typename Output>
+inline void serialize(Output& out, const std::chrono::duration<T, Ratio>& d) {
+    serialize(out, d.count());
+};
+
+template<typename T, typename Ratio, typename Input>
+inline std::chrono::duration<T, Ratio> deserialize(Input in, boost::type<std::chrono::duration<T, Ratio>>) {
+    return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
+};
+
 
 template<size_t N, typename T, typename Output>
 inline void serialize(Output& out, const std::array<T, N>& v) {
@@ -308,4 +318,26 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
     return deserialize(in, std::move(type));
 }
 
+template<typename Output, typename ...T>
+void serialize(Output& out, const boost::variant<T...>& v) {}
+
+template<typename Input, typename ...T>
+boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>) {
+    return boost::variant<T...>();
+}
+
+
+template<typename Output>
+void serialize(Output& out, const unknown_variant_type& v) {
+    out.write(v.data.begin(), v.data.size());
+}
+template<typename Input>
+unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>) {
+    auto size = deserialize(in, boost::type<size_type>());
+    auto index = deserialize(in, boost::type<size_type>());
+    auto sz = size - sizeof(size_type) * 2;
+    sstring v(sstring::initialized_later(), sz);
+    in.read(v.begin(), sz);
+    return unknown_variant_type{index, std::move(v)};
+}
 }
