@@ -43,36 +43,119 @@ void safe_serialize_as_uint32(Output& out, uint64_t data) {
     }
     serialize(out, uint32_t(data));
 }
+
+template<typename T>
+constexpr bool can_serialize_fast() {
+    return !std::is_same<T, bool>::value && std::is_integral<T>::value && (sizeof(T) == 1 || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__);
+}
+
+template<bool Fast, typename T>
+struct serialize_array_helper;
+
+template<typename T>
+struct serialize_array_helper<true, T> {
+    template<typename Container, typename Output>
+    static void doit(Output& out, const Container& v) {
+        out.write(reinterpret_cast<const char*>(v.data()), v.size() * sizeof(T));
+    }
+};
+
+template<typename T>
+struct serialize_array_helper<false, T> {
+    template<typename Container, typename Output>
+    static void doit(Output& out, const Container& v) {
+        for (auto&& e : v) {
+            serialize(out, e);
+        }
+    }
+};
+
+template<typename T, typename Container, typename Output>
+static inline void serialize_array(Output& out, const Container& v) {
+    serialize_array_helper<can_serialize_fast<T>(), T>::doit(out, v);
+}
+
+template<typename Container>
+struct container_traits;
+
+template<typename T>
+struct container_traits<std::vector<T>> {
+    struct back_emplacer {
+        std::vector<T>& c;
+        back_emplacer(std::vector<T>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace_back(std::move(v));
+        }
+    };
+    void resize(std::vector<T>& c, size_t size) {
+        c.resize(size);
+    }
+};
+
+template<typename T, size_t N>
+struct container_traits<std::array<T, N>> {
+    struct back_emplacer {
+        std::array<T, N>& c;
+        size_t idx = 0;
+        back_emplacer(std::array<T, N>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c[idx++] = std::move(v);
+        }
+    };
+    void resize(std::array<T, N>& c, size_t size) {}
+};
+
+template<bool Fast, typename T>
+struct deserialize_array_helper;
+
+template<typename T>
+struct deserialize_array_helper<true, T> {
+    template<typename Input, typename Container>
+    static void doit(Input& in, Container& v, size_t sz) {
+        container_traits<Container> t;
+        t.resize(v, sz);
+        in.read(reinterpret_cast<char*>(v.data()), v.size() * sizeof(T));
+    }
+};
+
+template<typename T>
+struct deserialize_array_helper<false, T> {
+    template<typename Input, typename Container>
+    static void doit(Input& in, Container& v, size_t sz) {
+        typename container_traits<Container>::back_emplacer be(v);
+        while (sz--) {
+            be(deserialize(in, boost::type<T>()));
+        }
+    }
+};
+
+template<typename T, typename Input, typename Container>
+static inline void deserialize_array(Input& in, Container& v, size_t sz) {
+    deserialize_array_helper<can_serialize_fast<T>(), T>::doit(in, v, sz);
+}
+
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::vector<T>& v) {
     safe_serialize_as_uint32(out, v.size());
-    for (auto&& e : v) {
-        serialize(out, e);
-    }
+    serialize_array<T>(out, v);
 }
 template<typename T, typename Input>
 inline std::vector<T> deserialize(Input& in, boost::type<std::vector<T>>) {
     auto sz = deserialize(in, boost::type<uint32_t>());
     std::vector<T> v;
     v.reserve(sz);
-    while (sz--) {
-        v.push_back(deserialize(in, boost::type<T>()));
-    }
+    deserialize_array<T>(in, v, sz);
     return v;
 }
 
 template<size_t N, typename T, typename Output>
 inline void serialize(Output& out, const std::array<T, N>& v) {
-    for (auto&& e : v) {
-        serialize(out, e);
-    }
+    serialize_array<T>(out, v);
 }
 template<size_t N, typename T, typename Input>
 inline std::array<T, N> deserialize(Input& in, boost::type<std::array<T, N>>) {
     std::array<T, N> v;
-    for (auto&& e : v) {
-        e = deserialize(in, boost::type<T>());
-    }
+    deserialize_array<T>(in, v, N);
     return v;
 }
 
