@@ -338,8 +338,8 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
-                , "queue_length", "writes")
-                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size(); })
+                , "queue_length", "foreground writes")
+                , scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return _response_handlers.size() - _stats.background_writes; })
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
