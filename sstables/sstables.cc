@@ -55,12 +55,8 @@ logging::logger sstlog("sstable");
 thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
-    static thread_local lw_shared_ptr<utils::phased_barrier> gate = [] {
-        auto g = make_lw_shared<utils::phased_barrier>();
-        engine().at_exit([] { return await_background_jobs(); });
-        return g;
-    }();
-    return *gate;
+    static thread_local utils::phased_barrier gate;
+    return gate;
 }
 
 future<> await_background_jobs() {
@@ -128,18 +124,21 @@ std::unordered_map<sstable::format_types, sstring, enum_hash<sstable::format_typ
     { sstable::format_types::big , "big" }
 };
 
+static const sstring TOC_SUFFIX = "TOC.txt";
+static const sstring TEMPORARY_TOC_SUFFIX = "TOC.txt.tmp";
+
 // FIXME: this should be version-dependent
 std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::component_type>> sstable::_component_map = {
     { component_type::Index, "Index.db"},
     { component_type::CompressionInfo, "CompressionInfo.db" },
     { component_type::Data, "Data.db" },
-    { component_type::TOC, "TOC.txt" },
+    { component_type::TOC, TOC_SUFFIX },
     { component_type::Summary, "Summary.db" },
     { component_type::Digest, "Digest.sha1" },
     { component_type::CRC, "CRC.db" },
     { component_type::Filter, "Filter.db" },
     { component_type::Statistics, "Statistics.db" },
-    { component_type::TemporaryTOC, "TOC.txt.tmp" },
+    { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -1746,25 +1745,26 @@ remove_by_toc_name(sstring sstable_toc_name) {
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();
         in.close().get();
-        remove_file(sstable_toc_name).get();
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
+        auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
+        rename_file(sstable_toc_name, new_toc_name).get();
         fsync_directory(dir).get();
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
-        auto toc_txt = sstring("TOC.txt");
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - toc_txt.size());
-        parallel_for_each(components, [prefix, toc_txt] (sstring component) {
+        parallel_for_each(components, [prefix] (sstring component) {
             if (component.empty()) {
                 // eof
                 return make_ready_future<>();
             }
-            if (component == toc_txt) {
+            if (component == TOC_SUFFIX) {
                 // already deleted
                 return make_ready_future<>();
             }
             return remove_file(prefix + component);
         }).get();
         fsync_directory(dir).get();
+        remove_file(new_toc_name).get();
     });
 }
 
