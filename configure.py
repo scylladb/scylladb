@@ -505,6 +505,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/partition_checksum.idl.hh',
         'idl/replay_position.idl.hh',
         'idl/truncation_record.idl.hh',
+        'idl/mutation.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [
