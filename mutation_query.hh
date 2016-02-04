@@ -48,6 +48,11 @@ struct partition {
         return _m;
     }
 
+    frozen_mutation& mut() {
+        return _m;
+    }
+
+
     bool operator==(const partition& other) const {
         return _row_count == other._row_count && _m.representation() == other._m.representation();
     }

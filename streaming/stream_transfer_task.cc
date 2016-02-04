@@ -81,9 +81,9 @@ void stream_transfer_task::start() {
         it++;
         consume(*msg.detail.mr, [&msg, this, seq, id, plan_id] (mutation&& m) {
             msg.mutations_nr++;
-            auto fm = make_lw_shared<const frozen_mutation>(m);
-            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm, seq, plan_id, id] {
-                auto cf_id = fm->column_family_id();
+            auto fm = freeze(m);
+            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm = std::move(fm), seq, plan_id, id] () mutable {
+                auto cf_id = fm.column_family_id();
                 // Skip sending the mutation if the cf is dropped after we
                 // call to make_local_reader in stream_session::add_transfer_ranges()
                 try {
@@ -95,11 +95,12 @@ void stream_transfer_task::start() {
                     return stop_iteration::yes;
                 }
                 sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, cf_id);
-                session->ms().send_stream_mutation(id, session->plan_id(), *fm, session->dst_cpu_id).then_wrapped([&msg, this, cf_id, plan_id, id, fm] (auto&& f) {
+                auto size =  fm.representation().size();
+                session->ms().send_stream_mutation(id, session->plan_id(), std::move(fm), session->dst_cpu_id).then_wrapped([&msg, this, cf_id, plan_id, id, size] (auto&& f) {
                     try {
                         f.get();
                         session->start_keep_alive_timer();
-                        session->progress(cf_id, progress_info::direction::OUT, fm->representation().size());
+                        session->progress(cf_id, progress_info::direction::OUT, size);
                         sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", plan_id, id.addr);
                         msg.mutations_done.signal();
                     } catch (std::exception& e) {

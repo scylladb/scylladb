@@ -415,16 +415,16 @@ future<std::vector<frozen_mutation>> convert_schema_to_mutations(distributed<ser
                 if (partition_key == system_keyspace::NAME) {
                     continue;
                 }
-                results.emplace_back(p.mut());
+                results.emplace_back(std::move(p.mut()));
             }
             return results;
         });
     };
     auto reduce = [] (auto&& result, auto&& mutations) {
-        std::copy(mutations.begin(), mutations.end(), std::back_inserter(result));
+        std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    return map_reduce(ALL.begin(), ALL.end(), map, std::move(std::vector<frozen_mutation>{}), reduce);
+    return map_reduce(ALL.begin(), ALL.end(), map, std::vector<frozen_mutation>{}, reduce);
 }
 
 future<schema_result>

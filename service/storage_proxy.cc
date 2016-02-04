@@ -1629,14 +1629,17 @@ public:
 
         // build reconcilable_result from reconciled data
         // traverse backwards since large keys are at the start
-        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::make_pair(uint32_t(0), std::vector<partition>()), [] (auto&& a, const mutation& m) {
+        std::vector<partition> vec;
+        using acc_type = std::pair<uint32_t, std::reference_wrapper<std::vector<partition>>>;
+        acc_type acc(0, std::ref(vec));
+        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, acc, [] (acc_type& a, const mutation& m) {
             auto count = m.live_row_count();
             a.first += count;
-            a.second.emplace_back(partition(count, freeze(m)));
-            return std::move(a);
+            a.second.get().emplace_back(partition(count, freeze(m)));
+            return a;
         });
 
-        return reconcilable_result(r.first, std::move(r.second));
+        return reconcilable_result(r.first, std::move(r.second.get()));
     }
 
     auto get_diffs_for_repair() {
