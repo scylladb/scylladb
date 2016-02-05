@@ -1708,4 +1708,45 @@ bool gossiper::is_safe_for_bootstrap(inet_address endpoint) {
     return !unsafe_statuses.count(status);
 }
 
+std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
+    std::set<sstring> features;
+    auto ep_state = get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return features;
+    }
+    auto app_state = ep_state->get_application_state(application_state::SUPPORTED_FEATURES);
+    if (!app_state) {
+        return features;
+    }
+    boost::split(features, app_state->value, boost::is_any_of(","));
+    return features;
+}
+
+std::set<sstring> gossiper::get_supported_features() const {
+    std::unordered_map<inet_address, std::set<sstring>> features_map;
+    std::set<sstring> common_features;
+
+    for (auto& x : endpoint_state_map) {
+        auto endpoint = x.first;
+        auto features = get_supported_features(endpoint);
+        if (features.empty()) {
+            return std::set<sstring>();
+        }
+        if (common_features.empty()) {
+            common_features = features;
+        }
+        features_map.emplace(endpoint, std::move(features));
+    }
+
+    for (auto& x : features_map) {
+        auto& features = x.second;
+        std::set<sstring> result;
+        std::set_intersection(features.begin(), features.end(),
+                common_features.begin(), common_features.end(),
+                std::inserter(result, result.begin()));
+        common_features = std::move(result);
+    }
+    return common_features;
+}
+
 } // namespace gms

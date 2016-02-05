@@ -53,6 +53,7 @@
 #include <experimental/optional>
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 namespace gms {
 
@@ -513,6 +514,11 @@ private:
     uint64_t _nr_run = 0;
     bool _ms_registered = false;
     bool _gossiped_to_seed = false;
+public:
+    // Get features supported by a particular node
+    std::set<sstring> get_supported_features(inet_address endpoint) const;
+    // Get features supported by all the nodes this node knows about
+    std::set<sstring> get_supported_features() const;
 };
 
 extern distributed<gossiper> _the_gossiper;
