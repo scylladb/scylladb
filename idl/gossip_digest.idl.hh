@@ -34,7 +34,8 @@ enum class application_state:int {
         SEVERITY,
         NET_VERSION,
         HOST_ID,
-        TOKENS
+        TOKENS,
+        SUPPORTED_FEATURES
 };
 
 class inet_address final {
