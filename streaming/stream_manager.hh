@@ -37,6 +37,7 @@
  */
 
 #pragma once
+#include "streaming/progress_info.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"
 #include "utils/UUID.hh"
@@ -46,6 +47,27 @@
 namespace streaming {
 
 class stream_result_future;
+
+struct stream_bytes {
+    int64_t bytes_sent = 0;
+    int64_t bytes_received = 0;
+    friend stream_bytes operator+(const stream_bytes& x, const stream_bytes& y) {
+        stream_bytes ret(x);
+        ret += y;
+        return ret;
+    }
+    friend bool operator!=(const stream_bytes& x, const stream_bytes& y) {
+        return x.bytes_sent != y.bytes_sent && x.bytes_received != y.bytes_received;
+    }
+    friend bool operator==(const stream_bytes& x, const stream_bytes& y) {
+        return x.bytes_sent == y.bytes_sent && x.bytes_received == y.bytes_received;
+    }
+    stream_bytes& operator+=(const stream_bytes& x) {
+        bytes_sent += x.bytes_sent;
+        bytes_received += x.bytes_received;
+        return *this;
+    }
+};
 
 /**
  * StreamManager manages currently running {@link StreamResultFuture}s and provides status of all operation invoked.
@@ -62,6 +84,7 @@ class stream_manager {
 private:
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _initiated_streams;
     std::unordered_map<UUID, shared_ptr<stream_result_future>> _receiving_streams;
+    std::unordered_map<UUID, std::unordered_map<gms::inet_address, stream_bytes>> _stream_bytes;
     semaphore _mutation_send_limiter{256};
 public:
     semaphore& mutation_send_limiter() { return _mutation_send_limiter; }
@@ -92,6 +115,20 @@ public:
     future<> stop() {
         return make_ready_future<>();
     }
+
+    void update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
+
+    void remove_progress(UUID plan_id);
+
+    stream_bytes get_progress(UUID plan_id, gms::inet_address peer);
+
+    future<> remove_progress_on_all_shards(UUID plan_id);
+
+    future<stream_bytes> get_progress_on_all_shards(UUID plan_id, gms::inet_address peer);
+
+    future<stream_bytes> get_progress_on_all_shards(gms::inet_address peer);
+
+    future<stream_bytes> get_progress_on_all_shards();
 };
 
 extern distributed<stream_manager> _the_stream_manager;
