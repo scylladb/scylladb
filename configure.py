@@ -558,16 +558,31 @@ else:
     args.pie = ''
     args.fpie = ''
 
-optional_packages = ['libsystemd']
+# a list element means a list of alternative packages to consider
+# the first element becomes the HAVE_pkg define
+# a string element is a package name with no alternatives
+optional_packages = [['libsystemd', 'libsystemd-daemon']]
 pkgs = []
 
-for pkg in optional_packages:
-    if have_pkg(pkg):
-        pkgs.append(pkg)
-        upkg = pkg.upper().replace('-', '_')
-        defines.append('HAVE_{}=1'.format(upkg))
-    else:
-        print('Missing optional package {pkg}'.format(**locals()))
+def setup_first_pkg_of_list(pkglist):
+    # The HAVE_pkg symbol is taken from the first alternative
+    upkg = pkglist[0].upper().replace('-', '_')
+    for pkg in pkglist:
+        if have_pkg(pkg):
+            pkgs.append(pkg)
+            defines.append('HAVE_{}=1'.format(upkg))
+            return True
+    return False
+
+for pkglist in optional_packages:
+    if isinstance(pkglist, str):
+        pkglist = [pkglist]
+    if not setup_first_pkg_of_list(pkglist):
+        if len(pkglist) == 1:
+            print('Missing optional package {pkglist[0]}'.format(**locals()))
+        else:
+            alternatives = ':'.join(pkglist[1:])
+            print('Missing optional package {pkglist[0]} (or alteratives {alternatives})'.format(**locals()))
 
 defines = ' '.join(['-D' + d for d in defines])
 
