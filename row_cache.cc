@@ -421,66 +421,66 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     auto attr = seastar::thread_attributes();
     attr.scheduling_group = &_update_thread_scheduling_group;
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
-      auto cleanup = defer([&] {
-          with_allocator(_tracker.allocator(), [&m, this] () {
-            m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>()] (partition_entry* entry) {
-                invalidate(entry->key());
-                deleter(entry);
-            });
-          });
-      });
-      _populate_phaser.advance_and_await().get();
-      while (!m.partitions.empty()) {
-        with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
-            unsigned quota = 30;
-            auto cmp = cache_entry::compare(_schema);
-            try {
-                _update_section(_tracker.region(), [&] {
-                    auto i = m.partitions.begin();
-                    while (i != m.partitions.end() && quota) {
-                        partition_entry& mem_e = *i;
-                        // FIXME: Optimize knowing we lookup in-order.
-                        auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
-                        // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
-                        // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
-                        //        search it.
-                        if (cache_i != _partitions.end() && cache_i->key().equal(*_schema, mem_e.key())) {
-                            cache_entry& entry = *cache_i;
-                            upgrade_entry(entry);
-                            entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
-                            _tracker.touch(entry);
-                            _tracker.on_merge();
-                        } else if (presence_checker(mem_e.key().key()) ==
-                                   partition_presence_checker_result::definitely_doesnt_exist) {
-                            cache_entry* entry = current_allocator().construct<cache_entry>(
-                                mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
-                            upgrade_entry(*entry);
-                            _tracker.insert(*entry);
-                            _partitions.insert(cache_i, *entry);
-                        }
-                        i = m.partitions.erase(i);
-                        current_allocator().destroy(&mem_e);
-                        --quota;
-                    }
+        auto cleanup = defer([&] {
+            with_allocator(_tracker.allocator(), [&m, this] () {
+                m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>()] (partition_entry* entry) {
+                    invalidate(entry->key());
+                    deleter(entry);
                 });
-                if (quota == 0 && seastar::thread::should_yield()) {
-                    return;
-                }
-            } catch (const std::bad_alloc&) {
-                // Cache entry may be in an incomplete state if
-                // _update_section fails due to weak exception guarantees of
-                // mutation_partition::apply().
-                auto i = m.partitions.begin();
-                auto cache_i = _partitions.find(i->key(), cmp);
-                if (cache_i != _partitions.end()) {
-                    _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
-                    _tracker.on_erase();
-                }
-                throw;
-            }
+            });
         });
-        seastar::thread::yield();
-      }
+        _populate_phaser.advance_and_await().get();
+        while (!m.partitions.empty()) {
+            with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
+                unsigned quota = 30;
+                auto cmp = cache_entry::compare(_schema);
+                try {
+                    _update_section(_tracker.region(), [&] {
+                        auto i = m.partitions.begin();
+                        while (i != m.partitions.end() && quota) {
+                            partition_entry& mem_e = *i;
+                            // FIXME: Optimize knowing we lookup in-order.
+                            auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
+                            // If cache doesn't contain the entry we cannot insert it because the mutation may be incomplete.
+                            // FIXME: keep a bitmap indicating which sstables we do cover, so we don't have to
+                            //        search it.
+                            if (cache_i != _partitions.end() && cache_i->key().equal(*_schema, mem_e.key())) {
+                                cache_entry& entry = *cache_i;
+                                upgrade_entry(entry);
+                                entry.partition().apply(*_schema, std::move(mem_e.partition()), *mem_e.schema());
+                                _tracker.touch(entry);
+                                _tracker.on_merge();
+                            } else if (presence_checker(mem_e.key().key()) ==
+                                    partition_presence_checker_result::definitely_doesnt_exist) {
+                                cache_entry* entry = current_allocator().construct<cache_entry>(
+                                        mem_e.schema(), std::move(mem_e.key()), std::move(mem_e.partition()));
+                                upgrade_entry(*entry);
+                                _tracker.insert(*entry);
+                                _partitions.insert(cache_i, *entry);
+                            }
+                            i = m.partitions.erase(i);
+                            current_allocator().destroy(&mem_e);
+                            --quota;
+                        }
+                    });
+                    if (quota == 0 && seastar::thread::should_yield()) {
+                        return;
+                    }
+                } catch (const std::bad_alloc&) {
+                    // Cache entry may be in an incomplete state if
+                    // _update_section fails due to weak exception guarantees of
+                    // mutation_partition::apply().
+                    auto i = m.partitions.begin();
+                    auto cache_i = _partitions.find(i->key(), cmp);
+                    if (cache_i != _partitions.end()) {
+                        _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
+                        _tracker.on_erase();
+                    }
+                    throw;
+                }
+            });
+            seastar::thread::yield();
+        }
     });
     return do_with(std::move(t), [] (seastar::thread& t) {
         return t.join();
