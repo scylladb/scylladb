@@ -63,11 +63,5 @@ public:
             ::feed_hash(as_collection_mutation(), h, def.type);
         }
     }
-    void linearize() {
-        _data.linearize();
-    }
-    void unlinearize() {
-        _data.scatter();
-    }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };

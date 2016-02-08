@@ -356,37 +356,6 @@ public:
         return read_linearize();
     }
 
-    void linearize() {
-        if (!external() || !_u.ptr->next) {
-            return;
-        }
-        auto& alctr = current_allocator();
-        auto size = _u.ptr->size;
-        void* p = alctr.alloc(&standard_migrator<blob_storage>::object,
-            sizeof(blob_storage) + size, alignof(blob_storage));
-        auto old = _u.ptr;
-        auto blob = new (p) blob_storage(&_u.ptr, size, size);
-        auto pos = size_type(0);
-        while (old) {
-            memcpy(blob->data + pos, old->data, old->frag_size);
-            pos += old->frag_size;
-            auto next = old->next;
-            alctr.destroy(old);
-            old = next;
-        }
-        assert(pos == size);
-    }
-
-    void scatter() {
-        if (!external()) {
-            return;
-        }
-        if (_u.ptr->size <= max_seg(current_allocator())) {
-            return;
-        }
-        *this = managed_bytes(*this);
-    }
-
     template <typename Func>
     friend auto with_linearized_managed_bytes(Func&& func);
 };
