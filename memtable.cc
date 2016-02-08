@@ -50,7 +50,9 @@ memtable::find_or_create_partition_slow(partition_key_view key) {
     return with_allocator(standard_allocator(), [&, this] () -> mutation_partition& {
         auto dk = dht::global_partitioner().decorate_key(*_schema, key);
         return with_allocator(outer, [&dk, this] () -> mutation_partition& {
+          return with_linearized_managed_bytes([&] () -> mutation_partition& {
             return find_or_create_partition(dk);
+          });
         });
     });
 }
@@ -168,6 +170,7 @@ public:
         }
 
         logalloc::reclaim_lock _(_memtable->_region);
+        managed_bytes::linearization_context_guard lcg;
         update_iterators();
         if (_i == _end) {
             return make_ready_future<mutation_opt>(stdx::nullopt);
@@ -189,6 +192,7 @@ memtable::make_reader(schema_ptr s, const query::partition_range& range) {
     if (query::is_single_partition(range)) {
         const query::ring_position& pos = range.start()->value();
         return _read_section(_region, [&] {
+        managed_bytes::linearization_context_guard lcg;
         auto i = partitions.find(pos, partition_entry::compare(_schema));
         if (i != partitions.end()) {
             upgrade_entry(*i);
@@ -223,8 +227,10 @@ void
 memtable::apply(const mutation& m, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m] {
         _allocating_section(_region, [&, this] {
+          with_linearized_managed_bytes([&] {
             mutation_partition& p = find_or_create_partition(m.decorated_key());
             p.apply(*_schema, m.partition(), *m.schema());
+          });
         });
     });
     update(rp);
@@ -234,8 +240,10 @@ void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& rp) {
     with_allocator(_region.allocator(), [this, &m, &m_schema] {
         _allocating_section(_region, [&, this] {
+          with_linearized_managed_bytes([&] {
             mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
             p.apply(*_schema, m.partition(), *m_schema);
+          });
         });
     });
     update(rp);
@@ -290,8 +298,10 @@ void memtable::upgrade_entry(partition_entry& e) {
     if (e._schema != _schema) {
         assert(!_region.reclaiming_enabled());
         with_allocator(_region.allocator(), [this, &e] {
+          with_linearized_managed_bytes([&] {
             e._p.upgrade(*e._schema, *_schema);
             e._schema = _schema;
+          });
         });
     }
 }
