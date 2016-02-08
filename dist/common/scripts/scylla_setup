@@ -71,6 +71,6 @@ if [ $AMI -eq 0 ]; then
 else
     /usr/lib/scylla/scylla_coredump_setup -s
     /usr/lib/scylla/scylla_ntp_setup -c amazon
-    /usr/lib/scylla/scylla_bootparam_setup -a
+    /usr/lib/scylla/scylla_bootparam_setup
     /usr/lib/scylla/scylla_sysconfig_setup -n $NIC
 fi
