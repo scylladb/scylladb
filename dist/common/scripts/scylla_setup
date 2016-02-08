@@ -8,65 +8,141 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup -d /dev/hda,/dev/hdb... -n eth0 -c centos -a"
-    echo "  -d  specify disks for RAID"
-    echo "  -n  specify NIC"
-    echo "  -c  specify NTP domain"
-    echo "  -a  setup AMI instance"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
+    echo "  --disks			specify disks for RAID"
+    echo "  --nic				specify NIC"
+    echo "  --ntp-domain			specify NTP domain"
+    echo "  --ami				setup AMI instance"
+    echo "  --no-enable-service		skip enabling service"
+    echo "  --no-selinux-setup		skip selinux setup"
+    echo "  --no-bootparam-setup		skip bootparam setup"
+    echo "  --no-ntp-setup		skip ntp setup"
+    echo "  --no-raid-setup		skip raid setup"
+    echo "  --no-coredump-setup		skip coredump setup"
+    echo "  --no-sysconfig-setup		skip sysconfig setup"
     exit 1
 }
 
-NIC=eth0
-RAID=/dev/md0
-NTP=
 AMI=0
-while getopts d:n:c:al:h OPT; do
-    case "$OPT" in
-        "n")
-            NIC=$OPTARG
+ENABLE_SERVICE=1
+SELINUX_SETUP=1
+BOOTPARAM_SETUP=1
+NTP_SETUP=1
+RAID_SETUP=1
+COREDUMP_SETUP=1
+SYSCONFIG_SETUP=1
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--disks")
+            DISKS="$2"
+            shift 2
             ;;
-        "d")
-            DISKS=$OPTARG
+        "--nic")
+            NIC="$2"
+            shift 2
             ;;
-        "c")
-            NTP=$OPTARG
-        "a")
+        "--ntp-domain")
+            NTP_DOMAIN="$2"
+            shift 2
+            ;;
+        "--ami")
             AMI=1
+            shift 1
             ;;
-        "h")
+        "--no-enable-service")
+            ENABLE_SERVICE=0
+            shift 1
+            ;;
+        "--no-selinux-setup")
+            SELINUX_SETUP=0
+            shift 1
+            ;;
+        "--no-bootparam-setup")
+            BOOTPARAM_SETUP=0
+            shift 1
+            ;;
+        "--no-ntp-setup")
+            NTP_SETUP=0
+            shift 1
+            ;;
+        "--no-raid-setup")
+            RAID_SETUP=0
+            shift 1
+            ;;
+        "--no-coredump-setup")
+            COREDUMP_SETUP=0
+            shift 1
+            ;;
+        "--no-sysconfig-setup")
+            SYSCONFIG_SETUP=0
+            shift 1
+            ;;
+        "-h" | "--help")
             print_usage
+            shift 1
             ;;
     esac
 done
 
+if [ $RAID_SETUP -eq 1 ] && [ "$DISKS" = "" ]; then
+    print_usage
+fi
+if [ $SYSCONFIG_SETUP -eq 1 ] && [ "$NIC" = "" ]; then
+    print_usage
+fi
+
 . /etc/os-release
 
-/usr/lib/scylla/scylla_selinux_setup
-if [ "$ID" != "ubuntu" ]; then
-    if [ $AMI -eq 1 ]; then
-        grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
-        mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
-        mv /home/centos/scylla-ami/scylla-ami-setup.service /usr/lib/systemd/system/
-        mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
-        chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
-        systemctl daemon-reload
-        systemctl enable scylla-ami-setup.service
-    fi
-    systemctl enable scylla-server.service
-    systemctl enable scylla-jmx.service
+if [ $AMI -eq 1 ]; then
+    grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
+    mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
+    mv /home/centos/scylla-ami/scylla-ami-setup.service /usr/lib/systemd/system/
+    mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
+    chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
+    systemctl daemon-reload
+    systemctl enable scylla-ami-setup.service
+    NTP_DOMAIN=amazon
+    RAID_SETUP=0
+    COREDUMP_SETUP=0
+    SYSCONFIG_SETUP=0
 fi
-if [ $AMI -eq 0 ]; then
-    /usr/lib/scylla/scylla_ntp_setup
+
+if [ $ENABLE_SERVICE -eq 1 ]; then
+    if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
+        systemctl enable scylla-server.service
+        systemctl enable scylla-jmx.service
+    fi
+fi
+
+if [ $SELINUX_SETUP -eq 1 ]; then
+    /usr/lib/scylla/scylla_selinux_setup
+fi
+
+if [ $BOOTPARAM_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_bootparam_setup
-    if [ $DISKS != "" ]; then
-        /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+fi
+
+if [ $NTP_SETUP -eq 1 ]; then
+    if [ "$NTP_DOMAIN" != "" ]; then
+        /usr/lib/scylla/scylla_ntp_setup -c $NTP_DOMAIN
+    else
+        /usr/lib/scylla/scylla_ntp_setup
+    fi
+fi
+
+if [ $RAID_SETUP -eq 1 ]; then
+    /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+fi
+
+if [ $COREDUMP_SETUP -eq 1 ]; then
+    if [ "$DISKS" != "" ]; then
         /usr/lib/scylla/scylla_coredump_setup -s
     else
         /usr/lib/scylla/scylla_coredump_setup
     fi
-else
-    /usr/lib/scylla/scylla_coredump_setup -s
-    /usr/lib/scylla/scylla_ntp_setup -c amazon
-    /usr/lib/scylla/scylla_bootparam_setup
+fi
+
+if [ $SYSCONFIG_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_sysconfig_setup -n $NIC
 fi
