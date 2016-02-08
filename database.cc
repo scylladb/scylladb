@@ -1077,19 +1077,31 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
                 dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
                 return make_ready_future<>();
             }
-            sstring cfname = comps[0];
 
-            auto sstdir = ksdir + "/" + de.name;
+            sstring cfname = comps[0];
+            sstring uuidst = comps[1];
 
             try {
-                auto& cf = find_column_family(ks_name, cfname);
-                dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
-                // FIXME: Increase parallelism.
-                return cf.populate(sstdir);
+                auto&& uuid = find_uuid(ks_name, cfname);
+                auto& cf = find_column_family(uuid);
+
+                // #870: Check that the directory name matches
+                // the current, expected UUID of the CF.
+                if (utils::UUID(uuidst) == uuid) {
+                    // FIXME: Increase parallelism.
+                    auto sstdir = ksdir + "/" + de.name;
+                    dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
+                    return cf.populate(sstdir);
+                }
+                // Nope. Warn and ignore.
+                dblog.info("Keyspace {}: Skipping obsolete version of CF {} ({})", ksdir, cfname, uuidst);
+            } catch (marshal_exception&) {
+                // Bogus UUID part of directory name
+                dblog.warn("{}, CF {}: malformed UUID: {}. Ignoring", ksdir, comps[0], uuidst);
             } catch (no_such_column_family&) {
                 dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
-                return make_ready_future<>();
             }
+            return make_ready_future<>();
         });
     }
     return make_ready_future<>();
