@@ -14,6 +14,7 @@
       "ssh_username": "centos",
       "ssh_timeout": "5m",
       "ami_name": "scylla_{{isotime | clean_ami_name}}",
+      "enhanced_networking": true,
       "launch_block_device_mappings": [
         {
           "device_name": "/dev/sda1",
