@@ -48,6 +48,10 @@ cache_tracker::cache_tracker() {
 
     _region.make_evictable([this] {
         return with_allocator(_region.allocator(), [this] {
+          // Removing a partition may require reading large keys when we rebalance
+          // the rbtree, so linearize anything we read
+          return with_linearized_managed_bytes([&] {
+           try {
             if (_lru.empty()) {
                 return memory::reclaiming_result::reclaimed_nothing;
             }
@@ -55,6 +59,13 @@ cache_tracker::cache_tracker() {
             --_partitions;
             ++_modification_count;
             return memory::reclaiming_result::reclaimed_something;
+           } catch (std::bad_alloc&) {
+            // Bad luck, linearization during partition removal caused us to
+            // fail.  Drop the entire cache so we can make forward progress.
+            clear();
+            return memory::reclaiming_result::reclaimed_something;
+           }
+          });
         });
     });
 }
@@ -236,6 +247,7 @@ public:
     { }
     virtual future<mutation_opt> operator()() override {
         return _cache._read_section(_cache._tracker.region(), [this] {
+          return with_linearized_managed_bytes([&] {
             update_iterators();
             if (_it == _end) {
                 return make_ready_future<mutation_opt>();
@@ -245,6 +257,7 @@ public:
             _last = ce.key();
             _cache.upgrade_entry(ce);
             return make_ready_future<mutation_opt>(ce.read(_schema));
+          });
         });
     }
 };
@@ -366,6 +379,7 @@ row_cache::make_reader(schema_ptr s, const query::partition_range& range, const 
         }
 
         return _read_section(_tracker.region(), [&] {
+          return with_linearized_managed_bytes([&] {
             const dht::decorated_key& dk = pos.as_decorated_key();
             auto i = _partitions.find(dk, cache_entry::compare(_schema));
             if (i != _partitions.end()) {
@@ -378,6 +392,7 @@ row_cache::make_reader(schema_ptr s, const query::partition_range& range, const 
                 on_miss();
                 return make_mutation_reader<populating_reader>(s, *this, _underlying(_schema, range, pc));
             }
+          });
         });
     }
 
@@ -391,6 +406,7 @@ row_cache::~row_cache() {
 void row_cache::populate(const mutation& m) {
     with_allocator(_tracker.allocator(), [this, &m] {
         _populate_section(_tracker.region(), [&] {
+          with_linearized_managed_bytes([&] {
             auto i = _partitions.lower_bound(m.decorated_key(), cache_entry::compare(_schema));
             if (i == _partitions.end() || !i->key().equal(*_schema, m.decorated_key())) {
                 cache_entry* entry = current_allocator().construct<cache_entry>(
@@ -403,12 +419,16 @@ void row_cache::populate(const mutation& m) {
                 // We cache whole partitions right now, so if cache already has this partition,
                 // it must be complete, so do nothing.
             }
+          });
         });
     });
 }
 
 void row_cache::clear() {
     with_allocator(_tracker.allocator(), [this] {
+        // We depend on clear_and_dispose() below not looking up any keys.
+        // Using with_linearized_managed_bytes() is no helps, because we don't
+        // want to propagate an exception from here.
         _partitions.clear_and_dispose([this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             _tracker.on_erase();
             deleter(p);
@@ -423,10 +443,24 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
         auto cleanup = defer([&] {
             with_allocator(_tracker.allocator(), [&m, this] () {
-                m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>()] (partition_entry* entry) {
+                bool blow_cache = false;
+                // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
+                // with_linearized_managed_bytes(), but invalidate() does.
+                m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>(), &blow_cache] (partition_entry* entry) {
+                  with_linearized_managed_bytes([&] {
+                   try {
                     invalidate(entry->key());
                     deleter(entry);
+                   } catch (...) {
+                    blow_cache = true;
+                   }
+                  });
                 });
+                if (blow_cache) {
+                    // We failed to invalidate the key, presumably due to with_linearized_managed_bytes()
+                    // running out of memory.  Recover using clear(), which doesn't throw.
+                    clear();
+                }
             });
         });
         _populate_phaser.advance_and_await().get();
@@ -438,6 +472,8 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                     _update_section(_tracker.region(), [&] {
                         auto i = m.partitions.begin();
                         while (i != m.partitions.end() && quota) {
+                          with_linearized_managed_bytes([&] {
+                           try {
                             partition_entry& mem_e = *i;
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
@@ -461,6 +497,11 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
                             --quota;
+                           } catch (...) {
+                            //
+                            clear();
+                           }
+                          });
                         }
                     });
                     if (quota == 0 && seastar::thread::should_yield()) {
@@ -473,8 +514,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                     auto i = m.partitions.begin();
                     auto cache_i = _partitions.find(i->key(), cmp);
                     if (cache_i != _partitions.end()) {
+                      with_linearized_managed_bytes([&] {
                         _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
                         _tracker.on_erase();
+                      });
                     }
                     throw;
                 }
@@ -488,22 +531,31 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
 }
 
 void row_cache::touch(const dht::decorated_key& dk) {
+ _read_section(_tracker.region(), [&] {
+  with_linearized_managed_bytes([&] {
     auto i = _partitions.find(dk, cache_entry::compare(_schema));
     if (i != _partitions.end()) {
         _tracker.touch(*i);
     }
+  });
+ });
 }
 
 void row_cache::invalidate(const dht::decorated_key& dk) {
+  _read_section(_tracker.region(), [&] {
     with_allocator(_tracker.allocator(), [this, &dk] {
+      with_linearized_managed_bytes([&] {
         _partitions.erase_and_dispose(dk, cache_entry::compare(_schema), [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
             _tracker.on_erase();
             deleter(p);
         });
+      });
     });
+  });
 }
 
 void row_cache::invalidate(const query::partition_range& range) {
+  with_linearized_managed_bytes([&] {
     if (range.is_wrap_around(dht::ring_position_comparator(*_schema))) {
         auto unwrapped = range.unwrap();
         invalidate(unwrapped.first);
@@ -536,6 +588,7 @@ void row_cache::invalidate(const query::partition_range& range) {
             deleter(p);
         });
     });
+  });
 }
 
 row_cache::row_cache(schema_ptr s, mutation_source fallback_factory, key_source underlying_keys,
@@ -588,8 +641,10 @@ void row_cache::upgrade_entry(cache_entry& e) {
         auto& r = _tracker.region();
         assert(!r.reclaiming_enabled());
         with_allocator(r.allocator(), [this, &e] {
+          with_linearized_managed_bytes([&] {
             e._p.upgrade(*e._schema, *_schema);
             e._schema = _schema;
+          });
         });
     }
 }
