@@ -3,16 +3,16 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla_ntp_setup -a"
-    echo "  -a  AMI instance mode"
+    echo "scylla_ntp_setup -c centos"
+    echo "  -c specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)"
     exit 1
 }
 
-AMI=0
-while getopts a OPT; do
+DOMAIN=
+while getopts c:h OPT; do
     case "$OPT" in
-        "a")
-            AMI=1
+        "c")
+            DOMAIN=$OPTARG
             ;;
         "h")
             print_usage
@@ -28,8 +28,8 @@ if [ "$NAME" = "Ubuntu" ]; then
     service ntp start
 else
     yum install -y ntp ntpdate || true
-    if [ $AMI -eq 1 ]; then
-        sed -e s#centos.pool.ntp.org#amazon.pool.ntp.org# /etc/ntp.conf > /tmp/ntp.conf
+    if [ "$DOMAIN" != "" ]; then
+        sed -e "s#\..*\.pool\.ntp\.org#.$DOMAIN.pool.ntp.org#" /etc/ntp.conf > /tmp/ntp.conf
         mv /tmp/ntp.conf /etc/ntp.conf
     fi
     if [ "`systemctl is-active ntpd`" = "active" ]; then

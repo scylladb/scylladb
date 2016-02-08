@@ -8,17 +8,19 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup -d /dev/hda,/dev/hdb... -n eth0 -a"
+    echo "scylla_setup -d /dev/hda,/dev/hdb... -n eth0 -c centos -a"
     echo "  -d  specify disks for RAID"
     echo "  -n  specify NIC"
+    echo "  -c  specify NTP domain"
     echo "  -a  setup AMI instance"
     exit 1
 }
 
 NIC=eth0
 RAID=/dev/md0
+NTP=
 AMI=0
-while getopts d:n:al:h OPT; do
+while getopts d:n:c:al:h OPT; do
     case "$OPT" in
         "n")
             NIC=$OPTARG
@@ -26,6 +28,8 @@ while getopts d:n:al:h OPT; do
         "d")
             DISKS=$OPTARG
             ;;
+        "c")
+            NTP=$OPTARG
         "a")
             AMI=1
             ;;
@@ -66,7 +70,7 @@ if [ $AMI -eq 0 ]; then
     fi
 else
     /usr/lib/scylla/scylla_coredump_setup -s
-    /usr/lib/scylla/scylla_ntp_setup -a
+    /usr/lib/scylla/scylla_ntp_setup -c amazon
     /usr/lib/scylla/scylla_bootparam_setup -a
     /usr/lib/scylla/scylla_sysconfig_setup -n $NIC
 fi
