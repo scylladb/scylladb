@@ -1,0 +1,13 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+. /etc/os-release
+
+if [ "$ID" != "ubuntu" ]; then
+    if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
+        setenforce 0
+        sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
+        mv /tmp/selinux /etc/sysconfig/
+    fi
+fi

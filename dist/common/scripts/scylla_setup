@@ -41,12 +41,8 @@ done
 
 . /etc/os-release
 
+/usr/lib/scylla/scylla_selinux_setup
 if [ "$ID" != "ubuntu" ]; then
-    if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
-        setenforce 0
-        sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
-        mv /tmp/selinux /etc/sysconfig/
-    fi
     if [ $AMI -eq 1 ]; then
         grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
         mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
