@@ -3,18 +3,18 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla_ntp_setup -c centos"
-    echo "  -c specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)"
+    echo "scylla_ntp_setup --subdomain centos"
+    echo "  --subdomain specify subdomain of pool.ntp.org (ex: centos, fedora or amazon)"
     exit 1
 }
 
-DOMAIN=
-while getopts c:h OPT; do
-    case "$OPT" in
-        "c")
-            DOMAIN=$OPTARG
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--subdomain")
+            DOMAIN="$2"
+            shift 2
             ;;
-        "h")
+        *)
             print_usage
             ;;
     esac

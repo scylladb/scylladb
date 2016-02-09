@@ -125,7 +125,7 @@ fi
 
 if [ $NTP_SETUP -eq 1 ]; then
     if [ "$NTP_DOMAIN" != "" ]; then
-        /usr/lib/scylla/scylla_ntp_setup -c $NTP_DOMAIN
+        /usr/lib/scylla/scylla_ntp_setup --subdomain $NTP_DOMAIN
     else
         /usr/lib/scylla/scylla_ntp_setup
     fi
