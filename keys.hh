@@ -109,13 +109,24 @@ public:
 
     // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
     // The iterators satisfy InputIterator concept.
+    auto begin() const {
+        return TopLevelView::compound::element_type::begin(representation());
+    }
+
+    // See begin()
+    auto end() const {
+        return TopLevelView::compound::element_type::end(representation());
+    }
+
+    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // The iterators satisfy InputIterator concept.
     auto begin(const schema& s) const {
-        return get_compound_type(s)->begin(representation());
+        return begin();
     }
 
     // See begin()
     auto end(const schema& s) const {
-        return get_compound_type(s)->end(representation());
+        return end();
     }
 
     bytes_view get_component(const schema& s, size_t idx) const {
@@ -125,8 +136,13 @@ public:
     }
 
     // Returns a range of bytes_view
+    auto components() const {
+        return TopLevelView::compound::element_type::components(representation());
+    }
+
+    // Returns a range of bytes_view
     auto components(const schema& s) const {
-        return boost::make_iterator_range(begin(s), end(s));
+        return components();
     }
 
     template<typename Hasher>
@@ -152,12 +168,12 @@ public:
         return from_exploded(s, {});
     }
 
-    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(v));
+    static TopLevel from_exploded(const std::vector<bytes>& v) {
+        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(v));
     }
 
-    static TopLevel from_exploded(const schema& s, std::vector<bytes>&& v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(std::move(v)));
+    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
+        return from_exploded(v);
     }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
@@ -195,6 +211,14 @@ public:
     // FIXME: return views
     std::vector<bytes> explode(const schema& s) const {
         return get_compound_type(s)->deserialize_value(_bytes);
+    }
+
+    std::vector<bytes> explode() const {
+        std::vector<bytes> result;
+        for (bytes_view c : components()) {
+            result.emplace_back(to_bytes(c));
+        }
+        return result;
     }
 
     struct less_compare {
@@ -258,6 +282,16 @@ public:
     // See begin()
     auto end(const schema& s) const {
         return get_compound_type(s)->end(_bytes);
+    }
+
+    // Returns a range of bytes_view
+    auto components() const {
+        return TopLevelView::compound::element_type::components(representation());
+    }
+
+    // Returns a range of bytes_view
+    auto components(const schema& s) const {
+        return components();
     }
 
     bytes_view get_component(const schema& s, size_t idx) const {

@@ -68,7 +68,7 @@ public:
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();
             }))
-        , _byte_order_comparable(!is_prefixable && _types.size() == 1 && _types[0]->is_byte_order_comparable())
+        , _byte_order_comparable(false)
         , _is_reversed(_types.size() == 1 && _types[0]->is_reversed())
     { }
 
@@ -88,51 +88,30 @@ public:
 
     /*
      * Format:
-     *   <len(value1)><value1><len(value2)><value2>...<len(value_n-1)><value_n-1>(len(value_n))?<value_n>
+     *   <len(value1)><value1><len(value2)><value2>...<len(value_n)><value_n>
      *
-     * For non-prefixable compounds, the value corresponding to the last component of types doesn't
-     * have its length encoded, its length is deduced from the input range.
-     *
-     * serialize_value() and serialize_optionals() for single element rely on the fact that for a single-element
-     * compounds their serialized form is equal to the serialized form of the component.
      */
     template<typename Wrapped>
-    void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
-        if (AllowPrefixes == allow_prefixes::yes) {
-            assert(values.size() <= _types.size());
-        } else {
-            assert(values.size() == _types.size());
-        }
-
-        size_t n_left = _types.size();
+    static void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
-            if (--n_left || AllowPrefixes == allow_prefixes::yes) {
-                write<uint16_t>(out, uint16_t(val.size()));
-            }
+            write<uint16_t>(out, uint16_t(val.size()));
             out = std::copy(val.begin(), val.end(), out);
         }
     }
     template <typename Wrapped>
-    size_t serialized_size(const std::vector<Wrapped>& values) {
+    static size_t serialized_size(const std::vector<Wrapped>& values) {
         size_t len = 0;
-        size_t n_left = _types.size();
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
-            if (--n_left || AllowPrefixes == allow_prefixes::yes) {
-                len += sizeof(uint16_t);
-            }
-            len += val.size();
+            len += sizeof(uint16_t) + val.size();
         }
         return len;
     }
     bytes serialize_single(bytes&& v) {
-        if (AllowPrefixes == allow_prefixes::no) {
-            assert(_types.size() == 1);
-            return std::move(v);
-        } else {
+        {
             // FIXME: Optimize
             std::vector<bytes> vec;
             vec.reserve(1);
@@ -140,24 +119,15 @@ public:
             return ::serialize_value(*this, vec);
         }
     }
-    bytes serialize_value(const std::vector<bytes>& values) {
-        return ::serialize_value(*this, values);
-    }
-    bytes serialize_value(std::vector<bytes>&& values) {
-        if (AllowPrefixes == allow_prefixes::no && _types.size() == 1 && values.size() == 1) {
-            return std::move(values[0]);
-        }
-        return ::serialize_value(*this, values);
+    template<typename RangeOfComponents>
+    static bytes serialize_value(const RangeOfComponents& values) {
+        bytes b(bytes::initialized_later(), serialized_size(values));
+        auto i = b.begin();
+        serialize_value(values, i);
+        return b;
     }
     bytes serialize_optionals(const std::vector<bytes_opt>& values) {
-        return ::serialize_value(*this, values);
-    }
-    bytes serialize_optionals(std::vector<bytes_opt>&& values) {
-        if (AllowPrefixes == allow_prefixes::no && _types.size() == 1 && values.size() == 1) {
-            assert(values[0]);
-            return std::move(*values[0]);
-        }
-        return ::serialize_value(*this, values);
+        return serialize_value(values);
     }
     bytes serialize_value_deep(const std::vector<data_value>& values) {
         // TODO: Optimize
@@ -171,35 +141,19 @@ public:
         return serialize_value(partial);
     }
     bytes decompose_value(const value_type& values) {
-        return ::serialize_value(*this, values);
+        return serialize_value(values);
     }
     class iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
     private:
-        ssize_t _types_left;
         bytes_view _v;
         value_type _current;
     private:
         void read_current() {
-            if (_types_left == 0) {
-                if (!_v.empty()) {
-                    throw marshal_exception();
-                }
-                _v = bytes_view(nullptr, 0);
-                return;
-            }
-            --_types_left;
             uint16_t len;
-            if (_types_left == 0 && AllowPrefixes == allow_prefixes::no) {
-                len = _v.size();
-            } else {
+            {
                 if (_v.empty()) {
-                    if (AllowPrefixes == allow_prefixes::yes) {
-                        _types_left = 0;
-                        _v = bytes_view(nullptr, 0);
-                        return;
-                    } else {
-                        throw marshal_exception();
-                    }
+                    _v = bytes_view(nullptr, 0);
+                    return;
                 }
                 len = read_simple<uint16_t>(_v);
                 if (_v.size() < len) {
@@ -211,10 +165,10 @@ public:
         }
     public:
         struct end_iterator_tag {};
-        iterator(const compound_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
+        iterator(const bytes_view& v) : _v(v) {
             read_current();
         }
-        iterator(end_iterator_tag, const bytes_view& v) : _types_left(0), _v(nullptr, 0) {}
+        iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
         iterator& operator++() {
             read_current();
             return *this;
@@ -226,16 +180,16 @@ public:
         }
         const value_type& operator*() const { return _current; }
         const value_type* operator->() const { return &_current; }
-        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin() || _types_left != i._types_left; }
-        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin() && _types_left == i._types_left; }
+        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
+        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
     };
-    iterator begin(const bytes_view& v) const {
-        return iterator(*this, v);
+    static iterator begin(const bytes_view& v) {
+        return iterator(v);
     }
-    iterator end(const bytes_view& v) const {
+    static iterator end(const bytes_view& v) {
         return iterator(typename iterator::end_iterator_tag(), v);
     }
-    boost::iterator_range<iterator> components(const bytes_view& v) const {
+    static boost::iterator_range<iterator> components(const bytes_view& v) {
         return { begin(v), end(v) };
     }
     value_type deserialize_value(bytes_view v) {
