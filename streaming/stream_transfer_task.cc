@@ -41,14 +41,13 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/stream_manager.hh"
+#include "streaming/outgoing_file_message.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
 #include "mutation.hh"
 #include "message/messaging_service.hh"
 #include "range.hh"
 #include "dht/i_partitioner.hh"
-#include "service/priority_manager.hh"
-#include <boost/range/irange.hpp>
 
 namespace streaming {
 
@@ -62,109 +61,105 @@ stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, U
 
 stream_transfer_task::~stream_transfer_task() = default;
 
-struct send_info {
-    database& db;
-    utils::UUID plan_id;
-    utils::UUID cf_id;
-    query::partition_range pr;
-    net::messaging_service::msg_addr id;
-    uint32_t dst_cpu_id;
-    size_t mutations_nr{0};
-    semaphore mutations_done{0};
-    send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
-              query::partition_range pr_, net::messaging_service::msg_addr id_,
-              uint32_t dst_cpu_id_)
-        : db(db_)
-        , plan_id(plan_id_)
-        , cf_id(cf_id_)
-        , pr(pr_)
-        , id(id_)
-        , dst_cpu_id(dst_cpu_id_) {
-    }
-};
-
-future<stop_iteration> do_send_mutations(auto si, auto fm) {
-    return get_local_stream_manager().mutation_send_limiter().wait().then([si, fm = std::move(fm)] () mutable {
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", si->plan_id, si->id, si->cf_id);
-        auto fm_size = fm.representation().size();
-        net::get_local_messaging_service().send_stream_mutation(si->id, si->plan_id, std::move(fm), si->dst_cpu_id).then_wrapped([si, fm_size] (auto&& f) {
-            try {
-                f.get();
-                sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", si->plan_id, si->id.addr);
-                get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
-                si->mutations_done.signal();
-            } catch (std::exception& e) {
-                auto err = std::string(e.what());
-                // Seastar RPC does not provide exception type info, so we can not catch no_such_column_family here
-                // Need to compare the exception error msg
-                if (err.find("Can't find a column family with UUID") != std::string::npos) {
-                    sslog.info("[Stream #{}] remote node {} does not have the cf_id = {}", si->plan_id, si->id, si->cf_id);
-                    si->mutations_done.signal();
-                } else {
-                    sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, err);
-                    si->mutations_done.broken();
-                }
-            }
-        }).finally([] {
-            get_local_stream_manager().mutation_send_limiter().signal();
-        });
-        return stop_iteration::no;
-    });
-}
-
-future<> send_mutations(auto si) {
-    auto& cf = si->db.find_column_family(si->cf_id);
-    auto& priority = service::get_local_mutation_stream_priority();
-    return do_with(cf.make_reader(cf.schema(), si->pr, priority), [si] (auto& reader) {
-        return repeat([si, &reader] () {
-            return reader().then([si] (auto mopt) {
-                if (mopt) {
-                    si->mutations_nr++;
-                    auto fm = frozen_mutation(*mopt);
-                    return do_send_mutations(si, std::move(fm));
-                } else {
-                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                }
-            });
-        });
-    }).then([si] {
-        return si->mutations_done.wait(si->mutations_nr);
-    });
+void stream_transfer_task::add_transfer_file(stream_detail detail) {
+    assert(cf_id == detail.cf_id);
+    auto message = outgoing_file_message(sequence_number++, std::move(detail));
+    auto seq = message.sequence_number;
+    _files.emplace(seq, std::move(message));
 }
 
 void stream_transfer_task::start() {
+    using msg_addr = net::messaging_service::msg_addr;
+    using net::messaging_verb;
     auto plan_id = session->plan_id();
-    auto cf_id = this->cf_id;
-    auto id = net::messaging_service::msg_addr{session->peer, session->dst_cpu_id};
-    sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
-    parallel_for_each(_ranges.begin(), _ranges.end(), [this, plan_id, cf_id, id] (auto range) {
-        unsigned shard_begin = range.start() ? dht::shard_of(range.start()->value()) : 0;
-        unsigned shard_end = range.end() ? dht::shard_of(range.end()->value()) + 1 : smp::count;
-        auto cf_id = this->cf_id;
-        auto dst_cpu_id = this->session->dst_cpu_id;
-        auto pr = query::to_partition_range(range);
-        auto shard_range = boost::irange<unsigned>(shard_begin, shard_end);
-        sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}, shard_begin={} shard_end={}", plan_id, cf_id, shard_begin, shard_end);
-        return parallel_for_each(shard_range.begin(), shard_range.end(),
-                [this, plan_id, cf_id, id, dst_cpu_id, pr] (unsigned shard) {
-            sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}, invoke_on shard={}", plan_id, cf_id, shard);
-            return this->session->get_db().invoke_on(shard, [plan_id, cf_id, id, dst_cpu_id, pr] (database& db) {
-                // Send mutations on related shards, do not capture this
-                auto si = make_lw_shared<send_info>(db, plan_id, cf_id, pr, id, dst_cpu_id);
-                return send_mutations(si);
+    sslog.debug("[Stream #{}] stream_transfer_task: {} outgoing_file_message to send", plan_id, _files.size());
+    for (auto it = _files.begin(); it != _files.end();) {
+        auto seq = it->first;
+        auto& msg = it->second;
+        auto id = msg_addr{session->peer, session->dst_cpu_id};
+        sslog.debug("[Stream #{}] stream_transfer_task: Sending outgoing_file_message seq={} msg.detail.cf_id={}", plan_id, seq, msg.detail.cf_id);
+        it++;
+        consume(*msg.detail.mr, [&msg, this, seq, id, plan_id] (mutation&& m) {
+            msg.mutations_nr++;
+            auto fm = freeze(m);
+            return get_local_stream_manager().mutation_send_limiter().wait().then([&msg, this, fm = std::move(fm), seq, plan_id, id] () mutable {
+                auto cf_id = fm.column_family_id();
+                // Skip sending the mutation if the cf is dropped after we
+                // call to make_local_reader in stream_session::add_transfer_ranges()
+                try {
+                    session->get_local_db().find_column_family(cf_id);
+                } catch (no_such_column_family&) {
+                    sslog.info("[Stream #{}] SEND STREAM_MUTATION to {} skipped, cf_id={}", plan_id, id, cf_id);
+                    msg.mutations_done.signal();
+                    get_local_stream_manager().mutation_send_limiter().signal();
+                    return stop_iteration::yes;
+                }
+                sslog.debug("[Stream #{}] SEND STREAM_MUTATION to {}, cf_id={}", plan_id, id, cf_id);
+                auto size =  fm.representation().size();
+                session->ms().send_stream_mutation(id, session->plan_id(), std::move(fm), session->dst_cpu_id).then_wrapped([&msg, this, cf_id, plan_id, id, size] (auto&& f) {
+                    try {
+                        f.get();
+                        session->start_keep_alive_timer();
+                        session->progress(cf_id, progress_info::direction::OUT, size);
+                        sslog.debug("[Stream #{}] GOT STREAM_MUTATION Reply from {}", plan_id, id.addr);
+                        msg.mutations_done.signal();
+                    } catch (std::exception& e) {
+                        auto err = std::string(e.what());
+                        // Seastar RPC does not provide exception type info, so we can not catch no_such_column_family here
+                        // Need to compare the exception error msg
+                        if (err.find("Can't find a column family with UUID") != std::string::npos) {
+                            sslog.info("[Stream #{}] remote node {} does not have the cf_id = {}", plan_id, id, cf_id);
+                            msg.mutations_done.signal();
+                        } else {
+                            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", plan_id, id, err);
+                            msg.mutations_done.broken();
+                        }
+                    }
+                }).finally([] {
+                    get_local_stream_manager().mutation_send_limiter().signal();
+                });
+                return stop_iteration::no;
             });
+        }).then([&msg] {
+            return msg.mutations_done.wait(msg.mutations_nr);
+        }).then_wrapped([this, seq, plan_id, id] (auto&& f){
+            // TODO: Add retry and timeout logic
+            try {
+                f.get();
+                this->complete(seq);
+            } catch (...) {
+                sslog.error("[Stream #{}] stream_transfer_task: Fail to send outgoing_file_message to {}: {}", plan_id, id, std::current_exception());
+                this->session->on_error();
+            }
         });
-    }).then([this, plan_id, cf_id, id] {
-        sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, cf_id={}", plan_id, id, cf_id);
-        return session->ms().send_stream_mutation_done(id, plan_id, _ranges, cf_id, session->dst_cpu_id);
-    }).then([this, id, plan_id, cf_id] {
-        sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
-        session->start_keep_alive_timer();
-        session->transfer_task_completed(cf_id);
-    }).handle_exception([this, plan_id, id] (auto ep){
-        sslog.error("[Stream #{}] stream_transfer_task: Fail to send to {}: {}", plan_id, id, ep);
-        this->session->on_error();
-    });
+    }
+}
+
+void stream_transfer_task::complete(int sequence_number) {
+    _files.erase(sequence_number);
+
+    auto plan_id = session->plan_id();
+
+    sslog.debug("[Stream #{}] stream_transfer_task: complete cf_id = {}, seq = {}", plan_id, this->cf_id, sequence_number);
+
+    auto signal_complete = _files.empty();
+    // all file sent, notify session this task is complete.
+    if (signal_complete) {
+        using msg_addr = net::messaging_service::msg_addr;
+        auto id = msg_addr{session->peer, session->dst_cpu_id};
+        sslog.debug("[Stream #{}] SEND STREAM_MUTATION_DONE to {}, seq={}", plan_id, id, sequence_number);
+        session->ms().send_stream_mutation_done(id, plan_id, std::move(_ranges), this->cf_id, session->dst_cpu_id).then_wrapped([this, id, plan_id] (auto&& f) {
+            try {
+                f.get();
+                session->start_keep_alive_timer();
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
+                session->transfer_task_completed(this->cf_id);
+            } catch (...) {
+                sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, std::current_exception());
+                session->on_error();
+            }
+        });
+    }
 }
 
 } // namespace streaming

@@ -38,26 +38,28 @@
 
 #pragma once
 
-#include "query-request.hh"
-#include "mutation_reader.hh"
-#include "utils/UUID.hh"
-#include <vector>
-#include "range.hh"
-#include "dht/i_partitioner.hh"
+#include "streaming/stream_detail.hh"
+#include <seastar/core/semaphore.hh>
 
 namespace streaming {
 
-struct stream_detail {
-    using UUID = utils::UUID;
-    UUID cf_id;
-    lw_shared_ptr<mutation_reader> mr;
-    int64_t estimated_keys;
-    stream_detail() = default;
-    stream_detail(UUID cf_id_, mutation_reader mr_, long estimated_keys_)
-        : cf_id(std::move(cf_id_))
-        , mr(make_lw_shared(std::move(mr_)))
-        , estimated_keys(estimated_keys_) {
+/**
+ * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
+ */
+class outgoing_file_message {
+public:
+    int32_t sequence_number;
+    stream_detail detail;
+
+    size_t mutations_nr{0};
+    semaphore mutations_done{0};
+
+    outgoing_file_message() = default;
+    outgoing_file_message(int32_t sequence_number_, stream_detail detail_)
+        : sequence_number(sequence_number_)
+        , detail(std::move(detail_)) {
     }
 };
 
 } // namespace streaming
+
