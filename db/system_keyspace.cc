@@ -677,16 +677,16 @@ future<> save_truncation_record(const column_family& cf, db_clock::time_point tr
     // once, for each core (calling us). But right now, redesigning so that calling here (or, rather,
     // save_truncation_records), is done from "somewhere higher, once per machine, not shard" is tricky.
     // Mainly because drop_tables also uses truncate. And is run per-core as well. Gah.
-    return get_truncated_position(cf.schema()->id()).then([&cf, truncated_at, rp](replay_positions positions) {
-        auto i = std::find_if(positions.begin(), positions.end(), [rp](auto& p) {
+    return get_truncation_record(cf.schema()->id()).then([&cf, truncated_at, rp](truncation_record e) {
+        auto i = std::find_if(e.positions.begin(), e.positions.end(), [rp](replay_position& p) {
             return p.shard_id() == rp.shard_id();
         });
-        if (i == positions.end()) {
-            positions.emplace_back(rp);
+        if (i == e.positions.end()) {
+            e.positions.emplace_back(rp);
         } else {
             *i = rp;
         }
-        return save_truncation_records(cf, truncated_at, positions);
+        return save_truncation_records(cf, std::max(truncated_at, e.time_stamp), e.positions);
     });
 }
 
