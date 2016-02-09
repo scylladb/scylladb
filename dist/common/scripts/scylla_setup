@@ -137,7 +137,7 @@ fi
 
 if [ $COREDUMP_SETUP -eq 1 ]; then
     if [ "$DISKS" != "" ]; then
-        /usr/lib/scylla/scylla_coredump_setup -s
+        /usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir
     else
         /usr/lib/scylla/scylla_coredump_setup
     fi
