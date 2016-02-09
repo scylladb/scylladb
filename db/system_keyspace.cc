@@ -58,13 +58,14 @@
 #include "thrift/server.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/query_processor.hh"
-#include "db/serializer.hh"
 #include "query_context.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "schema_builder.hh"
 #include "md5_hasher.hh"
 #include "release.hh"
+#include "log.hh"
+#include "serializer.hh"
 #include <core/enum.hh>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -75,6 +76,7 @@ std::unique_ptr<query_context> qctx = {};
 
 namespace system_keyspace {
 
+static logging::logger logger("system_keyspace");
 static const api::timestamp_type creation_timestamp = api::new_timestamp();
 
 api::timestamp_type schema_creation_timestamp() {
@@ -546,31 +548,44 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
     });
 }
 
-typedef std::pair<replay_positions, db_clock::time_point> truncation_entry;
-typedef utils::UUID truncation_key;
-typedef std::unordered_map<truncation_key, truncation_entry> truncation_map;
+struct truncation_record {
+    static constexpr uint32_t current_magic = 0x53435452; // 'S' 'C' 'T' 'R'
 
+    uint32_t magic;
+    std::vector<db::replay_position> positions;
+    db_clock::time_point time_stamp;
+};
+}
+}
+
+#include "idl/replay_position.dist.hh"
+#include "idl/truncation_record.dist.hh"
+#include "serializer_impl.hh"
+#include "idl/replay_position.dist.impl.hh"
+#include "idl/truncation_record.dist.impl.hh"
+
+namespace db {
+namespace system_keyspace {
+
+typedef utils::UUID truncation_key;
+typedef std::unordered_map<truncation_key, truncation_record> truncation_map;
+
+static constexpr uint8_t current_version = 1;
 static thread_local std::experimental::optional<truncation_map> truncation_records;
 
 future<> save_truncation_records(const column_family& cf, db_clock::time_point truncated_at, replay_positions positions) {
-    auto size =
-            sizeof(db_clock::rep)
-                    + positions.size()
-                            * db::serializer<replay_position>(
-                                    db::replay_position()).size();
-    bytes buf(bytes::initialized_later(), size);
-    data_output out(buf);
+    truncation_record r;
 
-    // Old version would write a single RP. We write N. Resulting blob size
-    // will determine how many.
-    // An external entity reading this blob would get a "correct" RP
-    // and a garbled time stamp. But an external entity has no business
-    // reading this data anyway, since it is meaningless outside this
-    // machine instance.
-    for (auto& rp : positions) {
-        db::serializer<replay_position>::write(out, rp);
-    }
-    out.write<db_clock::rep>(truncated_at.time_since_epoch().count());
+    r.magic = truncation_record::current_magic;
+    r.time_stamp = truncated_at;
+    r.positions = std::move(positions);
+
+    auto buf = ser::serialize_to_buffer<bytes>(r, sizeof(current_version));
+
+    buf[0] = current_version;
+
+    static_assert(sizeof(current_version) == 1, "using this as mark");
+    assert(buf.size() & 1); // verify we've created an odd-numbered buffer
 
     map_type_impl::native_type tmp;
     tmp.emplace_back(cf.schema()->id(), data_value(buf));
@@ -594,7 +609,7 @@ future<> remove_truncation_record(utils::UUID id) {
     });
 }
 
-static future<truncation_entry> get_truncation_record(utils::UUID cf_id) {
+static future<truncation_record> get_truncation_record(utils::UUID cf_id) {
     if (!truncation_records) {
         sstring req = sprint("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL);
         return qctx->qp().execute_internal(req).then([cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
@@ -605,22 +620,56 @@ static future<truncation_entry> get_truncation_record(utils::UUID cf_id) {
                     auto uuid = p.first;
                     auto buf = p.second;
 
-                    truncation_entry e;
+                    try {
+                        truncation_record e;
 
-                    data_input in(buf);
+                        if (buf.size() & 1) {
+                            // new record.
+                            if (buf[0] != current_version) {
+                                logger.warn("Found truncation record of unknown version {}. Ignoring.", int(buf[0]));
+                                continue;
+                            }
+                            e = ser::deserialize_from_buffer(buf, boost::type<truncation_record>(), 1);
+                            if (e.magic == truncation_record::current_magic) {
+                                tmp[uuid] = e;
+                                continue;
+                            }
+                        } else {
+                            // old scylla records. (We hope)
+                            // Read 64+64 bit RP:s, even though the
+                            // struct (and official serial size) is 64+32.
+                            data_input in(buf);
 
-                    while (in.avail() > sizeof(db_clock::rep)) {
-                        e.first.emplace_back(db::serializer<replay_position>::read(in));
+                            logger.debug("Reading old type record");
+                            while (in.avail() > sizeof(db_clock::rep)) {
+                                auto id = in.read<uint64_t>();
+                                auto pos = in.read<uint64_t>();
+                                e.positions.emplace_back(id, position_type(pos));
+                            }
+                            if (in.avail() == sizeof(db_clock::rep)) {
+                                e.time_stamp = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
+                                tmp[uuid] = e;
+                                continue;
+                            }
+                        }
+                    } catch (std::out_of_range &) {
                     }
-                    e.second = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
-                    tmp[uuid] = e;
+                    // Trying to load an origin table.
+                    // This is useless to us, because the only usage for this
+                    // data is commit log and batch replay, and we cannot replay
+                    // either from origin anyway.
+                    logger.warn("Error reading truncation record for {}. "
+                                    "Most likely this is data from a cassandra instance."
+                                    "Make sure you have cleared commit and batch logs before upgrading.",
+                                    uuid
+                    );
                 }
             }
             truncation_records = std::move(tmp);
             return get_truncation_record(cf_id);
         });
     }
-    return make_ready_future<truncation_entry>((*truncation_records)[cf_id]);
+    return make_ready_future<truncation_record>((*truncation_records)[cf_id]);
 }
 
 future<> save_truncation_record(const column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
@@ -653,14 +702,14 @@ future<db::replay_position> get_truncated_position(utils::UUID cf_id, uint32_t s
 }
 
  future<replay_positions> get_truncated_position(utils::UUID cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_entry e) {
-        return make_ready_future<replay_positions>(e.first);
+    return get_truncation_record(cf_id).then([](truncation_record e) {
+        return make_ready_future<replay_positions>(e.positions);
     });
 }
 
 future<db_clock::time_point> get_truncated_at(utils::UUID cf_id) {
-    return get_truncation_record(cf_id).then([](truncation_entry e) {
-        return make_ready_future<db_clock::time_point>(e.second);
+    return get_truncation_record(cf_id).then([](truncation_record e) {
+        return make_ready_future<db_clock::time_point>(e.time_stamp);
     });
 }
 
