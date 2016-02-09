@@ -238,9 +238,6 @@ public:
     boost::iterator_range<iterator> components(const bytes_view& v) const {
         return { begin(v), end(v) };
     }
-    auto iter_items(const bytes_view& v) {
-        return boost::iterator_range<iterator>(begin(v), end(v));
-    }
     value_type deserialize_value(bytes_view v) {
         std::vector<bytes> result;
         result.reserve(_types.size());
@@ -258,7 +255,7 @@ public:
         }
         auto t = _types.begin();
         size_t h = 0;
-        for (auto&& value : iter_items(v)) {
+        for (auto&& value : components(v)) {
             h ^= (*t)->hash(value);
             ++t;
         }
