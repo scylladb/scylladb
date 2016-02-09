@@ -107,6 +107,16 @@ static bool belongs_to_current_node(const dht::token& t, const std::vector<range
     return false;
 }
 
+static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstable>& new_sstables, sstring& ks, sstring& cf) {
+    // Delete either partially or fully written sstables of a compaction that
+    // was either stopped abruptly (e.g. out of disk space) or deliberately
+    // (e.g. nodetool stop COMPACTION).
+    for (auto& sst : new_sstables) {
+        logger.debug("Deleting sstable {} of interrupted compaction for {}/{}", sst->get_filename(), ks, cf);
+        sst->mark_for_deletion();
+    }
+}
+
 // compact_sstables compacts the given list of sstables creating one
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
@@ -235,7 +245,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     future<> read_done = repeat([output_writer, reader = std::move(reader), info] () mutable {
         if (info->is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
-            throw std::runtime_error(sprint("Compaction for %s/%s was deliberately stopped.", info->ks, info->cf));
+            throw compaction_stop_exception(info->ks, info->cf, info->stop_requested);
         }
         return reader().then([output_writer, info] (auto mopt) {
             if (mopt) {
@@ -300,7 +310,13 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         sstring ex;
         try {
             std::get<0>(t).get();
+        } catch(compaction_stop_exception& e) {
+
+            std::get<1>(t).ignore_ready_future(); // ignore result of write fiber if compaction was asked to stop.
+            delete_sstables_for_interrupted_compaction(info->new_sstables, info->ks, info->cf);
+            throw;
         } catch(...) {
+
             ex += sprint("read exception: %s", std::current_exception());
         }
 
@@ -311,13 +327,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         }
 
         if (ex.size()) {
-            // Delete either partially or fully written sstables of a compaction that
-            // was either stopped abruptly (e.g. out of disk space) or deliberately
-            // (e.g. nodetool stop COMPACTION).
-            for (auto& sst : info->new_sstables) {
-                logger.debug("Deleting sstable {} of interrupted compaction for {}/{}", sst->get_filename(), info->ks, info->cf);
-                sst->mark_for_deletion();
-            }
+            delete_sstables_for_interrupted_compaction(info->new_sstables, info->ks, info->cf);
 
             throw std::runtime_error(ex);
         }

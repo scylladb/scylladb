@@ -22,6 +22,7 @@
 #include "compaction_manager.hh"
 #include "database.hh"
 #include "core/scollectd.hh"
+#include "exceptions.hh"
 
 static logging::logger cmlog("compaction_manager");
 
@@ -135,6 +136,9 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 task->compacting_cf = nullptr;
                 cmlog.info("compaction task handler stopped due to shutdown");
                 throw;
+            } catch (sstables::compaction_stop_exception& e) {
+                cmlog.info("compaction info: {}", e.what());
+                retry = true;
             } catch (std::exception& e) {
                 cmlog.error("compaction failed: {}", e.what());
                 retry = true;
@@ -239,7 +243,7 @@ future<> compaction_manager::stop() {
     _registrations.clear();
     // Stop all ongoing compaction.
     for (auto& info : _compactions) {
-        info->stop();
+        info->stop("shutdown");
     }
     // Wait for each task handler to stop.
     return do_for_each(_tasks, [this] (auto& task) {
@@ -346,7 +350,7 @@ void compaction_manager::stop_compaction(sstring type) {
     }
     for (auto& info : _compactions) {
         if (target_type == info->type) {
-            info->stop();
+            info->stop("user request");
         }
     }
 }

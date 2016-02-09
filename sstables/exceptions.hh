@@ -36,4 +36,15 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
         malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
     {}
 };
+
+class compaction_stop_exception : public std::exception {
+    sstring _msg;
+public:
+    compaction_stop_exception(sstring ks, sstring cf, sstring reason) :
+        _msg(sprint("Compaction for %s/%s was stopped due to %s.", ks, cf, reason)) {}
+    const char *what() const noexcept {
+        return _msg.c_str();
+    }
+};
+
 }

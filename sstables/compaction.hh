@@ -81,14 +81,14 @@ namespace sstables {
         uint64_t total_partitions = 0;
         uint64_t total_keys_written = 0;
         std::vector<shared_sstable> new_sstables;
-        bool stop_requested = false;
+        sstring stop_requested;
 
         bool is_stop_requested() const {
-            return stop_requested;
+            return stop_requested.size() > 0;
         }
 
-        void stop() {
-            stop_requested = true;
+        void stop(sstring reason) {
+            stop_requested = std::move(reason);
         }
     };
 
