@@ -2758,9 +2758,8 @@ void storage_proxy::init_messaging_service() {
         });
     });
     ms.register_truncate([](sstring ksname, sstring cfname) {
-        const auto truncated_at = db_clock::now();
-        return get_storage_proxy().invoke_on_all([truncated_at, ksname, cfname](storage_proxy& sp) {
-            return sp._db.local().truncate(truncated_at, ksname, cfname);
+        return get_storage_proxy().invoke_on_all([ksname, cfname](storage_proxy& sp) {
+            return sp._db.local().truncate(ksname, cfname);
         });
     });
 

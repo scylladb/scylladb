@@ -679,7 +679,6 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after)
 {
-    auto changed_at = db_clock::now();
     std::vector<global_schema_ptr> created;
     std::vector<global_schema_ptr> altered;
     std::vector<global_schema_ptr> dropped;
@@ -696,7 +695,7 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
         altered.emplace_back(create_table_from_mutations(after.at(key)));
     }
 
-    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered, changed_at] (database& db) {
+    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
         return seastar::async([&] {
             for (auto&& gs : created) {
                 schema_ptr s = gs.get();
@@ -709,9 +708,9 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
             for (auto&& gs : altered) {
                 update_column_family(db, gs.get());
             }
-            parallel_for_each(dropped.begin(), dropped.end(), [changed_at, &db](auto&& gs) {
+            parallel_for_each(dropped.begin(), dropped.end(), [&db](auto&& gs) {
                 schema_ptr s = gs.get();
-                return db.drop_column_family(changed_at, s->ks_name(), s->cf_name()).then([s] {
+                return db.drop_column_family(s->ks_name(), s->cf_name()).then([s] {
                     service::get_local_migration_manager().notify_drop_column_family(s);
                 });
             }).get();
