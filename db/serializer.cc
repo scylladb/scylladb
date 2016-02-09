@@ -167,21 +167,25 @@ void db::serializer<collection_mutation_view>::read(collection_mutation_view& c,
     c = collection_mutation_view::from_bytes(bytes_view_serializer::read(in));
 }
 
+// Modified to match sstable/origin serialization. And the actual data type.
+// Note however, that afaict, noone uses this serializer now
+// (see comment in system_keyspace::save_truncation_record)
+// I.e. consider dropping this alltogether.
 template<>
 db::serializer<db::replay_position>::serializer(const db::replay_position& rp)
-        : _item(rp), _size(sizeof(uint64_t) * 2) {
+        : _item(rp), _size(sizeof(uint64_t) + sizeof(uint32_t)) {
 }
 
 template<>
 void db::serializer<db::replay_position>::write(output& out, const db::replay_position& rp) {
     out.write<uint64_t>(rp.id);
-    out.write<uint64_t>(rp.pos);
+    out.write<uint32_t>(rp.pos);
 }
 
 template<>
 void db::serializer<db::replay_position>::read(db::replay_position& rp, input& in) {
     rp.id = in.read<uint64_t>();
-    rp.pos = in.read<uint64_t>();
+    rp.pos = in.read<uint32_t>();
 }
 
 template class db::serializer<tombstone> ;
