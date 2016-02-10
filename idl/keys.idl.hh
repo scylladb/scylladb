@@ -20,9 +20,9 @@
  */
 
 class clustering_key_prefix {
-    bytes representation();
+    std::vector<bytes> explode();
 };
 
 class partition_key {
-    bytes representation();
+    std::vector<bytes> explode();
 };
