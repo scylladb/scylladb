@@ -73,6 +73,10 @@ private:
     std::vector<scollectd::registration> _registrations;
 
     std::list<lw_shared_ptr<sstables::compaction_info>> _compactions;
+
+    // Store sstables that are being compacted at the moment. That's needed to prevent
+    // a sstable from being compacted twice.
+    std::unordered_set<sstables::shared_sstable> _compacting_sstables;
 private:
     void task_start(lw_shared_ptr<task>& task);
     future<> task_stop(lw_shared_ptr<task>& task);

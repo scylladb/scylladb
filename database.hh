@@ -171,9 +171,6 @@ private:
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
-    // Store generation of sstables being compacted at the moment. That's needed to prevent a
-    // sstable from being compacted twice.
-    std::unordered_set<unsigned long> _compacting_generations;
 private:
     void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
     void add_sstable(sstables::sstable&& sstable);
@@ -365,10 +362,6 @@ public:
                 trigger_compaction();
             }
         });
-    }
-
-    std::unordered_set<unsigned long>& compacting_generations() {
-        return _compacting_generations;
     }
 private:
     // One does not need to wait on this future if all we are interested in, is

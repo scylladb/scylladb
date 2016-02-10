@@ -53,40 +53,38 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 _stats.active_tasks++;
 
                 column_family& cf = *task->compacting_cf;
-                std::unordered_set<unsigned long>& compacting_generations = cf.compacting_generations();
                 std::vector<sstables::shared_sstable> candidates; // candidates for compaction
 
                 candidates.reserve(cf.sstables_count());
                 // Filter out sstables that are being compacted.
                 for (auto& entry : *cf.get_sstables()) {
                     auto& sst = entry.second;
-                    if (!compacting_generations.count(sst->generation())) {
+                    if (!_compacting_sstables.count(sst)) {
                         candidates.push_back(sst);
                     }
                 }
 
                 sstables::compaction_descriptor descriptor;
-                // Created to erase generations from cf.compacting_generations() after compaction finishes.
-                std::vector<unsigned long> generations_to_compact;
-                generations_to_compact.reserve(descriptor.sstables.size());
+                // Created to erase sstables from _compacting_sstables after compaction finishes.
+                std::vector<sstables::shared_sstable> sstables_to_compact;
+                sstables_to_compact.reserve(descriptor.sstables.size());
 
-                auto insert_generations_to_compact = [&compacting_generations, &generations_to_compact, &descriptor] {
+                auto keep_track_of_compacting_sstables = [this, &sstables_to_compact, &descriptor] {
                     for (auto& sst : descriptor.sstables) {
-                        auto generation = sst->generation();
-                        generations_to_compact.push_back(generation);
-                        compacting_generations.insert(generation);
+                        sstables_to_compact.push_back(sst);
+                        _compacting_sstables.insert(sst);
                     }
                 };
 
                 future<> operation = make_ready_future<>();
                 if (task->cleanup) {
                     descriptor = sstables::compaction_descriptor(std::move(candidates));
-                    insert_generations_to_compact();
+                    keep_track_of_compacting_sstables();
                     operation = cf.cleanup_sstables(std::move(descriptor));
                 } else {
                     sstables::compaction_strategy cs = cf.get_compaction_strategy();
                     descriptor = cs.get_sstables_for_compaction(cf, std::move(candidates));
-                    insert_generations_to_compact();
+                    keep_track_of_compacting_sstables();
                     operation = cf.run_compaction(std::move(descriptor));
                 }
 
@@ -116,11 +114,10 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     task->compacting_cf = nullptr;
 
                     return make_ready_future<>();
-                }).finally([this, &compacting_generations, generations_to_compact = std::move(generations_to_compact)] {
-                    // Remove compacted generations from the set of compacting generations,
-                    // stored in column family.
-                    for (auto generation : generations_to_compact) {
-                        compacting_generations.erase(generation);
+                }).finally([this, sstables_to_compact = std::move(sstables_to_compact)] {
+                    // Remove compacted sstables from the set of compacting sstables.
+                    for (auto& sst : sstables_to_compact) {
+                        _compacting_sstables.erase(sst);
                     }
                     _stats.active_tasks--;
                 });
