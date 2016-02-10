@@ -90,13 +90,7 @@ public:
         return len;
     }
     bytes serialize_single(bytes&& v) {
-        {
-            // FIXME: Optimize
-            std::vector<bytes> vec;
-            vec.reserve(1);
-            vec.emplace_back(std::move(v));
-            return serialize_value(vec);
-        }
+        return serialize_value({std::move(v)});
     }
     template<typename RangeOfSerializedComponents>
     static bytes serialize_value(RangeOfSerializedComponents&& values) {
