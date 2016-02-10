@@ -168,8 +168,10 @@ public:
         return from_exploded(s, {});
     }
 
-    static TopLevel from_exploded(const std::vector<bytes>& v) {
-        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(v));
+    template<typename RangeOfSerializedComponents>
+    static TopLevel from_exploded(RangeOfSerializedComponents&& v) {
+        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(
+                std::forward<RangeOfSerializedComponents>(v)));
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {

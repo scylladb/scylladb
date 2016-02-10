@@ -26,28 +26,9 @@
 #include <algorithm>
 #include <vector>
 #include <boost/range/iterator_range.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include "utils/serialization.hh"
 #include "unimplemented.hh"
-
-// value_traits is meant to abstract away whether we are working on 'bytes'
-// elements or 'bytes_opt' elements. We don't support optional values, but
-// there are some generic layers which use this code which provide us with
-// data in that format. In order to avoid allocation and rewriting that data
-// into a new vector just to throw it away soon after that, we accept that
-// format too.
-
-template <typename T>
-struct value_traits {
-    static const T& unwrap(const T& t) { return t; }
-};
-
-template<>
-struct value_traits<bytes_opt> {
-    static const bytes& unwrap(const bytes_opt& t) {
-        assert(t);
-        return *t;
-    }
-};
 
 enum class allow_prefixes { no, yes };
 
@@ -91,20 +72,18 @@ public:
      *   <len(value1)><value1><len(value2)><value2>...<len(value_n)><value_n>
      *
      */
-    template<typename Wrapped>
-    static void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
-        for (auto&& wrapped : values) {
-            auto&& val = value_traits<Wrapped>::unwrap(wrapped);
+    template<typename RangeOfSerializedComponents>
+    static void serialize_value(RangeOfSerializedComponents&& values, bytes::iterator& out) {
+        for (auto&& val : values) {
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
             write<uint16_t>(out, uint16_t(val.size()));
             out = std::copy(val.begin(), val.end(), out);
         }
     }
-    template <typename Wrapped>
-    static size_t serialized_size(const std::vector<Wrapped>& values) {
+    template <typename RangeOfSerializedComponents>
+    static size_t serialized_size(RangeOfSerializedComponents&& values) {
         size_t len = 0;
-        for (auto&& wrapped : values) {
-            auto&& val = value_traits<Wrapped>::unwrap(wrapped);
+        for (auto&& val : values) {
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
             len += sizeof(uint16_t) + val.size();
         }
@@ -116,18 +95,27 @@ public:
             std::vector<bytes> vec;
             vec.reserve(1);
             vec.emplace_back(std::move(v));
-            return ::serialize_value(*this, vec);
+            return serialize_value(vec);
         }
     }
-    template<typename RangeOfComponents>
-    static bytes serialize_value(const RangeOfComponents& values) {
+    template<typename RangeOfSerializedComponents>
+    static bytes serialize_value(RangeOfSerializedComponents&& values) {
         bytes b(bytes::initialized_later(), serialized_size(values));
         auto i = b.begin();
         serialize_value(values, i);
         return b;
     }
+    template<typename T>
+    static bytes serialize_value(std::initializer_list<T> values) {
+        return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
+    }
     bytes serialize_optionals(const std::vector<bytes_opt>& values) {
-        return serialize_value(values);
+        return serialize_value(values | boost::adaptors::transformed([] (bytes_opt bo) -> bytes_view {
+            if (!bo) {
+                throw std::logic_error("attempted to create key component from empty optional");
+            }
+            return *bo;
+        }));
     }
     bytes serialize_value_deep(const std::vector<data_value>& values) {
         // TODO: Optimize
