@@ -452,7 +452,7 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
         return repeat([s, reader] {
             return (*reader)().then([s, reader] (mutation_opt mut) {
                 auto key_equal = [s, &mut] (sstring ip) {
-                    return mut->key().representation() == partition_key::from_deeply_exploded(*s, { net::ipv4_address(ip) }).representation();
+                    return mut->key().equal(*s, partition_key::from_deeply_exploded(*s, { net::ipv4_address(ip) }));
                 };
 
                 if (!mut) {
