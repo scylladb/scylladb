@@ -39,6 +39,19 @@ abstract_replication_strategy::abstract_replication_strategy(
         , _snitch(snitch)
         , _my_type(my_type) {}
 
+static void unwrap_first_range(std::vector<range<token>>& ret) {
+    if (ret.empty()) {
+        return;
+    }
+    // Make ret contain no wrap-around range by unwrapping the first element.
+    auto& r = ret.front();
+    if (r.is_wrap_around(dht::token_comparator())) {
+        auto split_ranges = r.unwrap();
+        r = std::move(split_ranges.first);
+        ret.push_back(std::move(split_ranges.second));
+    }
+}
+
 std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
 
@@ -123,15 +136,7 @@ abstract_replication_strategy::get_ranges(inet_address ep) const {
         }
         prev_tok = tok;
     }
-    if (!ret.empty()) {
-        // Make ret contain no wrap-around range by unwrapping the first element.
-        auto& r = ret.front();
-        if (r.is_wrap_around(dht::token_comparator())) {
-            auto split_ranges = r.unwrap();
-            r = split_ranges.first;
-            ret.push_back(split_ranges.second);
-        }
-    }
+    unwrap_first_range(ret);
     return ret;
 }
 
@@ -148,6 +153,7 @@ abstract_replication_strategy::get_primary_ranges(inet_address ep) {
         }
         prev_tok = tok;
     }
+    unwrap_first_range(ret);
     return ret;
 }
 
@@ -158,8 +164,17 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
         range<token> r = tm.get_primary_range_for(t);
         auto eps = calculate_natural_endpoints(t, tm);
         logger.debug("token={}, primary_range={}, address={}", t, r, eps);
-        for (auto ep : eps) {
-            ret.emplace(ep, r);
+        bool wrap = r.is_wrap_around(dht::token_comparator());
+        if (wrap) {
+            auto split_ranges = r.unwrap();
+            for (auto ep : eps) {
+                ret.emplace(ep, std::move(split_ranges.first));
+                ret.emplace(ep, std::move(split_ranges.second));
+            }
+        } else {
+            for (auto ep : eps) {
+                ret.emplace(ep, std::move(r));
+            }
         }
     }
     return ret;
@@ -170,8 +185,18 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
     std::unordered_multimap<range<token>, inet_address> ret;
     for (auto& t : tm.sorted_tokens()) {
         range<token> r = tm.get_primary_range_for(t);
-        for (auto ep : calculate_natural_endpoints(t, tm)) {
-            ret.emplace(r, ep);
+        auto eps = calculate_natural_endpoints(t, tm);
+        bool wrap = r.is_wrap_around(dht::token_comparator());
+        if (wrap) {
+            auto split_ranges = r.unwrap();
+            for (auto ep : eps) {
+                ret.emplace(std::move(split_ranges.first), ep);
+                ret.emplace(std::move(split_ranges.second), ep);
+            }
+        } else {
+            for (auto ep : eps) {
+                ret.emplace(std::move(r), ep);
+            }
         }
     }
     return ret;
