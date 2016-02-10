@@ -110,7 +110,7 @@ public:
         return serialize_value(boost::make_iterator_range(values.begin(), values.end()));
     }
     bytes serialize_optionals(const std::vector<bytes_opt>& values) {
-        return serialize_value(values | boost::adaptors::transformed([] (bytes_opt bo) -> bytes_view {
+        return serialize_value(values | boost::adaptors::transformed([] (const bytes_opt& bo) -> bytes_view {
             if (!bo) {
                 throw std::logic_error("attempted to create key component from empty optional");
             }

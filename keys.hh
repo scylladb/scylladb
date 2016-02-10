@@ -577,7 +577,20 @@ public:
     explicit partition_key(bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
-    partition_key(const partition_key_view& key)
+
+    template<typename RangeOfSerializedComponents>
+    partition_key(RangeOfSerializedComponents&& v)
+        : partition_key(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+    { }
+
+    partition_key(partition_key&& v) = default;
+    partition_key(const partition_key& v) = default;
+    partition_key(partition_key& v) = default;
+    partition_key& operator=(const partition_key&) = default;
+    partition_key& operator=(partition_key&) = default;
+    partition_key& operator=(partition_key&&) = default;
+
+    partition_key(partition_key_view key)
         : partition_key(bytes(key.representation().begin(), key.representation().end()))
     { }
 
@@ -651,6 +664,19 @@ public:
     explicit clustering_key_prefix(bytes&& b)
         : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
+
+    template<typename RangeOfSerializedComponents>
+    clustering_key_prefix(RangeOfSerializedComponents&& v)
+        : clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+    { }
+
+    clustering_key_prefix(clustering_key_prefix&& v) = default;
+    clustering_key_prefix(const clustering_key_prefix& v) = default;
+    clustering_key_prefix(clustering_key_prefix& v) = default;
+    clustering_key_prefix& operator=(const clustering_key_prefix&) = default;
+    clustering_key_prefix& operator=(clustering_key_prefix&) = default;
+    clustering_key_prefix& operator=(clustering_key_prefix&&) = default;
+
     clustering_key_prefix(clustering_key_prefix_view v)
         : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
     { }
