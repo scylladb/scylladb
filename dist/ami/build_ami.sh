@@ -42,8 +42,8 @@ if [ $LOCALRPM = 0 ]; then
     echo "sudo sh -x -e /home/centos/scylla_install_pkg" >> scylla_deploy.sh
 else
     echo "sudo sh -x -e /home/centos/scylla_install_pkg -l /home/centos" >> scylla_deploy.sh
-echo "sudo sh -x -e /usr/lib/scylla/scylla_setup -a" >> scylla_deploy.sh
 fi
+echo "sudo sh -x -e /usr/lib/scylla/scylla_setup -a" >> scylla_deploy.sh
 
 chmod a+rx scylla_deploy.sh
 packer/packer build -var-file=variables.json scylla.json
