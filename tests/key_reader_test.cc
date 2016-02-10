@@ -67,29 +67,29 @@ SEASTAR_TEST_CASE(test_combined) {
     rds.emplace_back(make_key_reader<keys_from_vector>(s, std::move(b)));
     rds.emplace_back(make_key_reader<keys_from_vector>(s, std::move(c)));
     auto reader = make_lw_shared(make_combined_reader(s, std::move(rds)));
-    return (*reader)().then([reader] (dht::decorated_key_opt dk) {
+    return (*reader)().then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(5));
+        BOOST_REQUIRE(dk->equal(*s, make_key(5)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(1));
+        BOOST_REQUIRE(dk->equal(*s, make_key(1)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(0));
+        BOOST_REQUIRE(dk->equal(*s, make_key(0)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(2));
+        BOOST_REQUIRE(dk->equal(*s, make_key(2)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(4));
+        BOOST_REQUIRE(dk->equal(*s, make_key(4)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, s, make_key] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(3));
+        BOOST_REQUIRE(dk->equal(*s, make_key(3)));
         return (*reader)();
     }).then([reader] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(!dk);
@@ -105,20 +105,20 @@ SEASTAR_TEST_CASE(test_filtering) {
 
     std::vector<dht::decorated_key> v = { make_key(0), make_key(1), make_key(2), make_key(3) };
     auto rd = make_key_reader<keys_from_vector>(s, std::move(v));
-    auto reader = make_lw_shared(make_filtering_reader(std::move(rd), [] (dht::decorated_key dk) {
-        return dk.key().representation() != int32_type->decompose(2);
+    auto reader = make_lw_shared(make_filtering_reader(std::move(rd), [s, make_key] (dht::decorated_key dk) {
+        return !dk.equal(*s, make_key(2));
     }));
-    return (*reader)().then([reader] (dht::decorated_key_opt dk) {
+    return (*reader)().then([reader, make_key, s] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(1));
+        BOOST_REQUIRE(dk->equal(*s, make_key(1)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, make_key, s] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(0));
+        BOOST_REQUIRE(dk->equal(*s, make_key(0)));
         return (*reader)();
-    }).then([reader] (dht::decorated_key_opt dk) {
+    }).then([reader, make_key, s] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(dk);
-        BOOST_CHECK_EQUAL(dk->key().representation(), int32_type->decompose(3));
+        BOOST_REQUIRE(dk->equal(*s, make_key(3)));
         return (*reader)();
     }).then([reader] (dht::decorated_key_opt dk) {
         BOOST_REQUIRE(!dk);

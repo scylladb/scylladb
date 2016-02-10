@@ -109,13 +109,24 @@ public:
 
     // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
     // The iterators satisfy InputIterator concept.
+    auto begin() const {
+        return TopLevelView::compound::element_type::begin(representation());
+    }
+
+    // See begin()
+    auto end() const {
+        return TopLevelView::compound::element_type::end(representation());
+    }
+
+    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // The iterators satisfy InputIterator concept.
     auto begin(const schema& s) const {
-        return get_compound_type(s)->begin(representation());
+        return begin();
     }
 
     // See begin()
     auto end(const schema& s) const {
-        return get_compound_type(s)->end(representation());
+        return end();
     }
 
     bytes_view get_component(const schema& s, size_t idx) const {
@@ -125,8 +136,13 @@ public:
     }
 
     // Returns a range of bytes_view
+    auto components() const {
+        return TopLevelView::compound::element_type::components(representation());
+    }
+
+    // Returns a range of bytes_view
     auto components(const schema& s) const {
-        return boost::make_iterator_range(begin(s), end(s));
+        return components();
     }
 
     template<typename Hasher>
@@ -152,12 +168,14 @@ public:
         return from_exploded(s, {});
     }
 
-    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(v));
+    template<typename RangeOfSerializedComponents>
+    static TopLevel from_exploded(RangeOfSerializedComponents&& v) {
+        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(
+                std::forward<RangeOfSerializedComponents>(v)));
     }
 
-    static TopLevel from_exploded(const schema& s, std::vector<bytes>&& v) {
-        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(std::move(v)));
+    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
+        return from_exploded(v);
     }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
@@ -195,6 +213,14 @@ public:
     // FIXME: return views
     std::vector<bytes> explode(const schema& s) const {
         return get_compound_type(s)->deserialize_value(_bytes);
+    }
+
+    std::vector<bytes> explode() const {
+        std::vector<bytes> result;
+        for (bytes_view c : components()) {
+            result.emplace_back(to_bytes(c));
+        }
+        return result;
     }
 
     struct less_compare {
@@ -258,6 +284,16 @@ public:
     // See begin()
     auto end(const schema& s) const {
         return get_compound_type(s)->end(_bytes);
+    }
+
+    // Returns a range of bytes_view
+    auto components() const {
+        return TopLevelView::compound::element_type::components(representation());
+    }
+
+    // Returns a range of bytes_view
+    auto components(const schema& s) const {
+        return components();
     }
 
     bytes_view get_component(const schema& s, size_t idx) const {
@@ -541,7 +577,20 @@ public:
     explicit partition_key(bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
-    partition_key(const partition_key_view& key)
+
+    template<typename RangeOfSerializedComponents>
+    partition_key(RangeOfSerializedComponents&& v)
+        : partition_key(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+    { }
+
+    partition_key(partition_key&& v) = default;
+    partition_key(const partition_key& v) = default;
+    partition_key(partition_key& v) = default;
+    partition_key& operator=(const partition_key&) = default;
+    partition_key& operator=(partition_key&) = default;
+    partition_key& operator=(partition_key&&) = default;
+
+    partition_key(partition_key_view key)
         : partition_key(bytes(key.representation().begin(), key.representation().end()))
     { }
 
@@ -615,6 +664,19 @@ public:
     explicit clustering_key_prefix(bytes&& b)
         : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
+
+    template<typename RangeOfSerializedComponents>
+    clustering_key_prefix(RangeOfSerializedComponents&& v)
+        : clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+    { }
+
+    clustering_key_prefix(clustering_key_prefix&& v) = default;
+    clustering_key_prefix(const clustering_key_prefix& v) = default;
+    clustering_key_prefix(clustering_key_prefix& v) = default;
+    clustering_key_prefix& operator=(const clustering_key_prefix&) = default;
+    clustering_key_prefix& operator=(clustering_key_prefix&) = default;
+    clustering_key_prefix& operator=(clustering_key_prefix&&) = default;
+
     clustering_key_prefix(clustering_key_prefix_view v)
         : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
     { }
