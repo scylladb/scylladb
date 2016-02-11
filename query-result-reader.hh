@@ -164,7 +164,7 @@ public:
         while (in.has_next()) {
             auto row_count = in.read<uint32_t>();
             if (slice.options.contains<partition_slice::option::send_partition_key>()) {
-                auto key = partition_key::from_bytes(to_bytes(in.read_view_to_blob<uint32_t>()));
+                auto key = partition_key::from_bytes(in.read_view_to_blob<uint32_t>());
                 visitor.accept_new_partition(key, row_count);
             } else {
                 visitor.accept_new_partition(row_count);
@@ -178,7 +178,7 @@ public:
 
             while (row_count--) {
                 if (slice.options.contains<partition_slice::option::send_clustering_key>()) {
-                    auto key = clustering_key::from_bytes(to_bytes(in.read_view_to_blob<uint32_t>()));
+                    auto key = clustering_key::from_bytes(in.read_view_to_blob<uint32_t>());
                     result_row_view row(in.read_view_to_blob<uint32_t>(), slice);
                     visitor.accept_new_row(key, static_row, row);
                 } else {

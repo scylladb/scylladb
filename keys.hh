@@ -571,7 +571,7 @@ public:
 };
 
 class partition_key : public compound_wrapper<partition_key, partition_key_view> {
-    explicit partition_key(bytes&& b)
+    explicit partition_key(managed_bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
 public:
@@ -590,13 +590,13 @@ public:
     partition_key& operator=(partition_key&&) = default;
 
     partition_key(partition_key_view key)
-        : partition_key(bytes(key.representation().begin(), key.representation().end()))
+        : partition_key(managed_bytes(key.representation()))
     { }
 
     using compound = lw_shared_ptr<c_type>;
 
-    static partition_key from_bytes(bytes b) {
-        return partition_key(std::move(b));
+    static partition_key from_bytes(bytes_view b) {
+        return partition_key(managed_bytes(b));
     }
 
     static const compound& get_compound_type(const schema& s) {
@@ -659,7 +659,7 @@ public:
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
-    explicit clustering_key_prefix(bytes&& b)
+    explicit clustering_key_prefix(managed_bytes&& b)
             : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
 public:
@@ -676,13 +676,13 @@ public:
     clustering_key_prefix& operator=(clustering_key_prefix&&) = default;
 
     clustering_key_prefix(clustering_key_prefix_view v)
-        : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
+        : clustering_key_prefix(managed_bytes(v.representation()))
     { }
 
     using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
 
-    static clustering_key_prefix from_bytes(bytes b) {
-        return clustering_key_prefix(std::move(b));
+    static clustering_key_prefix from_bytes(bytes_view b) {
+        return clustering_key_prefix(managed_bytes(b));
     }
 
     static const compound& get_compound_type(const schema& s) {
