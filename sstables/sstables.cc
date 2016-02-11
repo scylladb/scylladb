@@ -785,7 +785,7 @@ void sstable::seal_sstable() {
     dir_f.flush().get();
     dir_f.close().get();
     // If this point was reached, sstable should be safe in disk.
-    sstlog.debug("SSTable with generation {} was sealed successfully.", _generation);
+    sstlog.debug("SSTable with generation {} of {}/{} was sealed successfully.", _generation, _ks, _cf);
 }
 
 void write_crc(const sstring file_path, checksum& c) {
