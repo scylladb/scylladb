@@ -544,6 +544,9 @@ int main(int ac, char** av) {
             engine().at_exit([] {
                 return service::get_local_storage_service().drain_on_shutdown();
             });
+            engine().at_exit([] {
+                return repair_shutdown(service::get_local_storage_service().db());
+            });
         }).or_terminate();
     });
 }
