@@ -40,6 +40,11 @@ public:
     virtual const char* what() const noexcept override { return _what.c_str(); }
 };
 
+class repair_stopped_exception : public repair_exception {
+public:
+    repair_stopped_exception() : repair_exception("Repair stopped") { }
+};
+
 // NOTE: repair_start() can be run on any node, but starts a node-global
 // operation.
 // repair_start() starts the requested repair on this node. It returns an
@@ -57,6 +62,13 @@ enum class repair_status { RUNNING, SUCCESSFUL, FAILED };
 // repair_get_status() returns a future because it needs to run code on a
 // different CPU (cpu 0) and that might be a deferring operation.
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id);
+
+// repair_shutdown() stops all ongoing repairs started on this node (and
+// prevents any further repairs from being started). It returns a future
+// saying when all repairs have stopped, and attempts to stop them as
+// quickly as possible (we do not wait for repairs to finish but rather
+// stop them abruptly).
+future<> repair_shutdown(seastar::sharded<database>& db);
 
 // The class partition_checksum calculates a 256-bit cryptographically-secure
 // checksum of a set of partitions fed to it. The checksum of a partition set

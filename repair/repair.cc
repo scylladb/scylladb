@@ -203,15 +203,23 @@ private:
     // Successfully-finished repairs are those with id < _next_repair_command
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
+    // Variables used to allow shutting down all repair in progress
+    bool _in_shutdown = false;
+    promise<> _shutdown_done;
+    int _repairs_running = 0;
 public:
     void start(int id) {
         _status[id] = repair_status::RUNNING;
+        ++_repairs_running;
     }
     void done(int id, bool succeeded) {
         if (succeeded) {
             _status.erase(id);
         } else {
             _status[id] = repair_status::FAILED;
+        }
+        if (--_repairs_running == 0 && _in_shutdown) {
+            _shutdown_done.set_value();
         }
     }
     repair_status get(int id) {
@@ -228,7 +236,27 @@ public:
     int next_repair_command() {
         return _next_repair_command++;
     }
+    future<> shutdown() {
+        assert(!_in_shutdown);
+        _in_shutdown = true;
+        if (_repairs_running == 0) {
+            return make_ready_future<>();
+        }
+        return _shutdown_done.get_future();
+    }
+    bool in_shutdown() {
+        return _in_shutdown;
+    }
 } repair_tracker;
+
+static void check_in_shutdown() {
+    // Only call this from the single CPU managing the repair - the only CPU
+    // which is allowed to use repair_tracker.
+    assert(engine().cpu_id() == 0);
+    if (repair_tracker.in_shutdown()) {
+        throw repair_stopped_exception();
+    }
+}
 
 
 partition_checksum::partition_checksum(const mutation& m) {
@@ -445,6 +473,7 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
         [&db, &neighbors, parallelism] (auto& sem, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
         return do_for_each(ranges, [&sem, &success, &db, &neighbors, &keyspace, &cf]
                            (const auto& range) {
+            check_in_shutdown();
             return sem.wait(1).then([&sem, &success, &db, &neighbors, &keyspace, &cf, &range] {
                 // Ask this node, and all neighbors, to calculate checksums in
                 // this range. When all are done, compare the results, and if
@@ -713,6 +742,7 @@ static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
         // repair all the ranges in sequence
         return do_for_each(ranges.begin(), ranges.end(), [&db, keyspace, &cfs, &data_centers, &hosts, id] (auto&& range) {
 #endif
+            check_in_shutdown();
             return repair_range(db, keyspace, range, cfs, data_centers, hosts);
         }).then([id] {
             logger.info("repair {} completed sucessfully", id);
@@ -731,6 +761,7 @@ static future<> repair_ranges(seastar::sharded<database>& db, sstring keyspace,
 // itself does very little (mainly tell other nodes and CPUs what to do).
 static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
         std::unordered_map<sstring, sstring> options_map) {
+    check_in_shutdown();
 
     repair_options options(options_map);
 
@@ -804,5 +835,14 @@ future<int> repair_start(seastar::sharded<database>& db, sstring keyspace,
 future<repair_status> repair_get_status(seastar::sharded<database>& db, int id) {
     return db.invoke_on(0, [id] (database& localdb) {
         return repair_tracker.get(id);
+    });
+}
+
+future<> repair_shutdown(seastar::sharded<database>& db) {
+    logger.info("Starting shutdown of repair");
+    return db.invoke_on(0, [] (database& localdb) {
+        return repair_tracker.shutdown().then([] {
+            logger.info("Completed shutdown of repair");
+        });
     });
 }
