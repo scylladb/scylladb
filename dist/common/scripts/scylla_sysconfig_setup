@@ -13,6 +13,7 @@ print_usage() {
     echo "  -c  scylla config directory"
     echo "  -N  setup NIC's interrupts, RPS, XPS"
     echo "  -a  AMI instance mode"
+    echo "  -d  disk count"
     exit 1
 }
 
@@ -24,6 +25,7 @@ else
 fi
 . $SYSCONFIG/scylla-server
 
+DISK_COUNT=0
 while getopts n:m:p:u:g:d:c:Nakh OPT; do
     case "$OPT" in
         "n")
@@ -53,6 +55,9 @@ while getopts n:m:p:u:g:d:c:Nakh OPT; do
         "a")
             AMI=yes
             ;;
+        "d")
+            DISK_COUNT=$OPTARG
+            ;;
         "h")
             print_usage
             ;;
@@ -64,11 +69,29 @@ echo Setting parameters on $SYSCONFIG/scylla-server
 ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
 ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
 NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
+NR_SHARDS=$NR_CPU
 if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
-    NR=$((NR_CPU - 1))
+    NR_SHARDS=$((NR_CPU - 1))
     SET_NIC="yes"
-    SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR  --smp $NR"
+    SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR_SHARDS  --smp $NR_SHARDS"
 fi
+
+if [ "$AMI" = "yes" ] && [ $DISK_COUNT -gt 0 ]; then
+    NR_DISKS=$DISK_COUNT
+    if [ $NR_DISKS -lt 2 ]; then NR_DISKS=2; fi
+
+    NR_REQS=$((32 * $NR_DISKS / 2))
+
+    NR_IO_QUEUES=$NR_SHARDS
+    if [ $(($NR_REQS/$NR_IO_QUEUES)) -lt 4 ]; then
+        NR_IO_QUEUES=$(($NR_REQS / 4))
+    fi
+
+    NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
+
+    SCYLLA_IO="$SCYLLA_IO --num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS"
+fi
+
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
     -e s#^ETHPCIID=.*#ETHPCIID=$ETHPCIID# \
@@ -79,6 +102,7 @@ sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^SCYLLA_CONF=.*#SCYLLA_CONF=$SCYLLA_CONF# \
     -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
     -e "s#^SCYLLA_ARGS=.*#SCYLLA_ARGS=\"$SCYLLA_ARGS\"#" \
+    -e "s#^SCYLLA_IO=.*#SCYLLA_IO=\"$SCYLLA_IO\"#" \
     -e s#^AMI=.*#AMI=$AMI# \
     $SYSCONFIG/scylla-server > /tmp/scylla-server
 mv /tmp/scylla-server $SYSCONFIG/scylla-server
