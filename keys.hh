@@ -170,8 +170,7 @@ public:
 
     template<typename RangeOfSerializedComponents>
     static TopLevel from_exploded(RangeOfSerializedComponents&& v) {
-        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(
-                std::forward<RangeOfSerializedComponents>(v)));
+        return TopLevel(std::forward<RangeOfSerializedComponents>(v));
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
@@ -490,7 +489,7 @@ template <typename TopLevel, typename TopLevelView, typename FullTopLevel>
 class prefix_compound_wrapper : public compound_wrapper<TopLevel, TopLevelView> {
     using base = compound_wrapper<TopLevel, TopLevelView>;
 protected:
-    prefix_compound_wrapper(bytes&& b) : base(std::move(b)) {}
+    prefix_compound_wrapper(managed_bytes&& b) : base(std::move(b)) {}
 public:
     using prefix_view_type = prefix_view_on_prefix_compound<TopLevel>;
 
@@ -572,15 +571,15 @@ public:
 };
 
 class partition_key : public compound_wrapper<partition_key, partition_key_view> {
-public:
-    using c_type = compound_type<allow_prefixes::no>;
     explicit partition_key(bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
+public:
+    using c_type = compound_type<allow_prefixes::no>;
 
     template<typename RangeOfSerializedComponents>
     partition_key(RangeOfSerializedComponents&& v)
-        : partition_key(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))))
     { }
 
     partition_key(partition_key&& v) = default;
@@ -660,14 +659,13 @@ public:
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
-public:
     explicit clustering_key_prefix(bytes&& b)
-        : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
+            : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
-
+public:
     template<typename RangeOfSerializedComponents>
     clustering_key_prefix(RangeOfSerializedComponents&& v)
-        : clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
     { }
 
     clustering_key_prefix(clustering_key_prefix&& v) = default;
