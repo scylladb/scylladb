@@ -25,6 +25,31 @@ from distutils.spawn import find_executable
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
+for line in open('/etc/os-release'):
+    key, _, value = line.partition('=')
+    value = value.strip().strip('"')
+    if key == 'ID':
+        os_ids = [value]
+    if key == 'ID_LIKE':
+        os_ids += value.split(' ')
+
+# distribution "internationalization", converting package names.
+# Fedora name is key, values is distro -> package name dict. 
+i18n_xlat = {
+    'boost-devel': {
+        'debian': 'libboost-dev',
+        'ubuntu': 'libboost-dev (libboost1.55-dev on 14.04)',
+    },
+}
+
+def pkgname(name):
+    if name in i18n_xlat:
+        dict = i18n_xlat[name]
+        for id in os_ids:
+            if id in dict:
+                return dict[id]
+    return name 
+
 def get_flags():
     with open('/proc/cpuinfo') as f:
         for line in f:
@@ -583,6 +608,19 @@ for pkglist in optional_packages:
         else:
             alternatives = ':'.join(pkglist[1:])
             print('Missing optional package {pkglist[0]} (or alteratives {alternatives})'.format(**locals()))
+
+if not try_compile(compiler=args.cxx, source='#include <boost/version.hpp>'):
+    print('Boost not installed.  Please install {}.'.format(pkgname("boost-devel")))
+    sys.exit(1)
+
+if not try_compile(compiler=args.cxx, source='''\
+        #include <boost/version.hpp>
+        #if BOOST_VERSION < 105500
+        #error Boost version too low
+        #endif
+        '''):
+    print('Installed boost version too old.  Please update {}.'.format(pkgname("boost-devel")))
+    sys.exit(1)
 
 defines = ' '.join(['-D' + d for d in defines])
 
