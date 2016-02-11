@@ -62,9 +62,8 @@ public:
     }
 
     bytes_opt execute(serialization_format sf, const std::vector<bytes_opt>& parameters) override {
-        auto buf = _schema->partition_key_type()->serialize_optionals(parameters);
-        auto view = partition_key_view::from_bytes(std::move(buf));
-        auto tok = dht::global_partitioner().get_token(*_schema, view);
+        auto key = partition_key::from_optional_exploded(*_schema, parameters);
+        auto tok = dht::global_partitioner().get_token(*_schema, key);
         warn(unimplemented::cause::VALIDATION);
         return dht::global_partitioner().token_to_bytes(tok);
     }
