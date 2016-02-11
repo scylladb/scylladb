@@ -3,13 +3,13 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla-sysconfig-setup -n eth0 -m posix -p 64 -u scylla -g scylla -d /var/lib/scylla -c /etc/scylla -N -a -k"
+    echo "scylla-sysconfig-setup -n eth0 -m posix -p 64 -u scylla -g scylla -r /var/lib/scylla -c /etc/scylla -N -a -k"
     echo "  -n  specify NIC"
     echo "  -m  network mode (posix, dpdk)"
     echo "  -p  number of hugepages"
     echo "  -u  user (dpdk requires root)"
     echo "  -g  group (dpdk requires root)"
-    echo "  -d  scylla home directory"
+    echo "  -r  scylla home directory"
     echo "  -c  scylla config directory"
     echo "  -N  setup NIC's interrupts, RPS, XPS"
     echo "  -a  AMI instance mode"
@@ -41,7 +41,7 @@ while getopts n:m:p:u:g:d:c:Nakh OPT; do
         "g")
             GROUP=$OPTARG
             ;;
-        "d")
+        "r")
             SCYLLA_HOME=$OPTARG
             ;;
         "c")
