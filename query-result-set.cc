@@ -172,7 +172,7 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
             if (cell) {
                 auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                 auto view = cell.value();
-                auto normal_form = ctype->to_value(ctype->deserialize_mutation_form(view), cql_serialization_format::internal());
+                auto normal_form = ctype->to_value(ctype->deserialize_mutation_form(view), _slice.cql_format());
                 cells.emplace(col.name_as_text(), col.type->deserialize_value(normal_form));
             }
         }

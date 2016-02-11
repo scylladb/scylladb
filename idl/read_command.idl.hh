@@ -19,7 +19,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+class cql_serialization_format final {
+    uint8_t protocol_version();
+};
+
 namespace query {
+
 class specific_ranges {
     partition_key pk();
     std::vector<range<clustering_key_prefix>> ranges();
@@ -31,6 +36,7 @@ class partition_slice {
     std::vector<uint32_t> regular_columns;
     query::partition_slice::option_set options;
     std::unique_ptr<query::specific_ranges> get_specific_ranges();
+    cql_serialization_format cql_format();
 };
 
 class read_command {
@@ -40,4 +46,5 @@ class read_command {
     uint32_t row_limit;
     std::chrono::time_point<gc_clock, gc_clock::duration> timestamp;
 };
+
 }
