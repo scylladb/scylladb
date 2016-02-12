@@ -58,8 +58,9 @@ namespace cql3 {
  */
 class update_parameters final {
 public:
+    // Holder for data needed by CQL list updates which depend on current state of the list.
     struct prefetch_data {
-        using key = std::pair<partition_key, clustering_key>;
+        using key = std::pair<partition_key, std::experimental::optional<clustering_key>>;
         struct key_hashing {
             partition_key::hashing pk_hash;
             clustering_key::hashing ck_hash;
@@ -70,7 +71,7 @@ public:
             { }
 
             size_t operator()(const key& k) const {
-                return pk_hash(k.first) ^ ck_hash(k.second);
+                return pk_hash(k.first) ^ (k.second ? ck_hash(*k.second) : 0);
             }
         };
         struct key_equality {
@@ -83,7 +84,8 @@ public:
             { }
 
             bool operator()(const key& k1, const key& k2) const {
-                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
+                return pk_eq(k1.first, k2.first)
+                       && bool(k1.second) == bool(k2.second) && (!k1.second || ck_eq(*k1.second, *k2.second));
             }
         };
         using row = std::unordered_map<column_id, collection_mutation>;
@@ -183,8 +185,11 @@ public:
         return _timestamp;
     }
 
-    std::experimental::optional<collection_mutation_view> get_prefetched_list(
-        const partition_key& pkey, const clustering_key& row_key, const column_definition& column) const;
+    std::experimental::optional<collection_mutation_view>
+    get_prefetched_list(
+        partition_key pkey,
+        std::experimental::optional<clustering_key> ckey,
+        const column_definition& column) const;
 };
 
 }

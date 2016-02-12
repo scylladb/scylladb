@@ -259,7 +259,10 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     // we should not get here for frozen lists
     assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-    auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    std::experimental::optional<clustering_key> row_key;
+    if (!column.is_static()) {
+        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    }
 
     auto index = _idx->bind_and_get(params._options);
     auto value = _t->bind_and_get(params._options);
@@ -269,8 +272,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     }
 
     auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
-
-    auto existing_list_opt = params.get_prefetched_list(m.key(), row_key, column);
+    auto&& existing_list_opt = params.get_prefetched_list(m.key(), std::move(row_key), column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
@@ -383,8 +385,13 @@ lists::discarder::requires_read() {
 void
 lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
-    auto&& row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    auto&& existing_list = params.get_prefetched_list(m.key(), row_key, column);
+
+    std::experimental::optional<clustering_key> row_key;
+    if (!column.is_static()) {
+        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    }
+
+    auto&& existing_list = params.get_prefetched_list(m.key(), std::move(row_key), column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
 
@@ -444,8 +451,11 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     auto cvalue = dynamic_pointer_cast<constants::value>(index);
     assert(cvalue);
 
-    auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    auto&& existing_list = params.get_prefetched_list(m.key(), row_key, column);
+    std::experimental::optional<clustering_key> row_key;
+    if (!column.is_static()) {
+        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    }
+    auto&& existing_list = params.get_prefetched_list(m.key(), std::move(row_key), column);
     int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
     if (!existing_list) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");
