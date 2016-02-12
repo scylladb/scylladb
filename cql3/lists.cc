@@ -108,7 +108,7 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(bytes_view v, list_type type, serialization_format sf) {
+lists::value::from_serialized(bytes_view v, list_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
@@ -128,11 +128,11 @@ lists::value::from_serialized(bytes_view v, list_type type, serialization_format
 
 bytes_opt
 lists::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_serialization_format());
+    return get_with_protocol_version(options.get_cql_serialization_format());
 }
 
 bytes
-lists::value::get_with_protocol_version(serialization_format sf) {
+lists::value::get_with_protocol_version(cql_serialization_format sf) {
     // Can't use boost::indirect_iterator, because optional is not an iterator
     auto deref = [] (bytes_opt& x) { return *x; };
     return collection_type_impl::pack(
@@ -212,7 +212,7 @@ lists::marker::bind(const query_options& options) {
     if (!value) {
         return nullptr;
     } else {
-        return make_shared(value::from_serialized(*value, std::move(ltype), options.get_serialization_format()));
+        return make_shared(value::from_serialized(*value, std::move(ltype), options.get_cql_serialization_format()));
     }
 }
 
@@ -342,7 +342,7 @@ lists::do_append(shared_ptr<term> t,
             auto&& newv = collection_mutation{list_type_impl::pack(
                     boost::make_transform_iterator(to_add.begin(), deref),
                     boost::make_transform_iterator(to_add.end(), deref),
-                    to_add.size(), serialization_format::internal())};
+                    to_add.size(), cql_serialization_format::internal())};
             m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(newv)));
         }
     }

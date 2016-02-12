@@ -205,7 +205,7 @@ class collection_terminal {
 public:
     virtual ~collection_terminal() {}
     /** Gets the value of the collection when serialized with the given protocol version format */
-    virtual bytes get_with_protocol_version(serialization_format sf) = 0;
+    virtual bytes get_with_protocol_version(cql_serialization_format sf) = 0;
 };
 
 /**

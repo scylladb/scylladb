@@ -87,11 +87,11 @@ public:
         return false;
     }
 
-    virtual void add_input(serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
         _selected->add_input(sf, rs);
     }
 
-    virtual bytes_opt get_output(serialization_format sf) override {
+    virtual bytes_opt get_output(cql_serialization_format sf) override {
         auto&& value = _selected->get_output(sf);
         if (!value) {
             return std::experimental::nullopt;

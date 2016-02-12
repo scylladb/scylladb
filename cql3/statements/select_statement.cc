@@ -246,7 +246,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     if (aggregate) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
-                        options.get_serialization_format()),
+                        options.get_cql_serialization_format()),
                 [p, page_size, now](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now] {
@@ -338,7 +338,7 @@ shared_ptr<transport::messages::result_message> select_statement::process_result
         db_clock::time_point now) {
 
     cql3::selection::result_set_builder builder(*_selection, now,
-            options.get_serialization_format());
+            options.get_cql_serialization_format());
     query::result_view::consume(results->buf(), cmd->slice,
             cql3::selection::result_set_builder::visitor(builder, *_schema,
                     *_selection));

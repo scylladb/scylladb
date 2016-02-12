@@ -71,7 +71,7 @@ public:
      * @param rs the <code>result_set_builder</code>
      * @throws InvalidRequestException if a problem occurs while add the input value
      */
-    virtual void add_input(serialization_format sf, result_set_builder& rs) = 0;
+    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) = 0;
 
     /**
      * Returns the selector output.
@@ -80,7 +80,7 @@ public:
      * @return the selector output
      * @throws InvalidRequestException if a problem occurs while computing the output value
      */
-    virtual bytes_opt get_output(serialization_format sf) = 0;
+    virtual bytes_opt get_output(cql_serialization_format sf) = 0;
 
     /**
      * Returns the <code>selector</code> output type.

@@ -48,7 +48,7 @@
 #include "service/pager/paging_state.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
-#include "serialization_format.hh"
+#include "cql_serialization_format.hh"
 
 namespace cql3 {
 
@@ -75,7 +75,7 @@ private:
     const bool _skip_metadata;
     const specific_options _options;
     const int32_t _protocol_version; // transient
-    serialization_format _serialization_format;
+    cql_serialization_format _cql_serialization_format;
     std::experimental::optional<std::vector<query_options>> _batch_options;
 public:
     query_options(query_options&&) = default;
@@ -88,21 +88,21 @@ public:
                            bool skip_metadata,
                            specific_options options,
                            int32_t protocol_version,
-                           serialization_format sf);
+                           cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<bytes_view_opt> value_views,
                            bool skip_metadata,
                            specific_options options,
                            int32_t protocol_version,
-                           serialization_format sf);
+                           cql_serialization_format sf);
 
     explicit query_options(db::consistency_level consistency,
                            std::vector<std::vector<bytes_view_opt>> value_views,
                            bool skip_metadata,
                            specific_options options,
                            int32_t protocol_version,
-                           serialization_format sf);
+                           cql_serialization_format sf);
 
     // Batch query_options constructor
     explicit query_options(query_options&&, std::vector<std::vector<bytes_view_opt>> value_views);
@@ -131,7 +131,7 @@ public:
      * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
      */
     int get_protocol_version() const;
-    serialization_format get_serialization_format() const;
+    cql_serialization_format get_cql_serialization_format() const;
     // Mainly for the sake of BatchQueryOptions
     const specific_options& get_specific_options() const;
     const query_options& for_statement(size_t i) const;

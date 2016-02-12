@@ -113,11 +113,11 @@ protected:
             _current.clear();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             return std::move(_current);
         }
 
-        virtual void add_input_row(serialization_format sf, result_set_builder& rs) override {
+        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) override {
             _current = std::move(*rs.current);
         }
 
@@ -181,7 +181,7 @@ protected:
             return _factories->contains_only_aggregate_functions();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             std::vector<bytes_opt> output_row;
             output_row.reserve(_selectors.size());
             for (auto&& s : _selectors) {
@@ -190,7 +190,7 @@ protected:
             return output_row;
         }
 
-        virtual void add_input_row(serialization_format sf, result_set_builder& rs) {
+        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) {
             for (auto&& s : _selectors) {
                 s->add_input(sf, rs);
             }
@@ -253,11 +253,11 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, cql_serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
-    , _serialization_format(sf)
+    , _cql_serialization_format(sf)
 {
     if (s._collect_timestamps) {
         _timestamps.resize(s._columns.size(), 0);
@@ -298,15 +298,15 @@ void result_set_builder::add(const column_definition& def, const query::result_a
 
 void result_set_builder::add(const column_definition& def, collection_mutation_view c) {
     auto&& ctype = static_cast<const collection_type_impl*>(def.type.get());
-    current->emplace_back(ctype->to_value(c, _serialization_format));
+    current->emplace_back(ctype->to_value(c, _cql_serialization_format));
     // timestamps, ttls meaningless for collections
 }
 
 void result_set_builder::new_row() {
     if (current) {
-        _selectors->add_input_row(_serialization_format, *this);
+        _selectors->add_input_row(_cql_serialization_format, *this);
         if (!_selectors->is_aggregate()) {
-            _result_set->add_row(_selectors->get_output_row(_serialization_format));
+            _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
             _selectors->reset();
         }
         current->clear();
@@ -320,13 +320,13 @@ void result_set_builder::new_row() {
 
 std::unique_ptr<result_set> result_set_builder::build() {
     if (current) {
-        _selectors->add_input_row(_serialization_format, *this);
-        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+        _selectors->add_input_row(_cql_serialization_format, *this);
+        _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
         _selectors->reset();
         current = std::experimental::nullopt;
     }
     if (_result_set->empty() && _selectors->is_aggregate()) {
-        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+        _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
     }
     return std::move(_result_set);
 }

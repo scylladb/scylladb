@@ -56,7 +56,7 @@ inline
 shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
-            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         return {to_bytes(utils::UUID_gen::get_time_UUID())};
     });
 }
@@ -65,7 +65,7 @@ inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
     return make_native_scalar_function<true>("mintimeuuid", timeuuid_type, { timestamp_type },
-            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         auto& bb = values[0];
         if (!bb) {
             return {};
@@ -84,7 +84,7 @@ inline
 shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
-            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         // FIXME: should values be a vector<optional<bytes>>?
         auto& bb = values[0];
         if (!bb) {
@@ -104,7 +104,7 @@ inline
 shared_ptr<function>
 make_date_of_fct() {
     return make_native_scalar_function<true>("dateof", timestamp_type, { timeuuid_type },
-            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
@@ -119,7 +119,7 @@ inline
 shared_ptr<function>
 make_unix_timestamp_of_fcf() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
-            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+            [] (cql_serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {

@@ -69,9 +69,9 @@ public:
     * @param rs the <code>ResultSetBuilder</code>
     * @throws InvalidRequestException
     */
-    virtual void add_input_row(serialization_format sf, result_set_builder& rs) = 0;
+    virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) = 0;
 
-    virtual std::vector<bytes_opt> get_output_row(serialization_format sf) = 0;
+    virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) = 0;
 
     virtual void reset() = 0;
 };
@@ -236,9 +236,9 @@ private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
     const db_clock::time_point _now;
-    serialization_format _serialization_format;
+    cql_serialization_format _cql_serialization_format;
 public:
-    result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf);
+    result_set_builder(const selection& s, db_clock::time_point now, cql_serialization_format sf);
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);

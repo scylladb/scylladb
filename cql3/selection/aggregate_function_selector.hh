@@ -53,7 +53,7 @@ public:
         return true;
     }
 
-    virtual void add_input(serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
         // Aggregation of aggregation is not supported
         size_t m = _arg_selectors.size();
         for (size_t i = 0; i < m; ++i) {
@@ -65,7 +65,7 @@ public:
         _aggregate->add_input(sf, _args);
     }
 
-    virtual bytes_opt get_output(serialization_format sf) override {
+    virtual bytes_opt get_output(cql_serialization_format sf) override {
         return _aggregate->compute(sf);
     }
 

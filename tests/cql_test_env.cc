@@ -232,7 +232,7 @@ public:
                 auto c = cell->as_collection_mutation();
                 auto type = dynamic_pointer_cast<const collection_type_impl>(col_def->type);
                 actual = type->to_value(type->deserialize_mutation_form(c),
-                                        serialization_format::internal());
+                                        cql_serialization_format::internal());
             }
             assert(col_def->type->equal(actual, exp));
           });

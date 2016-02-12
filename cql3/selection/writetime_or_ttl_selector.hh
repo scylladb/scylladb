@@ -86,7 +86,7 @@ public:
         return make_shared<wtots_factory>(std::move(column_name), idx, is_writetime);
     }
 
-    virtual void add_input(serialization_format sf, result_set_builder& rs) override {
+    virtual void add_input(cql_serialization_format sf, result_set_builder& rs) override {
         if (_is_writetime) {
             int64_t ts = rs.timestamp_of(_idx);
             if (ts != api::missing_timestamp) {
@@ -108,7 +108,7 @@ public:
         }
     }
 
-    virtual bytes_opt get_output(serialization_format sf) override {
+    virtual bytes_opt get_output(cql_serialization_format sf) override {
         return _current;
     }
 

@@ -176,7 +176,7 @@ private:
             db_clock::time_point now) override {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
-                        _options.get_serialization_format()),
+                        _options.get_cql_serialization_format()),
                 [this, page_size, now](auto& builder) {
                     return this->fetch_page(builder, page_size, now).then([&builder] {
                        return builder.build();

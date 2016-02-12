@@ -28,18 +28,15 @@
 // any transport -- it's for internal storage) is bad, so abstract it
 // away here.
 
-class serialization_format {
+class cql_serialization_format {
     bool _use_32_bit;
 private:
-    explicit serialization_format(bool use_32_bit) : _use_32_bit(use_32_bit) {}
+    explicit cql_serialization_format(bool use_32_bit) : _use_32_bit(use_32_bit) {}
 public:
-    static serialization_format use_16_bit() { return serialization_format(false); }
-    static serialization_format use_32_bit() { return serialization_format(true); }
-    static serialization_format internal() { return use_32_bit(); }
+    static cql_serialization_format use_16_bit() { return cql_serialization_format(false); }
+    static cql_serialization_format use_32_bit() { return cql_serialization_format(true); }
+    static cql_serialization_format internal() { return use_32_bit(); }
     bool using_32_bits_for_collections() const { return _use_32_bit; }
-    bool operator==(serialization_format x) const { return _use_32_bit == x._use_32_bit; }
-    bool operator!=(serialization_format x) const { return !operator==(x); }
+    bool operator==(cql_serialization_format x) const { return _use_32_bit == x._use_32_bit; }
+    bool operator!=(cql_serialization_format x) const { return !operator==(x); }
 };
-
-
-
