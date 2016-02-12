@@ -186,11 +186,23 @@ modification_statement::make_update_parameters(
 class prefetch_data_builder {
     update_parameters::prefetch_data& _data;
     const query::partition_slice& _ps;
+    schema_ptr _schema;
     std::experimental::optional<partition_key> _pkey;
+private:
+    void add_cell(update_parameters::prefetch_data::row& cells, const column_definition& def, const std::experimental::optional<collection_mutation_view>& cell) {
+        if (cell) {
+            auto ctype = static_pointer_cast<const collection_type_impl>(def.type);
+            if (!ctype->is_multi_cell()) {
+                throw std::logic_error(sprint("cannot prefetch frozen collection: %s", def.name_as_text()));
+            }
+            cells.emplace(def.id, collection_mutation{*cell});
+        }
+    };
 public:
-    prefetch_data_builder(update_parameters::prefetch_data& data, const query::partition_slice& ps)
+    prefetch_data_builder(schema_ptr s, update_parameters::prefetch_data& data, const query::partition_slice& ps)
         : _data(data)
         , _ps(ps)
+        , _schema(std::move(s))
     { }
 
     void accept_new_partition(const partition_key& key, uint32_t row_count) {
@@ -205,20 +217,9 @@ public:
                     const query::result_row_view& row) {
         update_parameters::prefetch_data::row cells;
 
-        auto add_cell = [&cells] (column_id id, std::experimental::optional<collection_mutation_view>&& cell) {
-            if (cell) {
-                cells.emplace(id, collection_mutation{to_bytes(cell->data)});
-            }
-        };
-
-        auto static_row_iterator = static_row.iterator();
-        for (auto&& id : _ps.static_columns) {
-            add_cell(id, static_row_iterator.next_collection_cell());
-        }
-
         auto row_iterator = row.iterator();
         for (auto&& id : _ps.regular_columns) {
-            add_cell(id, row_iterator.next_collection_cell());
+            add_cell(cells, _schema->regular_column_at(id), row_iterator.next_collection_cell());
         }
 
         _data.rows.emplace(std::make_pair(*_pkey, key), std::move(cells));
@@ -228,7 +229,16 @@ public:
         assert(0);
     }
 
-    void accept_partition_end(const query::result_row_view& static_row) {}
+    void accept_partition_end(const query::result_row_view& static_row) {
+        update_parameters::prefetch_data::row cells;
+
+        auto static_row_iterator = static_row.iterator();
+        for (auto&& id : _ps.static_columns) {
+            add_cell(cells, _schema->static_column_at(id), static_row_iterator.next_collection_cell());
+        }
+
+        _data.rows.emplace(std::make_pair(*_pkey, std::experimental::nullopt), std::move(cells));
+    }
 };
 
 future<update_parameters::prefetched_rows_type>
@@ -278,7 +288,7 @@ modification_statement::read_required_rows(
         bytes_ostream buf(result->buf());
         query::result_view v(buf.linearize());
         auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
-        v.consume(ps, prefetch_data_builder(prefetched_rows.value(), ps));
+        v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
         return prefetched_rows;
     });
 }
