@@ -61,7 +61,7 @@ validate_cql_key(schema_ptr schema, const partition_key& key) {
     }
 
     try {
-        schema->partition_key_type()->validate(b);
+        key.validate(*schema);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.what());
     }

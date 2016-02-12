@@ -619,6 +619,10 @@ public:
         return view().legacy_equal(s, o);
     }
 
+    void validate(const schema& s) const {
+        return s.partition_key_type()->validate(representation());
+    }
+
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
 };
 
