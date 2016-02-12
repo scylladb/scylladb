@@ -332,6 +332,7 @@ public:
     }
     size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
+    bytes serialize() const;
     friend inline bool operator==(const data_value& x, const data_value& y);
     friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
@@ -509,6 +510,18 @@ inline
 void
 data_value::serialize(bytes::iterator& out) const {
     return _type->serialize(_value, out);
+}
+
+inline
+bytes
+data_value::serialize() const {
+    if (!_value) {
+        return {};
+    }
+    bytes b(bytes::initialized_later(), serialized_size());
+    auto i = b.begin();
+    serialize(i);
+    return b;
 }
 
 template <typename T>
