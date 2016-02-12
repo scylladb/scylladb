@@ -2179,7 +2179,7 @@ storage_proxy::do_query(schema_ptr s,
     lc.start();
     auto p = shared_from_this();
 
-    if (partition_ranges[0].is_singular() && partition_ranges[0].start()->value().has_key()) { // do not support mixed partitions (yet?)
+    if (query::is_single_partition(partition_ranges[0])) { // do not support mixed partitions (yet?)
         try {
             return query_singular(cmd, std::move(partition_ranges), cl).finally([lc, p] () mutable {
                     p->_stats.read.mark(lc.stop().latency_in_nano());
