@@ -50,12 +50,14 @@ namespace validation {
  */
 void
 validate_cql_key(schema_ptr schema, const partition_key& key) {
-    bytes_view b(key);
-    if (b.empty()) {
+    // C* validates here that the thrift key is not empty.
+    // It can only be empty if it is not composite and its only component in CQL form is empty.
+    if (schema->partition_key_size() == 1 && key.begin(*schema)->empty()) {
         throw exceptions::invalid_request_exception("Key may not be empty");
     }
 
     // check that key can be handled by FBUtilities.writeShortByteArray
+    auto b = key.representation();
     if (b.size() > max_key_size) {
         throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", b.size(), max_key_size));
     }
