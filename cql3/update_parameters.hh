@@ -88,7 +88,12 @@ public:
                        && bool(k1.second) == bool(k2.second) && (!k1.second || ck_eq(*k1.second, *k2.second));
             }
         };
-        using row = std::unordered_map<column_id, collection_mutation>;
+        struct cell {
+            bytes key;
+            bytes value;
+        };
+        using cell_list = std::vector<cell>;
+        using row = std::unordered_map<column_id, cell_list>;
     public:
         std::unordered_map<key, row, key_hashing, key_equality> rows;
         schema_ptr schema;
@@ -185,7 +190,7 @@ public:
         return _timestamp;
     }
 
-    std::experimental::optional<collection_mutation_view>
+    const prefetch_data::cell_list*
     get_prefetched_list(
         partition_key pkey,
         std::experimental::optional<clustering_key> ckey,

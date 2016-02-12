@@ -296,9 +296,8 @@ void result_set_builder::add(const column_definition& def, const query::result_a
     }
 }
 
-void result_set_builder::add(const column_definition& def, collection_mutation_view c) {
-    auto&& ctype = static_cast<const collection_type_impl*>(def.type.get());
-    current->emplace_back(ctype->to_value(c, _cql_serialization_format));
+void result_set_builder::add_collection(const column_definition& def, bytes_view c) {
+    current->emplace_back(to_bytes(c));
     // timestamps, ttls meaningless for collections
 }
 
@@ -345,7 +344,7 @@ void result_set_builder::visitor::add_value(const column_definition& def,
             _builder.add_empty();
             return;
         }
-        _builder.add(def, *cell);
+        _builder.add_collection(def, *cell);
     } else {
         auto cell = i.next_atomic_cell();
         if (!cell) {

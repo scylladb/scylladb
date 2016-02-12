@@ -276,27 +276,26 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to set an element on a list which is null");
     }
-    collection_mutation_view existing_list_ser = *existing_list_opt;
     auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
-    collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser);
+    auto&& existing_list = *existing_list_opt;
     // we verified that index is an int32_type
-    if (idx < 0 || size_t(idx) >= existing_list.cells.size()) {
+    if (idx < 0 || size_t(idx) >= existing_list.size()) {
         throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d",
-                idx, existing_list.cells.size()));
+                idx, existing_list.size()));
     }
 
-    bytes_view eidx = existing_list.cells[idx].first;
+    const bytes& eidx = existing_list[idx].key;
     list_type_impl::mutation mut;
     mut.cells.reserve(1);
     if (!value) {
-        mut.cells.emplace_back(to_bytes(eidx), params.make_dead_cell());
+        mut.cells.emplace_back(eidx, params.make_dead_cell());
     } else {
         if (value->size() > std::numeric_limits<uint16_t>::max()) {
             throw exceptions::invalid_request_exception(
                     sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
                             std::numeric_limits<uint16_t>::max(), value->size()));
         }
-        mut.cells.emplace_back(to_bytes(eidx), params.make_cell(*value));
+        mut.cells.emplace_back(eidx, params.make_cell(*value));
     }
     auto smut = ltype->serialize_mutation_form(mut);
     m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
@@ -401,9 +400,9 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
         return;
     }
 
-    auto&& elist = ltype->deserialize_mutation_form(*existing_list);
+    auto&& elist = *existing_list;
 
-    if (elist.cells.empty()) {
+    if (elist.empty()) {
         return;
     }
 
@@ -420,14 +419,14 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
     // toDiscard will be small and keeping a list will be more efficient.
     auto&& to_discard = lvalue->_elements;
     collection_type_impl::mutation mnew;
-    for (auto&& cell : elist.cells) {
+    for (auto&& cell : elist) {
         auto have_value = [&] (bytes_view value) {
             return std::find_if(to_discard.begin(), to_discard.end(),
                                 [ltype, value] (auto&& v) { return ltype->get_elements_type()->equal(*v, value); })
                                          != to_discard.end();
         };
-        if (cell.second.is_live() && have_value(cell.second.value())) {
-            mnew.cells.emplace_back(bytes(cell.first.begin(), cell.first.end()), params.make_dead_cell());
+        if (have_value(cell.value)) {
+            mnew.cells.emplace_back(cell.key, params.make_dead_cell());
         }
     }
     auto mnew_ser = ltype->serialize_mutation_form(mnew);
@@ -455,17 +454,17 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     if (!column.is_static()) {
         row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
     }
-    auto&& existing_list = params.get_prefetched_list(m.key(), std::move(row_key), column);
+    auto&& existing_list_opt = params.get_prefetched_list(m.key(), std::move(row_key), column);
     int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
-    if (!existing_list) {
+    if (!existing_list_opt) {
         throw exceptions::invalid_request_exception("Attempted to delete an element from a list which is null");
     }
-    auto&& deserialized = ltype->deserialize_mutation_form(*existing_list);
-    if (idx < 0 || size_t(idx) >= deserialized.cells.size()) {
-        throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d", idx, deserialized.cells.size()));
+    auto&& existing_list = *existing_list_opt;
+    if (idx < 0 || size_t(idx) >= existing_list.size()) {
+        throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d", idx, existing_list.size()));
     }
     collection_type_impl::mutation mut;
-    mut.cells.emplace_back(to_bytes(deserialized.cells[idx].first), params.make_dead_cell());
+    mut.cells.emplace_back(existing_list[idx].key, params.make_dead_cell());
     m.set_cell(prefix, column, ltype->serialize_mutation_form(mut));
 }
 

@@ -242,7 +242,7 @@ public:
     void add_empty();
     void add(bytes_opt value);
     void add(const column_definition& def, const query::result_atomic_cell_view& c);
-    void add(const column_definition& def, collection_mutation_view c);
+    void add_collection(const column_definition& def, bytes_view c);
     void new_row();
     std::unique_ptr<result_set> build();
     api::timestamp_type timestamp_of(size_t idx);

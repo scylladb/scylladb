@@ -419,11 +419,12 @@ static void get_row_slice(const schema& s,
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
                 auto m_view = ctype->deserialize_mutation_form(mut);
                 m_view.tomb.apply(tomb);
+                // FIXME: Instead of this, write optimistically and retract if empty
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view, now);
                 if (ctype->is_empty(m_ser)) {
                     writer.add_empty();
                 } else {
-                    writer.add(m_ser);
+                    writer.add(def.type, m_ser);
                 }
             }
         }

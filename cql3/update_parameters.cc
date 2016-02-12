@@ -43,7 +43,7 @@
 
 namespace cql3 {
 
-std::experimental::optional<collection_mutation_view>
+const update_parameters::prefetch_data::cell_list*
 update_parameters::get_prefetched_list(
     partition_key pkey,
     std::experimental::optional<clustering_key> ckey,
@@ -63,7 +63,7 @@ update_parameters::get_prefetched_list(
     if (j == row.end()) {
         return {};
     }
-    return {j->second};
+    return &j->second;
 }
 
 update_parameters::prefetch_data::prefetch_data(schema_ptr schema)

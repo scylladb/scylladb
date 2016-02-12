@@ -85,12 +85,12 @@ public:
             auto value = _in.read_view_to_blob<uint32_t>();
             return {result_atomic_cell_view(timestamp, expiry_, value)};
         }
-        std::experimental::optional<collection_mutation_view> next_collection_cell() {
+        std::experimental::optional<bytes_view> next_collection_cell() {
             auto present = _in.read<int8_t>();
             if (!present) {
                 return {};
             }
-            return collection_mutation_view{_in.read_view_to_blob<uint32_t>()};
+            return _in.read_view_to_blob<uint32_t>();
         };
         void skip(const column_definition& def) {
             if (def.is_atomic()) {
