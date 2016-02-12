@@ -34,6 +34,11 @@ void set_size(seastar::measuring_output_stream& os, const T& obj) {
     serialize(os, uint32_t(0));
 }
 
+template<typename T>
+void set_size(bytes_ostream& os, const T& obj) {
+    serialize(os, get_sizeof(obj));
+}
+
 
 template<typename Output>
 void safe_serialize_as_uint32(Output& out, uint64_t data) {
