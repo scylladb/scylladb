@@ -170,7 +170,7 @@ select_statement::make_partition_slice(const query_options& options) {
     if (_parameters->is_distinct()) {
         _opts.set(query::partition_slice::option::distinct);
         return query::partition_slice({ query::clustering_range::make_open_ended_both_sides() },
-            std::move(static_columns), {}, _opts);
+            std::move(static_columns), {}, _opts, nullptr, options.get_cql_serialization_format());
     }
 
     auto bounds = _restrictions->get_clustering_bounds(options);
@@ -179,7 +179,7 @@ select_statement::make_partition_slice(const query_options& options) {
         std::reverse(bounds.begin(), bounds.end());
     }
     return query::partition_slice(std::move(bounds),
-        std::move(static_columns), std::move(regular_columns), _opts);
+        std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format());
 }
 
 int32_t select_statement::get_limit(const query_options& options) const {
