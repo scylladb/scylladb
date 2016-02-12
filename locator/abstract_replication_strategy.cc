@@ -168,12 +168,12 @@ abstract_replication_strategy::get_address_ranges(token_metadata& tm) const {
         if (wrap) {
             auto split_ranges = r.unwrap();
             for (auto ep : eps) {
-                ret.emplace(ep, std::move(split_ranges.first));
-                ret.emplace(ep, std::move(split_ranges.second));
+                ret.emplace(ep, split_ranges.first);
+                ret.emplace(ep, split_ranges.second);
             }
         } else {
             for (auto ep : eps) {
-                ret.emplace(ep, std::move(r));
+                ret.emplace(ep, r);
             }
         }
     }
@@ -190,12 +190,12 @@ abstract_replication_strategy::get_range_addresses(token_metadata& tm) const {
         if (wrap) {
             auto split_ranges = r.unwrap();
             for (auto ep : eps) {
-                ret.emplace(std::move(split_ranges.first), ep);
-                ret.emplace(std::move(split_ranges.second), ep);
+                ret.emplace(split_ranges.first, ep);
+                ret.emplace(split_ranges.second, ep);
             }
         } else {
             for (auto ep : eps) {
-                ret.emplace(std::move(r), ep);
+                ret.emplace(r, ep);
             }
         }
     }
