@@ -132,7 +132,7 @@ if [ $NTP_SETUP -eq 1 ]; then
 fi
 
 if [ $RAID_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_raid_setup -d $DISKS -u
+    /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
 fi
 
 if [ $COREDUMP_SETUP -eq 1 ]; then

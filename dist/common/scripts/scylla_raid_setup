@@ -3,28 +3,31 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla-raid-setup -d /dev/hda,/dev/hdb... -r /dev/md0 -u"
-    echo "  -d  specify disks for RAID"
-    echo "  -r  MD device name for RAID"
-    echo "  -u  update /etc/fstab for RAID"
+    echo "scylla-raid-setup --disks /dev/hda,/dev/hdb... --raiddev /dev/md0 --update-fstab"
+    echo "  --disks	specify disks for RAID"
+    echo "  --raiddev	MD device name for RAID"
+    echo "  --update-fstab update /etc/fstab for RAID"
     exit 1
 }
 
 RAID=/dev/md0
 FSTAB=0
-while getopts d:r:uh OPT; do
-    case "$OPT" in
-        "d")
-            DISKS=`echo $OPTARG|tr -s ',' ' '`
-            NR_DISK=$((`echo $OPTARG|grep , -o|wc -w` + 1))
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--disks")
+            DISKS=`echo "$2"|tr -s ',' ' '`
+            NR_DISK=$((`echo "$2"|grep , -o|wc -w` + 1))
+            shift 2
             ;;
-        "r")
-            RAID=$OPTARG
+        "--raiddev")
+            RAID="$2"
+            shift 2
             ;;
-        "u")
+        "--update-fstab")
             FSTAB=1
+            shift 1
             ;;
-        "h")
+        *)
             print_usage
             ;;
     esac
