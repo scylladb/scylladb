@@ -16,7 +16,7 @@ ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SCYLLA_IO
 ExecStopPost=/usr/bin/sudo -E /usr/lib/scylla/scylla_stop
 TimeoutStartSec=900
 KillMode=process
-Restart=no
+Restart=on-abnormal
 User=scylla
 
 [Install]
