@@ -40,7 +40,8 @@ override_dh_auto_install:
 	cp -r $(CURDIR)/licenses $(DOC)
 
 	mkdir -p $(SCRIPTS) && \
-	cp $(CURDIR)/seastar/dpdk/tools/dpdk_nic_bind.py $(SCRIPTS)
+	cp $(CURDIR)/seastar/scripts/dpdk_nic_bind.py $(SCRIPTS)
+	cp $(CURDIR)/seastar/scripts/posix_net_conf.sh $(SCRIPTS)
 	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
 	cp $(CURDIR)/dist/ubuntu/scripts/* $(SCRIPTS)
 
