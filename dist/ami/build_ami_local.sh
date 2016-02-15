@@ -28,4 +28,4 @@ if [ ! -f dist/ami/files/scylla-tools.noarch.rpm ]; then
     cp build/scylla-tools-java/build/rpmbuild/RPMS/noarch/scylla-tools-`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`.*.noarch.rpm dist/ami/files/scylla-tools.noarch.rpm
 fi
 
-exec dist/ami/build_ami.sh -l
+exec dist/ami/build_ami.sh --localrpm

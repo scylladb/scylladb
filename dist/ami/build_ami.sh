@@ -6,17 +6,18 @@ if [ ! -e dist/ami/build_ami.sh ]; then
 fi
 
 print_usage() {
-    echo "build_ami.sh -l"
-    echo "  -l  deploy locally built rpms"
+    echo "build_ami.sh --localrpm"
+    echo "  --localrpm  deploy locally built rpms"
     exit 1
 }
 LOCALRPM=0
-while getopts lh OPT; do
-    case "$OPT" in
-        "l")
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--localrpm")
             LOCALRPM=1
+            shift 1
             ;;
-        "h")
+        *)
             print_usage
             ;;
     esac
