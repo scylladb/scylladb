@@ -63,7 +63,8 @@ selection::selection(schema_ptr schema,
 query::partition_slice::option_set selection::get_query_options() {
     query::partition_slice::option_set opts;
 
-    opts.set_if<query::partition_slice::option::send_timestamp_and_expiry>(_collect_timestamps || _collect_TTLs);
+    opts.set_if<query::partition_slice::option::send_timestamp>(_collect_timestamps);
+    opts.set_if<query::partition_slice::option::send_expiry>(_collect_TTLs);
 
     opts.set_if<query::partition_slice::option::send_partition_key>(
         std::any_of(_columns.begin(), _columns.end(),
@@ -112,11 +113,11 @@ protected:
             _current.clear();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             return std::move(_current);
         }
 
-        virtual void add_input_row(serialization_format sf, result_set_builder& rs) override {
+        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) override {
             _current = std::move(*rs.current);
         }
 
@@ -180,7 +181,7 @@ protected:
             return _factories->contains_only_aggregate_functions();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
+        virtual std::vector<bytes_opt> get_output_row(cql_serialization_format sf) override {
             std::vector<bytes_opt> output_row;
             output_row.reserve(_selectors.size());
             for (auto&& s : _selectors) {
@@ -189,7 +190,7 @@ protected:
             return output_row;
         }
 
-        virtual void add_input_row(serialization_format sf, result_set_builder& rs) {
+        virtual void add_input_row(cql_serialization_format sf, result_set_builder& rs) {
             for (auto&& s : _selectors) {
                 s->add_input(sf, rs);
             }
@@ -252,11 +253,11 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, serialization_format sf)
+result_set_builder::result_set_builder(const selection& s, db_clock::time_point now, cql_serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
-    , _serialization_format(sf)
+    , _cql_serialization_format(sf)
 {
     if (s._collect_timestamps) {
         _timestamps.resize(s._columns.size(), 0);
@@ -295,17 +296,16 @@ void result_set_builder::add(const column_definition& def, const query::result_a
     }
 }
 
-void result_set_builder::add(const column_definition& def, collection_mutation_view c) {
-    auto&& ctype = static_cast<const collection_type_impl*>(def.type.get());
-    current->emplace_back(ctype->to_value(c, _serialization_format));
+void result_set_builder::add_collection(const column_definition& def, bytes_view c) {
+    current->emplace_back(to_bytes(c));
     // timestamps, ttls meaningless for collections
 }
 
 void result_set_builder::new_row() {
     if (current) {
-        _selectors->add_input_row(_serialization_format, *this);
+        _selectors->add_input_row(_cql_serialization_format, *this);
         if (!_selectors->is_aggregate()) {
-            _result_set->add_row(_selectors->get_output_row(_serialization_format));
+            _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
             _selectors->reset();
         }
         current->clear();
@@ -319,13 +319,13 @@ void result_set_builder::new_row() {
 
 std::unique_ptr<result_set> result_set_builder::build() {
     if (current) {
-        _selectors->add_input_row(_serialization_format, *this);
-        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+        _selectors->add_input_row(_cql_serialization_format, *this);
+        _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
         _selectors->reset();
         current = std::experimental::nullopt;
     }
     if (_result_set->empty() && _selectors->is_aggregate()) {
-        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+        _result_set->add_row(_selectors->get_output_row(_cql_serialization_format));
     }
     return std::move(_result_set);
 }
@@ -344,7 +344,7 @@ void result_set_builder::visitor::add_value(const column_definition& def,
             _builder.add_empty();
             return;
         }
-        _builder.add(def, *cell);
+        _builder.add_collection(def, *cell);
     } else {
         auto cell = i.next_atomic_cell();
         if (!cell) {

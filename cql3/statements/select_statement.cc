@@ -170,7 +170,7 @@ select_statement::make_partition_slice(const query_options& options) {
     if (_parameters->is_distinct()) {
         _opts.set(query::partition_slice::option::distinct);
         return query::partition_slice({ query::clustering_range::make_open_ended_both_sides() },
-            std::move(static_columns), {}, _opts);
+            std::move(static_columns), {}, _opts, nullptr, options.get_cql_serialization_format());
     }
 
     auto bounds = _restrictions->get_clustering_bounds(options);
@@ -179,7 +179,7 @@ select_statement::make_partition_slice(const query_options& options) {
         std::reverse(bounds.begin(), bounds.end());
     }
     return query::partition_slice(std::move(bounds),
-        std::move(static_columns), std::move(regular_columns), _opts);
+        std::move(static_columns), std::move(regular_columns), _opts, nullptr, options.get_cql_serialization_format());
 }
 
 int32_t select_statement::get_limit(const query_options& options) const {
@@ -246,7 +246,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     if (aggregate) {
         return do_with(
                 cql3::selection::result_set_builder(*_selection, now,
-                        options.get_serialization_format()),
+                        options.get_cql_serialization_format()),
                 [p, page_size, now](auto& builder) {
                     return do_until([p] {return p->is_exhausted();},
                             [p, &builder, page_size, now] {
@@ -338,7 +338,7 @@ shared_ptr<transport::messages::result_message> select_statement::process_result
         db_clock::time_point now) {
 
     cql3::selection::result_set_builder builder(*_selection, now,
-            options.get_serialization_format());
+            options.get_cql_serialization_format());
     query::result_view::consume(results->buf(), cmd->slice,
             cql3::selection::result_set_builder::visitor(builder, *_schema,
                     *_selection));

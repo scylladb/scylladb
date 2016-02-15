@@ -81,9 +81,9 @@ public:
         value(std::map<bytes, bytes, serialized_compare> map)
             : map(std::move(map)) {
         }
-        static value from_serialized(bytes_view value, map_type type, serialization_format sf);
+        static value from_serialized(bytes_view value, map_type type, cql_serialization_format sf);
         virtual bytes_opt get(const query_options& options) override;
-        virtual bytes get_with_protocol_version(serialization_format sf);
+        virtual bytes get_with_protocol_version(cql_serialization_format sf);
         bool equals(map_type mt, const value& v);
         virtual sstring to_string() const;
     };

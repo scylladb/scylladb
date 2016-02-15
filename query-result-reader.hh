@@ -73,8 +73,10 @@ public:
             }
             api::timestamp_type timestamp = api::missing_timestamp;
             expiry_opt expiry_;
-            if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
-                timestamp = _in.read <api::timestamp_type> ();
+            if (_slice.options.contains<partition_slice::option::send_timestamp>()) {
+                timestamp = _in.read<api::timestamp_type>();
+            }
+            if (_slice.options.contains<partition_slice::option::send_expiry>()) {
                 auto expiry_rep = _in.read<gc_clock::rep>();
                 if (expiry_rep != std::numeric_limits<gc_clock::rep>::max()) {
                     expiry_ = gc_clock::time_point(gc_clock::duration(expiry_rep));
@@ -83,12 +85,12 @@ public:
             auto value = _in.read_view_to_blob<uint32_t>();
             return {result_atomic_cell_view(timestamp, expiry_, value)};
         }
-        std::experimental::optional<collection_mutation_view> next_collection_cell() {
+        std::experimental::optional<bytes_view> next_collection_cell() {
             auto present = _in.read<int8_t>();
             if (!present) {
                 return {};
             }
-            return collection_mutation_view{_in.read_view_to_blob<uint32_t>()};
+            return _in.read_view_to_blob<uint32_t>();
         };
         void skip(const column_definition& def) {
             if (def.is_atomic()) {
@@ -164,7 +166,7 @@ public:
         while (in.has_next()) {
             auto row_count = in.read<uint32_t>();
             if (slice.options.contains<partition_slice::option::send_partition_key>()) {
-                auto key = partition_key::from_bytes(to_bytes(in.read_view_to_blob<uint32_t>()));
+                auto key = partition_key::from_bytes(in.read_view_to_blob<uint32_t>());
                 visitor.accept_new_partition(key, row_count);
             } else {
                 visitor.accept_new_partition(row_count);
@@ -178,7 +180,7 @@ public:
 
             while (row_count--) {
                 if (slice.options.contains<partition_slice::option::send_clustering_key>()) {
-                    auto key = clustering_key::from_bytes(to_bytes(in.read_view_to_blob<uint32_t>()));
+                    auto key = clustering_key::from_bytes(in.read_view_to_blob<uint32_t>());
                     result_row_view row(in.read_view_to_blob<uint32_t>(), slice);
                     visitor.accept_new_row(key, static_row, row);
                 } else {

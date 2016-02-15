@@ -101,7 +101,7 @@ public:
 // <static-row>      ::= <row>
 // <row>             ::= <row-length> <cell>+
 // <cell>            ::= <atomic-cell> | <collection-cell>
-// <atomic-cell>     ::= <present-byte> [ <timestamp> <expiry> ] <value>
+// <atomic-cell>     ::= <present-byte> [ <timestamp> ] [ <expiry> ] <value>
 // <collection-cell> ::= <blob>
 //
 // <value>           ::= <blob>

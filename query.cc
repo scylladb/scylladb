@@ -44,8 +44,9 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
     if (ps._specific_ranges) {
         out << ", specific=[" << *ps._specific_ranges << "]";
     }
-    return out << ", options=" << sprint("%x", ps.options.mask()) // FIXME: pretty print options
-        << "}";
+    out << ", options=" << sprint("%x", ps.options.mask()); // FIXME: pretty print options
+    out << ", cql_format=" << ps.cql_format();
+    return out << "}";
 }
 
 std::ostream& operator<<(std::ostream& out, const read_command& r) {
@@ -61,13 +62,18 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out << "{" << s._pk << " : " << join(", ", s._ranges) << "}";
 }
 
-partition_slice::partition_slice(clustering_row_ranges row_ranges, std::vector<column_id> static_columns,
-    std::vector<column_id> regular_columns, option_set options, std::unique_ptr<specific_ranges> specific_ranges)
+partition_slice::partition_slice(clustering_row_ranges row_ranges,
+    std::vector<column_id> static_columns,
+    std::vector<column_id> regular_columns,
+    option_set options,
+    std::unique_ptr<specific_ranges> specific_ranges,
+    cql_serialization_format cql_format)
     : _row_ranges(std::move(row_ranges))
     , static_columns(std::move(static_columns))
     , regular_columns(std::move(regular_columns))
     , options(options)
     , _specific_ranges(std::move(specific_ranges))
+    , _cql_format(std::move(cql_format))
 {}
 
 partition_slice::partition_slice(partition_slice&&) = default;
@@ -80,6 +86,7 @@ partition_slice::partition_slice(const partition_slice& s)
     , regular_columns(s.regular_columns)
     , options(s.options)
     , _specific_ranges(s._specific_ranges ? std::make_unique<specific_ranges>(*s._specific_ranges) : nullptr)
+    , _cql_format(s._cql_format)
 {}
 
 partition_slice::~partition_slice()

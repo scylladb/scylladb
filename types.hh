@@ -34,7 +34,7 @@
 #include "bytes.hh"
 #include "log.hh"
 #include "atomic_cell.hh"
-#include "serialization_format.hh"
+#include "cql_serialization_format.hh"
 #include "tombstone.hh"
 #include "to_string.hh"
 #include <boost/range/adaptor/transformed.hpp>
@@ -332,6 +332,7 @@ public:
     }
     size_t serialized_size() const;
     void serialize(bytes::iterator& out) const;
+    bytes serialize() const;
     friend inline bool operator==(const data_value& x, const data_value& y);
     friend inline bool operator!=(const data_value& x, const data_value& y);
     friend class abstract_type;
@@ -490,7 +491,7 @@ protected:
     static const void* get_value_ptr(const data_value& v) {
         return v._value;
     }
-    friend void write_collection_value(bytes::iterator& out, serialization_format sf, data_type type, const data_value& value);
+    friend void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value);
     friend class tuple_type_impl;
     friend class data_value;
     friend class reversed_type_impl;
@@ -509,6 +510,18 @@ inline
 void
 data_value::serialize(bytes::iterator& out) const {
     return _type->serialize(_value, out);
+}
+
+inline
+bytes
+data_value::serialize() const {
+    if (!_value) {
+        return {};
+    }
+    bytes b(bytes::initialized_later(), serialized_size());
+    auto i = b.begin();
+    serialize(i);
+    return b;
 }
 
 template <typename T>
@@ -707,24 +720,24 @@ public:
     virtual bool is_value_compatible_with_frozen(const collection_type_impl& previous) const = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     template <typename BytesViewIterator>
-    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
+    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     mutation_view deserialize_mutation_form(collection_mutation_view in) const;
     bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb, gc_clock::time_point now) const;
-    virtual bytes to_value(mutation_view mut, serialization_format sf) const = 0;
-    bytes to_value(collection_mutation_view mut, serialization_format sf) const;
+    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
+    bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
     // FIXME: use iterators?
     collection_mutation serialize_mutation_form(const mutation& mut) const;
     collection_mutation serialize_mutation_form(mutation_view mut) const;
     collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
-    virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const = 0;
-    virtual data_value deserialize(bytes_view v, serialization_format sf) const = 0;
-    data_value deserialize_value(bytes_view v, serialization_format sf) const {
+    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
+    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const = 0;
+    data_value deserialize_value(bytes_view v, cql_serialization_format sf) const {
         return deserialize(v, sf);
     }
-    bytes_opt reserialize(serialization_format from, serialization_format to, bytes_view_opt v) const;
+    bytes_opt reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const;
 };
 
 using collection_type = shared_ptr<const collection_type_impl>;
@@ -901,17 +914,17 @@ public:
                         bytes_view o1, bytes_view o2);
     virtual bool is_byte_order_comparable() const override { return false; }
     virtual void serialize(const void* value, bytes::iterator& out) const override;
-    virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const override;
+    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const;
     virtual data_value deserialize(bytes_view v) const override;
-    virtual data_value deserialize(bytes_view v, serialization_format sf) const override;
+    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
-            serialization_format sf);
-    virtual bytes to_value(mutation_view mut, serialization_format sf) const override;
+            cql_serialization_format sf);
+    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
 };
 
 using map_type = shared_ptr<const map_type_impl>;
@@ -938,17 +951,17 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) const override;
     virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
     virtual void serialize(const void* value, bytes::iterator& out) const override;
-    virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const override;
+    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const override;
     virtual data_value deserialize(bytes_view v) const override;
-    virtual data_value deserialize(bytes_view v, serialization_format sf) const override;
+    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
-    virtual bytes to_value(mutation_view mut, serialization_format sf) const override;
+    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     bytes serialize_partially_deserialized_form(
-            const std::vector<bytes_view>& v, serialization_format sf) const;
+            const std::vector<bytes_view>& v, cql_serialization_format sf) const;
 };
 
 using set_type = shared_ptr<const set_type_impl>;
@@ -975,15 +988,15 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) const override;
     // FIXME: origin doesn't override is_byte_order_comparable().  Why?
     virtual void serialize(const void* value, bytes::iterator& out) const override;
-    virtual void serialize(const void* value, bytes::iterator& out, serialization_format sf) const override;
+    virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const override;
     virtual size_t serialized_size(const void* value) const override;
     virtual data_value deserialize(bytes_view v) const override;
-    virtual data_value deserialize(bytes_view v, serialization_format sf) const override;
+    virtual data_value deserialize(bytes_view v, cql_serialization_format sf) const override;
     virtual sstring to_string(const bytes& b) const override;
     virtual size_t hash(bytes_view v) const override;
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
-    virtual bytes to_value(mutation_view mut, serialization_format sf) const override;
+    virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
 };
 
 using list_type = shared_ptr<const list_type_impl>;
@@ -1253,15 +1266,15 @@ inline sstring read_simple_short_string(bytes_view& v) {
     return ret;
 }
 
-size_t collection_size_len(serialization_format sf);
-size_t collection_value_len(serialization_format sf);
-void write_collection_size(bytes::iterator& out, int size, serialization_format sf);
-void write_collection_value(bytes::iterator& out, serialization_format sf, bytes_view val_bytes);
-void write_collection_value(bytes::iterator& out, serialization_format sf, data_type type, const data_value& value);
+size_t collection_size_len(cql_serialization_format sf);
+size_t collection_value_len(cql_serialization_format sf);
+void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf);
+void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes);
+void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value);
 
 template <typename BytesViewIterator>
 bytes
-collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf) {
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf) {
     size_t len = collection_size_len(sf);
     size_t psz = collection_value_len(sf);
     for (auto j = start; j != finish; j++) {

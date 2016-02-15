@@ -378,7 +378,7 @@ cql_server::connection::read_frame() {
                 return make_ready_future<ret_type>();
             }
             _version = buf[0];
-            init_serialization_format();
+            init_cql_serialization_format();
             if (_version < 1 || _version > current_version) {
                 auto client_version = _version;
                 _version = current_version;
@@ -635,12 +635,8 @@ future<response_type> cql_server::connection::process_options(uint16_t stream, b
 }
 
 void
-cql_server::connection::init_serialization_format() {
-    if (_version < 3) {
-        _serialization_format = serialization_format::use_16_bit();
-    } else {
-        _serialization_format = serialization_format::use_32_bit();
-    }
+cql_server::connection::init_cql_serialization_format() {
+    _cql_serialization_format = cql_serialization_format(_version);
 }
 
 future<response_type> cql_server::connection::process_query(uint16_t stream, bytes_view buf, service::client_state client_state)
@@ -1158,7 +1154,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
     auto consistency = read_consistency(buf);
     if (version == 1) {
         return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_view_opt>{},
-            false, cql3::query_options::specific_options::DEFAULT, _version, _serialization_format);
+            false, cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     }
 
     assert(version >= 2);
@@ -1206,11 +1202,11 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
             onames = std::move(names);
         }
         options = std::make_unique<cql3::query_options>(consistency, std::move(onames), std::move(values), skip_metadata,
-            cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts}, _version,
-            _serialization_format);
+            cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts},
+            _cql_serialization_format);
     } else {
         options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::move(values), skip_metadata,
-            cql3::query_options::specific_options::DEFAULT, _version, _serialization_format);
+            cql3::query_options::specific_options::DEFAULT, _cql_serialization_format);
     }
 
     return std::move(options);

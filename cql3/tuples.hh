@@ -202,12 +202,12 @@ public:
                 buffers[i] = to_bytes_opt(_elements[i]->bind_and_get(options));
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
-                if (options.get_serialization_format() != serialization_format::internal()
+                if (options.get_cql_serialization_format() != cql_serialization_format::internal()
                         && _type->type(i)->is_collection()) {
                     if (buffers[i]) {
                         buffers[i] = static_pointer_cast<const collection_type_impl>(_type->type(i))->reserialize(
-                                options.get_serialization_format(),
-                                serialization_format::internal(),
+                                options.get_cql_serialization_format(),
+                                cql_serialization_format::internal(),
                                 bytes_view(*buffers[i]));
                     }
                 }
@@ -251,7 +251,7 @@ public:
             try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but the deserialization does the validation (so we're fine).
-                auto l = value_cast<list_type_impl::native_type>(type->deserialize(value, options.get_serialization_format()));
+                auto l = value_cast<list_type_impl::native_type>(type->deserialize(value, options.get_cql_serialization_format()));
                 auto ttype = dynamic_pointer_cast<const tuple_type_impl>(type->get_elements_type());
                 assert(ttype);
 

@@ -170,8 +170,7 @@ public:
 
     template<typename RangeOfSerializedComponents>
     static TopLevel from_exploded(RangeOfSerializedComponents&& v) {
-        return TopLevel::from_bytes(TopLevel::compound::element_type::serialize_value(
-                std::forward<RangeOfSerializedComponents>(v)));
+        return TopLevel(std::forward<RangeOfSerializedComponents>(v));
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
@@ -490,7 +489,7 @@ template <typename TopLevel, typename TopLevelView, typename FullTopLevel>
 class prefix_compound_wrapper : public compound_wrapper<TopLevel, TopLevelView> {
     using base = compound_wrapper<TopLevel, TopLevelView>;
 protected:
-    prefix_compound_wrapper(bytes&& b) : base(std::move(b)) {}
+    prefix_compound_wrapper(managed_bytes&& b) : base(std::move(b)) {}
 public:
     using prefix_view_type = prefix_view_on_prefix_compound<TopLevel>;
 
@@ -572,15 +571,15 @@ public:
 };
 
 class partition_key : public compound_wrapper<partition_key, partition_key_view> {
-public:
-    using c_type = compound_type<allow_prefixes::no>;
-    explicit partition_key(bytes&& b)
+    explicit partition_key(managed_bytes&& b)
         : compound_wrapper<partition_key, partition_key_view>(std::move(b))
     { }
+public:
+    using c_type = compound_type<allow_prefixes::no>;
 
     template<typename RangeOfSerializedComponents>
     partition_key(RangeOfSerializedComponents&& v)
-        : partition_key(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::forward<RangeOfSerializedComponents>(v))))
     { }
 
     partition_key(partition_key&& v) = default;
@@ -591,13 +590,13 @@ public:
     partition_key& operator=(partition_key&&) = default;
 
     partition_key(partition_key_view key)
-        : partition_key(bytes(key.representation().begin(), key.representation().end()))
+        : partition_key(managed_bytes(key.representation()))
     { }
 
     using compound = lw_shared_ptr<c_type>;
 
-    static partition_key from_bytes(bytes b) {
-        return partition_key(std::move(b));
+    static partition_key from_bytes(bytes_view b) {
+        return partition_key(managed_bytes(b));
     }
 
     static const compound& get_compound_type(const schema& s) {
@@ -618,6 +617,10 @@ public:
     // Checks if keys are equal in a way which is compatible with Origin.
     bool legacy_equal(const schema& s, const partition_key& o) const {
         return view().legacy_equal(s, o);
+    }
+
+    void validate(const schema& s) const {
+        return s.partition_key_type()->validate(representation());
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
@@ -660,14 +663,13 @@ public:
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
-public:
-    explicit clustering_key_prefix(bytes&& b)
-        : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
+    explicit clustering_key_prefix(managed_bytes&& b)
+            : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
-
+public:
     template<typename RangeOfSerializedComponents>
     clustering_key_prefix(RangeOfSerializedComponents&& v)
-        : clustering_key_prefix(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::forward<RangeOfSerializedComponents>(v)))
     { }
 
     clustering_key_prefix(clustering_key_prefix&& v) = default;
@@ -678,13 +680,13 @@ public:
     clustering_key_prefix& operator=(clustering_key_prefix&&) = default;
 
     clustering_key_prefix(clustering_key_prefix_view v)
-        : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
+        : clustering_key_prefix(managed_bytes(v.representation()))
     { }
 
     using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
 
-    static clustering_key_prefix from_bytes(bytes b) {
-        return clustering_key_prefix(std::move(b));
+    static clustering_key_prefix from_bytes(bytes_view b) {
+        return clustering_key_prefix(managed_bytes(b));
     }
 
     static const compound& get_compound_type(const schema& s) {

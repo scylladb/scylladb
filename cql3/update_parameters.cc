@@ -43,17 +43,17 @@
 
 namespace cql3 {
 
-std::experimental::optional<collection_mutation_view>
+const update_parameters::prefetch_data::cell_list*
 update_parameters::get_prefetched_list(
-    const partition_key& pkey,
-    const clustering_key& row_key,
+    partition_key pkey,
+    std::experimental::optional<clustering_key> ckey,
     const column_definition& column) const
 {
     if (!_prefetched) {
         return {};
     }
 
-    auto i = _prefetched->rows.find(std::make_pair(pkey, row_key));
+    auto i = _prefetched->rows.find(std::make_pair(std::move(pkey), std::move(ckey)));
     if (i == _prefetched->rows.end()) {
         return {};
     }
@@ -63,7 +63,7 @@ update_parameters::get_prefetched_list(
     if (j == row.end()) {
         return {};
     }
-    return {j->second};
+    return &j->second;
 }
 
 update_parameters::prefetch_data::prefetch_data(schema_ptr schema)

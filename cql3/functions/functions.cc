@@ -299,7 +299,7 @@ function_call::collect_marker_specification(shared_ptr<variable_specifications> 
 
 shared_ptr<terminal>
 function_call::bind(const query_options& options) {
-    return make_terminal(_fun, to_bytes_opt(bind_and_get(options)), options.get_serialization_format());
+    return make_terminal(_fun, to_bytes_opt(bind_and_get(options)), options.get_cql_serialization_format());
 }
 
 bytes_view_opt
@@ -315,12 +315,12 @@ function_call::bind_and_get(const query_options& options) {
         }
         buffers.push_back(std::move(to_bytes_opt(val)));
     }
-    auto result = execute_internal(options.get_serialization_format(), *_fun, std::move(buffers));
+    auto result = execute_internal(options.get_cql_serialization_format(), *_fun, std::move(buffers));
     return options.make_temporary(result);
 }
 
 bytes_opt
-function_call::execute_internal(serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
+function_call::execute_internal(cql_serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
     bytes_opt result = fun.execute(sf, params);
     try {
         // Check the method didn't lied on it's declared return type
@@ -347,7 +347,7 @@ function_call::contains_bind_marker() const {
 }
 
 shared_ptr<terminal>
-function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, serialization_format sf)  {
+function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, cql_serialization_format sf)  {
     if (!dynamic_pointer_cast<const collection_type_impl>(fun->return_type())) {
         return ::make_shared<constants::value>(std::move(result));
     }
@@ -413,7 +413,7 @@ function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<
     // If all parameters are terminal and the function is pure, we can
     // evaluate it now, otherwise we'd have to wait execution time
     if (all_terminal && scalar_fun->is_pure()) {
-        return make_terminal(scalar_fun, execute(*scalar_fun, parameters), query_options::DEFAULT.get_serialization_format());
+        return make_terminal(scalar_fun, execute(*scalar_fun, parameters), query_options::DEFAULT.get_cql_serialization_format());
     } else {
         return ::make_shared<function_call>(scalar_fun, parameters);
     }
@@ -429,7 +429,7 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
         buffers.push_back(std::move(param));
     }
 
-    return execute_internal(serialization_format::internal(), fun, buffers);
+    return execute_internal(cql_serialization_format::internal(), fun, buffers);
 }
 
 assignment_testable::test_result

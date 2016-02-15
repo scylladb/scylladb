@@ -89,7 +89,7 @@ class cql_server {
 private:
     class event_notifier;
 
-    static constexpr int current_version = 3;
+    static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
@@ -122,8 +122,8 @@ private:
         output_stream<char> _write_buf;
         seastar::gate _pending_requests_gate;
         future<> _ready_to_respond = make_ready_future<>();
-        uint8_t _version = 0;
-        serialization_format _serialization_format = serialization_format::use_16_bit();
+        cql_protocol_version_type _version = 0;
+        cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
         unsigned _request_cpu = 0;
@@ -194,7 +194,7 @@ private:
         std::unique_ptr<cql3::query_options> read_options(bytes_view& buf);
         std::unique_ptr<cql3::query_options> read_options(bytes_view& buf, uint8_t);
 
-        void init_serialization_format();
+        void init_cql_serialization_format();
 
         friend event_notifier;
     };

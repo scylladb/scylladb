@@ -1459,7 +1459,7 @@ collection_type_impl::as_cql3_type() const {
 }
 
 bytes
-collection_type_impl::to_value(collection_mutation_view mut, serialization_format sf) const {
+collection_type_impl::to_value(collection_mutation_view mut, cql_serialization_format sf) const {
     return to_value(deserialize_mutation_form(mut), sf);
 }
 
@@ -1475,14 +1475,14 @@ collection_type_impl::mutation_view::materialize() const {
 }
 
 
-size_t collection_size_len(serialization_format sf) {
+size_t collection_size_len(cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         return sizeof(int32_t);
     }
     return sizeof(uint16_t);
 }
 
-size_t collection_value_len(serialization_format sf) {
+size_t collection_value_len(cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         return sizeof(int32_t);
     }
@@ -1490,7 +1490,7 @@ size_t collection_value_len(serialization_format sf) {
 }
 
 
-int read_collection_size(bytes_view& in, serialization_format sf) {
+int read_collection_size(bytes_view& in, cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         return read_simple<int32_t>(in);
     } else {
@@ -1498,7 +1498,7 @@ int read_collection_size(bytes_view& in, serialization_format sf) {
     }
 }
 
-void write_collection_size(bytes::iterator& out, int size, serialization_format sf) {
+void write_collection_size(bytes::iterator& out, int size, cql_serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         serialize_int32(out, size);
     } else {
@@ -1506,12 +1506,12 @@ void write_collection_size(bytes::iterator& out, int size, serialization_format 
     }
 }
 
-bytes_view read_collection_value(bytes_view& in, serialization_format sf) {
+bytes_view read_collection_value(bytes_view& in, cql_serialization_format sf) {
     auto size = sf.using_32_bits_for_collections() ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
     return read_simple_bytes(in, size);
 }
 
-void write_collection_value(bytes::iterator& out, serialization_format sf, bytes_view val_bytes) {
+void write_collection_value(bytes::iterator& out, cql_serialization_format sf, bytes_view val_bytes) {
     if (sf.using_32_bits_for_collections()) {
         serialize_int32(out, int32_t(val_bytes.size()));
     } else {
@@ -1520,7 +1520,7 @@ void write_collection_value(bytes::iterator& out, serialization_format sf, bytes
     out = std::copy_n(val_bytes.begin(), val_bytes.size(), out);
 }
 
-void write_collection_value(bytes::iterator& out, serialization_format sf, data_type type, const data_value& value) {
+void write_collection_value(bytes::iterator& out, cql_serialization_format sf, data_type type, const data_value& value) {
     size_t val_len = type->serialized_size(type->get_value_ptr(value));
 
     if (sf.using_32_bits_for_collections()) {
@@ -1600,7 +1600,7 @@ map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, byt
     } else if (o2.empty()) {
         return 1;
     }
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
     int size1 = read_collection_size(o1, sf);
     int size2 = read_collection_size(o2, sf);
     // FIXME: use std::lexicographical_compare()
@@ -1623,14 +1623,14 @@ map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, byt
 
 void
 map_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, serialization_format::internal());
+    return serialize(value, out, cql_serialization_format::internal());
 }
 
 size_t
 map_type_impl::serialized_size(const void* value) const {
     auto& m = from_value(value);
-    size_t len = collection_size_len(serialization_format::internal());
-    size_t psz = collection_value_len(serialization_format::internal());
+    size_t len = collection_size_len(cql_serialization_format::internal());
+    size_t psz = collection_value_len(cql_serialization_format::internal());
     for (auto&& kv : m) {
         len += psz + _keys->serialized_size(get_value_ptr(kv.first));
         len += psz + _values->serialized_size(get_value_ptr(kv.second));
@@ -1640,7 +1640,7 @@ map_type_impl::serialized_size(const void* value) const {
 }
 
 void
-map_type_impl::serialize(const void* value, bytes::iterator& out, serialization_format sf) const {
+map_type_impl::serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const {
     auto& m = from_value(value);
     write_collection_size(out, m.size(), sf);
     for (auto&& kv : m) {
@@ -1651,11 +1651,11 @@ map_type_impl::serialize(const void* value, bytes::iterator& out, serialization_
 
 data_value
 map_type_impl::deserialize(bytes_view v) const {
-    return deserialize(v, serialization_format::internal());
+    return deserialize(v, cql_serialization_format::internal());
 }
 
 data_value
-map_type_impl::deserialize(bytes_view in, serialization_format sf) const {
+map_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     native_type m;
     auto size = read_collection_size(in, sf);
     for (int i = 0; i < size; ++i) {
@@ -1674,7 +1674,7 @@ map_type_impl::to_string(const bytes& b) const {
     std::ostringstream out;
     bool first = true;
     auto v = bytes_view(b);
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
 
     if (include_frozen_type) {
         out << "(";
@@ -1721,7 +1721,7 @@ map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 }
 
 bytes
-map_type_impl::to_value(mutation_view mut, serialization_format sf) const {
+map_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
@@ -1735,7 +1735,7 @@ map_type_impl::to_value(mutation_view mut, serialization_format sf) const {
 
 bytes
 map_type_impl::serialize_partially_deserialized_form(
-        const std::vector<std::pair<bytes_view, bytes_view>>& v, serialization_format sf) {
+        const std::vector<std::pair<bytes_view, bytes_view>>& v, cql_serialization_format sf) {
     size_t len = collection_value_len(sf) * v.size() * 2 + collection_size_len(sf);
     for (auto&& e : v) {
         len += e.first.size() + e.second.size();
@@ -1956,7 +1956,7 @@ collection_type_impl::difference(collection_mutation_view a, collection_mutation
 }
 
 bytes_opt
-collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) const {
+collection_type_impl::reserialize(cql_serialization_format from, cql_serialization_format to, bytes_view_opt v) const {
     if (!v) {
         return std::experimental::nullopt;
     }
@@ -1974,16 +1974,16 @@ class listlike_partial_deserializing_iterator
     bytes_view* _in;
     int _remain;
     bytes_view _cur;
-    serialization_format _sf;
+    cql_serialization_format _sf;
 private:
     struct end_tag {};
-    listlike_partial_deserializing_iterator(bytes_view& in, serialization_format sf)
+    listlike_partial_deserializing_iterator(bytes_view& in, cql_serialization_format sf)
             : _in(&in), _sf(sf) {
         _remain = read_collection_size(*_in, _sf);
         parse();
     }
     listlike_partial_deserializing_iterator(end_tag)
-            : _remain(0), _sf(serialization_format::internal()) {  // _sf is bogus, but doesn't matter
+            : _remain(0), _sf(cql_serialization_format::internal()) {  // _sf is bogus, but doesn't matter
     }
 public:
     bytes_view operator*() const { return _cur; }
@@ -2002,10 +2002,10 @@ public:
     bool operator!=(const listlike_partial_deserializing_iterator& x) const {
         return _remain != x._remain;
     }
-    static listlike_partial_deserializing_iterator begin(bytes_view& in, serialization_format sf) {
+    static listlike_partial_deserializing_iterator begin(bytes_view& in, cql_serialization_format sf) {
         return { in, sf };
     }
-    static listlike_partial_deserializing_iterator end(bytes_view in, serialization_format sf) {
+    static listlike_partial_deserializing_iterator end(bytes_view in, cql_serialization_format sf) {
         return { end_tag() };
     }
 private:
@@ -2075,7 +2075,7 @@ set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previ
 bool
 set_type_impl::less(bytes_view o1, bytes_view o2) const {
     using llpdi = listlike_partial_deserializing_iterator;
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
     return std::lexicographical_compare(
             llpdi::begin(o1, sf), llpdi::end(o1, sf),
             llpdi::begin(o2, sf), llpdi::end(o2, sf),
@@ -2084,14 +2084,14 @@ set_type_impl::less(bytes_view o1, bytes_view o2) const {
 
 void
 set_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, serialization_format::internal());
+    return serialize(value, out, cql_serialization_format::internal());
 }
 
 size_t
 set_type_impl::serialized_size(const void* value) const {
     auto& s = from_value(value);
-    size_t len = collection_size_len(serialization_format::internal());
-    size_t psz = collection_value_len(serialization_format::internal());
+    size_t len = collection_size_len(cql_serialization_format::internal());
+    size_t psz = collection_value_len(cql_serialization_format::internal());
     for (auto&& e : s) {
         len += psz + _elements->serialized_size(_elements->get_value_ptr(e));
     }
@@ -2101,7 +2101,7 @@ set_type_impl::serialized_size(const void* value) const {
 
 
 void
-set_type_impl::serialize(const void* value, bytes::iterator& out, serialization_format sf) const {
+set_type_impl::serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const {
     auto& s = from_value(value);
     write_collection_size(out, s.size(), sf);
     for (auto&& e : s) {
@@ -2111,11 +2111,11 @@ set_type_impl::serialize(const void* value, bytes::iterator& out, serialization_
 
 data_value
 set_type_impl::deserialize(bytes_view in) const {
-    return deserialize(in, serialization_format::internal());
+    return deserialize(in, cql_serialization_format::internal());
 }
 
 data_value
-set_type_impl::deserialize(bytes_view in, serialization_format sf) const {
+set_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
@@ -2135,7 +2135,7 @@ set_type_impl::to_string(const bytes& b) const {
     std::ostringstream out;
     bool first = true;
     auto v = bytes_view(b);
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
     std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
@@ -2166,7 +2166,7 @@ set_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 }
 
 bytes
-set_type_impl::to_value(mutation_view mut, serialization_format sf) const {
+set_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
@@ -2179,7 +2179,7 @@ set_type_impl::to_value(mutation_view mut, serialization_format sf) const {
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
-        const std::vector<bytes_view>& v, serialization_format sf) const {
+        const std::vector<bytes_view>& v, cql_serialization_format sf) const {
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
@@ -2251,7 +2251,7 @@ list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& prev
 bool
 list_type_impl::less(bytes_view o1, bytes_view o2) const {
     using llpdi = listlike_partial_deserializing_iterator;
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
     return std::lexicographical_compare(
             llpdi::begin(o1, sf), llpdi::end(o1, sf),
             llpdi::begin(o2, sf), llpdi::end(o2, sf),
@@ -2260,11 +2260,11 @@ list_type_impl::less(bytes_view o1, bytes_view o2) const {
 
 void
 list_type_impl::serialize(const void* value, bytes::iterator& out) const {
-    return serialize(value, out, serialization_format::internal());
+    return serialize(value, out, cql_serialization_format::internal());
 }
 
 void
-list_type_impl::serialize(const void* value, bytes::iterator& out, serialization_format sf) const {
+list_type_impl::serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const {
     auto& s = from_value(value);
     write_collection_size(out, s.size(), sf);
     for (auto&& e : s) {
@@ -2275,8 +2275,8 @@ list_type_impl::serialize(const void* value, bytes::iterator& out, serialization
 size_t
 list_type_impl::serialized_size(const void* value) const {
     auto& s = from_value(value);
-    size_t len = collection_size_len(serialization_format::internal());
-    size_t psz = collection_value_len(serialization_format::internal());
+    size_t len = collection_size_len(cql_serialization_format::internal());
+    size_t psz = collection_value_len(cql_serialization_format::internal());
     for (auto&& e : s) {
         len += psz + _elements->serialized_size(_elements->get_value_ptr(e));
     }
@@ -2285,11 +2285,11 @@ list_type_impl::serialized_size(const void* value) const {
 
 data_value
 list_type_impl::deserialize(bytes_view in) const {
-    return deserialize(in, serialization_format::internal());
+    return deserialize(in, cql_serialization_format::internal());
 }
 
 data_value
-list_type_impl::deserialize(bytes_view in, serialization_format sf) const {
+list_type_impl::deserialize(bytes_view in, cql_serialization_format sf) const {
     auto nr = read_collection_size(in, sf);
     native_type s;
     s.reserve(nr);
@@ -2309,7 +2309,7 @@ list_type_impl::to_string(const bytes& b) const {
     std::ostringstream out;
     bool first = true;
     auto v = bytes_view(b);
-    auto sf = serialization_format::internal();
+    auto sf = cql_serialization_format::internal();
     std::for_each(llpdi::begin(v, sf), llpdi::end(v, sf), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
@@ -2340,7 +2340,7 @@ list_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
 }
 
 bytes
-list_type_impl::to_value(mutation_view mut, serialization_format sf) const {
+list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {

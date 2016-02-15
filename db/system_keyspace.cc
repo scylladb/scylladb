@@ -440,7 +440,7 @@ static future<> setup_version() {
                              version::release(),
                              cql3::query_processor::CQL_VERSION,
                              org::apache::cassandra::thrift_version,
-                             to_sstring(version::native_protocol()),
+                             to_sstring(cql_serialization_format::latest_version),
                              snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
                              snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
                              sstring(dht::global_partitioner().name()),

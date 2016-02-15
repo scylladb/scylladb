@@ -63,10 +63,6 @@ public:
     }
 };
 
-inline const int native_protocol() {
-    return 3;
-}
-
 inline const sstring& release() {
     static thread_local auto str_ver = version::current().to_sstring();
     return str_ver;

@@ -55,8 +55,10 @@ public:
         // FIXME: store this in a bitmap
         _w.write<int8_t>(true);
         assert(c.is_live());
-        if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
+        if (_slice.options.contains<partition_slice::option::send_timestamp>()) {
             _w.write(c.timestamp());
+        }
+        if (_slice.options.contains<partition_slice::option::send_expiry>()) {
             if (c.is_live_and_has_ttl()) {
                 _w.write<gc_clock::rep>(c.expiry().time_since_epoch().count());
             } else {
@@ -66,10 +68,14 @@ public:
         _w.write_blob(c.value());
     }
 
-    void add(collection_mutation_view v) {
+    void add(const data_type& type, collection_mutation_view v) {
+        auto ctype = static_pointer_cast<const collection_type_impl>(type);
+        if (_slice.options.contains<partition_slice::option::collections_as_maps>()) {
+            ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
+        }
         // FIXME: store this in a bitmap
         _w.write<int8_t>(true);
-        _w.write_blob(v.data);
+        _w.write_blob(ctype->to_value(v, _slice.cql_format()));
     }
 
     void finish() {

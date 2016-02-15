@@ -152,7 +152,7 @@ maps::literal::to_string() const {
 }
 
 maps::value
-maps::value::from_serialized(bytes_view value, map_type type, serialization_format sf) {
+maps::value::from_serialized(bytes_view value, map_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
@@ -171,11 +171,11 @@ maps::value::from_serialized(bytes_view value, map_type type, serialization_form
 
 bytes_opt
 maps::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_serialization_format());
+    return get_with_protocol_version(options.get_cql_serialization_format());
 }
 
 bytes
-maps::value::get_with_protocol_version(serialization_format sf) {
+maps::value::get_with_protocol_version(cql_serialization_format sf) {
     //FIXME: share code with serialize_partially_deserialized_form
     size_t len = collection_value_len(sf) * map.size() * 2 + collection_size_len(sf);
     for (auto&& e : map) {
@@ -257,7 +257,7 @@ maps::marker::bind(const query_options& options) {
                     maps::value::from_serialized(*val,
                             static_pointer_cast<const map_type_impl>(
                                     _receiver->type),
-                            options.get_serialization_format())) :
+                            options.get_cql_serialization_format())) :
             nullptr;
 }
 
@@ -333,7 +333,7 @@ maps::do_put(mutation& m, const exploded_clustering_prefix& prefix, const update
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
             auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
-                    serialization_format::internal());
+                    cql_serialization_format::internal());
             m.set_cell(prefix, column, params.make_cell(std::move(v)));
         }
     }

@@ -120,7 +120,7 @@ sets::literal::to_string() const {
 }
 
 sets::value
-sets::value::from_serialized(bytes_view v, set_type type, serialization_format sf) {
+sets::value::from_serialized(bytes_view v, set_type type, cql_serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).
@@ -138,11 +138,11 @@ sets::value::from_serialized(bytes_view v, set_type type, serialization_format s
 
 bytes_opt
 sets::value::get(const query_options& options) {
-    return get_with_protocol_version(options.get_serialization_format());
+    return get_with_protocol_version(options.get_cql_serialization_format());
 }
 
 bytes
-sets::value::get_with_protocol_version(serialization_format sf) {
+sets::value::get_with_protocol_version(cql_serialization_format sf) {
     return collection_type_impl::pack(_elements.begin(), _elements.end(),
             _elements.size(), sf);
 }
@@ -215,7 +215,7 @@ sets::marker::bind(const query_options& options) {
         return nullptr;
     } else {
         auto as_set_type = static_pointer_cast<const set_type_impl>(_receiver->type);
-        return make_shared(value::from_serialized(*value, as_set_type, options.get_serialization_format()));
+        return make_shared(value::from_serialized(*value, as_set_type, options.get_cql_serialization_format()));
     }
 }
 
@@ -262,7 +262,7 @@ sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, cons
         // for frozen sets, we're overwriting the whole cell
         auto v = set_type->serialize_partially_deserialized_form(
                 {set_value->_elements.begin(), set_value->_elements.end()},
-                serialization_format::internal());
+                cql_serialization_format::internal());
         m.set_cell(row_key, column, params.make_cell(std::move(v)));
     } else {
         m.set_cell(row_key, column, params.make_dead_cell());

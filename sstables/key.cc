@@ -22,7 +22,7 @@
 
 #include <utils/serialization.hh>
 #include <iterator>
-#include "serialization_format.hh"
+#include "cql_serialization_format.hh"
 
 #include "bytes.hh"
 #include "schema.hh"

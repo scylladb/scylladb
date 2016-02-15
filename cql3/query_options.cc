@@ -47,7 +47,7 @@ namespace cql3 {
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
 thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, std::experimental::nullopt,
-    {}, false, query_options::specific_options::DEFAULT, version::native_protocol(), serialization_format::use_32_bit()};
+    {}, false, query_options::specific_options::DEFAULT, cql_serialization_format::latest()};
 
 query_options::query_options(db::consistency_level consistency,
                              std::experimental::optional<std::vector<sstring_view>> names,
@@ -55,16 +55,14 @@ query_options::query_options(db::consistency_level consistency,
                              std::vector<bytes_view_opt> value_views,
                              bool skip_metadata,
                              specific_options options,
-                             int32_t protocol_version,
-                             serialization_format sf)
+                             cql_serialization_format sf)
     : _consistency(consistency)
     , _names(std::move(names))
     , _values(std::move(values))
     , _value_views(std::move(value_views))
     , _skip_metadata(skip_metadata)
     , _options(std::move(options))
-    , _protocol_version(protocol_version)
-    , _serialization_format(sf)
+    , _cql_serialization_format(sf)
 {
 }
 
@@ -73,8 +71,7 @@ query_options::query_options(db::consistency_level consistency,
                              std::vector<bytes_view_opt> value_views,
                              bool skip_metadata,
                              specific_options options,
-                             int32_t protocol_version,
-                             serialization_format sf)
+                             cql_serialization_format sf)
     : query_options(
           consistency,
           std::move(names),
@@ -82,7 +79,6 @@ query_options::query_options(db::consistency_level consistency,
           std::move(value_views),
           skip_metadata,
           std::move(options),
-          protocol_version,
           sf
       )
 {
@@ -94,7 +90,7 @@ query_options::query_options(query_options&& o, std::vector<std::vector<bytes_vi
     std::vector<query_options> tmp;
     tmp.reserve(value_views.size());
     std::transform(value_views.begin(), value_views.end(), std::back_inserter(tmp), [this](auto& vals) {
-        return query_options(_consistency, {}, vals, _skip_metadata, _options, _protocol_version, _serialization_format);
+        return query_options(_consistency, {}, vals, _skip_metadata, _options, _cql_serialization_format);
     });
     _batch_options = std::move(tmp);
 }
@@ -107,8 +103,7 @@ query_options::query_options(db::consistency_level cl, std::vector<bytes_opt> va
           {},
           false,
           query_options::specific_options::DEFAULT,
-          version::native_protocol(),
-          serialization_format::use_32_bit()
+          cql_serialization_format::latest()
       )
 {
     for (auto&& value : _values) {
@@ -178,12 +173,12 @@ api::timestamp_type query_options::get_timestamp(service::query_state& state) co
 
 int query_options::get_protocol_version() const
 {
-    return _protocol_version;
+    return _cql_serialization_format.protocol_version();
 }
 
-serialization_format query_options::get_serialization_format() const
+cql_serialization_format query_options::get_cql_serialization_format() const
 {
-    return _serialization_format;
+    return _cql_serialization_format;
 }
 
 const query_options::specific_options& query_options::get_specific_options() const
