@@ -74,7 +74,6 @@ private:
     mutable std::vector<std::vector<int8_t>> _temporaries;
     const bool _skip_metadata;
     const specific_options _options;
-    const int32_t _protocol_version; // transient
     cql_serialization_format _cql_serialization_format;
     std::experimental::optional<std::vector<query_options>> _batch_options;
 public:
@@ -87,21 +86,18 @@ public:
                            std::vector<bytes_view_opt> value_views,
                            bool skip_metadata,
                            specific_options options,
-                           int32_t protocol_version,
                            cql_serialization_format sf);
     explicit query_options(db::consistency_level consistency,
                            std::experimental::optional<std::vector<sstring_view>> names,
                            std::vector<bytes_view_opt> value_views,
                            bool skip_metadata,
                            specific_options options,
-                           int32_t protocol_version,
                            cql_serialization_format sf);
 
     explicit query_options(db::consistency_level consistency,
                            std::vector<std::vector<bytes_view_opt>> value_views,
                            bool skip_metadata,
                            specific_options options,
-                           int32_t protocol_version,
                            cql_serialization_format sf);
 
     // Batch query_options constructor

@@ -21,6 +21,10 @@
 
 #pragma once
 
+#include <iostream>
+
+using cql_protocol_version_type = uint8_t;
+
 // Abstraction of transport protocol-dependent serialization format
 // Protocols v1, v2 used 16 bits for collection sizes, while v3 and
 // above use 32 bits.  But letting every bit of the code know what
@@ -29,17 +33,19 @@
 // away here.
 
 class cql_serialization_format {
-    bool _use_32_bit;
-private:
-    explicit cql_serialization_format(bool use_32_bit) : _use_32_bit(use_32_bit) {}
+    cql_protocol_version_type _version;
 public:
-    static cql_serialization_format use_16_bit() { return cql_serialization_format(false); }
-    static cql_serialization_format use_32_bit() { return cql_serialization_format(true); }
-    bool using_32_bits_for_collections() const { return _use_32_bit; }
-    bool operator==(cql_serialization_format x) const { return _use_32_bit == x._use_32_bit; }
-    static cql_serialization_format latest() { return { latest_version }; }
+    static constexpr cql_protocol_version_type latest_version = 3;
+    explicit cql_serialization_format(cql_protocol_version_type version) : _version(version) {}
+    static cql_serialization_format latest() { return cql_serialization_format{latest_version}; }
     static cql_serialization_format internal() { return latest(); }
+    bool using_32_bits_for_collections() const { return _version >= 3; }
+    bool operator==(cql_serialization_format x) const { return _version == x._version; }
     bool operator!=(cql_serialization_format x) const { return !operator==(x); }
+    cql_protocol_version_type protocol_version() const { return _version; }
+    friend std::ostream& operator<<(std::ostream& out, const cql_serialization_format& sf) {
+        return out << sf._version;
+    }
     bool collection_format_unchanged(cql_serialization_format other = cql_serialization_format::latest()) const {
         return using_32_bits_for_collections() == other.using_32_bits_for_collections();
     }
