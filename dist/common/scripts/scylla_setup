@@ -94,20 +94,6 @@ fi
 
 . /etc/os-release
 
-if [ $AMI -eq 1 ]; then
-    grep -v ' - mounts' /etc/cloud/cloud.cfg > /tmp/cloud.cfg
-    mv /tmp/cloud.cfg /etc/cloud/cloud.cfg
-    mv /home/centos/scylla-ami/scylla-ami-setup.service /usr/lib/systemd/system/
-    mv /home/centos/scylla-ami /usr/lib/scylla/scylla-ami
-    chmod a+rx /usr/lib/scylla/scylla-ami/ds2_configure.py
-    systemctl daemon-reload
-    systemctl enable scylla-ami-setup.service
-    NTP_DOMAIN=amazon
-    RAID_SETUP=0
-    COREDUMP_SETUP=0
-    SYSCONFIG_SETUP=0
-fi
-
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
         systemctl enable scylla-server.service
