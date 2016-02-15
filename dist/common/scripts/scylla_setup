@@ -144,5 +144,5 @@ if [ $COREDUMP_SETUP -eq 1 ]; then
 fi
 
 if [ $SYSCONFIG_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_sysconfig_setup -n $NIC
+    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
 fi
