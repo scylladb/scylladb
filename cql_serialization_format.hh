@@ -35,8 +35,12 @@ private:
 public:
     static cql_serialization_format use_16_bit() { return cql_serialization_format(false); }
     static cql_serialization_format use_32_bit() { return cql_serialization_format(true); }
-    static cql_serialization_format internal() { return use_32_bit(); }
     bool using_32_bits_for_collections() const { return _use_32_bit; }
     bool operator==(cql_serialization_format x) const { return _use_32_bit == x._use_32_bit; }
+    static cql_serialization_format latest() { return { latest_version }; }
+    static cql_serialization_format internal() { return latest(); }
     bool operator!=(cql_serialization_format x) const { return !operator==(x); }
+    bool collection_format_unchanged(cql_serialization_format other = cql_serialization_format::latest()) const {
+        return using_32_bits_for_collections() == other.using_32_bits_for_collections();
+    }
 };
