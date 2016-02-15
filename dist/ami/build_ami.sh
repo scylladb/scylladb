@@ -6,8 +6,9 @@ if [ ! -e dist/ami/build_ami.sh ]; then
 fi
 
 print_usage() {
-    echo "build_ami.sh --localrpm"
+    echo "build_ami.sh --localrpm --unstable"
     echo "  --localrpm  deploy locally built rpms"
+    echo "  --unstable  use unstable branch"
     exit 1
 }
 LOCALRPM=0
@@ -15,6 +16,11 @@ while [ $# -gt 0 ]; do
     case "$1" in
         "--localrpm")
             LOCALRPM=1
+            INSTALL_ARGS="$INSTALL_ARGS --localrpm"
+            shift 1
+            ;;
+        "--unstable")
+            INSTALL_ARGS="$INSTALL_ARGS --unstable"
             shift 1
             ;;
         *)
@@ -38,11 +44,6 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-if [ $LOCALRPM = 0 ]; then
-    echo "sudo sh -x -e /home/centos/scylla_install_ami" >> scylla_deploy.sh
-else
-    echo "sudo sh -x -e /home/centos/scylla_install_ami --localrpm" >> scylla_deploy.sh
-fi
-
+echo "sudo sh -x -e /home/centos/scylla_install_ami $INSTALL_ARGS" >> scylla_deploy.sh
 chmod a+rx scylla_deploy.sh
 packer/packer build -var-file=variables.json scylla.json
