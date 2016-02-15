@@ -301,4 +301,11 @@ Buffer serialize_to_buffer(const T& v, size_t head_space) {
     ser::serialize(out, v);
     return ret;
 }
+
+template<typename T, typename Buffer>
+T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_space) {
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(buf.begin() + head_space), buf.size() - head_space);
+    return deserialize(in, std::move(type));
+}
+
 }
