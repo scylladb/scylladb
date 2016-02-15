@@ -8,24 +8,27 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_install_pkg -l /home/scylla/rpms -u"
-    echo "  -l	install locally built .rpm/.deb on specified directory"
-    echo "  -u  use unstable repository"
+    echo "scylla_install_pkg --local-pkg /home/scylla/rpms --unstable"
+    echo "  --local-pkg	install locally built .rpm/.deb on specified directory"
+    echo "  --unstable  use unstable repository"
     exit 1
 }
 
 LOCAL_PKG=
 UNSTABLE=0
-while getopts l:nh OPT; do
-    case "$OPT" in
-        "l")
-            LOCAL_PKG=$OPTARG
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--local-pkg")
+            LOCAL_PKG=$2
+            shift 2
             ;;
-        "u")
+        "--unstable")
             UNSTABLE=1
+            shift 1
             ;;
-        "h")
+        *)
             print_usage
+            shift 1
             ;;
     esac
 done
