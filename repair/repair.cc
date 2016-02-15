@@ -203,14 +203,12 @@ private:
     // Successfully-finished repairs are those with id < _next_repair_command
     // but aren't listed as running or failed the status map.
     std::unordered_map<int, repair_status> _status;
-    // Variables used to allow shutting down all repair in progress
-    bool _in_shutdown = false;
-    promise<> _shutdown_done;
-    int _repairs_running = 0;
+    // Used to allow shutting down repairs in progress, and waiting for them.
+    seastar::gate _gate;
 public:
     void start(int id) {
+        _gate.enter();
         _status[id] = repair_status::RUNNING;
-        ++_repairs_running;
     }
     void done(int id, bool succeeded) {
         if (succeeded) {
@@ -218,9 +216,7 @@ public:
         } else {
             _status[id] = repair_status::FAILED;
         }
-        if (--_repairs_running == 0 && _in_shutdown) {
-            _shutdown_done.set_value();
-        }
+        _gate.leave();
     }
     repair_status get(int id) {
         if (id >= _next_repair_command) {
@@ -237,15 +233,10 @@ public:
         return _next_repair_command++;
     }
     future<> shutdown() {
-        assert(!_in_shutdown);
-        _in_shutdown = true;
-        if (_repairs_running == 0) {
-            return make_ready_future<>();
-        }
-        return _shutdown_done.get_future();
+        return _gate.close();
     }
-    bool in_shutdown() {
-        return _in_shutdown;
+    void check_in_shutdown() {
+        _gate.check();
     }
 } repair_tracker;
 
@@ -253,9 +244,7 @@ static void check_in_shutdown() {
     // Only call this from the single CPU managing the repair - the only CPU
     // which is allowed to use repair_tracker.
     assert(engine().cpu_id() == 0);
-    if (repair_tracker.in_shutdown()) {
-        throw repair_stopped_exception();
-    }
+    repair_tracker.check_in_shutdown();
 }
 
 
