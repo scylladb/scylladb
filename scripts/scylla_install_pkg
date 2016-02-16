@@ -8,16 +8,21 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_install_pkg -l /home/scylla/rpms"
+    echo "scylla_install_pkg -l /home/scylla/rpms -u"
     echo "  -l	install locally built .rpm/.deb on specified directory"
+    echo "  -u  use unstable repository"
     exit 1
 }
 
 LOCAL_PKG=
-while getopts l:h OPT; do
+UNSTABLE=0
+while getopts l:nh OPT; do
     case "$OPT" in
         "l")
             LOCAL_PKG=$OPTARG
+            ;;
+        "u")
+            UNSTABLE=1
             ;;
         "h")
             print_usage
@@ -38,10 +43,18 @@ if [ "$ID" = "ubuntu" ]; then
     fi
 else
     if [ "$ID" = "fedora" ]; then
-        curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
+        if [ $UNSTABLE -eq 0 ]; then
+            curl http://downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
+        else
+            curl http://downloads.scylladb.com.s3.amazonaws.com/rpm/unstable/fedora/master/latest/scylla.repo > /etc/yum.repos.d/scylla.repo
+        fi
     elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
-        curl https://s3.amazonaws.com/downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
-	yum install -y epel-release
+        if [ $UNSTABLE -eq 0 ]; then
+            curl http://downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
+        else
+            curl http://downloads.scylladb.com.s3.amazonaws.com/rpm/unstable/centos/master/latest/scylla.repo > /etc/yum.repos.d/scylla.repo
+        fi
+        yum install -y epel-release
     else
         echo "Unsupported distribution"
         exit 1
