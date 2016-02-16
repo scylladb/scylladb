@@ -280,10 +280,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
             std::vector<column_family*> column_families_vec;
             auto& cm = db.get_compaction_manager();
-            for (auto entry : column_families) {
-                column_family* cf = &db.find_column_family(keyspace, entry);
-                cm.submit_cleanup_job(cf);
+            for (auto cf : column_families) {
+                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
             }
+            return parallel_for_each(column_families_vec, [&cm] (column_family* cf) {
+                return cm.perform_cleanup(cf);
+            });
         }).then([]{
             return make_ready_future<json::json_return_type>(0);
         });

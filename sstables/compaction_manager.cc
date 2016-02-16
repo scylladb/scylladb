@@ -97,6 +97,12 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                     // The code below is to re-schedule the operation, so let's skip it
                     // if cleaning up.
                     if (task->cleanup) {
+                        auto it = _cleanup_waiters.find(task->compacting_cf);
+                        if (it != _cleanup_waiters.end()) {
+                            // Notificate waiter of cleanup termination.
+                            it->second.set_value();
+                            _cleanup_waiters.erase(it);
+                        }
                         task->compacting_cf = nullptr;
                         return make_ready_future<>();
                     }
@@ -251,6 +257,10 @@ future<> compaction_manager::stop() {
         }
         _cfs_to_compact.clear();
         _cfs_to_cleanup.clear();
+        for (auto& it : _cleanup_waiters) {
+            it.second.set_exception(std::runtime_error("cleanup interrupted due to shutdown"));
+        }
+        _cleanup_waiters.clear();
         return make_ready_future<>();
     });
 }
@@ -279,17 +289,23 @@ void compaction_manager::submit(column_family* cf) {
     signal_less_busy_task();
 }
 
-void compaction_manager::submit_cleanup_job(column_family* cf) {
+future<> compaction_manager::perform_cleanup(column_family* cf) {
     if (!can_submit()) {
-        return;
+        throw std::runtime_error("cleanup request failed: compaction manager is either stopped or wasn't properly initialized");
     }
     // To avoid having two or more entries of the same cf stored in the queue.
     if (std::find(_cfs_to_cleanup.begin(), _cfs_to_cleanup.end(), cf) != _cfs_to_cleanup.end()) {
-        return;
+        throw std::runtime_error(sprint("cleanup request failed: there is an ongoing cleanup on %s.%s", cf->schema()->ks_name(), cf->schema()->cf_name()));
     }
     _cfs_to_cleanup.push_back(cf);
     _stats.pending_tasks++;
     signal_less_busy_task();
+
+    promise<> p;
+    future<> f = p.get_future();
+    _cleanup_waiters.insert(std::make_pair(cf, std::move(p)));
+    // Wait for termination of cleanup operation.
+    return std::move(f);
 }
 
 future<> compaction_manager::remove(column_family* cf) {
