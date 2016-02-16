@@ -69,6 +69,4 @@ if [ ! -d packer ]; then
     cd -
 fi
 
-echo "sudo sh -x -e /home/centos/scylla_install_ami $INSTALL_ARGS" >> scylla_deploy.sh
-chmod a+rx scylla_deploy.sh
-packer/packer build -var-file=variables.json scylla.json
+packer/packer build -var-file=variables.json -var install_args="$INSTALL_ARGS" scylla.json
