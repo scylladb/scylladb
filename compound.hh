@@ -66,7 +66,7 @@ public:
     prefix_type as_prefix() {
         return prefix_type(_types);
     }
-
+private:
     /*
      * Format:
      *   <len(value1)><value1><len(value2)><value2>...<len(value_n)><value_n>
@@ -84,17 +84,21 @@ public:
     static size_t serialized_size(RangeOfSerializedComponents&& values) {
         size_t len = 0;
         for (auto&& val : values) {
-            assert(val.size() <= std::numeric_limits<uint16_t>::max());
             len += sizeof(uint16_t) + val.size();
         }
         return len;
     }
+public:
     bytes serialize_single(bytes&& v) {
         return serialize_value({std::move(v)});
     }
     template<typename RangeOfSerializedComponents>
     static bytes serialize_value(RangeOfSerializedComponents&& values) {
-        bytes b(bytes::initialized_later(), serialized_size(values));
+        auto size = serialized_size(values);
+        if (size > std::numeric_limits<uint16_t>::max()) {
+            throw std::runtime_error(sprint("Key size too large: %d > %d", size, std::numeric_limits<uint16_t>::max()));
+        }
+        bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
         serialize_value(values, i);
         return b;
