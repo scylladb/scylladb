@@ -1,17 +1,19 @@
 #!/bin/sh -e
 
+. /etc/os-release
 print_usage() {
-    echo "build_rpm.sh -R"
-    echo "  -R  rebuild dependency packages (CentOS)"
+    echo "build_rpm.sh --rebuild-dep"
+    echo "  --rebuild-dep  rebuild dependency packages (CentOS)"
     exit 1
 }
 REBUILD=0
-while getopts Rh OPT; do
+for OPT in "$@"; do
     case "$OPT" in
-        "R")
+        "--rebuild-dep")
             REBUILD=1
+            shift 1
             ;;
-        "h")
+        *)
             print_usage
             ;;
     esac
@@ -24,7 +26,6 @@ if [ ! -e dist/redhat/build_rpm.sh ]; then
     exit 1
 fi
 
-. /etc/os-release
 if [ "$ID" != "fedora" ] && [ "$ID" != "centos" ]; then
     echo "Unsupported distribution"
     exit 1
