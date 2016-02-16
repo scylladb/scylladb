@@ -669,8 +669,6 @@ def add_views(hout):
 def add_visitors(hout):
     if not local_types:
         return
-    if config.ns != '':
-        fprintln(hout, "namespace ", config.ns, " {")
     fprintln(hout, "\n////// State holders")
     for k in local_types:
         handle_visitors_state(local_types[k], hout)
@@ -678,8 +676,6 @@ def add_visitors(hout):
     for k in sort_dependencies():
         handle_visitors_nodes(local_types[k], hout)
     add_views(hout)
-    if config.ns != '':
-        fprintln(hout, "}")
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
     add_to_types(cls, namespaces, parent_template_param)
@@ -755,6 +751,17 @@ def handle_objects(tree, hout, cout, namespaces=[]):
         else:
             print("unknown type ", obj, obj["type"])
 
+def handle_types(tree, namespaces=[]):
+    for obj in tree:
+        if is_class(obj):
+            add_to_types(obj, namespaces, [])
+        elif is_enum(obj):
+            pass
+        elif obj["type"] == "namespace":
+            handle_types(obj["content"], namespaces + [obj["name"]])
+        else:
+            print("unknown type ", obj, obj["type"])
+
 def load_file(name):
     if config.o:
         cout = open(config.o.replace('.hh', '.impl.hh'), "w+")
@@ -774,8 +781,10 @@ def load_file(name):
         fprintln(cout, "namespace ", config.ns, " {")
     data = parse_file(name)
     if data:
+        handle_types(data)
+    add_visitors(cout)
+    if data:
         handle_objects(data, hout, cout)
-    add_visitors(hout)
     if config.ns != '':
         fprintln(cout, "}")
     cout.close()
