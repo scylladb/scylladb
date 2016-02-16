@@ -466,7 +466,7 @@ private:
 public:
     future<> read_toc();
 
-    bool filter_has_key(const schema& s, const partition_key& key) {
+    bool filter_has_key(const schema& s, partition_key_view key) {
         return filter_has_key(key::from_partition_key(s, key));
     }
 

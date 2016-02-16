@@ -93,7 +93,7 @@ public:
     static key from_exploded(const schema& s, const std::vector<bytes>& v);
     static key from_exploded(const schema& s, std::vector<bytes>&& v);
     // Unfortunately, the _bytes field for the partition_key are not public. We can't move.
-    static key from_partition_key(const schema& s, const partition_key& pk);
+    static key from_partition_key(const schema& s, partition_key_view pk);
     partition_key to_partition_key(const schema& s);
 
     std::vector<bytes> explode(const schema& s) const;
