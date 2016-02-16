@@ -49,6 +49,7 @@
 #include "streaming/stream_request.hh"
 #include "streaming/prepare_message.hh"
 #include "streaming/stream_detail.hh"
+#include "streaming/stream_manager.hh"
 #include "streaming/session_info.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
@@ -180,6 +181,8 @@ private:
 
     std::chrono::seconds _keep_alive_timeout{600};
     timer<lowres_clock> _keep_alive;
+    stream_bytes _last_stream_bytes;
+
     session_info _session_info;
 public:
     void start_keep_alive_timer() {
@@ -253,9 +256,6 @@ public:
     void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
-
-    void add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details);
-
 private:
     void close_session(stream_session_state final_state);
 
@@ -307,8 +307,6 @@ public:
     void follower_start_sent();
 
     void progress(UUID cf_id, progress_info::direction dir, size_t fm_size);
-
-    void received(UUID cf_id, int sequence_number);
 
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.

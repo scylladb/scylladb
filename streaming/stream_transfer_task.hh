@@ -40,10 +40,10 @@
 
 #include "utils/UUID.hh"
 #include "streaming/stream_task.hh"
-#include "streaming/outgoing_file_message.hh"
 #include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include <map>
+#include <seastar/core/semaphore.hh>
 
 namespace streaming {
 
@@ -58,37 +58,22 @@ private:
     bool aborted = false;
     // A stream_transfer_task always contains the same range to stream
     std::vector<range<dht::token>> _ranges;
-    std::map<int32_t, outgoing_file_message> _files;
     long _total_size;
 public:
     using UUID = utils::UUID;
     stream_transfer_task(stream_transfer_task&&) = default;
     stream_transfer_task(shared_ptr<stream_session> session, UUID cf_id, std::vector<range<dht::token>> ranges, long total_size = 0);
     ~stream_transfer_task();
-
-    void add_transfer_file(stream_detail detail);
-
-    /**
-     * Received ACK for file at {@code sequenceNumber}.
-     *
-     * @param sequenceNumber sequence number of file
-     */
-    void complete(int sequence_number);
-
 public:
     virtual void abort() override {
     }
 
     virtual int get_total_number_of_files() override {
-        return _files.size();
+        return 1;
     }
 
     virtual long get_total_size() override {
         return _total_size;
-    }
-
-    std::map<int32_t, outgoing_file_message>& get_file_messages() {
-        return _files;
     }
 
     void start();

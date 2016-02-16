@@ -40,7 +40,6 @@
 #include "message/messaging_service.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/prepare_message.hh"
-#include "streaming/outgoing_file_message.hh"
 #include "streaming/stream_result_future.hh"
 #include "streaming/stream_manager.hh"
 #include "mutation_reader.hh"
@@ -104,7 +103,6 @@ void stream_session::init_messaging_service_handler() {
             auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
-            session->start_keep_alive_timer();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
                 session->plan_id(), from, session->peer, session->dst_cpu_id);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
@@ -114,20 +112,16 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from] () mutable {
             auto session = get_session(plan_id, from, "PREPARE_DONE_MESSAGE");
-            session->start_keep_alive_timer();
             session->follower_start_sent();
             return make_ready_future<>();
         });
     });
     ms().register_stream_mutation([] (const rpc::client_info& cinfo, UUID plan_id, frozen_mutation fm, unsigned dst_cpu_id) {
-        auto from_msg_addr = net::messaging_service::get_source(cinfo);
-        return smp::submit_to(dst_cpu_id, [plan_id, from_msg_addr, fm = std::move(fm)] () mutable {
-            auto& from = from_msg_addr.addr;
-            auto cf_id = fm.column_family_id();
-            auto session = get_session(plan_id, from, "STREAM_MUTATION", cf_id);
-            session->start_keep_alive_timer();
-            session->progress(cf_id, progress_info::direction::IN, fm.representation().size());
-            return service::get_schema_for_write(fm.schema_version(), from_msg_addr).then([&fm] (schema_ptr s) {
+        auto from = net::messaging_service::get_source(cinfo);
+        return do_with(std::move(fm), [plan_id, from] (const auto& fm) {
+            auto fm_size = fm.representation().size();
+            get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
+            return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
                 return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
             });
         });
@@ -136,7 +130,6 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
-            session->start_keep_alive_timer();
             session->receive_task_completed(cf_id);
             return session->get_db().invoke_on_all([ranges = std::move(ranges), cf_id] (database& db) {
                 auto& cf = db.find_column_family(cf_id);
@@ -150,7 +143,6 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [plan_id, from, dst_cpu_id] () mutable {
             auto session = get_session(plan_id, from, "COMPLETE_MESSAGE");
-            session->start_keep_alive_timer();
             session->complete();
         });
     });
@@ -249,7 +241,6 @@ future<> stream_session::on_initialization_complete() {
     return ms().send_prepare_message(id, std::move(prepare), plan_id(), description()).then_wrapped([this, id] (auto&& f) {
         try {
             auto msg = f.get0();
-            this->start_keep_alive_timer();
             sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE Reply from {}", this->plan_id(), this->peer);
             this->dst_cpu_id = msg.dst_cpu_id;
             for (auto& summary : msg.summaries) {
@@ -267,7 +258,6 @@ future<> stream_session::on_initialization_complete() {
         sslog.debug("[Stream #{}] SEND PREPARE_DONE_MESSAGE to {}", plan_id, id);
         return ms().send_prepare_done_message(id, plan_id, this->dst_cpu_id).then([this] {
             sslog.debug("[Stream #{}] GOT PREPARE_DONE_MESSAGE Reply from {}", this->plan_id(), this->peer);
-            this->start_keep_alive_timer();
         }).handle_exception([id, plan_id] (auto ep) {
             sslog.error("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
             std::rethrow_exception(ep);
@@ -351,13 +341,6 @@ void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t f
     progress_info progress(peer, cf_id.to_sstring(), dir, bytes, bytes);
     update_progress(progress);
     _stream_result->handle_progress(progress);
-}
-
-void stream_session::received(UUID cf_id, int sequence_number) {
-    auto it = _transfers.find(cf_id);
-    if (it != _transfers.end()) {
-        it->second.complete(sequence_number);
-    }
 }
 
 void stream_session::complete() {
@@ -485,35 +468,12 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
 }
 
 void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
-    std::vector<stream_detail> stream_details;
     auto cfs = get_column_family_stores(keyspace, column_families);
     for (auto& cf : cfs) {
-        std::vector<mutation_reader> readers;
         auto cf_id = cf->schema()->id();
-        for (auto& range : ranges) {
-            auto pr = query::to_partition_range(range);
-            auto mr = service::get_storage_proxy().local().make_local_reader(cf_id, pr, service::get_local_mutation_stream_priority());
-            readers.push_back(std::move(mr));
-        }
-        // Store this mutation_reader so we can send mutaions later
-        mutation_reader mr = make_combined_reader(std::move(readers));
-        // FIXME: sstable.estimatedKeysForRanges(ranges)
-        long estimated_keys = 0;
-        stream_details.emplace_back(std::move(cf_id), std::move(mr), estimated_keys);
-    }
-    if (!stream_details.empty()) {
-        add_transfer_files(std::move(ranges), std::move(stream_details));
-    }
-}
-
-void stream_session::add_transfer_files(std::vector<range<token>> ranges, std::vector<stream_detail> stream_details) {
-    for (auto& detail : stream_details) {
-        UUID cf_id = detail.cf_id;
-        auto it = _transfers.find(cf_id);
-        if (it == _transfers.end()) {
-            it = _transfers.emplace(cf_id, stream_transfer_task(shared_from_this(), cf_id, ranges)).first;
-        }
-        it->second.add_transfer_file(std::move(detail));
+        stream_transfer_task task(shared_from_this(), cf_id, ranges);
+        auto inserted = _transfers.emplace(cf_id, std::move(task)).second;
+        assert(inserted);
     }
 }
 
@@ -566,9 +526,19 @@ void stream_session::start() {
 void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
     _stream_result = stream_result_;
     _keep_alive.set_callback([this] {
-        sslog.info("[Stream #{}] The session {} is idle for {} seconds, the peer {} is probably gone, close it",
-            this->plan_id(), this, this->_keep_alive_timeout.count(), this->peer);
-        this->on_error();
+        auto plan_id = this->plan_id();
+        get_local_stream_manager().get_progress_on_all_shards(plan_id, this->peer).then([this] (stream_bytes sbytes) {
+            if (sbytes != this->_last_stream_bytes) {
+                this->_last_stream_bytes = sbytes;
+                this->start_keep_alive_timer();
+            } else {
+                sslog.info("[Stream #{}] The session {} is idle for {} seconds, the peer {} is probably gone, close it",
+                    this->plan_id(), this, this->_keep_alive_timeout.count(), this->peer);
+                this->on_error();
+            }
+        }).handle_exception([plan_id] (auto ep) {
+           sslog.info("[Stream #{}] keep alive timer callback fails: {}", plan_id, ep);
+        });
     });
     start_keep_alive_timer();
 }

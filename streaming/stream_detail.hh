@@ -50,13 +50,9 @@ namespace streaming {
 struct stream_detail {
     using UUID = utils::UUID;
     UUID cf_id;
-    lw_shared_ptr<mutation_reader> mr;
-    int64_t estimated_keys;
     stream_detail() = default;
-    stream_detail(UUID cf_id_, mutation_reader mr_, long estimated_keys_)
-        : cf_id(std::move(cf_id_))
-        , mr(make_lw_shared(std::move(mr_)))
-        , estimated_keys(estimated_keys_) {
+    stream_detail(UUID cf_id_)
+        : cf_id(std::move(cf_id_)) {
     }
 };
 

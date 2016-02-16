@@ -111,17 +111,9 @@ void set_stream_manager(http_context& ctx, routes& r) {
     hs::get_total_incoming_bytes.set(r, [](std::unique_ptr<request> req) {
         gms::inet_address peer(req->param["peer"]);
         return streaming::get_stream_manager().map_reduce0([peer](streaming::stream_manager& sm) {
-            int64_t res = 0;
-            for (auto sr : sm.get_all_streams()) {
-                if (sr) {
-                    for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
-                        if (session->peer == peer) {
-                            res += session->get_bytes_received();
-                        }
-                    }
-                }
-            }
-            return res;
+            return sm.get_progress_on_all_shards(peer).then([] (auto sbytes) {
+                return sbytes.bytes_received;
+            });
         }, 0, std::plus<int64_t>()).then([](int64_t res) {
             return make_ready_future<json::json_return_type>(res);
         });
@@ -129,15 +121,9 @@ void set_stream_manager(http_context& ctx, routes& r) {
 
     hs::get_all_total_incoming_bytes.set(r, [](std::unique_ptr<request> req) {
         return streaming::get_stream_manager().map_reduce0([](streaming::stream_manager& sm) {
-            int64_t res = 0;
-            for (auto sr : sm.get_all_streams()) {
-                if (sr) {
-                    for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
-                        res += session->get_bytes_received();
-                    }
-                }
-            }
-            return res;
+            return sm.get_progress_on_all_shards().then([] (auto sbytes) {
+                return sbytes.bytes_received;
+            });
         }, 0, std::plus<int64_t>()).then([](int64_t res) {
             return make_ready_future<json::json_return_type>(res);
         });
@@ -145,18 +131,10 @@ void set_stream_manager(http_context& ctx, routes& r) {
 
     hs::get_total_outgoing_bytes.set(r, [](std::unique_ptr<request> req) {
         gms::inet_address peer(req->param["peer"]);
-        return streaming::get_stream_manager().map_reduce0([peer](streaming::stream_manager& sm) {
-            int64_t res = 0;
-            for (auto sr : sm.get_all_streams()) {
-                if (sr) {
-                    for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
-                        if (session->peer == peer) {
-                            res += session->get_bytes_sent();
-                        }
-                    }
-                }
-            }
-            return res;
+        return streaming::get_stream_manager().map_reduce0([peer] (streaming::stream_manager& sm) {
+            return sm.get_progress_on_all_shards(peer).then([] (auto sbytes) {
+                return sbytes.bytes_sent;
+            });
         }, 0, std::plus<int64_t>()).then([](int64_t res) {
             return make_ready_future<json::json_return_type>(res);
         });
@@ -164,15 +142,9 @@ void set_stream_manager(http_context& ctx, routes& r) {
 
     hs::get_all_total_outgoing_bytes.set(r, [](std::unique_ptr<request> req) {
         return streaming::get_stream_manager().map_reduce0([](streaming::stream_manager& sm) {
-            int64_t res = 0;
-            for (auto sr : sm.get_all_streams()) {
-                if (sr) {
-                    for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
-                        res += session->get_bytes_sent();
-                    }
-                }
-            }
-            return res;
+            return sm.get_progress_on_all_shards().then([] (auto sbytes) {
+                return sbytes.bytes_sent;
+            });
         }, 0, std::plus<int64_t>()).then([](int64_t res) {
             return make_ready_future<json::json_return_type>(res);
         });

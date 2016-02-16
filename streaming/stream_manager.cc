@@ -97,6 +97,10 @@ void stream_manager::remove_stream(UUID plan_id) {
     sslog.debug("stream_manager: removing plan_id={}", plan_id);
     _initiated_streams.erase(plan_id);
     _receiving_streams.erase(plan_id);
+    // FIXME: Do not ignore the future
+    remove_progress_on_all_shards(plan_id).handle_exception([plan_id] (auto ep) {
+        sslog.info("stream_manager: Fail to remove progress for plan_id={}: {}", plan_id, ep);
+    });
 }
 
 void stream_manager::show_streams() {
@@ -117,6 +121,70 @@ std::vector<shared_ptr<stream_result_future>> stream_manager::get_all_streams() 
         result.push_back(x.second);
     }
     return result;
+}
+
+void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size) {
+    auto& sbytes = _stream_bytes[cf_id];
+    if (dir == progress_info::direction::OUT) {
+        sbytes[peer].bytes_sent += fm_size;
+    } else {
+        sbytes[peer].bytes_received += fm_size;
+    }
+}
+
+void stream_manager::remove_progress(UUID plan_id) {
+    _stream_bytes.erase(plan_id);
+}
+
+stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) {
+    auto& sbytes = _stream_bytes[plan_id];
+    return sbytes[peer];
+}
+
+future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
+    return get_stream_manager().invoke_on_all([plan_id] (auto& sm) {
+        sm.remove_progress(plan_id);
+    });
+}
+
+future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gms::inet_address peer) {
+    return get_stream_manager().map_reduce0(
+        [plan_id, peer] (auto& sm) {
+            return sm.get_progress(plan_id, peer);
+        },
+        stream_bytes(),
+        std::plus<stream_bytes>()
+    );
+}
+
+future<stream_bytes> stream_manager::get_progress_on_all_shards(gms::inet_address peer) {
+    return get_stream_manager().map_reduce0(
+        [peer] (auto& sm) {
+            stream_bytes ret;
+            for (auto& sbytes : sm._stream_bytes) {
+                ret += sbytes.second[peer];
+            }
+            return ret;
+        },
+        stream_bytes(),
+        std::plus<stream_bytes>()
+    );
+}
+
+future<stream_bytes> stream_manager::get_progress_on_all_shards() {
+    return get_stream_manager().map_reduce0(
+        [] (auto& sm) {
+            stream_bytes ret;
+            for (auto& sbytes : sm._stream_bytes) {
+                for (auto& sb : sbytes.second) {
+                    ret += sb.second;
+                }
+            }
+            return ret;
+        },
+        stream_bytes(),
+        std::plus<stream_bytes>()
+    );
 }
 
 } // namespace streaming
