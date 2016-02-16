@@ -28,6 +28,7 @@
 #include "utils/allocation_strategy.hh"
 #include <seastar/core/unaligned.hh>
 #include <unordered_map>
+#include <type_traits>
 
 struct blob_storage {
     using size_type = uint32_t;
@@ -357,14 +358,14 @@ public:
     }
 
     template <typename Func>
-    friend auto with_linearized_managed_bytes(Func&& func);
+    friend std::result_of_t<Func()> with_linearized_managed_bytes(Func&& func);
 };
 
 // Run func() while ensuring that reads of managed_bytes objects are
 // temporarlily linearized
 template <typename Func>
 inline
-decltype(auto)
+std::result_of_t<Func()>
 with_linearized_managed_bytes(Func&& func) {
     managed_bytes::linearization_context_guard g;
     return func();
