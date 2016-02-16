@@ -6,5 +6,6 @@ FILE=$1
 TIME=`date --date @$2 +%F-%T`
 PID=$3
 
+logger -p user.err "$FILE is crashed, saving coredump to /var/lib/scylla/coredump/core.$FILE-$TIME-$PID"
 mkdir -p /var/lib/scylla/coredump
 cat - > /var/lib/scylla/coredump/core.$FILE-$TIME-$PID
