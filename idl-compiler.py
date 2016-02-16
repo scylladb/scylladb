@@ -714,7 +714,8 @@ void $func(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER,
     for param in cls["members"]:
         if is_class(param) or is_enum(param):
             continue
-        fprintln(cout, Template("""  $func(buf, obj.$var);""").substitute({'func' : SERIALIZER, 'var' : param["name"]}))
+        fprintln(cout, Template("""  static_assert(is_equivalent<decltype(obj.$var), $type>::value, "member value has a wrong type");
+    $func(buf, obj.$var);""").substitute({'func' : SERIALIZER, 'var' : param["name"], 'type' : param_type(param["type"])}))
     fprintln(cout, "}")
 
     fprintln(cout, Template("""
