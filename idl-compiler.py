@@ -344,13 +344,17 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
     set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
     set_command = "_state.f.end(_out);" if var_index is not None else ""
     return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
-    return Template("""
-   after_${basestate}__$name write_$name$var_type($type t) && {
-        $set_varient_index
-        serialize(_out, t);
-        $set
-        return $return_command;
-   }""").substitute({'type' : typ, 'name': name, 'basestate' : base_state, 'var_type' :var_type, 'set_varient_index':set_varient_index, 'set' :set_command, 'return_command' : return_command})
+
+    if typ in ['bytes', 'sstring']:
+        typ += '_view'
+
+    return Template(reindent(4, """
+        after_${base_state}__$name write_$name$var_type($typ t) && {
+            $set_varient_index
+            serialize(_out, t);
+            $set_command
+            return $return_command;
+        }""")).substitute(locals())
 
 def add_param_writer_object(name, base_state, typ, var_type = "", var_index = None, root_node = False):
     var_type1 = "_" + var_type if var_type != "" else ""
