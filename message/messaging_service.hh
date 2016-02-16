@@ -77,25 +77,26 @@ enum class messaging_verb : int32_t {
     READ_MUTATION_DATA = 4,
     READ_DIGEST = 5,
     // Used by gossip
-    GOSSIP_ECHO = 6,
-    GOSSIP_DIGEST_SYN = 7,
+    GOSSIP_DIGEST_SYN = 6,
+    GOSSIP_DIGEST_ACK = 7,
     GOSSIP_DIGEST_ACK2 = 8,
-    GOSSIP_SHUTDOWN = 9,
+    GOSSIP_ECHO = 9,
+    GOSSIP_SHUTDOWN = 10,
     // end of gossip verb
-    DEFINITIONS_UPDATE = 10,
-    TRUNCATE = 11,
-    REPLICATION_FINISHED = 12,
-    MIGRATION_REQUEST = 13,
+    DEFINITIONS_UPDATE = 11,
+    TRUNCATE = 12,
+    REPLICATION_FINISHED = 13,
+    MIGRATION_REQUEST = 14,
     // Used by streaming
-    PREPARE_MESSAGE = 14,
-    PREPARE_DONE_MESSAGE = 15,
-    STREAM_MUTATION = 16,
-    STREAM_MUTATION_DONE = 17,
-    COMPLETE_MESSAGE = 18,
+    PREPARE_MESSAGE = 15,
+    PREPARE_DONE_MESSAGE = 16,
+    STREAM_MUTATION = 17,
+    STREAM_MUTATION_DONE = 18,
+    COMPLETE_MESSAGE = 19,
     // end of streaming verbs
-    REPAIR_CHECKSUM_RANGE = 19,
-    GET_SCHEMA_VERSION = 20,
-    LAST = 21,
+    REPAIR_CHECKSUM_RANGE = 20,
+    GET_SCHEMA_VERSION = 21,
+    LAST = 22,
 };
 
 } // namespace net
