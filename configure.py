@@ -223,7 +223,11 @@ apps = [
 
 tests = scylla_tests
 
-all_artifacts = apps + tests
+other = [
+    'iotune',
+    ]
+
+all_artifacts = apps + tests + other
 
 arg_parser = argparse.ArgumentParser('Configure scylla')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
@@ -727,6 +731,9 @@ with open(buildfile, 'w') as f:
             command = {ninja} -C $subdir $target
             restat = 1
             description = NINJA $out
+        rule copy
+            command = cp $in $out
+            description = COPY $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -763,6 +770,8 @@ with open(buildfile, 'w') as f:
         thrifts = set()
         antlr3_grammars = set()
         for binary in build_artifacts:
+            if binary in other:
+                continue
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
@@ -860,9 +869,13 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
-        f.write('build seastar/build/{}/libseastar.a: ninja {}\n'.format(mode, seastar_deps))
+        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja {seastar_deps}\n'
+                .format(**locals()))
         f.write('  subdir = seastar\n')
-        f.write('  target = build/{}/libseastar.a\n'.format(mode))
+        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune\n'.format(**locals()))
+        f.write(textwrap.dedent('''\
+            build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
+            ''').format(**locals()))
     f.write('build {}: phony\n'.format(seastar_deps))
     f.write(textwrap.dedent('''\
         rule configure
