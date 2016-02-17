@@ -191,7 +191,7 @@ public:
     void write_byte(uint8_t b);
     void write_int(int32_t n);
     void write_long(int64_t n);
-    void write_short(int16_t n);
+    void write_short(uint16_t n);
     void write_string(const sstring& s);
     void write_long_string(const sstring& s);
     void write_uuid(utils::UUID uuid);
@@ -1048,9 +1048,9 @@ int64_t cql_server::connection::read_long(bytes_view& buf)
     return n;
 }
 
-int16_t cql_server::connection::read_short(bytes_view& buf)
+uint16_t cql_server::connection::read_short(bytes_view& buf)
 {
-    return static_cast<int16_t>(read_unsigned_short(buf));
+    return read_unsigned_short(buf);
 }
 
 uint16_t cql_server::connection::read_unsigned_short(bytes_view& buf)
@@ -1357,7 +1357,7 @@ void cql_server::response::write_long(int64_t n)
     _body.insert(_body.end(), s, s+sizeof(u));
 }
 
-void cql_server::response::write_short(int16_t n)
+void cql_server::response::write_short(uint16_t n)
 {
     auto u = htons(n);
     auto *s = reinterpret_cast<const char*>(&u);
@@ -1366,7 +1366,7 @@ void cql_server::response::write_short(int16_t n)
 
 void cql_server::response::write_string(const sstring& s)
 {
-    assert(s.size() <= std::numeric_limits<int16_t>::max());
+    assert(s.size() <= std::numeric_limits<uint16_t>::max());
     write_short(s.size());
     _body.insert(_body.end(), s.begin(), s.end());
 }
@@ -1386,7 +1386,7 @@ void cql_server::response::write_uuid(utils::UUID uuid)
 
 void cql_server::response::write_string_list(std::vector<sstring> string_list)
 {
-    assert(string_list.size() <= std::numeric_limits<int16_t>::max());
+    assert(string_list.size() <= std::numeric_limits<uint16_t>::max());
     write_short(string_list.size());
     for (auto&& s : string_list) {
         write_string(s);
@@ -1402,7 +1402,7 @@ void cql_server::response::write_bytes(bytes b)
 
 void cql_server::response::write_short_bytes(bytes b)
 {
-    assert(b.size() <= std::numeric_limits<int16_t>::max());
+    assert(b.size() <= std::numeric_limits<uint16_t>::max());
     write_short(b.size());
     _body.insert(_body.end(), b.begin(), b.end());
 }
@@ -1436,7 +1436,7 @@ void cql_server::response::write_consistency(db::consistency_level c)
 
 void cql_server::response::write_string_map(std::map<sstring, sstring> string_map)
 {
-    assert(string_map.size() <= std::numeric_limits<int16_t>::max());
+    assert(string_map.size() <= std::numeric_limits<uint16_t>::max());
     write_short(string_map.size());
     for (auto&& s : string_map) {
         write_string(s.first);
@@ -1450,7 +1450,7 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
     for (auto it = string_map.begin(), end = string_map.end(); it != end; it = string_map.upper_bound(it->first)) {
         keys.push_back(it->first);
     }
-    assert(keys.size() <= std::numeric_limits<int16_t>::max());
+    assert(keys.size() <= std::numeric_limits<uint16_t>::max());
     write_short(keys.size());
     for (auto&& key : keys) {
         std::vector<sstring> values;
