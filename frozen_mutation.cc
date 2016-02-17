@@ -77,18 +77,14 @@ frozen_mutation::frozen_mutation(const mutation& m) {
     partition_key_view_serializer key_ser(key_view);
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes buf(bytes::initialized_later(),
-              id_ser.size()
-              + schema_version_ser.size()
-              + key_ser.size()
-              + part_ser.size_without_framing());
-    data_output out(buf);
+    bytes_ostream out;
     id_ser.write(out);
     schema_version_ser.write(out);
     key_ser.write(out);
-    part_ser.write_without_framing(out);
+    part_ser.write(out);
 
-    _bytes = std::move(buf);
+    auto bv = out.linearize();
+    _bytes = bytes(bv.begin(), bv.end()); // FIXME: avoid copy
 }
 
 mutation
