@@ -369,6 +369,17 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
     """)).substitute(locals())
     if not is_stub(typ) and is_local_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
+    if is_stub(typ):
+        set_command = "_state.f.end(_out);" if var_index is not None else ""
+        return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
+        ret += Template(reindent(4, """
+            template<typename Serializer>
+            after_${base_state}__${name} ${name}$var_type(Serializer&& f) && {
+                $set_varient_index
+                f(writer_of_$typ(_out));
+                $set_command
+                return $return_command;
+            }""")).substitute(locals())
     return ret
 
 def add_param_write(current, base_state, vector = False, root_node = False):
