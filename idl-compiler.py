@@ -27,7 +27,7 @@ import argparse
 import os
 from string import Template
 import pyparsing as pp
-
+from functools import reduce
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -118,7 +118,7 @@ def parse_file(file_name):
     type = pp.Forward()
     nestedParens = pp.nestedExpr('<', '>')
 
-    tmpl = pp.Group(btype + langle.suppress() + pp.Group(pp.delimitedList(type)) + rangle.suppress())
+    tmpl = pp.Group(btype.setResultsName("template_name") + langle.suppress() + pp.Group(pp.delimitedList(type)) + rangle.suppress())
     type << (tmpl | btype)
     enum_lit = pp.Literal('enum')
     enum_class = pp.Group(enum_lit + cls)
@@ -131,14 +131,15 @@ def parse_file(file_name):
 
     member_name = pp.Combine(pp.Group(identifier + pp.Optional(lparen + rparen)))
     attrib = pp.Group(lbrack.suppress() + lbrack.suppress() + pp.SkipTo(']') + rbrack.suppress() + rbrack.suppress())
+    opt_attribute = pp.Optional(attrib).setResultsName("attribute")
     namespace = pp.Group(ns.setResultsName("type") + identifier.setResultsName("name") + lbrace + pp.Group(pp.OneOrMore(content)).setResultsName("content") + rbrace)
     enum = pp.Group(enum_class.setResultsName("type") + identifier.setResultsName("name") + colon.suppress() + identifier.setResultsName("underline_type") + enum_values.setResultsName("enum_values") + pp.Optional(semi).suppress())
     default_value = equals.suppress() + pp.SkipTo(';')
-    class_member = pp.Group(type.setResultsName("type") + member_name.setResultsName("name") + pp.Optional(attrib).setResultsName("attribute") + pp.Optional(default_value).setResultsName("default") + semi.suppress()).setResultsName("member")
+    class_member = pp.Group(type.setResultsName("type") + member_name.setResultsName("name") + opt_attribute + pp.Optional(default_value).setResultsName("default") + semi.suppress()).setResultsName("member")
     template_param = pp.Group(identifier.setResultsName("type") + identifier.setResultsName("name"))
     template_def = pp.Group(template + langle + pp.Group(pp.delimitedList(template_param)).setResultsName("params") + rangle)
     class_content = pp.Forward()
-    class_def = pp.Group(pp.Optional(template_def).setResultsName("template") + (cls | struct).setResultsName("type") + with_colon.setResultsName("name") + pp.Optional(final) + pp.Optional(stub) + lbrace + pp.Group(pp.OneOrMore(class_content)).setResultsName("members") + rbrace + pp.Optional(semi))
+    class_def = pp.Group(pp.Optional(template_def).setResultsName("template") + (cls | struct).setResultsName("type") + with_colon.setResultsName("name") + pp.Optional(final) + pp.Optional(stub) + opt_attribute + lbrace + pp.Group(pp.ZeroOrMore(class_content)).setResultsName("members") + rbrace + pp.Optional(semi))
     content << (enum | class_def | namespace)
     class_content << (enum | class_def | class_member)
     rt = pp.OneOrMore(content)
@@ -214,8 +215,474 @@ def is_enum(obj):
         return not isinstance(obj["type"], str) and "".join(obj["type"]) == 'enumclass'
     except:
         return False
+local_types = {}
+
+def list_types(lst):
+    if isinstance(lst, str):
+        return [lst]
+    if len(lst) == 1:
+        return lst
+    lt = reduce(lambda a,b: a + b, [list_types(l) for l in lst[1]])
+    return lt
+
+def list_local_types(lst):
+    return {l for l in list_types(lst) if l in local_types}
+
+def is_basic_type(lst):
+    if isinstance(lst, str):
+        return lst not in local_types
+    if len(lst) == 1:
+        return lst[0] not in local_types
+    return False
+
+def is_local_type(lst):
+    return isinstance(lst, str) and lst in local_types or len(lst) == 1 and lst[0] in local_types
+
+def get_template_name(lst):
+    return lst["template_name"] if not isinstance(lst, str) and len(lst) >1 else None
+
+def is_vector(lst):
+    return get_template_name(lst) == "std::vector"
+
+def is_variant(lst):
+    return get_template_name(lst) == "boost::variant"
+
+created_writers = set()
+
+def get_members(cls):
+    return [p for p in cls["members"] if not is_class(p) and not is_enum(p)]
+
+def is_final(cls):
+    return "final" in cls
+def get_variant_type(lst):
+    if is_variant(lst):
+        return "variant"
+    return param_type(lst)
+
+def variant_to_member(typ):
+    return [{"name" :  get_variant_type(x), "type" : x } for x in typ if is_local_type(x) or is_variant(x)]
+
+def variant_info(info, typ):
+    [cls, namespaces, parent_template_param] = info
+    return [{"members" : variant_to_member(typ)}, namespaces, parent_template_param]
+
+def handle_visitors_state(info, hout, clases = []):
+    [cls, namespaces, parent_template_param] = info
+    name = "__".join(clases) if clases else cls["name"]
+    frame = "empty_frame" if "final" in cls else "frame"
+    fprintln(hout, Template("""
+struct state_of_$name {
+    $frame f;""").substitute({'name': name, 'frame': frame }))
+    if clases:
+        local_state = "state_of_" + "__".join(clases[:-1])
+        fprintln(hout, Template("    $name _parent;").substitute({'name':  local_state}))
+        if "final" in cls:
+            fprintln(hout, Template("    state_of_$name($state parent) : _parent(parent) {}").substitute({'name':  name, 'state' : local_state}))
+    fprintln(hout, "};")
+    members = get_members(cls)
+    member_class = clases if clases else [cls["name"]]
+    for param in members:
+        if is_local_type(param["type"]):
+            handle_visitors_state(local_types[param_type(param["type"])], hout, member_class + [param["name"]])
+        if is_variant(param["type"]):
+            handle_visitors_state(variant_info(info, param["type"][1]), hout, member_class + [param["name"]])
+
+def get_dependency(cls):
+    members = get_members(cls)
+    return reduce(lambda a,b: a |b, [list_local_types(m["type"]) for m in members], set())
+
+def add_vector_node(hout, cls, members, base_state, current_node, ind):
+    current = members[ind]
+    typ = current["type"][1]
+    fprintln(hout, Template("""
+struct $node_name {
+    bytes_ostream& _out;
+    state_of_$base_state _state;
+    place_holder _size;
+    size_type _count = 0;
+    $node_name(bytes_ostream& out, state_of_$base_state state)
+        : _out(out)
+        , _state(state)
+        , _size(start_place_holder(out))
+    {
+    }
+    $next_state end_$name() {
+        _size.set(_out, _count);
+    }""").substitute({'node_name': '', 'name': current["name"] }))
+
+    fprintln(hout, "};")
+
+def vector_add_method(current, base_state):
+    typ = current["type"]
+    res = ""
+    if is_basic_type(typ[1]):
+        res = Template("""
+  void add_$name($type t)  {
+        serialize(_out, t);
+        _count++;
+  }""").substitute({'type': param_type(typ[1]), 'name': current["name"]})
+    else:
+        res = Template("""
+  writer_of_$type add() {
+        _count++;
+        return {_out};
+  }""").substitute({'type': param_type(typ[1]), 'name': current["name"]})
+    return res + Template("""
+  after_${basestate}__$name end_$name() && {
+        _size.set(_out, _count);
+        return { _out, std::move(_state) };
+  }""").substitute({'name': current["name"], 'basestate' : base_state})
+
+def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index = None, root_node = False):
+    set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
+    set_command = "_state.f.end(_out);" if var_index is not None else ""
+    return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
+    return Template("""
+   after_${basestate}__$name write_$name$var_type($type t) && {
+        $set_varient_index
+        serialize(_out, t);
+        $set
+        return $return_command;
+   }""").substitute({'type' : typ, 'name': name, 'basestate' : base_state, 'var_type' :var_type, 'set_varient_index':set_varient_index, 'set' :set_command, 'return_command' : return_command})
+
+def add_param_writer_object(name, base_state, var_type = "", var_index = None):
+    var_type1 = "_" + var_type if var_type != "" else ""
+    set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
+    return Template("""
+    ${basestate}__${name}$var_type1 start_${name}$var_type() && {
+        $set_varient_index
+        return { _out, std::move(_state) };
+    }
+""").substitute({'name': name, 'basestate' : base_state, 'var_type' :var_type, 'var_type1' :var_type1, 'set_varient_index':set_varient_index})
+
+def add_param_write(current, base_state, vector = False, root_node = False):
+    typ = current["type"]
+    res = ""
+    if is_basic_type(typ):
+        res = res + add_param_writer_basic_type(current["name"], base_state, typ)
+    elif is_vector(typ):
+        set_size = "_size.set(_out, 0);" if vector else "serialize(_out, size_type(0));"
+
+        res = res +  Template("""
+    ${basestate}__$name start_$name() && {
+        return { _out, std::move(_state) };
+    }
+
+    after_${basestate}__$name skip_$name() && {
+        $set
+        return { _out, std::move(_state) };
+    }
+""").substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state, 'set' : set_size})
+    elif is_local_type(typ):
+        res = res + add_param_writer_object(current["name"], base_state)
+    elif is_variant(typ):
+        for idx, p in enumerate(typ[1]):
+            if is_basic_type(p):
+                varient_type = param_type(p)
+                res = res + add_param_writer_basic_type(current["name"], base_state, varient_type,"_" + varient_type, idx, root_node)
+            elif is_variant(p):
+                res = res + add_param_writer_object(current["name"], base_state, '_' + "variant", idx)
+            elif is_local_type(p):
+                res = res + add_param_writer_object(current["name"], base_state, '_' + param_type(p), idx)
+    else:
+        print ("something is wrong with type", typ)
+    return res;
+
+def get_return_struct(variant_node, clases):
+    if not variant_node:
+        return clases
+    if clases[-2] == "variant":
+        return clases[:-2]
+    return clases[:-1]
+
+
+def add_variant_end_method(base_state, name, clases):
+
+    return_struct = "after_" + base_state
+    return Template("""
+    $return_struct  end_$name() && {
+        _state.f.end(_out);
+        _state._parent.f.end(_out);
+        return { _out, std::move(_state._parent._parent) };
+    }
+""").substitute({'name': name, 'return_struct':return_struct})
+
+def add_end_method(parents, name, variant_node = False, return_value = True):
+    if variant_node:
+        return add_variant_end_method(parents, name, return_value)
+    base_state = parents + "__" + name
+    if return_value:
+        return_struct =  "after_" + base_state
+        return Template("""
+    $return_struct  end_$name() && {
+        _state.f.end(_out);
+        return { _out, std::move(_state._parent) };
+    }
+""").substitute({'name': name, 'return_struct':return_struct})
+    return Template("""
+    void  end_$name() {
+        _state.f.end(_out);
+    }
+""").substitute({'name': name, 'basestate':base_state})
+
+def add_vector_placeholder():
+    return """    place_holder _size;
+    size_type _count = 0;"""
+
+def add_node(hout, name, member, base_state, prefix, parents, fun, is_type_vector = False, is_type_final = False):
+    struct_name = prefix + name
+    if member and is_type_vector:
+        vector_placeholder = add_vector_placeholder()
+        vector_init = "\n            , _size(start_place_holder(out))"
+    else:
+        vector_placeholder = ""
+        vector_init = ""
+    if vector_init != "" or prefix == "":
+        state_init =  "_state{start_frame(out), std::move(state)}" if parents != base_state and not is_type_final else "_state(state)"
+    else:
+        if member and is_variant(member) and parents != base_state:
+            state_init =  "_state{start_frame(out), std::move(state)}"
+            sate = name
+        else:
+            state_init = ""
+    if prefix == "writer_of_":
+        constructor = Template("""$name(bytes_ostream& out)
+            : _out(out)
+            , _state{start_frame(out)}${vector_init}
+            {}""").substitute({'name': struct_name, 'vector_init' : vector_init})
+    elif state_init != "":
+        constructor = Template("""$name(bytes_ostream& out, state_of_$state state)
+            : _out(out)
+            , $state_init${vector_init}
+            {}""").substitute({'name': struct_name, 'vector_init' : vector_init, 'state' : parents, 'state_init' : state_init})
+    else:
+        constructor = ""
+    fprintln(hout, Template("""
+struct $name {
+    bytes_ostream& _out;
+    state_of_$state _state;
+    ${vector_placeholder}
+    ${constructor}
+    $fun
+};""").substitute({'name': struct_name, 'state' : base_state, 'fun' : fun, 'vector_placeholder': vector_placeholder, 'constructor': constructor}))
+
+def add_vector_node(hout, member, base_state, parents):
+    add_node(hout, base_state + "__" + member["name"], member["type"], base_state, "", parents, vector_add_method(member, base_state), True)
+
+def add_variant_nodes(hout, member, param, base_state, parents, classes):
+    vr = False
+    par = base_state + "__" + member["name"]
+    for typ in param[1]:
+        if is_local_type(typ):
+            handle_visitors_nodes(local_types[param_type(typ)], hout, True, classes + [member["name"], local_types[param_type(typ)][0]["name"]])
+        if is_variant(typ):
+            name = base_state + "__" + member["name"] + "__variant"
+            new_member = {"type": typ, "name" : "variant"}
+            return_struct = "after_" + par
+            end_method = Template("""
+    $return_struct  end_variant() && {
+        _state.f.end(_out);
+        return { _out, std::move(_state._parent) };
+    }
+""").substitute({'return_struct':return_struct})
+            add_node(hout, name, None, base_state + "__" + member["name"], "after_", name, end_method)
+            add_variant_nodes(hout, new_member, typ, par, name, classes + [member["name"]])
+            add_node(hout, name, typ, name, "", par, add_param_write({"type": typ, "name" : "variant"}, par))
+            vr = True
+writers = set()
+
+def add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes):
+    if is_vector(member["type"]):
+        add_vector_node(hout, member, base_state_name, base_state_name)
+    elif is_variant(member["type"]):
+        add_variant_nodes(hout, member, member["type"], base_state_name, parents, member_classes)
+    elif is_local_type(member["type"]):
+        handle_visitors_nodes(local_types[member["type"]], hout, False, member_classes + [member["name"]])
+
+def handle_visitors_nodes(info, hout, variant_node = False, clases = []):
+    global writers
+    [cls, namespaces, parent_template_param] = info
+    #for root node, only generate once
+    if not clases:
+        if cls["name"] in writers:
+            return
+        writers.add(cls["name"])
+
+    members = get_members(cls)
+    if clases:
+        base_state_name = "__".join(clases)
+        if variant_node:
+            parents = "__".join(clases[:-1])
+        else:
+            parents = "__".join(clases[:-1])
+        current_name = clases[-1]
+    else:
+        base_state_name = cls["name"]
+        current_name = cls["name"]
+        parents = ""
+    member_classes = clases if clases else [current_name]
+    prefix = ""  if clases else "writer_of_"
+    if not members:
+        add_node(hout, base_state_name, None, base_state_name, prefix, parents, add_end_method(parents, current_name, variant_node, clases), False, is_final(cls))
+        return
+    add_node(hout, base_state_name + "__" + members[-1]["name"], members[-1]["type"], base_state_name, "after_", base_state_name, add_end_method(parents, current_name, variant_node, clases))
+    # Create writer and reader for include class
+    if not variant_node:
+        for member in get_dependency(cls):
+            handle_visitors_nodes(local_types[member], hout)
+    for ind in reversed(range(1, len(members))):
+        member = members[ind]
+        add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
+        variant_state = base_state_name + "__" + member["name"] if is_variant(member["type"]) else base_state_name
+        is_param_vector = is_vector(member["type"]) and  is_basic_type(member["type"][1][0])
+        add_node(hout, base_state_name + "__" + members[ind - 1]["name"], member["type"], variant_state, "after_", base_state_name, add_param_write(member, base_state_name), False)
+    member = members[0]
+    is_param_vector = is_vector(member["type"]) and is_basic_type(member["type"][1][0])
+    add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes)
+    add_node(hout, base_state_name, member["type"], base_state_name, prefix, parents, add_param_write(member, base_state_name, False, not clases), False, is_final(cls))
+
+def add_to_types(cls, namespaces, parent_template_param ):
+    global local_types
+    if "attribute" not in cls or cls["attribute"][0][0] != "writable":
+        return
+    local_types[cls["name"]] = [cls, namespaces, parent_template_param]
+    for param in cls["members"]:
+        if is_class(param) or is_enum(param):
+            continue
+
+def sort_dependencies():
+    dep_tree = {}
+    res = []
+    for k in local_types:
+        [cls, namespaces, parent_template_param] = local_types[k]
+        dep_tree[k] = get_dependency(cls)
+    while (len(dep_tree) > 0):
+        found = set()
+        found = found | { k for k in dep_tree if not dep_tree[k]}
+        res = res + [k for k in found]
+        for k in found:
+            dep_tree.pop(k)
+        for k in dep_tree:
+            if dep_tree[k]:
+                dep_tree[k].difference_update(found)
+
+    return res
+
+
+def join_template_view(lst, more_types = []):
+    return "<" + ", ".join([param_view_type(l) for l in lst] + more_types) + ">"
+
+def to_view(val):
+    if val in local_types:
+        return val +"_view"
+    return val
+
+def param_view_type(lst):
+    if isinstance(lst, str):
+        return to_view(lst)
+    if len(lst) == 1:
+        return to_view(lst[0])
+    if lst[0] == "boost::variant":
+        return lst[0] + join_template_view(lst[1], ["unknown_variant_type"])
+    return lst[0] + join_template_view(lst[1])
+
+read_sizes = set()
+
+def add_variant_read_size(hout, typ):
+    global read_sizes
+    t = param_view_type(typ)
+    if t in read_sizes:
+        return
+    if not is_variant(typ):
+        return
+    for p in typ[1]:
+        if is_variant(p):
+            add_variant_read_size(hout, p)
+    read_sizes.add(t)
+    fprintln(hout, Template("""
+template<>
+inline void skip(seastar::simple_input_stream& v, boost::type<${type}>) {
+    size_type ln = deserialize(v, boost::type<size_type>());
+    v.skip(ln - sizeof(size_type));
+}""").substitute ({'type' : t}))
+
+
+    fprintln(hout, Template("""
+template<typename Input>
+$type deserialize(Input& v, boost::type<${type}>) {
+    auto in = v;
+    deserialize(in, boost::type<size_type>());
+    size_type o = deserialize(in, boost::type<size_type>());
+    """).substitute ({'type' : t}))
+    for index, param in enumerate(typ[1]):
+        fprintln(hout, Template("""
+    if (o == $ind) {
+        v.skip(sizeof(size_type)*2);
+        return $full_type(deserialize(v, boost::type<$type>()));
+    }""").substitute({'ind' : index, 'type' : param_view_type(param), 'full_type' : t}))
+    fprintln(hout, '    return ' + t + '(deserialize(v, boost::type<unknown_variant_type>()));\n}')
+
+def add_view(hout, info):
+    [cls, namespaces, parent_template_param] = info
+    members = get_members(cls)
+    for m in members:
+        add_variant_read_size(hout, m["type"])
+
+    fprintln(hout, Template("""struct ${name}_view {
+    seastar::simple_input_stream v;
+    """).substitute({'name' : cls["name"]}))
+
+    skip = "" if is_final(cls) else "skip(in, boost::type<size_type>());"
+    for m in members:
+        full_type = param_view_type(m["type"])
+        fprintln(hout, Template("""
+    $type $name() const {
+       auto in = v;
+       $skip
+       return deserialize(in, boost::type<$type>());
+    }""").substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
+        skip = skip + Template("\n       skip(in, boost::type<${type}>());").substitute({'type': full_type})
+
+    fprintln(hout, "};")
+    skip_impl = "seastar::simple_input_stream& in = v;\n       " + skip if is_final(cls) else "v.skip(deserialize(v, boost::type<size_type>()) - sizeof(size_type));"
+    if skip == "":
+        skip_impl = ""
+
+    fprintln(hout, Template("""
+template<>
+inline void skip(seastar::simple_input_stream& v, boost::type<${type}_view>) {
+    $skip_impl
+}
+
+template<typename Input>
+${type}_view deserialize(Input& v, boost::type<${type}_view>) {
+   ${type}_view res{v};
+   skip(v, boost::type<${type}_view>());
+   return res;
+}
+""").substitute({'type' : param_type(cls["name"]), 'skip' : skip, 'skip_impl' : skip_impl}))
+
+def add_views(hout):
+    for k in sort_dependencies():
+        add_view(hout, local_types[k])
+
+def add_visitors(hout):
+    if not local_types:
+        return
+    if config.ns != '':
+        fprintln(hout, "namespace ", config.ns, " {")
+    fprintln(hout, "\n////// State holders")
+    for k in local_types:
+        handle_visitors_state(local_types[k], hout)
+    fprintln(hout, "\n////// Nodes")
+    for k in sort_dependencies():
+        handle_visitors_nodes(local_types[k], hout)
+    add_views(hout)
+    if config.ns != '':
+        fprintln(hout, "}")
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
+    add_to_types(cls, namespaces, parent_template_param)
     if "stub" in cls:
         return
     [ns, ns_open, ns_close] = set_namespace(namespaces)
@@ -247,7 +714,8 @@ void $func(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER,
     for param in cls["members"]:
         if is_class(param) or is_enum(param):
             continue
-        fprintln(cout, Template("""  $func(buf, obj.$var);""").substitute({'func' : SERIALIZER, 'var' : param["name"]}))
+        fprintln(cout, Template("""  static_assert(is_equivalent<decltype(obj.$var), $type>::value, "member value has a wrong type");
+    $func(buf, obj.$var);""").substitute({'func' : SERIALIZER, 'var' : param["name"], 'type' : param_type(param["type"])}))
     fprintln(cout, "}")
 
     fprintln(cout, Template("""
@@ -307,6 +775,7 @@ def load_file(name):
     data = parse_file(name)
     if data:
         handle_objects(data, hout, cout)
+    add_visitors(hout)
     if config.ns != '':
         fprintln(cout, "}")
     cout.close()

@@ -27,6 +27,7 @@
 #include <experimental/optional>
 #include "enum_set.hh"
 #include "core/simple-stream.hh"
+#include "boost/variant/variant.hpp"
 
 namespace ser {
 using size_type = uint32_t;
@@ -191,6 +192,41 @@ Buffer serialize_to_buffer(const T& v, size_t head_space = 0);
 template<typename T, typename Buffer>
 T deserialize_from_buffer(const Buffer&, boost::type<T>, size_t head_space = 0);
 
+template<typename Output, typename ...T>
+void serialize(Output& out, const boost::variant<T...>& v);
+
+template<typename Input, typename ...T>
+boost::variant<T...> deserialize(Input& in, boost::type<boost::variant<T...>>);
+
+struct unknown_variant_type {
+    size_type index;
+    sstring data;
+};
+
+template<typename Output>
+void serialize(Output& out, const unknown_variant_type& v);
+
+template<typename Input>
+unknown_variant_type deserialize(Input& in, boost::type<unknown_variant_type>);
+
+template <typename T>
+struct normalize {
+    using type = T;
+};
+
+template <>
+struct normalize<bytes_view> {
+     using type = bytes;
+};
+
+template <>
+struct normalize<managed_bytes> {
+     using type = bytes;
+};
+
+template <typename T, typename U>
+struct is_equivalent : std::is_same<typename normalize<std::remove_const_t<std::remove_reference_t<T>>>::type, typename normalize<std::remove_const_t <std::remove_reference_t<U>>>::type> {
+};
 }
 
 /*
