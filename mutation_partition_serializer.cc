@@ -24,150 +24,171 @@
 #include "mutation_partition.hh"
 #include "db/serializer.hh"
 
-//
-// Representation layout:
-//
-// <partition>          ::= <tombstone> <static-row> <range-tombstones> <row>*
-// <range-tombstones>   ::= <n-tombstones> <range-tombstone>*
-// <range-tombstone>    ::= <clustering-key-prefix> <tombstone>
-// <row>                ::= <tombstone> <created-at-timestamp> <cells>
-// <static-row>         ::= <cells>
-// <cells>              ::= <n-cells> <cell>+
-// <cell>               ::= <column-id> <value>
-// <value>              ::= <atomic-cell> | <collection-mutation>
-//
-// Notes:
-//  - <cell>s in <cells> are sorted by <column-id>
-//  - The count of <row>s is inferred from framing.
-//
-// FIXME: We could make this format more compact by using bitfields
-// to mark absence of elements like:
-//   - range tombstones (they should be rare)
-//   - static row (maybe rare)
-//   - row's tombstone (present only when deleting rows) and timestamp
-//
-// Also atomic cells could be stored more compactly. Right now
-// each cell has a one-byte flags field which tells if it's live or not
-// and if it has ttl or not. We could condense these flags in a per-row bitmap.
+#include "utils/UUID.hh"
+#include "serializer.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/mutation.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
 
 using namespace db;
 
+namespace {
+
+template<typename Writer>
+auto write_live_cell(Writer&& writer, const atomic_cell& c)
+{
+    return std::move(writer).write_created_at(c.timestamp())
+                            .write_value(c.value())
+                        .end_live_cell();
+}
+
+template<typename Writer>
+auto write_expiring_cell(Writer&& writer, const atomic_cell& c)
+{
+    return std::move(writer).write_ttl(c.ttl())
+                            .write_expiry(c.expiry())
+                            .start_c()
+                                .write_created_at(c.timestamp())
+                                .write_value(c.value())
+                            .end_c()
+                        .end_expiring_cell();
+}
+
+template<typename Writer>
+auto write_dead_cell(Writer&& writer, const atomic_cell& c)
+{
+    return std::move(writer).start_tomb()
+                                .write_timestamp(c.timestamp())
+                                .write_deletion_time(c.deletion_time())
+                            .end_tomb()
+                        .end_dead_cell();
+}
+
+template<typename Writer>
+auto write_collection_cell(Writer&& collection_writer, collection_mutation_view cmv, const column_definition& def)
+{
+    auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+    auto m_view = ctype->deserialize_mutation_form(cmv);
+    auto cells_writer = std::move(collection_writer).write_tomb(m_view.tomb).start_elements();
+    for (auto&& c : m_view.cells) {
+        auto cell_writer = cells_writer.add().write_key(c.first);
+        if (!c.second.is_live()) {
+            write_dead_cell(std::move(cell_writer).start_value_dead_cell(), c.second).end_collection_element();
+        } else if (c.second.is_live_and_has_ttl()) {
+            write_expiring_cell(std::move(cell_writer).start_value_expiring_cell(), c.second).end_collection_element();
+        } else {
+            write_live_cell(std::move(cell_writer).start_value_live_cell(), c.second).end_collection_element();
+        }
+    }
+    return std::move(cells_writer).end_elements().end_collection_cell();
+}
+
+template<typename Writer>
+auto write_row_cells(Writer&& writer, const row& r, const schema& s, column_kind kind)
+{
+    auto column_writer = std::move(writer).start_columns();
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        auto& def = s.column_at(kind, id);
+        auto cell_or_collection_writer = column_writer.add().write_id(id);
+        if (def.is_atomic()) {
+            auto&& c = cell.as_atomic_cell();
+            auto cell_writer = std::move(cell_or_collection_writer).start_c_variant();
+            if (!c.is_live()) {
+                write_dead_cell(std::move(cell_writer).start_variant_dead_cell(), c).end_variant().end_column();
+            } else if (c.is_live_and_has_ttl()) {
+                write_expiring_cell(std::move(cell_writer).start_variant_expiring_cell(), c).end_variant().end_column();
+            } else {
+                write_live_cell(std::move(cell_writer).start_variant_live_cell(), c).end_variant().end_column();
+            }
+        } else {
+            write_collection_cell(std::move(cell_or_collection_writer).start_c_collection_cell(), cell.as_collection_mutation(), def).end_column();
+        }
+    });
+    return std::move(column_writer).end_columns();
+}
+
+template<typename Writer>
+auto write_row_marker(Writer&& writer, const row_marker& marker)
+{
+    if (marker.is_missing()) {
+        return std::move(writer).start_marker_no_marker().end_no_marker();
+    } else if (!marker.is_live()) {
+        return std::move(writer).start_marker_dead_marker()
+                                    .start_tomb()
+                                        .write_timestamp(marker.timestamp())
+                                        .write_deletion_time(marker.deletion_time())
+                                    .end_tomb()
+                                .end_dead_marker();
+    } else if (marker.is_expiring()) {
+        return std::move(writer).start_marker_expiring_marker()
+                                    .start_lm()
+                                        .write_created_at(marker.timestamp())
+                                    .end_lm()
+                                    .write_ttl(marker.ttl())
+                                    .write_expiry(marker.expiry())
+                                .end_expiring_marker();
+    } else {
+        return std::move(writer).start_marker_live_marker()
+                                    .write_created_at(marker.timestamp())
+                                .end_live_marker();
+    }
+}
+
+}
+
+template<typename Writer>
+void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
+{
+    auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
+    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    for (auto&& rt : mp.row_tombstones()) {
+        row_tombstones.add().write_key(rt.prefix()).write_tomb(rt.t()).end_range_tombstone();
+    }
+    auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
+    for (auto&& cr : mp.clustered_rows()) {
+        auto marker_writer = clustering_rows.add().write_key(cr.key());
+        auto deleted_at_writer = write_row_marker(std::move(marker_writer), cr.row().marker());
+        auto&& dt = cr.row().deleted_at();
+        auto row_writer = std::move(deleted_at_writer).start_deleted_at()
+                                                          .write_timestamp(dt.timestamp)
+                                                          .write_deletion_time(dt.deletion_time)
+                                                      .end_deleted_at()
+                                                      .start_cells();
+        write_row_cells(std::move(row_writer), cr.row().cells(), s, column_kind::regular_column).end_cells().end_deletable_row();
+    }
+    std::move(clustering_rows).end_rows().end_mutation_partition();
+}
+
 mutation_partition_serializer::mutation_partition_serializer(const schema& schema, const mutation_partition& p)
-    : _schema(schema), _p(p), _size(size(schema, p))
+    : _schema(schema), _p(p)
 { }
-
-size_t
-mutation_partition_serializer::size(const schema& schema, const mutation_partition& p) {
-    size_t size = 0;
-    size += tombstone_serializer(tombstone()).size();
-
-    // static row
-    size += sizeof(count_type);
-    p.static_row().for_each_cell([&] (column_id, const atomic_cell_or_collection& c) {
-        size += sizeof(column_id);
-        size += bytes_view_serializer(c.serialize()).size();
-    });
-
-    // row tombstones
-    size += sizeof(count_type);
-    for (const row_tombstones_entry& e : p.row_tombstones()) {
-        size += clustering_key_prefix_view_serializer(e.prefix()).size();
-        size += tombstone_serializer(e.t()).size();
-    }
-
-    // rows
-    for (const rows_entry& e : p.clustered_rows()) {
-        size += clustering_key_view_serializer(e.key()).size();
-        size += sizeof(api::timestamp_type); // e.row().marker()._timestamp
-        if (!e.row().marker().is_missing()) {
-            size += sizeof(gc_clock::duration); // e.row().marker()._ttl
-            if (e.row().marker().ttl().count()) {
-                size += sizeof(gc_clock::time_point); // e.row().marker()._expiry
-            }
-        }
-        size += tombstone_serializer(e.row().deleted_at()).size();
-        size += sizeof(count_type); // e.row().cells.size()
-        e.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-            size += sizeof(column_id);
-            const column_definition& def = schema.regular_column_at(id);
-            if (def.is_atomic()) {
-                size += atomic_cell_view_serializer(c.as_atomic_cell()).size();
-            } else {
-                size += collection_mutation_view_serializer(c.as_collection_mutation()).size();
-            }
-        });
-    }
-
-    return size;
-}
-
-void
-mutation_partition_serializer::write(data_output& out) const {
-    out.write<size_type>(_size);
-    write_without_framing(out);
-}
-
-void
-mutation_partition_serializer::write_without_framing(data_output& out) const {
-    tombstone_serializer::write(out, _p.partition_tombstone());
-
-    // static row
-    auto n_static_columns = _p.static_row().size();
-    assert(n_static_columns == (count_type)n_static_columns);
-    out.write<count_type>(n_static_columns);
-
-    _p.static_row().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-        out.write(id);
-        bytes_view_serializer::write(out, c.serialize());
-    });
-
-    // row tombstones
-    auto n_tombstones = _p.row_tombstones().size();
-    assert(n_tombstones == (count_type)n_tombstones);
-    out.write<count_type>(n_tombstones);
-
-    for (const row_tombstones_entry& e : _p.row_tombstones()) {
-        clustering_key_prefix_view_serializer::write(out, e.prefix());
-        tombstone_serializer::write(out, e.t());
-    }
-
-    // rows
-    for (const rows_entry& e : _p.clustered_rows()) {
-        clustering_key_view_serializer::write(out, e.key());
-        const auto& rm = e.row().marker();
-        out.write(rm.timestamp());
-        if (!rm.is_missing()) {
-            out.write(rm.ttl().count());
-            if (rm.ttl().count()) {
-                out.write(rm.expiry().time_since_epoch().count());
-            }
-        }
-        tombstone_serializer::write(out, e.row().deleted_at());
-        out.write<count_type>(e.row().cells().size());
-        e.row().cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& c) {
-            out.write(id);
-            const column_definition& def = _schema.regular_column_at(id);
-            if (def.is_atomic()) {
-                atomic_cell_view_serializer::write(out, c.as_atomic_cell());
-            } else {
-                collection_mutation_view_serializer::write(out, c.as_collection_mutation());
-            }
-        });
-    }
-}
 
 void
 mutation_partition_serializer::write(bytes_ostream& out) const {
-    out.write<size_type>(_size);
-    auto buf = out.write_place_holder(_size);
-    data_output data_out((char*)buf, _size);
-    write_without_framing(data_out);
+    write(ser::writer_of_mutation_partition(out));
+}
+
+void mutation_partition_serializer::write(ser::writer_of_mutation_partition&& wr) const
+{
+    write_serialized(std::move(wr), _schema, _p);
 }
 
 mutation_partition_view
 mutation_partition_serializer::read_as_view(data_input& in) {
-    auto size = in.read<size_type>();
-    return mutation_partition_view::from_bytes(in.read_view(size));
+    auto di = in;
+    auto bv = di.read_view(di.avail());
+    seastar::simple_input_stream s(reinterpret_cast<const char*>(bv.data()), bv.size());
+    auto mpv = mutation_partition_view::from_stream(s);
+
+    auto s2 = s;
+    ser::skip(s2, boost::type<ser::mutation_partition_view>());
+    in.skip(s.size() - s2.size());
+    return std::move(mpv);
 }
 
 mutation_partition
