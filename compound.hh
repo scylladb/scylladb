@@ -43,6 +43,7 @@ public:
     static constexpr bool is_prefixable = AllowPrefixes == allow_prefixes::yes;
     using prefix_type = compound_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
+    using size_type = uint16_t;
 
     compound_type(std::vector<data_type> types)
         : _types(std::move(types))
@@ -75,8 +76,8 @@ private:
     template<typename RangeOfSerializedComponents>
     static void serialize_value(RangeOfSerializedComponents&& values, bytes::iterator& out) {
         for (auto&& val : values) {
-            assert(val.size() <= std::numeric_limits<uint16_t>::max());
-            write<uint16_t>(out, uint16_t(val.size()));
+            assert(val.size() <= std::numeric_limits<size_type>::max());
+            write<size_type>(out, size_type(val.size()));
             out = std::copy(val.begin(), val.end(), out);
         }
     }
@@ -84,7 +85,7 @@ private:
     static size_t serialized_size(RangeOfSerializedComponents&& values) {
         size_t len = 0;
         for (auto&& val : values) {
-            len += sizeof(uint16_t) + val.size();
+            len += sizeof(size_type) + val.size();
         }
         return len;
     }
@@ -95,8 +96,8 @@ public:
     template<typename RangeOfSerializedComponents>
     static bytes serialize_value(RangeOfSerializedComponents&& values) {
         auto size = serialized_size(values);
-        if (size > std::numeric_limits<uint16_t>::max()) {
-            throw std::runtime_error(sprint("Key size too large: %d > %d", size, std::numeric_limits<uint16_t>::max()));
+        if (size > std::numeric_limits<size_type>::max()) {
+            throw std::runtime_error(sprint("Key size too large: %d > %d", size, std::numeric_limits<size_type>::max()));
         }
         bytes b(bytes::initialized_later(), size);
         auto i = b.begin();
@@ -135,13 +136,13 @@ public:
         value_type _current;
     private:
         void read_current() {
-            uint16_t len;
+            size_type len;
             {
                 if (_v.empty()) {
                     _v = bytes_view(nullptr, 0);
                     return;
                 }
-                len = read_simple<uint16_t>(_v);
+                len = read_simple<size_type>(_v);
                 if (_v.size() < len) {
                     throw marshal_exception();
                 }
