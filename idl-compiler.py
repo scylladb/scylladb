@@ -347,6 +347,8 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
 
     if typ in ['bytes', 'sstring']:
         typ += '_view'
+    else:
+        typ = 'const ' + typ + '&'
 
     return Template(reindent(4, """
         after_${base_state}__$name write_$name$var_type($typ t) && {
