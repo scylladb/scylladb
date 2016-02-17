@@ -25,7 +25,7 @@
 #include "net/byteorder.hh"
 #include "core/unaligned.hh"
 #include "hashing.hh"
-
+#include "seastar/core/simple-stream.hh"
 /**
  * Utility for writing data into a buffer when its final size is not known up front.
  *
@@ -163,6 +163,10 @@ public:
     template <typename T>
     struct place_holder {
         value_type* ptr;
+        // makes the place_holder looks like a stream
+        seastar::simple_output_stream get_stream() {
+            return seastar::simple_output_stream{reinterpret_cast<char*>(ptr)};
+        }
     };
 
     // Writes given values in big-endian format
