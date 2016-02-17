@@ -1364,17 +1364,25 @@ void cql_server::response::write_short(uint16_t n)
     _body.insert(_body.end(), s, s+sizeof(u));
 }
 
+template<typename T>
+inline
+T cast_if_fits(size_t v) {
+    size_t max = std::numeric_limits<T>::max();
+    if (v > max) {
+        throw std::runtime_error(sprint("Value to large, %d > %d", v, max));
+    }
+    return static_cast<T>(v);
+}
+
 void cql_server::response::write_string(const sstring& s)
 {
-    assert(s.size() <= std::numeric_limits<uint16_t>::max());
-    write_short(s.size());
+    write_short(cast_if_fits<uint16_t>(s.size()));
     _body.insert(_body.end(), s.begin(), s.end());
 }
 
 void cql_server::response::write_long_string(const sstring& s)
 {
-    assert(s.size() <= std::numeric_limits<int32_t>::max());
-    write_int(s.size());
+    write_int(cast_if_fits<int32_t>(s.size()));
     _body.insert(_body.end(), s.begin(), s.end());
 }
 
@@ -1386,8 +1394,7 @@ void cql_server::response::write_uuid(utils::UUID uuid)
 
 void cql_server::response::write_string_list(std::vector<sstring> string_list)
 {
-    assert(string_list.size() <= std::numeric_limits<uint16_t>::max());
-    write_short(string_list.size());
+    write_short(cast_if_fits<uint16_t>(string_list.size()));
     for (auto&& s : string_list) {
         write_string(s);
     }
@@ -1395,15 +1402,13 @@ void cql_server::response::write_string_list(std::vector<sstring> string_list)
 
 void cql_server::response::write_bytes(bytes b)
 {
-    assert(b.size() <= std::numeric_limits<int32_t>::max());
-    write_int(b.size());
+    write_int(cast_if_fits<int32_t>(b.size()));
     _body.insert(_body.end(), b.begin(), b.end());
 }
 
 void cql_server::response::write_short_bytes(bytes b)
 {
-    assert(b.size() <= std::numeric_limits<uint16_t>::max());
-    write_short(b.size());
+    write_short(cast_if_fits<uint16_t>(b.size()));
     _body.insert(_body.end(), b.begin(), b.end());
 }
 
@@ -1436,8 +1441,7 @@ void cql_server::response::write_consistency(db::consistency_level c)
 
 void cql_server::response::write_string_map(std::map<sstring, sstring> string_map)
 {
-    assert(string_map.size() <= std::numeric_limits<uint16_t>::max());
-    write_short(string_map.size());
+    write_short(cast_if_fits<uint16_t>(string_map.size()));
     for (auto&& s : string_map) {
         write_string(s.first);
         write_string(s.second);
@@ -1450,8 +1454,7 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
     for (auto it = string_map.begin(), end = string_map.end(); it != end; it = string_map.upper_bound(it->first)) {
         keys.push_back(it->first);
     }
-    assert(keys.size() <= std::numeric_limits<uint16_t>::max());
-    write_short(keys.size());
+    write_short(cast_if_fits<uint16_t>(keys.size()));
     for (auto&& key : keys) {
         std::vector<sstring> values;
         auto range = string_map.equal_range(key);
