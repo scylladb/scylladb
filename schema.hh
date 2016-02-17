@@ -300,6 +300,10 @@ public:
             : _columns(std::move(columns))
             , _n_static(n_static)
     { }
+    const column& column_at(column_kind kind, column_id id) const {
+        assert(kind == column_kind::regular_column || kind == column_kind::static_column);
+        return kind == column_kind::regular_column ? regular_column_at(id) : static_column_at(id);
+    }
     const column& static_column_at(column_id id) const {
         if (id >= _n_static) {
             throw std::out_of_range(sprint("static column id %d >= %d", id, _n_static));
