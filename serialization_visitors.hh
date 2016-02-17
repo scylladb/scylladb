@@ -66,6 +66,24 @@ inline frame start_frame(bytes_ostream& out) {
     return frame { size_ph, offset };
 }
 
+template<typename T>
+inline void skip(seastar::simple_input_stream& v, boost::type<T>) {
+    deserialize(v, boost::type<T>());
+}
+
+template<>
+inline void skip(seastar::simple_input_stream& v, boost::type<sstring>) {
+    v.skip(deserialize(v, boost::type<size_type>()));
+}
+
+template<typename T>
+inline void skip(seastar::simple_input_stream& v, boost::type<std::vector<T>>) {
+    auto ln = deserialize(v, boost::type<size_type>());
+    for (size_type i = 0; i < ln; i++) {
+        skip(v, boost::type<T>());
+    }
+}
+
 
 }
 
