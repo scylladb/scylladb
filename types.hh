@@ -727,9 +727,9 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
     // FIXME: use iterators?
-    collection_mutation serialize_mutation_form(const mutation& mut) const;
-    collection_mutation serialize_mutation_form(mutation_view mut) const;
-    collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
+    static collection_mutation serialize_mutation_form(const mutation& mut);
+    static collection_mutation serialize_mutation_form(mutation_view mut);
+    static collection_mutation serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now);
     collection_mutation merge(collection_mutation_view a, collection_mutation_view b) const;
     collection_mutation difference(collection_mutation_view a, collection_mutation_view b) const;
     virtual void serialize(const void* value, bytes::iterator& out, cql_serialization_format sf) const = 0;
