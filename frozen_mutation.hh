@@ -41,6 +41,9 @@ class mutation;
 class frozen_mutation final {
 private:
     bytes _bytes;
+    partition_key _pk;
+private:
+    partition_key deserialize_key() const;
 public:
     frozen_mutation(const mutation& m);
     explicit frozen_mutation(bytes&& b);
