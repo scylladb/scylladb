@@ -71,7 +71,9 @@
     },
     {
       "type": "shell",
-      "script": "scylla_deploy.sh"
+      "inline": [
+         "sudo /home/centos/scylla-ami/scylla_install_ami {{ user `install_args` }}"
+       ]
     }
   ],
   "variables": {
@@ -81,6 +83,7 @@
     "security_group_id": "",
     "region": "",
     "associate_public_ip_address": "",
-    "instance_type": ""
+    "instance_type": "",
+    "install_args": ""
   }
 }

@@ -3,18 +3,19 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla_coredump_setup -s"
-    echo "  -s  store coredump to /var/lib/scylla"
+    echo "scylla_coredump_setup --dump-to-raiddir"
+    echo "  --dump-to-raiddir  store coredump to /var/lib/scylla"
     exit 1
 }
 
 SYMLINK=0
-while getopts sh OPT; do
-    case "$OPT" in
-        "s")
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--dump-to-raiddir")
             SYMLINK=1
+            shift 1
             ;;
-        "h")
+        *)
             print_usage
             ;;
     esac

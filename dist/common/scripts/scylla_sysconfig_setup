@@ -3,17 +3,16 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla-sysconfig-setup -n eth0 -m posix -p 64 -u scylla -g scylla -r /var/lib/scylla -c /etc/scylla -N -a -k"
-    echo "  -n  specify NIC"
-    echo "  -m  network mode (posix, dpdk)"
-    echo "  -p  number of hugepages"
-    echo "  -u  user (dpdk requires root)"
-    echo "  -g  group (dpdk requires root)"
-    echo "  -r  scylla home directory"
-    echo "  -c  scylla config directory"
-    echo "  -N  setup NIC's interrupts, RPS, XPS"
-    echo "  -a  AMI instance mode"
-    echo "  -d  disk count"
+    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic --disk-count 2"
+    echo "  --nic  specify NIC"
+    echo "  --mode  network mode (posix, dpdk)"
+    echo "  --nr-hugepages  number of hugepages"
+    echo "  --user  user (dpdk requires root)"
+    echo "  --group  group (dpdk requires root)"
+    echo "  --homedir  scylla home directory"
+    echo "  --confdir  scylla config directory"
+    echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
+    echo "  --disk-count disk count"
     exit 1
 }
 
@@ -26,39 +25,48 @@ fi
 . $SYSCONFIG/scylla-server
 
 DISK_COUNT=0
-while getopts n:m:p:u:g:d:c:Nakh OPT; do
-    case "$OPT" in
-        "n")
-            NIC=$OPTARG
+if [ $# -eq 0 ]; then
+    print_usage
+fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--nic")
+            NIC="$2"
+            shift 2
             ;;
-        "m")
-            NETWORK_MODE=$OPTARG
+        "--mode")
+            NETWORK_MODE="$2"
+            shift 2
             ;;
-        "p")
-            NR_HUGEPAGES=$OPTARG
+        "--nr-hugepages")
+            NR_HUGEPAGES="$2"
+            shift 2
             ;;
-        "u")
-            USER=$OPTARG
+        "--user")
+            USER="$2"
+            shift 2
             ;;
-        "g")
-            GROUP=$OPTARG
+        "--group")
+            GROUP="$2"
+            shift 2
             ;;
-        "r")
-            SCYLLA_HOME=$OPTARG
+        "--homedir")
+            SCYLLA_HOME="$2"
+            shift 2
             ;;
-        "c")
-            SCYLLA_CONF=$OPTARG
+        "--confdir")
+            SCYLLA_CONF="$2"
+            shift 2
             ;;
-        "N")
+        "--setup-nic")
             SETUP_NIC=1
+            shift 1
             ;;
-        "a")
-            AMI=yes
+        "--disk-count")
+            DISK_COUNT="$2"
+            shift 2
             ;;
-        "d")
-            DISK_COUNT=$OPTARG
-            ;;
-        "h")
+        *)
             print_usage
             ;;
     esac
@@ -103,6 +111,5 @@ sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
     -e "s#^SCYLLA_ARGS=.*#SCYLLA_ARGS=\"$SCYLLA_ARGS\"#" \
     -e "s#^SCYLLA_IO=.*#SCYLLA_IO=\"$SCYLLA_IO\"#" \
-    -e s#^AMI=.*#AMI=$AMI# \
     $SYSCONFIG/scylla-server > /tmp/scylla-server
 mv /tmp/scylla-server $SYSCONFIG/scylla-server

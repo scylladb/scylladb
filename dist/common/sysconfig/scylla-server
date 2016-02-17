@@ -42,6 +42,3 @@ SCYLLA_ARGS="--log-to-syslog 1 --log-to-stdout 0 --default-log-level info --coll
 
 # scylla io
 SCYLLA_IO=
-
-# setup as AMI instance
-AMI=no
