@@ -923,8 +923,13 @@ void storage_service::unregister_subscriber(endpoint_lifecycle_subscriber* subsc
     _lifecycle_subscribers.erase(std::remove(_lifecycle_subscribers.begin(), _lifecycle_subscribers.end(), subscriber), _lifecycle_subscribers.end());
 }
 
+static stdx::optional<future<>> drain_in_progress;
+
 future<> storage_service::drain_on_shutdown() {
     return run_with_no_api_lock([] (storage_service& ss) {
+        if (drain_in_progress) {
+            return std::move(*drain_in_progress);
+        }
         return seastar::async([&ss] {
             logger.info("Drain on shutdown: starts");
 
@@ -1832,6 +1837,13 @@ future<> storage_service::drain() {
                 logger.warn("Cannot drain node (did it already happen?)");
                 return;
             }
+            if (drain_in_progress) {
+                drain_in_progress->get();
+                ss.set_mode(mode::DRAINED, true);
+                return;
+            }
+            promise<> p;
+            drain_in_progress = p.get_future();
 
             ss.set_mode(mode::DRAINING, "starting drain process", true);
             ss.shutdown_client_servers().get();
@@ -1871,6 +1883,7 @@ future<> storage_service::drain() {
             }).get();
 
             ss.set_mode(mode::DRAINED, true);
+            p.set_value();
         });
     });
 }
