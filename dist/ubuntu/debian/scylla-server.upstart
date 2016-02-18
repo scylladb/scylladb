@@ -12,6 +12,8 @@ umask 022
 console log
 
 expect stop
+respawn
+normal exit 0 1
 setuid scylla
 setgid scylla
 limit core unlimited unlimited
