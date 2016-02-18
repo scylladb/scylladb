@@ -279,38 +279,45 @@ bool operator==(const column_definition&, const column_definition&);
 static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 
+class column_mapping_entry {
+    bytes _name;
+    data_type _type;
+public:
+    column_mapping_entry(bytes name, data_type type)
+        : _name(std::move(name)), _type(std::move(type)) { }
+    column_mapping_entry(bytes name, sstring type_name);
+    const bytes& name() const { return _name; }
+    const data_type& type() const { return _type; }
+    const sstring& type_name() const { return _type->name(); }
+};
+
 // Encapsulates information needed for converting mutations between different schema versions.
 class column_mapping {
-public:
-    struct column {
-        bytes _name;
-        data_type _type;
-        const bytes& name() const { return _name; }
-        const data_type& type() const { return _type; }
-    };
 private:
     // Contains _n_static definitions for static columns followed by definitions for regular columns,
     // both ordered by consecutive column_ids.
     // Primary key column sets are not mutable so we don't need to map them.
-    std::vector<column> _columns;
+    std::vector<column_mapping_entry> _columns;
     column_count_type _n_static = 0;
 public:
     column_mapping() {}
-    column_mapping(std::vector<column> columns, column_count_type n_static)
+    column_mapping(std::vector<column_mapping_entry> columns, column_count_type n_static)
             : _columns(std::move(columns))
             , _n_static(n_static)
     { }
-    const column& column_at(column_kind kind, column_id id) const {
+    const std::vector<column_mapping_entry>& columns() const { return _columns; }
+    column_count_type n_static() const { return _n_static; }
+    const column_mapping_entry& column_at(column_kind kind, column_id id) const {
         assert(kind == column_kind::regular_column || kind == column_kind::static_column);
         return kind == column_kind::regular_column ? regular_column_at(id) : static_column_at(id);
     }
-    const column& static_column_at(column_id id) const {
+    const column_mapping_entry& static_column_at(column_id id) const {
         if (id >= _n_static) {
             throw std::out_of_range(sprint("static column id %d >= %d", id, _n_static));
         }
         return _columns[id];
     }
-    const column& regular_column_at(column_id id) const {
+    const column_mapping_entry& regular_column_at(column_id id) const {
         auto n_regular = _columns.size() - _n_static;
         if (id >= n_regular) {
             throw std::out_of_range(sprint("regular column id %d >= %d", id, n_regular));

@@ -75,7 +75,7 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
-        const column_mapping::column& col = _visited_column_mapping.static_column_at(id);
+        const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
             accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), cell);
@@ -83,7 +83,7 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
-        const column_mapping::column& col = _visited_column_mapping.static_column_at(id);
+        const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
             accept_cell(_p._static_row, column_kind::static_column, *def, col.type(), collection);
@@ -102,7 +102,7 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        const column_mapping::column& col = _visited_column_mapping.regular_column_at(id);
+        const column_mapping_entry& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
             accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), cell);
@@ -110,7 +110,7 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
-        const column_mapping::column& col = _visited_column_mapping.regular_column_at(id);
+        const column_mapping_entry& col = _visited_column_mapping.regular_column_at(id);
         const column_definition* def = _p_schema.get_column_definition(col.name());
         if (def) {
             accept_cell(_current_row->cells(), column_kind::regular_column, *def, col.type(), collection);

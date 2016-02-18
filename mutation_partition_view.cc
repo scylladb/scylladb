@@ -85,9 +85,9 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
         class atomic_cell_or_collection_visitor : public boost::static_visitor<> {
             Visitor _visitor;
             column_id _id;
-            const column_mapping::column& _col;
+            const column_mapping_entry& _col;
         public:
-            explicit atomic_cell_or_collection_visitor(Visitor v, column_id id, const column_mapping::column& col)
+            explicit atomic_cell_or_collection_visitor(Visitor v, column_id id, const column_mapping_entry& col)
                 : _visitor(std::move(v)), _id(id), _col(col) { }
 
             void operator()(boost::variant<ser::live_cell_view, ser::expiring_cell_view, ser::dead_cell_view, ser::unknown_variant_type>& acv) const {

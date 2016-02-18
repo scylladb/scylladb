@@ -58,6 +58,12 @@ sstring to_sstring(index_type t) {
 
 template class db::serializer<column_mapping>;
 
+column_mapping_entry::column_mapping_entry(bytes name, sstring type_name)
+    : _name(std::move(name))
+    , _type(db::marshal::type_parser::parse(type_name))
+{
+}
+
 template<>
 db::serializer<column_mapping>::serializer(const column_mapping& cm)
         : _item(cm)
@@ -77,7 +83,7 @@ db::serializer<column_mapping>::write(output& out, const column_mapping& cm) {
     static_assert(std::is_same<column_count_type, uint32_t>::value, "ABI change");
     out.write<column_count_type>(cm._columns.size());
     out.write<column_count_type>(cm._n_static);
-    for (const column_mapping::column& col : cm._columns) {
+    for (const column_mapping_entry& col : cm._columns) {
         db::serializer<bytes>(col.name()).write(out);
         db::serializer<sstring>(col.type()->name()).write(out);
     }
@@ -94,13 +100,13 @@ template<>
 column_mapping db::serializer<column_mapping>::read(input& in) {
     auto n_columns = in.read<column_count_type>();
     auto n_static = in.read<column_count_type>();
-    std::vector<column_mapping::column> columns;
+    std::vector<column_mapping_entry> columns;
     columns.reserve(n_columns);
     for (column_count_type i = 0; i < n_columns; ++i) {
         auto name = db::serializer<bytes>::read(in);
         auto type_name = db::serializer<sstring>::read(in);
         auto type = db::marshal::type_parser::parse(type_name);
-        columns.emplace_back(column_mapping::column{std::move(name), std::move(type)});
+        columns.emplace_back(column_mapping_entry{std::move(name), std::move(type)});
     }
     return column_mapping(std::move(columns), n_static);
 }
@@ -155,9 +161,9 @@ void schema::rebuild() {
     }
 
     {
-        std::vector<column_mapping::column> cm_columns;
+        std::vector<column_mapping_entry> cm_columns;
         for (const column_definition& def : boost::range::join(static_columns(), regular_columns())) {
-            cm_columns.emplace_back(column_mapping::column{def.name(), def.type});
+            cm_columns.emplace_back(column_mapping_entry{def.name(), def.type});
         }
         _column_mapping = column_mapping(std::move(cm_columns), static_columns_count());
     }
