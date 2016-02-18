@@ -505,7 +505,7 @@ int main(int ac, char** av) {
                     });
                 });
             }).then([] {
-                supervisor_notify("starting storage service");
+                supervisor_notify("starting storage service", true);
                 auto& ss = service::get_local_storage_service();
                 return ss.init_server();
             }).then([&ctx] {
@@ -539,7 +539,7 @@ int main(int ac, char** av) {
                 return api::set_server_done(ctx);
             });
         }).then([] {
-            supervisor_notify("serving", true);
+            supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
                 return service::get_local_storage_service().drain_on_shutdown();
