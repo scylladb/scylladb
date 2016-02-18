@@ -581,6 +581,11 @@ struct repair_options {
     // for determining the list of ranges to repair. In particular, "ranges"
     // overrides the setting of "primary_range".
     std::vector<query::range<dht::token>> ranges;
+    // If start_token and end_token are set, they define a range which is
+    // intersected with the ranges actually held by this node to decide what
+    // to repair.
+    sstring start_token;
+    sstring end_token;
     // column_families is the list of column families to repair in the given
     // keyspace. If this list is empty (the default), all the column families
     // in this keyspace are repaired
@@ -618,6 +623,8 @@ struct repair_options {
             throw std::runtime_error(sprint(
                     "unsupported repair parallelism: %d", parallelism));
         }
+        string_opt(start_token, options, START_TOKEN);
+        string_opt(end_token, options, END_TOKEN);
         // The parsing code above removed from the map options we have parsed.
         // If anything is left there in the end, it's an unsupported option.
         if (!options.empty()) {
@@ -627,14 +634,16 @@ struct repair_options {
     }
 
     static constexpr const char* PRIMARY_RANGE_KEY = "primaryRange";
-    static constexpr const char* PARALLELISM_KEY = "parallelism"; // TODO
-    static constexpr const char* INCREMENTAL_KEY = "incremental"; // TODO
-    static constexpr const char* JOB_THREADS_KEY = "jobThreads"; // TODO
+    static constexpr const char* PARALLELISM_KEY = "parallelism";
+    static constexpr const char* INCREMENTAL_KEY = "incremental";
+    static constexpr const char* JOB_THREADS_KEY = "jobThreads";
     static constexpr const char* RANGES_KEY = "ranges";
-    static constexpr const char* COLUMNFAMILIES_KEY = "columnFamilies"; // TODO
-    static constexpr const char* DATACENTERS_KEY = "dataCenters"; // TODO
-    static constexpr const char* HOSTS_KEY = "hosts"; // TODO
-    static constexpr const char* TRACE_KEY = "trace"; // TODO
+    static constexpr const char* COLUMNFAMILIES_KEY = "columnFamilies";
+    static constexpr const char* DATACENTERS_KEY = "dataCenters";
+    static constexpr const char* HOSTS_KEY = "hosts";
+    static constexpr const char* TRACE_KEY = "trace";
+    static constexpr const char* START_TOKEN = "startToken";
+    static constexpr const char* END_TOKEN = "endToken";
 
     // Settings of "parallelism" option. Numbers must match Cassandra's
     // RepairParallelism enum, which is used by the caller.
@@ -668,6 +677,16 @@ private:
             if (errno) {
                 throw(std::runtime_error(sprint("cannot parse integer: '%s'", it->second)));
             }
+            options.erase(it);
+        }
+    }
+
+    static void string_opt(sstring& var,
+            std::unordered_map<sstring, sstring>& options,
+            const sstring& key) {
+        auto it = options.find(key);
+        if (it != options.end()) {
+            var = it->second;
             options.erase(it);
         }
     }
@@ -791,6 +810,33 @@ static int do_repair_start(seastar::sharded<database>& db, sstring keyspace,
 #endif
     } else {
         ranges = get_local_ranges(db.local(), keyspace);
+    }
+
+    if (!options.start_token.empty() || !options.end_token.empty()) {
+        // Intersect the list of local ranges with the given token range,
+        // dropping ranges with no intersection.
+        // We don't have a range::intersect() method, but we can use
+        // range::subtract() and subtract the complement range.
+        std::experimental::optional<::range<dht::token>::bound> tok_start;
+        std::experimental::optional<::range<dht::token>::bound> tok_end;
+        if (!options.start_token.empty()) {
+            tok_start = ::range<dht::token>::bound(
+                dht::global_partitioner().from_sstring(options.start_token),
+                true);
+        }
+        if (!options.end_token.empty()) {
+            tok_end = ::range<dht::token>::bound(
+                dht::global_partitioner().from_sstring(options.end_token),
+                false);
+        }
+        ::range<dht::token> given_range_complement(tok_end, tok_start);
+        std::vector<query::range<dht::token>> intersections;
+        for (const auto& range : ranges) {
+            auto rs = range.subtract(given_range_complement,
+                    dht::token_comparator());
+            intersections.insert(intersections.end(), rs.begin(), rs.end());
+        }
+        ranges = std::move(intersections);
     }
 
     std::vector<sstring> cfs;

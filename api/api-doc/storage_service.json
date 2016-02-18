@@ -837,6 +837,22 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"startToken",
+                     "description":"Token on which to begin repair",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"endToken",
+                     "description":"Token on which to end repair",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"columnFamilies",
                      "description":"Which column families to repair in the given keyspace. Multiple columns families can be named separated by commas. If this option is missing, all column families in the keyspace are repaired.",
                      "required":false,
