@@ -112,7 +112,7 @@ static void delete_sstables_for_interrupted_compaction(std::vector<shared_sstabl
     // was either stopped abruptly (e.g. out of disk space) or deliberately
     // (e.g. nodetool stop COMPACTION).
     for (auto& sst : new_sstables) {
-        logger.debug("Deleting sstable {} of interrupted compaction for {}/{}", sst->get_filename(), ks, cf);
+        logger.debug("Deleting sstable {} of interrupted compaction for {}.{}", sst->get_filename(), ks, cf);
         sst->mark_for_deletion();
     }
 }

@@ -785,7 +785,7 @@ void sstable::seal_sstable() {
     dir_f.flush().get();
     dir_f.close().get();
     // If this point was reached, sstable should be safe in disk.
-    sstlog.debug("SSTable with generation {} of {}/{} was sealed successfully.", _generation, _ks, _cf);
+    sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
 }
 
 void write_crc(const sstring file_path, checksum& c) {
@@ -1779,7 +1779,7 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
 
-        sstlog.warn("Deleting components of sstable from {}/{} of generation {} that has a temporary TOC", ks, cf, generation);
+        sstlog.warn("Deleting components of sstable from {}.{} of generation {} that has a temporary TOC", ks, cf, generation);
 
         for (auto& entry : sstable::_component_map) {
             // Skipping TemporaryTOC because it must be the last component to

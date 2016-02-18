@@ -377,7 +377,7 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
 #if 0
         oldCfm.validateCompatility(cfm);
 #endif
-        logger.info("Update table '{}/{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
+        logger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name());
         auto mutations = db::schema_tables::make_update_table_mutations(keyspace.metadata(), old_schema, cfm, api::new_timestamp(), from_thrift);
         return announce(std::move(mutations), announce_locally);
@@ -474,7 +474,7 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
         auto& db = get_local_storage_proxy().get_db().local();
         auto&& old_cfm = db.find_schema(ks_name, cf_name);
         auto&& keyspace = db.find_keyspace(ks_name);
-        logger.info("Drop table '{}/{}'", old_cfm->ks_name(), old_cfm->cf_name());
+        logger.info("Drop table '{}.{}'", old_cfm->ks_name(), old_cfm->cf_name());
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), old_cfm, api::new_timestamp());
         return announce(std::move(mutations), announce_locally);
     } catch (const no_such_column_family& e) {
