@@ -137,7 +137,7 @@ void compaction_manager::task_start(lw_shared_ptr<compaction_manager::task>& tas
                 f.get();
             } catch (seastar::gate_closed_exception& e) {
                 task->compacting_cf = nullptr;
-                cmlog.info("compaction task handler stopped due to shutdown");
+                cmlog.debug("compaction task handler stopped due to shutdown");
                 throw;
             } catch (sstables::compaction_stop_exception& e) {
                 cmlog.info("compaction info: {}", e.what());
@@ -261,6 +261,7 @@ future<> compaction_manager::stop() {
             it.second.set_exception(std::runtime_error("cleanup interrupted due to shutdown"));
         }
         _cleanup_waiters.clear();
+        cmlog.info("Stopped");
         return make_ready_future<>();
     });
 }
