@@ -153,7 +153,7 @@ inline void serialize(Output& out, const std::chrono::duration<T, Ratio>& d) {
 };
 
 template<typename T, typename Ratio, typename Input>
-inline std::chrono::duration<T, Ratio> deserialize(Input in, boost::type<std::chrono::duration<T, Ratio>>) {
+inline std::chrono::duration<T, Ratio> deserialize(Input& in, boost::type<std::chrono::duration<T, Ratio>>) {
     return std::chrono::duration<T, Ratio>(deserialize(in, boost::type<T>()));
 };
 
