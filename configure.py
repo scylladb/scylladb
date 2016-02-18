@@ -730,7 +730,7 @@ with open(buildfile, 'w') as f:
             command = seastar/json/json2code.py -f $in -o $out
             description = SWAGGER $out
         rule serializer
-            command = ./idl-compiler.py --ns ser -f $in -o $out
+            command = {python} ./idl-compiler.py --ns ser -f $in -o $out
             description = IDL compiler $out
         rule ninja
             command = {ninja} -C $subdir $target
