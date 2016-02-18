@@ -731,7 +731,7 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // We create a new list rather than modifying it in-place, so that
     // on-going reads can continue to use the old list.
     auto current_sstables = _sstables;
-    _sstables = make_lw_shared<sstable_list>();
+    auto new_sstable_list = make_lw_shared<sstable_list>();
 
     // zeroing live_disk_space_used and live_sstable_count because the
     // sstable list is re-created below.
@@ -745,7 +745,7 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
         // Checks if oldtab is a sstable not being compacted.
         if (!s.count(oldtab.second)) {
             update_stats_for_new_sstable(oldtab.second->data_size());
-            _sstables->emplace(oldtab.first, oldtab.second);
+            new_sstable_list->emplace(oldtab.first, oldtab.second);
         }
     }
 
@@ -753,12 +753,14 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
         // FIXME: rename the new sstable(s). Verify a rename doesn't cause
         // problems for the sstable object.
         update_stats_for_new_sstable(newtab->data_size());
-        _sstables->emplace(newtab->generation(), newtab);
+        new_sstable_list->emplace(newtab->generation(), newtab);
     }
 
     for (const auto& oldtab : sstables_to_remove) {
         oldtab->mark_for_deletion();
     }
+
+    _sstables = std::move(new_sstable_list);
 }
 
 future<>
