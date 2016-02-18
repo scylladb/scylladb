@@ -234,9 +234,14 @@ public:
     future<> send_gossip_shutdown(msg_addr id, inet_address from);
 
     // Wrapper for GOSSIP_DIGEST_SYN
-    void register_gossip_digest_syn(std::function<future<gms::gossip_digest_ack> (gms::gossip_digest_syn)>&& func);
+    void register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_syn)>&& func);
     void unregister_gossip_digest_syn();
-    future<gms::gossip_digest_ack> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
+    future<> send_gossip_digest_syn(msg_addr id, gms::gossip_digest_syn msg);
+
+    // Wrapper for GOSSIP_DIGEST_ACK
+    void register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gms::gossip_digest_ack)>&& func);
+    void unregister_gossip_digest_ack();
+    future<> send_gossip_digest_ack(msg_addr id, gms::gossip_digest_ack msg);
 
     // Wrapper for GOSSIP_DIGEST_ACK2
     void register_gossip_digest_ack2(std::function<rpc::no_wait_type (gms::gossip_digest_ack2)>&& func);

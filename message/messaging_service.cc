@@ -614,16 +614,29 @@ future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from)
     return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
 }
 
-void messaging_service::register_gossip_digest_syn(std::function<future<gossip_digest_ack> (gossip_digest_syn)>&& func) {
+// gossip syn
+void messaging_service::register_gossip_digest_syn(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_syn)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(func));
 }
 void messaging_service::unregister_gossip_digest_syn() {
     _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_SYN);
 }
-future<gossip_digest_ack> messaging_service::send_gossip_digest_syn(msg_addr id, gossip_digest_syn msg) {
-    return send_message_timeout<gossip_digest_ack>(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), 3000ms, std::move(msg));
+future<> messaging_service::send_gossip_digest_syn(msg_addr id, gossip_digest_syn msg) {
+    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(msg));
 }
 
+// gossip ack
+void messaging_service::register_gossip_digest_ack(std::function<rpc::no_wait_type (const rpc::client_info& cinfo, gossip_digest_ack)>&& func) {
+    register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(func));
+}
+void messaging_service::unregister_gossip_digest_ack() {
+    _rpc->unregister_handler(net::messaging_verb::GOSSIP_DIGEST_ACK);
+}
+future<> messaging_service::send_gossip_digest_ack(msg_addr id, gossip_digest_ack msg) {
+    return send_message_oneway(this, messaging_verb::GOSSIP_DIGEST_ACK, std::move(id), std::move(msg));
+}
+
+// gossip ack2
 void messaging_service::register_gossip_digest_ack2(std::function<rpc::no_wait_type (gossip_digest_ack2)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_DIGEST_ACK2, std::move(func));
 }

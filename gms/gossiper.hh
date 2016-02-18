@@ -88,8 +88,8 @@ private:
     }
     void init_messaging_service_handler();
     void uninit_messaging_service_handler();
-    future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg);
+    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
+    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to) {
         return msg_addr{to, _default_cpuid};
@@ -506,6 +506,7 @@ public:
     future<> wait_for_gossip_to_settle();
 private:
     uint64_t _nr_run = 0;
+    bool _ms_registered = false;
 };
 
 extern distributed<gossiper> _the_gossiper;

@@ -20,9 +20,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "core/reactor.hh"
-#include "core/app-template.hh"
-#include "core/sstring.hh"
+#include <core/reactor.hh>
+#include <core/app-template.hh>
+#include <seastar/core/sstring.hh>
+#include <seastar/rpc/rpc_types.hh>
 #include "message/messaging_service.hh"
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
@@ -57,10 +58,13 @@ public:
     future<> stop() {
         return make_ready_future<>();
     }
+    promise<> digest_test_done;
 public:
     void init_handler() {
-        ms.register_gossip_digest_syn([] (gms::gossip_digest_syn msg) {
+        ms.register_gossip_digest_syn([this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
             print("Server got syn msg = %s\n", msg);
+
+            auto from = net::messaging_service::get_source(cinfo);
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
             int32_t gen = 800;
@@ -74,7 +78,26 @@ public:
                 {ep2, endpoint_state()},
             };
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
-            return make_ready_future<gms::gossip_digest_ack>(std::move(ack));
+            ms.send_gossip_digest_ack(from, std::move(ack)).handle_exception([] (auto ep) {
+                print("Fail to send ack : %s", ep);
+            });
+            return messaging_service::no_wait();
+        });
+
+        ms.register_gossip_digest_ack([this] (const rpc::client_info& cinfo, gms::gossip_digest_ack msg) {
+            print("Server got ack msg = %s\n", msg);
+            auto from = net::messaging_service::get_source(cinfo);
+            // Prepare gossip_digest_ack2 message
+            auto ep1 = inet_address("3.3.3.3");
+            std::map<inet_address, endpoint_state> eps{
+                {ep1, endpoint_state()},
+            };
+            gms::gossip_digest_ack2 ack2(std::move(eps));
+            ms.send_gossip_digest_ack2(from, std::move(ack2)).handle_exception([] (auto ep) {
+                print("Fail to send ack2 : %s", ep);
+            });
+            digest_test_done.set_value();
+            return messaging_service::no_wait();
         });
 
         ms.register_gossip_digest_ack2([] (gms::gossip_digest_ack2 msg) {
@@ -108,18 +131,8 @@ public:
             {ep2, gen++, ver++},
         };
         gms::gossip_digest_syn syn("my_cluster", "my_partition", digests);
-        return ms.send_gossip_digest_syn(id, std::move(syn)).then([this, id] (gms::gossip_digest_ack ack) {
-            print("Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack);
-            // Prepare gossip_digest_ack2 message
-            auto ep1 = inet_address("3.3.3.3");
-            std::map<inet_address, endpoint_state> eps{
-                {ep1, endpoint_state()},
-            };
-            gms::gossip_digest_ack2 ack2(std::move(eps));
-            return ms.send_gossip_digest_ack2(id, std::move(ack2)).then([] () {
-                print("Client sent gossip_digest_ack2 got reply = void\n");
-                return make_ready_future<>();
-            });
+        return ms.send_gossip_digest_syn(id, std::move(syn)).then([this] {
+            return digest_test_done.get_future();
         });
     }
 
@@ -169,6 +182,7 @@ int main(int ac, char ** av) {
             api_port++;
         }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
+        utils::fb_utilities::set_broadcast_address(listen);
         net::get_messaging_service().start(listen).then([config, api_port, stay_alive] () {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
