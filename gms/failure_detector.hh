@@ -48,6 +48,8 @@
 #include <cmath>
 #include <list>
 #include <map>
+#include <experimental/optional>
+
 
 namespace gms {
 class inet_address;
@@ -124,16 +126,13 @@ private:
         return DEFAULT_MAX_PAUSE;
     }
 
-    arrival_window::clk::time_point _last_interpret;
+    std::experimental::optional<arrival_window::clk::time_point> _last_interpret;
     arrival_window::clk::time_point _last_paused;
 
 public:
-    failure_detector() {
-        _last_interpret = arrival_window::clk::now();
-    }
+    failure_detector() = default;
 
     failure_detector(double phi) : _phi(phi) {
-        _last_interpret = arrival_window::clk::now();
     }
 
     future<> stop() {
