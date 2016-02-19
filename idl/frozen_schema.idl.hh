@@ -19,6 +19,10 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+class canonical_mutation final {
+    bytes representation();
+};
+
 class frozen_schema final {
     bytes representation();
 };
