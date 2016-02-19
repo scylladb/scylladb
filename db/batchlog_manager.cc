@@ -59,6 +59,12 @@
 #include "gms/failure_detector.hh"
 #include "service/storage_service.hh"
 #include "schema_registry.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 static logging::logger logger("batchlog_manager");
 
@@ -119,15 +125,11 @@ mutation db::batchlog_manager::get_batch_log_mutation_for(const std::vector<muta
     auto timestamp = api::new_timestamp();
     auto data = [this, &mutations] {
         std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
-        const auto size = std::accumulate(fm.begin(), fm.end(), size_t(0), [](size_t s, auto& m) {
-            return s + serializer<canonical_mutation>{m}.size();
-        });
-        bytes buf(bytes::initialized_later(), size);
-        data_output out(buf);
+        bytes_ostream out;
         for (auto& m : fm) {
-            serializer<canonical_mutation>{m}(out);
+            ser::serialize(out, m);
         }
-        return buf;
+        return to_bytes(out.linearize());
     }();
 
     mutation m(key, schema);
@@ -178,9 +180,9 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         logger.debug("Replaying batch {}", id);
 
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
-        data_input in(data);
-        while (in.has_next()) {
-            fms->emplace_back(serializer<canonical_mutation>::read(in));
+        seastar::simple_input_stream in(reinterpret_cast<const char*>(data.begin()), data.size());
+        while (in.size()) {
+            fms->emplace_back(ser::deserialize(in, boost::type<canonical_mutation>()));
         }
 
         auto size = data.size();
