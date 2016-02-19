@@ -50,6 +50,7 @@
 #include "idl/range.dist.hh"
 #include "idl/partition_checksum.dist.hh"
 #include "serializer_impl.hh"
+#include "serialization_visitors.hh"
 #include "idl/result.dist.impl.hh"
 #include "idl/reconcilable_result.dist.impl.hh"
 #include "idl/ring_position.dist.impl.hh"

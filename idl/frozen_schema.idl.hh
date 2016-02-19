@@ -28,6 +28,11 @@ class schema_mutations {
     canonical_mutation columns_canonical_mutation();
 };
 
+class schema stub [[writable]] {
+    utils::UUID version;
+    schema_mutations mutations;
+};
+
 class frozen_schema final {
     bytes representation();
 };
