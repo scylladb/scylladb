@@ -28,6 +28,7 @@ import os
 from string import Template
 import pyparsing as pp
 from functools import reduce
+import textwrap
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -48,6 +49,8 @@ parser.add_argument('file', nargs='*', help="combine one or more file names for 
 config = parser.parse_args()
 
 
+def reindent(indent, text):
+    return textwrap.indent(textwrap.dedent(text), ' ' * indent)
 
 def fprint(f, *args):
     for arg in args:
