@@ -327,18 +327,6 @@ public:
     friend class db::serializer<column_mapping>;
 };
 
-namespace db {
-
-template<> serializer<column_mapping>::serializer(const column_mapping&);
-template<> void serializer<column_mapping>::write(output&, const column_mapping&);
-template<> void serializer<column_mapping>::write(bytes_ostream&) const;
-template<> column_mapping serializer<column_mapping>::read(input&);
-template<> void serializer<column_mapping>::skip(input&);
-
-extern template class serializer<column_mapping>;
-
-}
-
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
