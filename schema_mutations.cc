@@ -50,6 +50,12 @@ schema_mutations db::serializer<schema_mutations>::read(input& in) {
     );
 }
 
+schema_mutations::schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns)
+    : _columnfamilies(columnfamilies.to_mutation(db::schema_tables::columnfamilies()))
+      , _columns(columns.to_mutation(db::schema_tables::columns()))
+{
+}
+
 void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     dst.push_back(_columnfamilies);
     dst.push_back(_columns);

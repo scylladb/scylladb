@@ -23,6 +23,11 @@ class canonical_mutation final {
     bytes representation();
 };
 
+class schema_mutations {
+    canonical_mutation columnfamilies_canonical_mutation();
+    canonical_mutation columns_canonical_mutation();
+};
+
 class frozen_schema final {
     bytes representation();
 };

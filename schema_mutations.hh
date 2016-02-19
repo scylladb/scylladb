@@ -24,6 +24,7 @@
 #include <vector>
 #include "mutation.hh"
 #include "schema.hh"
+#include "canonical_mutation.hh"
 
 // Commutative representation of table schema
 class schema_mutations {
@@ -34,6 +35,7 @@ public:
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
     { }
+    schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -48,6 +50,14 @@ public:
 
     const mutation& columns_mutation() const {
         return _columns;
+    }
+
+    canonical_mutation columnfamilies_canonical_mutation() const {
+        return canonical_mutation(_columnfamilies);
+    }
+
+    canonical_mutation columns_canonical_mutation() const {
+        return canonical_mutation(_columns);
     }
 
     table_schema_version digest() const;
