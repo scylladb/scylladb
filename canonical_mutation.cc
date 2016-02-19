@@ -35,8 +35,6 @@
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
 
-template class db::serializer<canonical_mutation>;
-
 canonical_mutation::canonical_mutation(bytes data)
         : _data(std::move(data))
 { }
@@ -88,21 +86,4 @@ mutation canonical_mutation::to_mutation(schema_ptr s) const {
         partition_view.accept(cm, v);
     }
     return m;
-}
-
-template<>
-db::serializer<canonical_mutation>::serializer(const canonical_mutation& v)
-        : _item(v)
-        , _size(db::serializer<bytes>(v._data).size())
-{ }
-
-template<>
-void
-db::serializer<canonical_mutation>::write(output& out, const canonical_mutation& v) {
-    db::serializer<bytes>(v._data).write(out);
-}
-
-template<>
-canonical_mutation db::serializer<canonical_mutation>::read(input& in) {
-    return canonical_mutation(db::serializer<bytes>::read(in));
 }

@@ -53,15 +53,4 @@ public:
 
     const bytes& representation() const { return _data; }
 
-    friend class db::serializer<canonical_mutation>;
 };
-
-namespace db {
-
-template<> serializer<canonical_mutation>::serializer(const canonical_mutation&);
-template<> void serializer<canonical_mutation>::write(output&, const canonical_mutation&);
-template<> canonical_mutation serializer<canonical_mutation>::read(input&);
-
-extern template class serializer<canonical_mutation>;
-
-}
