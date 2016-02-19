@@ -20,35 +20,51 @@
  */
 
 #include "commitlog_entry.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/frozen_mutation.dist.hh"
+#include "idl/mutation.dist.hh"
+#include "idl/commitlog.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/frozen_mutation.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
+#include "idl/commitlog.dist.impl.hh"
 
-size_t commitlog_entry_writer:size() const
-{
-    size_t size = data_output::serialized_size<bool>();
+commitlog_entry::commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation)
+    : _mapping(std::move(mapping))
+      , _mutation_storage(std::move(mutation))
+      , _mutation(*_mutation_storage)
+{ }
+
+commitlog_entry::commitlog_entry(stdx::optional<column_mapping> mapping, const frozen_mutation& mutation)
+    : _mapping(std::move(mapping))
+      , _mutation(mutation)
+{ }
+
+commitlog_entry commitlog_entry_writer::get_entry() const {
     if (_with_schema) {
-        size += _column_mapping_serializer.size();
+        return commitlog_entry(_schema->get_column_mapping(), _mutation);
+    } else {
+        return commitlog_entry({}, _mutation);
     }
-    size += _mutation.representation().size();
-    return size;
 }
 
-void commitlog_entry_writer::write(data_output& out) const
-{
-    out.write(_with_schema);
-    if (_with_schema) {
-        _column_mapping_serializer.write(out);
-    }
-    auto bv = _mutation.representation();
-    out.write(bv.begin(), bv.end());
+void commitlog_entry_writer::compute_size() {
+    _size = ser::get_sizeof(get_entry());
+}
+
+void commitlog_entry_writer::write(data_output& out) const {
+    seastar::simple_output_stream str(out.reserve(size()));
+    ser::serialize(str, get_entry());
 }
 
 commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)
-    : _mutation(bytes())
+    : _ce([&] {
+    seastar::simple_input_stream in(buffer.get(), buffer.size());
+    return ser::deserialize(in, boost::type<commitlog_entry>());
+}())
 {
-    data_input in(buffer);
-    bool has_column_mapping = in.read<bool>();
-    if (has_column_mapping) {
-        _column_mapping = db::serializer<::column_mapping>::read(in);
-    }
-    auto bv = in.read_view(in.avail());
-    _mutation = frozen_mutation(bytes(bv.begin(), bv.end()));
 }
