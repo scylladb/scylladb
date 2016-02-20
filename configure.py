@@ -215,6 +215,7 @@ scylla_tests = [
     'tests/flush_queue_test',
     'tests/dynamic_bitset_test',
     'tests/auth_test',
+    'tests/idl_test',
 ]
 
 apps = [
@@ -506,6 +507,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/replay_position.idl.hh',
         'idl/truncation_record.idl.hh',
         'idl/mutation.idl.hh',
+        'idl/idl_test.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [
@@ -549,6 +551,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/perf/perf_sstable',
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
+    'tests/idl_test',
 ])
 
 for t in tests_not_using_seastar_test_framework:

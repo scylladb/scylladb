@@ -19,7 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-class tombstone stub [[writable]] {
+class tombstone [[writable]] {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
 };
@@ -73,19 +73,6 @@ class expiring_marker stub [[writable]] {
 
 class dead_marker final stub [[writable]] {
     tombstone tomb;
-};
-
-class clustering_key stub [[writable]] {
-    // bytess correspond to key components, format of values is specified in the CQL binary protocol
-    // and depends on the CQL column type for given component.
-    // prefixes allowed.
-    std::vector<bytes> components;
-};
-
-class partition_key stub [[writable]] {
-    // bytess correspond to key components, format of values is specified in the CQL binary protocol
-    // and depends on the CQL column type for given component.
-    std::vector<bytes> components;
 };
 
 class deletable_row stub [[writable]] {

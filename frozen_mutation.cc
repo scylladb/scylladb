@@ -28,6 +28,16 @@
 #include "utils/UUID.hh"
 #include "utils/data_input.hh"
 #include "query-result-set.hh"
+#include "utils/UUID.hh"
+#include "serializer.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/mutation.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
 
 //
 // Representation layout:
@@ -39,23 +49,21 @@ using namespace db;
 
 utils::UUID
 frozen_mutation::column_family_id() const {
-    data_input in(_bytes);
-    return uuid_serializer::read(in);
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
+    return mv.table_id();
 }
 
 utils::UUID
 frozen_mutation::schema_version() const {
-    data_input in(_bytes);
-    uuid_serializer::skip(in); // cf_id
-    return uuid_serializer::read(in);
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
+    return mv.schema_version();
 }
 
 partition_key_view
 frozen_mutation::key(const schema& s) const {
-    data_input in(_bytes);
-    uuid_serializer::skip(in); // cf_id
-    uuid_serializer::skip(in); // schema_version
-    return partition_key_view_serializer::read(in);
+    return _pk;
 }
 
 dht::decorated_key
@@ -63,32 +71,33 @@ frozen_mutation::decorated_key(const schema& s) const {
     return dht::global_partitioner().decorate_key(s, key(s));
 }
 
+partition_key frozen_mutation::deserialize_key() const {
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
+    return mv.key();
+}
+
 frozen_mutation::frozen_mutation(bytes&& b)
     : _bytes(std::move(b))
+    , _pk(deserialize_key())
 { }
 
-frozen_mutation::frozen_mutation(const mutation& m) {
-    auto&& id = m.schema()->id();
-    partition_key_view key_view = m.key();
-    auto version = m.schema()->version();
-
-    uuid_serializer id_ser(id);
-    uuid_serializer schema_version_ser(version);
-    partition_key_view_serializer key_ser(key_view);
+frozen_mutation::frozen_mutation(const mutation& m)
+    : _pk(m.key())
+{
     mutation_partition_serializer part_ser(*m.schema(), m.partition());
 
-    bytes buf(bytes::initialized_later(),
-              id_ser.size()
-              + schema_version_ser.size()
-              + key_ser.size()
-              + part_ser.size_without_framing());
-    data_output out(buf);
-    id_ser.write(out);
-    schema_version_ser.write(out);
-    key_ser.write(out);
-    part_ser.write_without_framing(out);
+    bytes_ostream out;
+    ser::writer_of_mutation wom(out);
+    std::move(wom).write_table_id(m.schema()->id())
+                  .write_schema_version(m.schema()->version())
+                  .write_key(m.key())
+                  .partition([&] (auto wr) {
+                      part_ser.write(std::move(wr));
+                  }).end_mutation();
 
-    _bytes = std::move(buf);
+    auto bv = out.linearize();
+    _bytes = bytes(bv.begin(), bv.end()); // FIXME: avoid copy
 }
 
 mutation
@@ -104,11 +113,9 @@ frozen_mutation freeze(const mutation& m) {
 }
 
 mutation_partition_view frozen_mutation::partition() const {
-    data_input in(_bytes);
-    uuid_serializer::skip(in); // cf_id
-    uuid_serializer::skip(in); // schema_version
-    partition_key_view_serializer::skip(in);
-    return mutation_partition_view::from_bytes(in.read_view(in.avail()));
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
+    return mutation_partition_view::from_view(mv.partition());
 }
 
 std::ostream& operator<<(std::ostream& out, const frozen_mutation::printer& pr) {

@@ -186,6 +186,9 @@ void set_size(seastar::simple_output_stream& os, const T& obj);
 template<typename T>
 void set_size(seastar::measuring_output_stream& os, const T& obj);
 
+template<typename T>
+void set_size(bytes_ostream& os, const T& obj);
+
 template<typename Buffer, typename T>
 Buffer serialize_to_buffer(const T& v, size_t head_space = 0);
 

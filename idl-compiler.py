@@ -28,6 +28,7 @@ import os
 from string import Template
 import pyparsing as pp
 from functools import reduce
+import textwrap
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -48,6 +49,8 @@ parser.add_argument('file', nargs='*', help="combine one or more file names for 
 config = parser.parse_args()
 
 
+def reindent(indent, text):
+    return textwrap.indent(textwrap.dedent(text), ' ' * indent)
 
 def fprint(f, *args):
     for arg in args:
@@ -266,6 +269,10 @@ def variant_info(info, typ):
     [cls, namespaces, parent_template_param] = info
     return [{"members" : variant_to_member(typ)}, namespaces, parent_template_param]
 
+stubs = set()
+def is_stub(cls):
+    return cls in stubs
+
 def handle_visitors_state(info, hout, clases = []):
     [cls, namespaces, parent_template_param] = info
     name = "__".join(clases) if clases else cls["name"]
@@ -337,23 +344,43 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
     set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
     set_command = "_state.f.end(_out);" if var_index is not None else ""
     return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
-    return Template("""
-   after_${basestate}__$name write_$name$var_type($type t) && {
-        $set_varient_index
-        serialize(_out, t);
-        $set
-        return $return_command;
-   }""").substitute({'type' : typ, 'name': name, 'basestate' : base_state, 'var_type' :var_type, 'set_varient_index':set_varient_index, 'set' :set_command, 'return_command' : return_command})
 
-def add_param_writer_object(name, base_state, var_type = "", var_index = None):
+    if typ in ['bytes', 'sstring']:
+        typ += '_view'
+    else:
+        typ = 'const ' + typ + '&'
+
+    return Template(reindent(4, """
+        after_${base_state}__$name write_$name$var_type($typ t) && {
+            $set_varient_index
+            serialize(_out, t);
+            $set_command
+            return $return_command;
+        }""")).substitute(locals())
+
+def add_param_writer_object(name, base_state, typ, var_type = "", var_index = None, root_node = False):
     var_type1 = "_" + var_type if var_type != "" else ""
     set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
-    return Template("""
-    ${basestate}__${name}$var_type1 start_${name}$var_type() && {
-        $set_varient_index
-        return { _out, std::move(_state) };
-    }
-""").substitute({'name': name, 'basestate' : base_state, 'var_type' :var_type, 'var_type1' :var_type1, 'set_varient_index':set_varient_index})
+    ret = Template(reindent(4,"""
+        ${base_state}__${name}$var_type1 start_${name}$var_type() && {
+            $set_varient_index
+            return { _out, std::move(_state) };
+        }
+    """)).substitute(locals())
+    if not is_stub(typ) and is_local_type(typ):
+        ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
+    if is_stub(typ):
+        set_command = "_state.f.end(_out);" if var_index is not None else ""
+        return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
+        ret += Template(reindent(4, """
+            template<typename Serializer>
+            after_${base_state}__${name} ${name}$var_type(Serializer&& f) && {
+                $set_varient_index
+                f(writer_of_$typ(_out));
+                $set_command
+                return $return_command;
+            }""")).substitute(locals())
+    return ret
 
 def add_param_write(current, base_state, vector = False, root_node = False):
     typ = current["type"]
@@ -374,16 +401,16 @@ def add_param_write(current, base_state, vector = False, root_node = False):
     }
 """).substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state, 'set' : set_size})
     elif is_local_type(typ):
-        res = res + add_param_writer_object(current["name"], base_state)
+        res = res + add_param_writer_object(current["name"], base_state, typ)
     elif is_variant(typ):
         for idx, p in enumerate(typ[1]):
             if is_basic_type(p):
                 varient_type = param_type(p)
                 res = res + add_param_writer_basic_type(current["name"], base_state, varient_type,"_" + varient_type, idx, root_node)
             elif is_variant(p):
-                res = res + add_param_writer_object(current["name"], base_state, '_' + "variant", idx)
+                res = res + add_param_writer_object(current["name"], base_state, p, '_' + "variant", idx, root_node)
             elif is_local_type(p):
-                res = res + add_param_writer_object(current["name"], base_state, '_' + param_type(p), idx)
+                res = res + add_param_writer_object(current["name"], base_state, p, '_' + param_type(p), idx, root_node)
     else:
         print ("something is wrong with type", typ)
     return res;
@@ -543,9 +570,12 @@ def handle_visitors_nodes(info, hout, variant_node = False, clases = []):
 
 def add_to_types(cls, namespaces, parent_template_param ):
     global local_types
+    global stubs
     if "attribute" not in cls or cls["attribute"][0][0] != "writable":
         return
     local_types[cls["name"]] = [cls, namespaces, parent_template_param]
+    if "stub" in cls:
+        stubs.add(cls["name"])
     for param in cls["members"]:
         if is_class(param) or is_enum(param):
             continue
@@ -632,15 +662,25 @@ def add_view(hout, info):
     seastar::simple_input_stream v;
     """).substitute({'name' : cls["name"]}))
 
+    if not is_stub(cls["name"]) and is_local_type(cls["name"]):
+        fprintln(hout, Template(reindent(4, """
+            operator $type() const {
+               auto in = v;
+               return deserialize(in, boost::type<$type>());
+            }
+        """)).substitute({'type' : cls["name"]}))
+
     skip = "" if is_final(cls) else "skip(in, boost::type<size_type>());"
     for m in members:
         full_type = param_view_type(m["type"])
-        fprintln(hout, Template("""
-    $type $name() const {
-       auto in = v;
-       $skip
-       return deserialize(in, boost::type<$type>());
-    }""").substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
+        fprintln(hout, Template(reindent(4, """
+            $type $name() const {
+               auto in = v;
+               $skip
+               return deserialize(in, boost::type<$type>());
+            }
+        """)).substitute({'name' : m["name"], 'type' : full_type, 'skip' : skip}))
+
         skip = skip + Template("\n       skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
     fprintln(hout, "};")
@@ -669,8 +709,6 @@ def add_views(hout):
 def add_visitors(hout):
     if not local_types:
         return
-    if config.ns != '':
-        fprintln(hout, "namespace ", config.ns, " {")
     fprintln(hout, "\n////// State holders")
     for k in local_types:
         handle_visitors_state(local_types[k], hout)
@@ -678,8 +716,6 @@ def add_visitors(hout):
     for k in sort_dependencies():
         handle_visitors_nodes(local_types[k], hout)
     add_views(hout)
-    if config.ns != '':
-        fprintln(hout, "}")
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
     add_to_types(cls, namespaces, parent_template_param)
@@ -755,6 +791,17 @@ def handle_objects(tree, hout, cout, namespaces=[]):
         else:
             print("unknown type ", obj, obj["type"])
 
+def handle_types(tree, namespaces=[]):
+    for obj in tree:
+        if is_class(obj):
+            add_to_types(obj, namespaces, [])
+        elif is_enum(obj):
+            pass
+        elif obj["type"] == "namespace":
+            handle_types(obj["content"], namespaces + [obj["name"]])
+        else:
+            print("unknown type ", obj, obj["type"])
+
 def load_file(name):
     if config.o:
         cout = open(config.o.replace('.hh', '.impl.hh'), "w+")
@@ -774,8 +821,10 @@ def load_file(name):
         fprintln(cout, "namespace ", config.ns, " {")
     data = parse_file(name)
     if data:
+        handle_types(data)
+    add_visitors(cout)
+    if data:
         handle_objects(data, hout, cout)
-    add_visitors(hout)
     if config.ns != '':
         fprintln(cout, "}")
     cout.close()

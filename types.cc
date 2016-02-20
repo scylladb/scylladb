@@ -1876,17 +1876,17 @@ bool collection_type_impl::mutation::compact_and_expire(tombstone base_tomb, gc_
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(const mutation& mut) const {
+collection_type_impl::serialize_mutation_form(const mutation& mut) {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form(mutation_view mut) const {
+collection_type_impl::serialize_mutation_form(mutation_view mut) {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation
-collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) {
     return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
         return e.second.is_live(t, now);
     }));

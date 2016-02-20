@@ -24,15 +24,24 @@
 #include "database_fwd.hh"
 #include "mutation_partition_visitor.hh"
 
+#include <seastar/core/simple-stream.hh>
+
+namespace ser {
+class mutation_partition_view;
+}
+
 // View on serialized mutation partition. See mutation_partition_serializer.
 class mutation_partition_view {
-    bytes_view _bytes;
+    seastar::simple_input_stream _in;
 private:
-    mutation_partition_view(bytes_view v)
-        : _bytes(v)
+    mutation_partition_view(seastar::simple_input_stream v)
+        : _in(v)
     { }
 public:
-    static mutation_partition_view from_bytes(bytes_view v) { return { v }; }
+    static mutation_partition_view from_stream(seastar::simple_input_stream v) {
+        return { v };
+    }
+    static mutation_partition_view from_view(ser::mutation_partition_view v);
     void accept(const schema& schema, mutation_partition_visitor& visitor) const;
     void accept(const column_mapping&, mutation_partition_visitor& visitor) const;
 };
