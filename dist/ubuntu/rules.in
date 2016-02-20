@@ -54,6 +54,8 @@ override_dh_auto_install:
 	mkdir -p $(CURDIR)/debian/scylla-server/usr/bin/ && \
 	cp $(CURDIR)/build/release/scylla \
 		$(CURDIR)/debian/scylla-server/usr/bin/
+	cp $(CURDIR)/build/release/iotune \
+		$(CURDIR)/debian/scylla-server/usr/bin/
 
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog

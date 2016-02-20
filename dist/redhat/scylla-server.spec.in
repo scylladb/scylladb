@@ -26,10 +26,10 @@ Conflicts:      abrt
 
 %build
 %if 0%{?fedora}
-./configure.py --with scylla --disable-xen --enable-dpdk --mode=release
+./configure.py --disable-xen --enable-dpdk --mode=release
 %endif
 %if 0%{?rhel}
-python3.4 ./configure.py --with scylla --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
+python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
 ninja-build -j2
 
@@ -55,6 +55,7 @@ install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
+install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
 install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
 install -m644 README-DPDK.md $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -139,6 +140,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_docdir}/scylla/licenses/
 %{_unitdir}/scylla-server.service
 %{_bindir}/scylla
+%{_bindir}/iotune
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup
