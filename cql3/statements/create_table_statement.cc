@@ -44,6 +44,7 @@
 #include <regex>
 
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm/adjacent_find.hpp>
 
 #include "cql3/statements/create_table_statement.hh"
 
@@ -173,13 +174,12 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         throw exceptions::invalid_request_exception(sprint("Table names shouldn't be more than %d characters long (got \"%s\")", schema::NAME_LENGTH, cf_name.c_str()));
     }
 
-    for (auto&& entry : _defined_names) {
-        auto c = std::count_if(_defined_names.begin(), _defined_names.end(), [&entry] (auto e) {
-            return entry->text() == e->text();
-        });
-        if (c > 1) {
-            throw exceptions::invalid_request_exception(sprint("Multiple definition of identifier %s", entry->text().c_str()));
-        }
+    // Check for duplicate column names
+    auto i = boost::range::adjacent_find(_defined_names, [] (auto&& e1, auto&& e2) {
+        return e1->text() == e2->text();
+    });
+    if (i != _defined_names.end()) {
+        throw exceptions::invalid_request_exception(sprint("Multiple definition of identifier %s", (*i)->text()));
     }
 
     properties->validate();
