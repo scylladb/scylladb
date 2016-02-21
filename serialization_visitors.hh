@@ -48,6 +48,11 @@ struct frame : public place_holder {
     }
 };
 
+struct vector_position {
+    bytes_ostream::position pos;
+    size_type count;
+};
+
 //empty frame, behave like a place holder, but is used when no place holder is needed
 struct empty_frame {
     void end(bytes_ostream&) {}
