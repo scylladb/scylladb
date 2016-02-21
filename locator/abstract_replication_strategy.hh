@@ -41,6 +41,7 @@ enum class replication_strategy_type {
     simple,
     local,
     network_topology,
+    everywhere_topology,
 };
 
 class abstract_replication_strategy {
