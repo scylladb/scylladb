@@ -681,6 +681,10 @@ public:
         return tmp;
     }
 
+    size_t get_all_endpoints_count() const {
+        return _endpoint_to_host_id_map.size();
+    }
+
 #if 0
     public Set<InetAddress> getAllEndpoints()
     {
