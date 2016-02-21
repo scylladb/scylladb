@@ -1084,7 +1084,13 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
             sstring uuidst = comps[1];
 
             try {
-                auto&& uuid = find_uuid(ks_name, cfname);
+                auto&& uuid = [&] {
+                    try {
+                        return find_uuid(ks_name, cfname);
+                    } catch (const std::out_of_range& e) {
+                        std::throw_with_nested(no_such_column_family(ks_name, cfname));
+                    }
+                }();
                 auto& cf = find_column_family(uuid);
 
                 // #870: Check that the directory name matches
