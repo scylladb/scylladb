@@ -42,6 +42,14 @@ private:
     struct chunk {
         // FIXME: group fragment pointers to reduce pointer chasing when packetizing
         std::unique_ptr<chunk> next;
+        ~chunk() {
+            auto p = std::move(next);
+            while (p) {
+                // Avoid recursion when freeing chunks
+                auto p_next = std::move(p->next);
+                p = std::move(p_next);
+            }
+        }
         size_type offset; // Also means "size" after chunk is closed
         size_type size;
         value_type data[0];
