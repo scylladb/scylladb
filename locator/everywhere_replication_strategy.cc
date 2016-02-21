@@ -46,6 +46,6 @@ everywhere_replication_strategy::everywhere_replication_strategy(const sstring& 
         abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::everywhere_topology) {}
 
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, const sstring&, token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
-static registry registrator("org.apache.cassandra.locator.EverywhereReplicationStrategy");
-static registry registrator_short_name("EverywhereReplicationStrategy");
+static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
+static registry registrator_short_name("EverywhereStrategy");
 }
