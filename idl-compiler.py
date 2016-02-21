@@ -338,6 +338,15 @@ def vector_add_method(current, base_state):
   after_${basestate}__$name end_$name() && {
         _size.set(_out, _count);
         return { _out, std::move(_state) };
+  }
+
+  vector_position pos() const {
+        return vector_position{_out.pos(), _count};
+  }
+
+  void rollback(const vector_position& vp) {
+        _out.retract(vp.pos);
+        _count = vp.count;
   }""").substitute({'name': current["name"], 'basestate' : base_state})
 
 def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index = None, root_node = False):
