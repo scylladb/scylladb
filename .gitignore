@@ -8,3 +8,4 @@ cscope.*
 dist/ami/files/*.rpm
 dist/ami/variables.json
 dist/ami/scylla_deploy.sh
+*.pyc
