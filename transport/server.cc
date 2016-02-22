@@ -712,7 +712,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
     }
 
     const auto type = read_byte(buf);
-    const unsigned n = read_unsigned_short(buf);
+    const unsigned n = read_short(buf);
 
     std::vector<shared_ptr<cql3::statements::modification_statement>> modifications;
     std::vector<std::vector<bytes_view_opt>> values;
@@ -1050,11 +1050,6 @@ int64_t cql_server::connection::read_long(bytes_view& buf)
 
 uint16_t cql_server::connection::read_short(bytes_view& buf)
 {
-    return read_unsigned_short(buf);
-}
-
-uint16_t cql_server::connection::read_unsigned_short(bytes_view& buf)
-{
     check_room(buf, sizeof(uint16_t));
     auto p = reinterpret_cast<const uint8_t*>(buf.begin());
     uint16_t n = (static_cast<uint16_t>(p[0]) << 8)
@@ -1213,7 +1208,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(bytes_
 }
 
 void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vector<sstring_view>& names, std::vector<bytes_view_opt>& values) {
-    uint16_t size = read_unsigned_short(buf);
+    uint16_t size = read_short(buf);
     names.reserve(size);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
@@ -1223,7 +1218,7 @@ void cql_server::connection::read_name_and_value_list(bytes_view& buf, std::vect
 }
 
 void cql_server::connection::read_string_list(bytes_view& buf, std::vector<sstring>& strings) {
-    uint16_t size = read_unsigned_short(buf);
+    uint16_t size = read_short(buf);
     strings.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
         strings.emplace_back(read_string(buf));
@@ -1231,7 +1226,7 @@ void cql_server::connection::read_string_list(bytes_view& buf, std::vector<sstri
 }
 
 void cql_server::connection::read_value_view_list(bytes_view& buf, std::vector<bytes_view_opt>& values) {
-    uint16_t size = read_unsigned_short(buf);
+    uint16_t size = read_short(buf);
     values.reserve(size);
     for (uint16_t i = 0; i < size; i++) {
         values.emplace_back(read_value_view(buf));

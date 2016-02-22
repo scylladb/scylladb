@@ -179,7 +179,6 @@ private:
         int32_t read_int(bytes_view& buf);
         int64_t read_long(bytes_view& buf);
         uint16_t read_short(bytes_view& buf);
-        uint16_t read_unsigned_short(bytes_view& buf);
         sstring read_string(bytes_view& buf);
         sstring_view read_string_view(bytes_view& buf);
         sstring_view read_long_string_view(bytes_view& buf);
