@@ -36,6 +36,7 @@ options {
 #include "cql3/statements/drop_keyspace_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
+#include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -283,7 +284,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st22=listUsersStatement          { $stmt = st22; }
     | st23=createTriggerStatement      { $stmt = st23; }
     | st24=dropTriggerStatement        { $stmt = st24; }
+#endif
     | st25=createTypeStatement         { $stmt = st25; }
+#if 0
     | st26=alterTypeStatement          { $stmt = st26; }
     | st27=dropTypeStatement           { $stmt = st27; }
     | st28=createFunctionStatement     { $stmt = st28; }
@@ -695,7 +698,6 @@ cfamOrdering[shared_ptr<cql3::statements::create_table_statement::raw_statement>
     ;
 
 
-#if 0
 /**
  * CREATE TYPE foo (
  *    <name1> <type1>,
@@ -703,17 +705,16 @@ cfamOrdering[shared_ptr<cql3::statements::create_table_statement::raw_statement>
  *    ....
  * )
  */
-createTypeStatement returns [CreateTypeStatement expr]
-    @init { boolean ifNotExists = false; }
-    : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { ifNotExists = true; } )?
-         tn=userTypeName { $expr = new CreateTypeStatement(tn, ifNotExists); }
+createTypeStatement returns [::shared_ptr<create_type_statement> expr]
+    @init { bool if_not_exists = false; }
+    : K_CREATE K_TYPE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+         tn=userTypeName { $expr = ::make_shared<create_type_statement>(tn, if_not_exists); }
          '(' typeColumns[expr] ( ',' typeColumns[expr]? )* ')'
     ;
 
-typeColumns[CreateTypeStatement expr]
-    : k=ident v=comparatorType { $expr.addDefinition(k, v); }
+typeColumns[::shared_ptr<create_type_statement> expr]
+    : k=ident v=comparatorType { $expr->add_definition(k, v); }
     ;
-#endif
 
 
 /**
