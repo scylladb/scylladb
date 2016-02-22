@@ -985,15 +985,23 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
     if (c.size() == 1) {
         ck_bview.remove_suffix(1);
     }
-    uint16_t sz = ck_bview.size() + c.size();
-    write(out, sz, ck_bview, c);
+    size_t sz = ck_bview.size() + c.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    uint16_t sz16 = sz;
+    write(out, sz16, ck_bview, c);
 }
 
 void sstable::write_column_name(file_writer& out, bytes_view column_names) {
     column_name_helper::min_max_components(_c_stats.min_column_names, _c_stats.max_column_names, { column_names });
 
-    uint16_t sz = column_names.size();
-    write(out, sz, column_names);
+    size_t sz = column_names.size();
+    if (sz > std::numeric_limits<uint16_t>::max()) {
+        throw std::runtime_error(sprint("Column name too large (%d > %d)", sz, std::numeric_limits<uint16_t>::max()));
+    }
+    uint16_t sz16 = sz;
+    write(out, sz16, column_names);
 }
 
 
