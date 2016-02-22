@@ -58,7 +58,7 @@ public:
 
     void set_keyspace(sstring keyspace);
 
-    sstring get_keyspace() const;
+    const sstring& get_keyspace() const;
 
     bytes get_user_type_name() const;
 
