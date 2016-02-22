@@ -109,13 +109,15 @@ mutation_query(schema_ptr s,
                 is_reversed, limit);
             state.limit -= rows_left;
 
-            // NOTE: We must return all columns, regardless of what's in
-            // partition_slice, for the results to be reconcilable with tombstones.
-            // That's because row's presence depends on existence of any
-            // column in a row (See mutation_partition::query). We could
-            // optimize this case and only send cell timestamps, without data,
-            // for the cells which are not queried for (TODO).
-            state.result.emplace_back(partition{rows_left, freeze(m)});
+            if (rows_left || !m.partition().empty()) {
+                // NOTE: We must return all columns, regardless of what's in
+                // partition_slice, for the results to be reconcilable with tombstones.
+                // That's because row's presence depends on existence of any
+                // column in a row (See mutation_partition::query). We could
+                // optimize this case and only send cell timestamps, without data,
+                // for the cells which are not queried for (TODO).
+                state.result.emplace_back(partition{rows_left, freeze(m)});
+            }
 
             return state.limit ? stop_iteration::no : stop_iteration::yes;
         }).then([&state] {
