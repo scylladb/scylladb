@@ -38,14 +38,16 @@ public:
             data_type regular_column_name_type = utf8_type);
     schema_builder(const schema_ptr);
 
-    void set_uuid(const utils::UUID& id) {
+    schema_builder& set_uuid(const utils::UUID& id) {
         _raw._id = id;
+        return *this;
     }
     const utils::UUID& uuid() const {
         return _raw._id;
     }
-    void set_regular_column_name_type(const data_type& t) {
+    schema_builder& set_regular_column_name_type(const data_type& t) {
         _raw._regular_column_name_type = t;
+        return *this;
     }
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
@@ -56,123 +58,142 @@ public:
     const sstring& cf_name() const {
         return _raw._cf_name;
     }
-    void set_comment(const sstring& s) {
+    schema_builder& set_comment(const sstring& s) {
         _raw._comment = s;
+        return *this;
     }
     const sstring& comment() const {
         return _raw._comment;
     }
-    void set_default_time_to_live(gc_clock::duration t) {
+    schema_builder& set_default_time_to_live(gc_clock::duration t) {
         _raw._default_time_to_live = t;
+        return *this;
     }
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
 
-    void set_default_validator(const data_type& validator) {
+    schema_builder& set_default_validator(const data_type& validator) {
         _raw._default_validator = validator;
+        return *this;
     }
 
-    void set_gc_grace_seconds(int32_t gc_grace_seconds) {
+    schema_builder& set_gc_grace_seconds(int32_t gc_grace_seconds) {
         _raw._gc_grace_seconds = gc_grace_seconds;
+        return *this;
     }
 
     int32_t get_gc_grace_seconds() {
         return _raw._gc_grace_seconds;
     }
 
-    void set_dc_local_read_repair_chance(double chance) {
+    schema_builder& set_dc_local_read_repair_chance(double chance) {
         _raw._dc_local_read_repair_chance = chance;
+        return *this;
     }
 
     double get_dc_local_read_repair_chance() {
         return _raw._dc_local_read_repair_chance;
     }
 
-    void set_read_repair_chance(double chance) {
+    schema_builder& set_read_repair_chance(double chance) {
         _raw._read_repair_chance = chance;
+        return *this;
     }
 
     double get_read_repair_chance() {
         return _raw._read_repair_chance;
     }
 
-    void set_min_compaction_threshold(int32_t t) {
+    schema_builder& set_min_compaction_threshold(int32_t t) {
         _raw._min_compaction_threshold = t;
+        return *this;
     }
 
     int32_t get_min_compaction_threshold() {
         return _raw._min_compaction_threshold;
     }
 
-    void set_max_compaction_threshold(int32_t t) {
+    schema_builder& set_max_compaction_threshold(int32_t t) {
         _raw._max_compaction_threshold = t;
+        return *this;
     }
 
     int32_t get_max_compaction_threshold() {
         return _raw._max_compaction_threshold;
     }
 
-    void set_min_index_interval(int32_t t) {
+    schema_builder& set_min_index_interval(int32_t t) {
         _raw._min_index_interval = t;
+        return *this;
     }
 
     int32_t get_min_index_interval() {
         return _raw._min_index_interval;
     }
 
-    void set_max_index_interval(int32_t t) {
+    schema_builder& set_max_index_interval(int32_t t) {
         _raw._max_index_interval = t;
+        return *this;
     }
 
     int32_t get_max_index_interval() {
         return _raw._max_index_interval;
     }
 
-    void set_memtable_flush_period(int32_t t) {
+    schema_builder& set_memtable_flush_period(int32_t t) {
         _raw._memtable_flush_period = t;
+        return *this;
     }
 
     int32_t get_memtable_flush_period() const {
         return _raw._memtable_flush_period;
     }
 
-    void set_speculative_retry(sstring retry_sstring) {
+    schema_builder& set_speculative_retry(sstring retry_sstring) {
         _raw._speculative_retry = speculative_retry::from_sstring(retry_sstring);
+        return *this;
     }
 
     const speculative_retry& get_speculative_retry() {
         return _raw._speculative_retry;
     }
 
-    void set_bloom_filter_fp_chance(double fp) {
+    schema_builder& set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
+        return *this;
     }
     double get_bloom_filter_fp_chance() const {
         return _raw._bloom_filter_fp_chance;
     }
-    void set_compressor_params(const compression_parameters& cp) {
+    schema_builder& set_compressor_params(const compression_parameters& cp) {
         _raw._compressor_params = cp;
+        return *this;
     }
 
-    void set_compaction_strategy(sstables::compaction_strategy_type type) {
+    schema_builder& set_compaction_strategy(sstables::compaction_strategy_type type) {
         _raw._compaction_strategy = type;
+        return *this;
     }
 
-    void set_compaction_strategy_options(std::map<sstring, sstring> options) {
+    schema_builder& set_compaction_strategy_options(std::map<sstring, sstring> options) {
         _raw._compaction_strategy_options = std::move(options);
+        return *this;
     }
 
-    void set_caching_options(caching_options c) {
+    schema_builder& set_caching_options(caching_options c) {
         _raw._caching_options = std::move(c);
+        return *this;
     }
 
-    void set_is_dense(bool is_dense) {
+    schema_builder& set_is_dense(bool is_dense) {
         _raw._is_dense = is_dense;
+        return *this;
     }
 
-    void set_is_compound(bool is_compound) {
+    schema_builder& set_is_compound(bool is_compound) {
         _raw._is_compound = is_compound;
+        return *this;
     }
 
     column_definition& find_column(const cql3::column_identifier&);
