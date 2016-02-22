@@ -1968,7 +1968,8 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
     auto metadata = _token_metadata.clone_only_token_map(); // don't do this in the loop! #7758
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), metadata);
+        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+        auto eps = ks.get_replication_strategy().calculate_natural_endpoints(end_token, metadata);
         current_replica_endpoints.emplace(r, std::move(eps));
     }
 
@@ -1989,7 +1990,8 @@ std::unordered_multimap<range<token>, inet_address> storage_service::get_changed
     // range.
     for (auto& r : ranges) {
         auto& ks = _db.local().find_keyspace(keyspace_name);
-        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(r.end()->value(), temp);
+        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
+        auto new_replica_endpoints = ks.get_replication_strategy().calculate_natural_endpoints(end_token, temp);
 
         auto rg = current_replica_endpoints.equal_range(r);
         for (auto it = rg.first; it != rg.second; it++) {
@@ -2503,8 +2505,9 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
                     if (r.contains(to_fetch, dht::token_comparator())) {
                         std::vector<inet_address> endpoints;
                         if (dht::range_streamer::use_strict_consistency()) {
+                            auto end_token = to_fetch.end() ? to_fetch.end()->value() : dht::maximum_token();
                             std::vector<inet_address> old_endpoints = eps;
-                            std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_fetch.end()->value(), token_meta_clone_all_settled);
+                            std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone_all_settled);
 
                             //Due to CASSANDRA-5953 we can have a higher RF then we have endpoints.
                             //So we need to be careful to only be strict when endpoints == RF
@@ -2563,8 +2566,9 @@ void storage_service::range_relocator::calculate_to_from_streams(std::unordered_
             std::unordered_multimap<inet_address, range<token>> endpoint_ranges;
             std::unordered_map<inet_address, std::vector<range<token>>> endpoint_ranges_map;
             for (range<token> to_stream : ranges_per_keyspace.first) {
-                std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone);
-                std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(to_stream.end()->value(), token_meta_clone_all_settled);
+                auto end_token = to_stream.end() ? to_stream.end()->value() : dht::maximum_token();
+                std::vector<inet_address> current_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone);
+                std::vector<inet_address> new_endpoints = strategy.calculate_natural_endpoints(end_token, token_meta_clone_all_settled);
                 logger.debug("Range: {} Current endpoints: {} New endpoints: {}", to_stream, current_endpoints, new_endpoints);
                 std::sort(current_endpoints.begin(), current_endpoints.end());
                 std::sort(new_endpoints.begin(), new_endpoints.end());
