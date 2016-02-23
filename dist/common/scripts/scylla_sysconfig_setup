@@ -13,7 +13,7 @@ print_usage() {
     echo "  --confdir  scylla config directory"
     echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
     echo "  --disk-count disk count"
-    echo "  --ami  AMI instance mode"
+    echo "  -a  AMI instance mode"
     exit 1
 }
 
@@ -67,7 +67,7 @@ while [ $# -gt 0 ]; do
             DISK_COUNT="$2"
             shift 2
             ;;
-        "--ami")
+        "-a")
             AMI=yes
             ;;
         *)
