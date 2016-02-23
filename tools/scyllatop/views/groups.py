@@ -40,4 +40,4 @@ class Groups(object):
             self._groups[label].add(metric)
 
     def all(self):
-        return self._groups.values()
+        return sorted(self._groups.values(), key=lambda group: group.label)
