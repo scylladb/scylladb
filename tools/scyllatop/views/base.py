@@ -30,7 +30,7 @@ class Base(object):
         curses.doupdate()
 
     def clearScreen(self):
-        self._window.clear()
+        self._window.erase()
         self._window.move(0, 0)
 
     def writeLine(self, thing, line):
