@@ -122,6 +122,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
+        systemctl enable scylla-io-setup.service
         systemctl enable scylla-server.service
         systemctl enable scylla-jmx.service
     fi
