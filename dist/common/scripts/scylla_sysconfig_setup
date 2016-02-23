@@ -13,7 +13,6 @@ print_usage() {
     echo "  --confdir  scylla config directory"
     echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
     echo "  --disk-count disk count"
-    echo "  -a  AMI instance mode"
     exit 1
 }
 
@@ -67,9 +66,6 @@ while [ $# -gt 0 ]; do
             DISK_COUNT="$2"
             shift 2
             ;;
-        "-a")
-            AMI=yes
-            ;;
         *)
             print_usage
             ;;
@@ -115,6 +111,5 @@ sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
     -e "s#^SCYLLA_ARGS=.*#SCYLLA_ARGS=\"$SCYLLA_ARGS\"#" \
     -e "s#^SCYLLA_IO=.*#SCYLLA_IO=\"$SCYLLA_IO\"#" \
-    -e s#^AMI=.*#AMI=$AMI# \
     $SYSCONFIG/scylla-server > /tmp/scylla-server
 mv /tmp/scylla-server $SYSCONFIG/scylla-server
