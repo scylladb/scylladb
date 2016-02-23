@@ -178,7 +178,7 @@ static sizes calculate_sizes(const mutation& m) {
     result.memtable = mt->occupancy().used_space();
     result.cache = tracker.region().occupancy().used_space();
     result.frozen = freeze(m).representation().size();
-    result.canonical = db::serializer<canonical_mutation>(canonical_mutation(m)).size();
+    result.canonical = canonical_mutation(m).representation().size();
 
     tmpdir sstable_dir;
     auto sst = make_lw_shared<sstables::sstable>(s->ks_name(), s->cf_name(),
