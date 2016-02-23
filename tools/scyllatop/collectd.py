@@ -4,14 +4,14 @@ import atexit
 import os
 import logging
 
-COLLECTD_EXAMPLE_CONFIGURATION = ['LoadPlugin unixsock',
-                                  '',
-                                  '<Plugin unixsock>',
-                                  '   SocketFile "{socket}"',
-                                  '   SocketGroup "collectd"',
-                                  '   SocketPerms "0660"',
-                                  '   DeleteSocket false',
-                                  '</Plugin>']
+COLLECTD_EXAMPLE_CONFIGURATION = '\n'.join(['LoadPlugin unixsock',
+                                            '',
+                                            '<Plugin unixsock>',
+                                            '   SocketFile "{socket}"',
+                                            '   SocketGroup "wheel"',
+                                            '   SocketPerms "0660"',
+                                            '   DeleteSocket false',
+                                            '</Plugin>'])
 
 
 class Collectd(object):
