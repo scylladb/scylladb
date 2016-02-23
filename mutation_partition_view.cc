@@ -83,12 +83,12 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
         auto& col = cm.column_at(kind, id);
 
         class atomic_cell_or_collection_visitor : public boost::static_visitor<> {
-            Visitor _visitor;
+            Visitor& _visitor;
             column_id _id;
             const column_mapping::column& _col;
         public:
-            explicit atomic_cell_or_collection_visitor(Visitor v, column_id id, const column_mapping::column& col)
-                : _visitor(std::move(v)), _id(id), _col(col) { }
+            explicit atomic_cell_or_collection_visitor(Visitor& v, column_id id, const column_mapping::column& col)
+                : _visitor(v), _id(id), _col(col) { }
 
             void operator()(boost::variant<ser::live_cell_view, ser::expiring_cell_view, ser::dead_cell_view, ser::unknown_variant_type>& acv) const {
                 if (!_col.type()->is_atomic()) {
@@ -107,7 +107,7 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
             }
         };
         auto&& cell = cv.c();
-        boost::apply_visitor(atomic_cell_or_collection_visitor(std::move(visitor), id, col), cell);
+        boost::apply_visitor(atomic_cell_or_collection_visitor(visitor, id, col), cell);
     }
 }
 
