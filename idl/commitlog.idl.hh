@@ -19,20 +19,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-class canonical_mutation final {
-    bytes representation();
-};
-
-class schema_mutations {
-    canonical_mutation columnfamilies_canonical_mutation();
-    canonical_mutation columns_canonical_mutation();
-};
-
-class schema stub [[writable]] {
-    utils::UUID version;
-    schema_mutations mutations;
-};
-
-class frozen_schema final {
-    bytes representation();
+class commitlog_entry {
+    std::experimental::optional<column_mapping> mapping();
+    frozen_mutation mutation();
 };

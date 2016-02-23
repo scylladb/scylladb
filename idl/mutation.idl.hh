@@ -101,3 +101,21 @@ class mutation stub [[writable]] {
     partition_key key;
     mutation_partition partition;
 };
+
+class column_mapping_entry {
+    bytes name();
+    sstring type_name();
+};
+
+class column_mapping {
+    std::vector<column_mapping_entry> columns();
+    uint32_t n_static();
+};
+
+class canonical_mutation stub [[writable]] {
+    utils::UUID table_id;
+    utils::UUID schema_version;
+    partition_key key;
+    column_mapping mapping;
+    mutation_partition partition;
+}

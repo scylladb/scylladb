@@ -24,80 +24,66 @@
 #include "mutation_partition_serializer.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "hashing_partition_visitor.hh"
-
-template class db::serializer<canonical_mutation>;
-
-//
-// Representation layout:
-//
-// <canonical_mutation> ::= <column_family_id> <table_schema_version> <partition_key> <column-mapping> <partition>
-//
-// For <partition> see mutation_partition_serializer.cc
-// For <column-mapping> see db::serializer<column_mapping>
-//
+#include "utils/UUID.hh"
+#include "serializer.hh"
+#include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/mutation.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/uuid.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
 
 canonical_mutation::canonical_mutation(bytes data)
         : _data(std::move(data))
 { }
 
 canonical_mutation::canonical_mutation(const mutation& m)
-    : _data([&m] {
-        bytes_ostream out;
-        db::serializer<utils::UUID>(m.column_family_id()).write(out);
-        db::serializer<table_schema_version>(m.schema()->version()).write(out);
-        db::serializer<partition_key_view>(m.key()).write(out);
-        db::serializer<column_mapping>(m.schema()->get_column_mapping()).write(out);
-        mutation_partition_serializer ser(*m.schema(), m.partition());
-        ser.write(out);
-        return to_bytes(out.linearize());
-    }())
-{ }
+{
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    bytes_ostream out;
+    ser::writer_of_canonical_mutation wr(out);
+    std::move(wr).write_table_id(m.schema()->id())
+                 .write_schema_version(m.schema()->version())
+                 .write_key(m.key())
+                 .write_mapping(m.schema()->get_column_mapping())
+                 .partition([&] (auto wr) {
+                     part_ser.write(std::move(wr));
+                 }).end_canonical_mutation();
+    _data = to_bytes(out.linearize());
+}
 
 utils::UUID canonical_mutation::column_family_id() const {
-    data_input in(_data);
-    return db::serializer<utils::UUID>::read(in);
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_data.begin()), _data.size());
+    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
+    return mv.table_id();
 }
 
 mutation canonical_mutation::to_mutation(schema_ptr s) const {
-    data_input in(_data);
+    seastar::simple_input_stream in(reinterpret_cast<const char*>(_data.begin()), _data.size());
+    auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
 
-    auto cf_id = db::serializer<utils::UUID>::read(in);
+    auto cf_id = mv.table_id();
     if (s->id() != cf_id) {
         throw std::runtime_error(sprint("Attempted to deserialize canonical_mutation of table %s with schema of table %s (%s.%s)",
                                         cf_id, s->id(), s->ks_name(), s->cf_name()));
     }
 
-    auto version = db::serializer<table_schema_version>::read(in);
-    auto pk = partition_key(db::serializer<partition_key_view>::read(in));
+    auto version = mv.schema_version();
+    auto pk = mv.key();
 
     mutation m(std::move(pk), std::move(s));
 
     if (version == m.schema()->version()) {
-        db::serializer<column_mapping>::skip(in);
-        auto partition_view = mutation_partition_serializer::read_as_view(in);
+        auto partition_view = mutation_partition_view::from_view(mv.partition());
         m.partition().apply(*m.schema(), partition_view, *m.schema());
     } else {
-        column_mapping cm = db::serializer<column_mapping>::read(in);
+        column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());
-        auto partition_view = mutation_partition_serializer::read_as_view(in);
+        auto partition_view = mutation_partition_view::from_view(mv.partition());
         partition_view.accept(cm, v);
     }
     return m;
-}
-
-template<>
-db::serializer<canonical_mutation>::serializer(const canonical_mutation& v)
-        : _item(v)
-        , _size(db::serializer<bytes>(v._data).size())
-{ }
-
-template<>
-void
-db::serializer<canonical_mutation>::write(output& out, const canonical_mutation& v) {
-    db::serializer<bytes>(v._data).write(out);
-}
-
-template<>
-canonical_mutation db::serializer<canonical_mutation>::read(input& in) {
-    return canonical_mutation(db::serializer<bytes>::read(in));
 }

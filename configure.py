@@ -374,6 +374,7 @@ scylla_core = (['database.cc',
                  'db/schema_tables.cc',
                  'db/commitlog/commitlog.cc',
                  'db/commitlog/commitlog_replayer.cc',
+                 'db/commitlog/commitlog_entry.cc',
                  'db/serializer.cc',
                  'db/config.cc',
                  'db/index/secondary_index.cc',
@@ -510,6 +511,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/truncation_record.idl.hh',
         'idl/mutation.idl.hh',
         'idl/idl_test.idl.hh',
+        'idl/commitlog.idl.hh',
         ]
 
 scylla_tests_dependencies = scylla_core + api + idls + [

@@ -33,8 +33,8 @@
 // Safe to pass serialized across nodes.
 class canonical_mutation {
     bytes _data;
-    canonical_mutation(bytes);
 public:
+    explicit canonical_mutation(bytes);
     explicit canonical_mutation(const mutation&);
 
     canonical_mutation(canonical_mutation&&) = default;
@@ -51,15 +51,6 @@ public:
 
     utils::UUID column_family_id() const;
 
-    friend class db::serializer<canonical_mutation>;
+    const bytes& representation() const { return _data; }
+
 };
-
-namespace db {
-
-template<> serializer<canonical_mutation>::serializer(const canonical_mutation&);
-template<> void serializer<canonical_mutation>::write(output&, const canonical_mutation&);
-template<> canonical_mutation serializer<canonical_mutation>::read(input&);
-
-extern template class serializer<canonical_mutation>;
-
-}

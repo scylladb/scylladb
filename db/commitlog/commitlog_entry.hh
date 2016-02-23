@@ -28,18 +28,35 @@
 
 namespace stdx = std::experimental;
 
+class commitlog_entry {
+    stdx::optional<column_mapping> _mapping;
+    stdx::optional<frozen_mutation> _mutation_storage;
+    const frozen_mutation& _mutation;
+public:
+    commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation);
+    commitlog_entry(stdx::optional<column_mapping> mapping, const frozen_mutation& mutation);
+    const stdx::optional<column_mapping>& mapping() const { return _mapping; }
+    const frozen_mutation& mutation() const { return _mutation; }
+};
+
 class commitlog_entry_writer {
     schema_ptr _schema;
-    db::serializer<column_mapping> _column_mapping_serializer;
     const frozen_mutation& _mutation;
     bool _with_schema = true;
+    size_t _size;
+private:
+    void compute_size();
+    commitlog_entry get_entry() const;
 public:
     commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm)
-        : _schema(std::move(s)), _column_mapping_serializer(_schema->get_column_mapping()), _mutation(fm)
-    { }
+        : _schema(std::move(s)), _mutation(fm)
+    {
+        compute_size();
+    }
 
     void set_with_schema(bool value) {
         _with_schema = value;
+        compute_size();
     }
     bool with_schema() {
         return _with_schema;
@@ -49,40 +66,17 @@ public:
     }
 
     size_t size() const {
-        size_t size = data_output::serialized_size<bool>();
-        if (_with_schema) {
-            size += _column_mapping_serializer.size();
-        }
-        size += _mutation.representation().size();
-        return size;
+        return _size;
     }
 
-    void write(data_output& out) const {
-        out.write(_with_schema);
-        if (_with_schema) {
-            _column_mapping_serializer.write(out);
-        }
-        auto bv = _mutation.representation();
-        out.write(bv.begin(), bv.end());
-    }
+    void write(data_output& out) const;
 };
 
 class commitlog_entry_reader {
-    frozen_mutation _mutation;
-    stdx::optional<column_mapping> _column_mapping;
+    commitlog_entry _ce;
 public:
-    commitlog_entry_reader(const temporary_buffer<char>& buffer)
-        : _mutation(bytes())
-    {
-        data_input in(buffer);
-        bool has_column_mapping = in.read<bool>();
-        if (has_column_mapping) {
-            _column_mapping = db::serializer<::column_mapping>::read(in);
-        }
-        auto bv = in.read_view(in.avail());
-        _mutation = frozen_mutation(bytes(bv.begin(), bv.end()));
-    }
+    commitlog_entry_reader(const temporary_buffer<char>& buffer);
 
-    const stdx::optional<column_mapping>& get_column_mapping() const { return _column_mapping; }
-    const frozen_mutation& mutation() const { return _mutation; }
+    const stdx::optional<column_mapping>& get_column_mapping() const { return _ce.mapping(); }
+    const frozen_mutation& mutation() const { return _ce.mutation(); }
 };

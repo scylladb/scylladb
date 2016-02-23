@@ -24,6 +24,7 @@
 #include <vector>
 #include "mutation.hh"
 #include "schema.hh"
+#include "canonical_mutation.hh"
 
 // Commutative representation of table schema
 class schema_mutations {
@@ -34,6 +35,7 @@ public:
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
     { }
+    schema_mutations(canonical_mutation columnfamilies, canonical_mutation columns);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -50,6 +52,14 @@ public:
         return _columns;
     }
 
+    canonical_mutation columnfamilies_canonical_mutation() const {
+        return canonical_mutation(_columnfamilies);
+    }
+
+    canonical_mutation columns_canonical_mutation() const {
+        return canonical_mutation(_columns);
+    }
+
     table_schema_version digest() const;
 
     bool operator==(const schema_mutations&) const;
@@ -57,16 +67,5 @@ public:
 
     // Returns true iff any mutations contain any live cells
     bool live() const;
-
-    friend class db::serializer<schema_mutations>;
 };
 
-namespace db {
-
-template<> serializer<schema_mutations>::serializer(const schema_mutations&);
-template<> void serializer<schema_mutations>::write(output&, const schema_mutations&);
-template<> schema_mutations serializer<schema_mutations>::read(input&);
-
-extern template class serializer<schema_mutations>;
-
-}

@@ -93,6 +93,11 @@ public:
         _ptr += s;
         return *this;
     }
+    char* reserve(size_t s) {
+        auto p = _ptr;
+        skip(s);
+        return p;
+    }
 
     template<typename T>
     inline std::enable_if_t<std::is_fundamental<T>::value, data_output&> write(T t);
