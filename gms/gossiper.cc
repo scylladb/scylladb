@@ -1396,26 +1396,28 @@ void gossiper::add_saved_endpoint(inet_address ep) {
 }
 
 future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
-    return seastar::async([this, g = this->shared_from_this(), state, value = std::move(value)] () mutable {
-        inet_address ep_addr = get_broadcast_address();
-        if (!endpoint_state_map.count(ep_addr)) {
-            auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_state = %s, value = %s",
-                              ep_addr, state, value);
-            logger.error(err.c_str());
-            throw std::runtime_error(err);
-        }
-        endpoint_state& ep_state = endpoint_state_map.at(ep_addr);
-        // Fire "before change" notifications:
-        do_before_change_notifications(ep_addr, ep_state, state, value);
-        // Notifications may have taken some time, so preventively raise the version
-        // of the new value, otherwise it could be ignored by the remote node
-        // if another value with a newer version was received in the meantime:
-        value = storage_service_value_factory().clone_with_higher_version(value);
-        // Add to local application state and fire "on change" notifications:
-        ep_state.add_application_state(state, value);
-        do_on_change_notifications(ep_addr, state, value);
-    }).handle_exception([] (auto ep) {
-        logger.warn("Fail to apply application_state: {}", ep);
+    return get_gossiper().invoke_on(0, [state, value = std::move(value)] (auto& gossiper) mutable {
+        return seastar::async([&gossiper, g = gossiper.shared_from_this(), state, value = std::move(value)] () mutable {
+            inet_address ep_addr = gossiper.get_broadcast_address();
+            if (!gossiper.endpoint_state_map.count(ep_addr)) {
+                auto err = sprint("endpoint_state_map does not contain endpoint = %s, application_state = %s, value = %s",
+                                  ep_addr, state, value);
+                logger.error(err.c_str());
+                throw std::runtime_error(err);
+            }
+            endpoint_state& ep_state = gossiper.endpoint_state_map.at(ep_addr);
+            // Fire "before change" notifications:
+            gossiper.do_before_change_notifications(ep_addr, ep_state, state, value);
+            // Notifications may have taken some time, so preventively raise the version
+            // of the new value, otherwise it could be ignored by the remote node
+            // if another value with a newer version was received in the meantime:
+            value = storage_service_value_factory().clone_with_higher_version(value);
+            // Add to local application state and fire "on change" notifications:
+            ep_state.add_application_state(state, value);
+            gossiper.do_on_change_notifications(ep_addr, state, value);
+        }).handle_exception([] (auto ep) {
+            logger.warn("Fail to apply application_state: {}", ep);
+        });
     });
 }
 
