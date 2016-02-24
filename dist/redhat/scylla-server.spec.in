@@ -11,7 +11,7 @@ Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
 BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel
 %{?fedora:BuildRequires: boost-devel ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing}
 %{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
-Requires:       systemd-libs hwloc
+Requires:       systemd-libs hwloc collectd
 Conflicts:      abrt
 
 %description
@@ -39,6 +39,7 @@ mkdir -p $RPM_BUILD_ROOT%{_bindir}
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -48,6 +49,7 @@ mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -m644 dist/common/sudoers.d/scylla $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
+install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -121,6 +123,7 @@ if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     rm -rf /tmp/%{name}-%{version}-%{release}/
 fi
 ln -sfT /etc/scylla /var/lib/scylla/conf
+systemctl restart collectd
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -131,6 +134,7 @@ rm -rf $RPM_BUILD_ROOT
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
 %{_sysconfdir}/sudoers.d/scylla
+%config(noreplace) %{_sysconfdir}/collectd.d/scylla.conf
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
