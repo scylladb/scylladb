@@ -141,7 +141,7 @@ template<typename T>
 inline
 T reserialize(const T& v) {
     auto buf = ser::serialize_to_buffer<bytes>(v);
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(buf.begin()), buf.size());
+    auto in = ser::as_input_stream(buf);
     return ser::deserialize(in, boost::type<T>());
 }
 

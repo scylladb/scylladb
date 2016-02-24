@@ -323,6 +323,11 @@ T deserialize_from_buffer(const Buffer& buf, boost::type<T> type, size_t head_sp
     return deserialize(in, std::move(type));
 }
 
+inline
+seastar::simple_input_stream as_input_stream(bytes_view b) {
+    return seastar::simple_input_stream(reinterpret_cast<const char*>(b.begin()), b.size());
+}
+
 template<typename Output, typename ...T>
 void serialize(Output& out, const boost::variant<T...>& v) {}
 
