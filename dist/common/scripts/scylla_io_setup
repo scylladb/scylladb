@@ -39,6 +39,6 @@ if [ ! -f /etc/scylla.d/io.conf ]; then
 
         echo "SCYLLA_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
-        sudo -u scylla iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
+        iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
     fi
 fi
