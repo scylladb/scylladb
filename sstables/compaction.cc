@@ -62,6 +62,7 @@
 #include "db/query_context.hh"
 #include "service/storage_service.hh"
 #include "service/priority_manager.hh"
+#include "db_clock.hh"
 
 namespace sstables {
 
@@ -227,7 +228,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
     auto reader = make_mutation_reader<compacting_reader>(schema, std::move(readers), std::move(not_compacted_sstables),
         std::move(owned_ranges), cleanup);
 
-    auto start_time = std::chrono::steady_clock::now();
+    auto start_time = db_clock::now();
 
     // We use a fixed-sized pipe between the producer fiber (which reads the
     // individual sstables and merges them) and the consumer fiber (which
@@ -333,7 +334,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
         }
     }).then([start_time, info, cleanup] {
         double ratio = double(info->end_size) / double(info->start_size);
-        auto end_time = std::chrono::steady_clock::now();
+        auto end_time = db_clock::now();
         // time taken by compaction in seconds.
         auto duration = std::chrono::duration<float>(end_time - start_time);
         auto throughput = (double(info->end_size) / (1024*1024)) / duration.count();
