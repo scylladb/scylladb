@@ -18,9 +18,9 @@ def halt(* args):
 signal.signal(signal.SIGINT, halt)
 
 
-def main(screen, metrics, interval, collectd):
+def main(screen, metricPatterns, interval, collectd):
     curses.curs_set(0)
-    liveData = livedata.LiveData(metrics, interval, collectd)
+    liveData = livedata.LiveData(metricPatterns, interval, collectd)
     simpleView = views.simple.Simple(screen)
     meansView = views.means.Means(screen)
     liveData.addView(simpleView)
@@ -43,7 +43,7 @@ if __name__ == '__main__':
         help='python log level, e.g. DEBUG, INFO or ERROR',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         default='ERROR')
-    parser.add_argument('metrics', nargs='*', default=[], help='metrics to query, separated by spaces')
+    parser.add_argument(dest='metricPattern', nargs='*', default=[], help='metrics to query, separated by spaces. You can use regular expressions here to efficiently specify metrics')
     parser.add_argument('-i', '--interval', help="time resolution in seconds, default: 1", type=float, default=1)
     parser.add_argument('-s', '--socket', default='/var/run/collectd-unixsock', help="unixsock plugin to connect to, default: /var/run/collectd-unixsock")
     parser.add_argument('--print-config', action='store_true',
@@ -62,4 +62,4 @@ if __name__ == '__main__':
         pprint.pprint([m.symbol for m in metric.Metric.discover(collectd)])
         quit()
 
-    curses.wrapper(main, arguments.metrics, arguments.interval, collectd)
+    curses.wrapper(main, arguments.metricPattern, arguments.interval, collectd)
