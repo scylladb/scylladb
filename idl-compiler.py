@@ -29,6 +29,7 @@ from string import Template
 import pyparsing as pp
 from functools import reduce
 import textwrap
+from numbers import Number
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -257,6 +258,9 @@ def is_vector(lst):
 def is_variant(lst):
     return get_template_name(lst) == "boost::variant"
 
+def is_optional(lst):
+    return get_template_name(lst) == "std::experimental::optional"
+
 created_writers = set()
 
 def get_members(cls):
@@ -327,20 +331,32 @@ struct $node_name {
     fprintln(hout, "};")
 
 def vector_add_method(current, base_state):
-    typ = current["type"]
-    res = ""
+    if is_optional(current["type"][1][0]):
+        typ = current["type"][1][0]
+        res = reindent(4, """
+  void write_empty() {
+        serialize(_out, false);
+        _count++;
+  }""")
+        set_optional = "serialize(_out, true);"
+    else:
+        typ = current["type"]
+        res = ""
+        set_optional = ""
     if is_basic_type(typ[1]):
-        res = Template("""
+        res = res + Template("""
   void add_$name($type t)  {
+        $set_optional
         serialize(_out, t);
         _count++;
-  }""").substitute({'type': param_type(typ[1]), 'name': current["name"]})
+  }""").substitute({'type': param_type(typ[1]), 'name': current["name"], 'set_optional': set_optional})
     else:
-        res = Template("""
+        res = res + Template("""
   writer_of_$type add() {
+        $set_optional
         _count++;
         return {_out};
-  }""").substitute({'type': param_type(typ[1]), 'name': current["name"]})
+  }""").substitute({'type': param_type(typ[1]), 'name': current["name"], 'set_optional': set_optional})
     return res + Template("""
   after_${basestate}__$name end_$name() && {
         _size.set(_out, _count);
@@ -357,9 +373,11 @@ def vector_add_method(current, base_state):
   }""").substitute({'name': current["name"], 'basestate' : base_state})
 
 def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index = None, root_node = False):
-    set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
-    set_command = "_state.f.end(_out);" if var_index is not None else ""
-    return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
+    if isinstance(var_index, Number):
+        var_index = "uint32_t(" + str(var_index) +")"
+    set_varient_index = "serialize(_out, " + var_index +");\n" if var_index is not None else ""
+    set_command = "_state.f.end(_out);" if var_type is not "" else ""
+    return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
 
     if typ in ['bytes', 'sstring']:
         typ += '_view'
@@ -376,7 +394,9 @@ def add_param_writer_basic_type(name, base_state, typ, var_type = "", var_index 
 
 def add_param_writer_object(name, base_state, typ, var_type = "", var_index = None, root_node = False):
     var_type1 = "_" + var_type if var_type != "" else ""
-    set_varient_index = "serialize(_out, uint32_t(" + str(var_index) +"));\n" if var_index is not None else ""
+    if isinstance(var_index, Number):
+        var_index = "uint32_t(" + str(var_index) +")"
+    set_varient_index = "serialize(_out, " + var_index +");\n" if var_index is not None else ""
     ret = Template(reindent(4,"""
         ${base_state}__${name}$var_type1 start_${name}$var_type() && {
             $set_varient_index
@@ -386,8 +406,8 @@ def add_param_writer_object(name, base_state, typ, var_type = "", var_index = No
     if not is_stub(typ) and is_local_type(typ):
         ret += add_param_writer_basic_type(name, base_state, typ, var_type, var_index, root_node)
     if is_stub(typ):
-        set_command = "_state.f.end(_out);" if var_index is not None else ""
-        return_command = "{ _out, std::move(_state._parent) }" if var_index is not None and not root_node else "{ _out, std::move(_state) }"
+        set_command = "_state.f.end(_out);" if var_type is not "" else ""
+        return_command = "{ _out, std::move(_state._parent) }" if var_type is not "" and not root_node else "{ _out, std::move(_state) }"
         ret += Template(reindent(4, """
             template<typename Serializer>
             after_${base_state}__${name} ${name}$var_type(Serializer&& f) && {
@@ -403,6 +423,18 @@ def add_param_write(current, base_state, vector = False, root_node = False):
     res = ""
     if is_basic_type(typ):
         res = res + add_param_writer_basic_type(current["name"], base_state, typ)
+    elif is_optional(typ):
+            res = res +  Template(reindent(4, """
+    after_${basestate}__$name skip_$name() && {
+        serialize(_out, false);
+        return { _out, std::move(_state) };
+    }""")).substitute({'type': param_type(typ), 'name': current["name"], 'basestate' : base_state})
+            if is_basic_type(typ[1][0]):
+                res = res + add_param_writer_basic_type(current["name"], base_state, typ[1][0], "", "true")
+            elif is_local_type(typ[1][0]):
+                res = res + add_param_writer_object(current["name"], base_state[0][1], typ, "", "true")
+            else:
+                print("non supported optional type ", type[0][1])
     elif is_vector(typ):
         set_size = "_size.set(_out, 0);" if vector else "serialize(_out, size_type(0));"
 
