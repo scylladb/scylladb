@@ -859,14 +859,25 @@ void column_family::start_compaction() {
 
 void column_family::trigger_compaction() {
     // Submitting compaction job to compaction manager.
+    // #934 - always inc the pending counter, to help
+    // indicate the want for compaction.
+    _stats.pending_compactions++;
+    do_trigger_compaction(); // see below
+}
+
+void column_family::do_trigger_compaction() {
+    // But only submit if we're not locked out
     if (!_compaction_disabled) {
-        _stats.pending_compactions++;
         _compaction_manager.submit(this);
     }
 }
 
 future<> column_family::run_compaction(sstables::compaction_descriptor descriptor) {
+    assert(_stats.pending_compactions > 0);
     return compact_sstables(std::move(descriptor)).then([this] {
+        // only do this on success. (no exceptions)
+        // in that case, we rely on it being still set
+        // for reqeueuing
         _stats.pending_compactions--;
     });
 }
@@ -2272,7 +2283,8 @@ void column_family::clear() {
 // NOTE: does not need to be futurized, but might eventually, depending on
 // if we implement notifications, whatnot.
 future<db::replay_position> column_family::discard_sstables(db_clock::time_point truncated_at) {
-    assert(_stats.pending_compactions == 0);
+    assert(_compaction_disabled > 0);
+    assert(!compaction_manager_queued());
 
     return with_lock(_sstables_lock.for_read(), [this, truncated_at] {
         db::replay_position rp;
