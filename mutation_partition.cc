@@ -24,6 +24,7 @@
 #include "mutation_partition_applier.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
+#include "query-result-writer.hh"
 
 template<bool reversed>
 struct reversal_traits;

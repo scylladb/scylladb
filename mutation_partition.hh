@@ -32,7 +32,7 @@
 #include "tombstone.hh"
 #include "keys.hh"
 #include "atomic_cell_or_collection.hh"
-#include "query-result-writer.hh"
+#include "query-result.hh"
 #include "mutation_partition_view.hh"
 #include "mutation_partition_visitor.hh"
 #include "utils/managed_vector.hh"

@@ -24,6 +24,7 @@
 #include "db/serializer.hh"
 #include "mutation_partition_serializer.hh"
 #include "service/priority_manager.hh"
+#include "query-result-writer.hh"
 
 reconcilable_result::~reconcilable_result() {}
 

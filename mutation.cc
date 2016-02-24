@@ -20,6 +20,7 @@
  */
 
 #include "mutation.hh"
+#include "query-result-writer.hh"
 
 mutation::data::data(dht::decorated_key&& key, schema_ptr&& schema)
     : _schema(std::move(schema))
