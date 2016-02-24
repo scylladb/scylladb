@@ -117,6 +117,11 @@ select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selec
         ::shared_ptr<term>{});
 }
 
+::shared_ptr<cql3::metadata> select_statement::get_result_metadata() const {
+    // FIXME: COUNT needs special result metadata handling.
+    return _selection->get_result_metadata();
+}
+
 uint32_t select_statement::get_bound_terms() {
     return _bound_terms;
 }

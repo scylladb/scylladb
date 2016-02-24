@@ -287,6 +287,13 @@ public:
 
 };
 
+inline ::shared_ptr<cql3::metadata> make_empty_metadata()
+{
+    auto result = ::make_shared<cql3::metadata>(std::vector<::shared_ptr<cql3::column_specification>>{});
+    result->set_skip_metadata();
+    return result;
+}
+
 class result_set {
 #if 0
     private static final ColumnIdentifier COUNT_COLUMN = new ColumnIdentifier("count", false);

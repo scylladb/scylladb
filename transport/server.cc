@@ -910,12 +910,9 @@ public:
         _response->write_short_bytes(m.get_id());
         // FIXME: not compatible with v4
         assert(_version < 4);
-        cql3::metadata metadata{prepared->bound_names};
-        _response->write(metadata);
+        _response->write(*m.metadata());
         if (_version > 1) {
-            cql3::metadata result_metadata{std::vector<::shared_ptr<cql3::column_specification>>{}};
-            result_metadata.set_skip_metadata();
-            _response->write(result_metadata);
+            _response->write(*m.result_metadata());
         }
     }
 

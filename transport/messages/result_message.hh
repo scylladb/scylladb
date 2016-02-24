@@ -24,6 +24,7 @@
 
 #include "cql3/result_set.hh"
 #include "cql3/statements/parsed_statement.hh"
+#include "cql3/statements/select_statement.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
@@ -80,11 +81,15 @@ public:
 class result_message::prepared : public result_message {
 private:
     bytes _id;
-   ::shared_ptr<cql3::statements::parsed_statement::prepared> _prepared;
+    ::shared_ptr<cql3::statements::parsed_statement::prepared> _prepared;
+    ::shared_ptr<cql3::metadata> _metadata;
+    ::shared_ptr<cql3::metadata> _result_metadata;
 public:
     prepared(const bytes& id, ::shared_ptr<cql3::statements::parsed_statement::prepared> prepared)
         : _id{id}
         , _prepared{prepared}
+        , _metadata{::make_shared<cql3::metadata>(prepared->bound_names)}
+        , _result_metadata{extract_result_metadata(prepared->statement)}
     { }
 
     const bytes& get_id() const {
@@ -95,8 +100,24 @@ public:
         return _prepared;
     }
 
+    ::shared_ptr<cql3::metadata> metadata() const {
+        return _metadata;
+    }
+
+    ::shared_ptr<cql3::metadata> result_metadata() const {
+        return _result_metadata;
+    }
+
     virtual void accept(result_message::visitor& v) override {
         v.visit(*this);
+    }
+private:
+    static ::shared_ptr<cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement) {
+        auto select_stmt = dynamic_cast<cql3::statements::select_statement*>(statement.get());
+        if (!select_stmt) {
+            return cql3::make_empty_metadata();
+        }
+        return select_stmt->get_result_metadata();
     }
 };
 
