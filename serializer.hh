@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <experimental/optional>
 #include "enum_set.hh"
+#include "bytes_ostream.hh"
 #include "core/simple-stream.hh"
 #include "boost/variant/variant.hpp"
 
