@@ -43,7 +43,7 @@ if __name__ == '__main__':
         help='python log level, e.g. DEBUG, INFO or ERROR',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         default='ERROR')
-    parser.add_argument(dest='metricPattern', nargs='*', default=[], help='metrics to query, separated by spaces. You can use regular expressions here to efficiently specify metrics')
+    parser.add_argument(dest='metricPattern', nargs='*', default=[], help='metrics to query, separated by spaces. You can use shell globs (e.g. *cpu*nice*) here to efficiently specify metrics')
     parser.add_argument('-i', '--interval', help="time resolution in seconds, default: 1", type=float, default=1)
     parser.add_argument('-s', '--socket', default='/var/run/collectd-unixsock', help="unixsock plugin to connect to, default: /var/run/collectd-unixsock")
     parser.add_argument('--print-config', action='store_true',
