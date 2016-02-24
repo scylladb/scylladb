@@ -51,9 +51,18 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--list', action='store_true',
                         help="print out a list of all metrics exposed by collectd and exit")
     arguments = parser.parse_args()
-    logging.basicConfig(filename='scyllatop.log',
-                        level=getattr(logging, arguments.verbosity),
-                        format='%(asctime)s %(levelname)s: %(message)s')
+    stream_log = logging.StreamHandler()
+    stream_log.setLevel(logging.ERROR)
+    stream_log.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+
+    file_log = logging.FileHandler(filename='scyllatop.log')
+    file_log.setLevel(getattr(logging, arguments.verbosity))
+    file_log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+
+    logging.getLogger().addHandler(stream_log)
+    logging.getLogger().addHandler(file_log)
+    logging.getLogger().setLevel(logging.DEBUG)
+
     if arguments.print_config:
         print(collectd.COLLECTD_EXAMPLE_CONFIGURATION.format(socket=arguments.socket))
         quit()
