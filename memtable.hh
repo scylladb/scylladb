@@ -136,7 +136,7 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     //
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_reader(schema_ptr, const query::partition_range& range = query::full_partition_range);
+    mutation_reader make_reader(schema_ptr, const query::partition_range& range = query::full_partition_range, const io_priority_class& pc = default_priority_class());
 
     mutation_source as_data_source();
     key_source as_key_source();
