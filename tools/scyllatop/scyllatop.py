@@ -50,12 +50,14 @@ if __name__ == '__main__':
                         help="print out a configuration to put in your collectd.conf (you can use -s here to define the socket path)")
     parser.add_argument('-l', '--list', action='store_true',
                         help="print out a list of all metrics exposed by collectd and exit")
+    parser.add_argument('-L', '--logfile', default='scyllatop.log',
+                        help="specify path for log file")
     arguments = parser.parse_args()
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
     stream_log.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 
-    file_log = logging.FileHandler(filename='scyllatop.log')
+    file_log = logging.FileHandler(filename=arguments.logfile)
     file_log.setLevel(getattr(logging, arguments.verbosity))
     file_log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
 
