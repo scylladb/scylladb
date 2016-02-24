@@ -72,6 +72,7 @@
 #include "utils/latency.hh"
 #include "schema.hh"
 #include "schema_registry.hh"
+#include "utils/joinpoint.hh"
 
 namespace service {
 
@@ -2758,8 +2759,11 @@ void storage_proxy::init_messaging_service() {
         });
     });
     ms.register_truncate([](sstring ksname, sstring cfname) {
-        return get_storage_proxy().invoke_on_all([ksname, cfname](storage_proxy& sp) {
-            return sp._db.local().truncate(ksname, cfname);
+        return do_with(utils::make_joinpoint([] { return db_clock::now();}),
+                        [ksname, cfname](auto& tsf) {
+            return get_storage_proxy().invoke_on_all([ksname, cfname, &tsf](storage_proxy& sp) {
+                return sp._db.local().truncate(ksname, cfname, [&tsf] { return tsf.value(); });
+            });
         });
     });
 

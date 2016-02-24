@@ -65,6 +65,7 @@
 #include <boost/range/adaptor/map.hpp>
 
 #include "compaction_strategy.hh"
+#include "utils/joinpoint.hh"
 
 using namespace db::system_keyspace;
 
@@ -695,25 +696,28 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
         altered.emplace_back(create_table_from_mutations(after.at(key)));
     }
 
-    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
-        return seastar::async([&] {
-            for (auto&& gs : created) {
-                schema_ptr s = gs.get();
-                auto& ks = db.find_keyspace(s->ks_name());
-                auto cfg = ks.make_column_family_config(*s);
-                db.add_column_family(s, cfg);
-                ks.make_directory_for_column_family(s->cf_name(), s->id()).get();
-                service::get_local_migration_manager().notify_create_column_family(s);
-            }
-            for (auto&& gs : altered) {
-                update_column_family(db, gs.get());
-            }
-            parallel_for_each(dropped.begin(), dropped.end(), [&db](auto&& gs) {
-                schema_ptr s = gs.get();
-                return db.drop_column_family(s->ks_name(), s->cf_name()).then([s] {
-                    service::get_local_migration_manager().notify_drop_column_family(s);
-                });
-            }).get();
+    do_with(utils::make_joinpoint([] { return db_clock::now();})
+        , [&created, &dropped, &altered, &proxy](auto& tsf) {
+        return proxy.local().get_db().invoke_on_all([&created, &dropped, &altered, &tsf] (database& db) {
+            return seastar::async([&] {
+                for (auto&& gs : created) {
+                    schema_ptr s = gs.get();
+                    auto& ks = db.find_keyspace(s->ks_name());
+                    auto cfg = ks.make_column_family_config(*s);
+                    db.add_column_family(s, cfg);
+                    ks.make_directory_for_column_family(s->cf_name(), s->id()).get();
+                    service::get_local_migration_manager().notify_create_column_family(s);
+                }
+                for (auto&& gs : altered) {
+                    update_column_family(db, gs.get());
+                }
+                parallel_for_each(dropped.begin(), dropped.end(), [&db, &tsf](auto&& gs) {
+                    schema_ptr s = gs.get();
+                    return db.drop_column_family(s->ks_name(), s->cf_name(), [&tsf] { return tsf.value(); }).then([s] {
+                        service::get_local_migration_manager().notify_drop_column_family(s);
+                    });
+                }).get();
+            });
         });
     }).get();
 }

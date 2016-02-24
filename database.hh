@@ -610,8 +610,6 @@ public:
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
-    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name);
-
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
@@ -678,9 +676,16 @@ public:
     }
 
     future<> flush_all_memtables();
+
+    // See #937. Truncation now requires a callback to get a time stamp
+    // that must be guaranteed to be the same for all shards.
+    typedef std::function<future<db_clock::time_point>()> timestamp_func;
+
     /** Truncates the given column family */
-    future<> truncate(sstring ksname, sstring cfname);
-    future<> truncate(const keyspace& ks, column_family& cf);
+    future<> truncate(sstring ksname, sstring cfname, timestamp_func);
+    future<> truncate(const keyspace& ks, column_family& cf, timestamp_func);
+
+    future<> drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func);
 
     const logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_region_group;

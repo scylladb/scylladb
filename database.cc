@@ -1278,14 +1278,14 @@ void database::add_column_family(schema_ptr schema, column_family::config cfg) {
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
+future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_name, timestamp_func tsf) {
     auto uuid = find_uuid(ks_name, cf_name);
     auto& ks = find_keyspace(ks_name);
     auto cf = _column_families.at(uuid);
     _column_families.erase(uuid);
     ks.metadata()->remove_column_family(cf->schema());
     _ks_cf_to_uuid.erase(std::make_pair(ks_name, cf_name));
-    return truncate(ks, *cf).then([this, cf] {
+    return truncate(ks, *cf, std::move(tsf)).then([this, cf] {
         return cf->stop();
     }).then([this, cf] {
         return make_ready_future<>();
@@ -1894,13 +1894,13 @@ future<> database::flush_all_memtables() {
     });
 }
 
-future<> database::truncate(sstring ksname, sstring cfname) {
+future<> database::truncate(sstring ksname, sstring cfname, timestamp_func tsf) {
     auto& ks = find_keyspace(ksname);
     auto& cf = find_column_family(ksname, cfname);
-    return truncate(ks, cf);
+    return truncate(ks, cf, std::move(tsf));
 }
 
-future<> database::truncate(const keyspace& ks, column_family& cf)
+future<> database::truncate(const keyspace& ks, column_family& cf, timestamp_func tsf)
 {
     const auto durable = ks.metadata()->durable_writes();
     const auto auto_snapshot = get_config().auto_snapshot();
@@ -1915,22 +1915,22 @@ future<> database::truncate(const keyspace& ks, column_family& cf)
         cf.clear();
     }
 
-    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot]() mutable {
-        return f.then([&cf, auto_snapshot] {
+    return cf.run_with_compaction_disabled([f = std::move(f), &cf, auto_snapshot, tsf = std::move(tsf)]() mutable {
+        return f.then([&cf, auto_snapshot, tsf = std::move(tsf)] {
             dblog.debug("Discarding sstable data for truncated CF + indexes");
             // TODO: notify truncation
 
-            auto truncated_at = db_clock::now();
-
-            future<> f = make_ready_future<>();
-            if (auto_snapshot) {
-                auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
-                f = cf.snapshot(name);
-            }
-            return f.then([&cf, truncated_at] {
-                return cf.discard_sstables(truncated_at).then([&cf, truncated_at](db::replay_position rp) {
-                    // TODO: indexes.
-                    return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+            return tsf().then([&cf, auto_snapshot](db_clock::time_point truncated_at) {
+                future<> f = make_ready_future<>();
+                if (auto_snapshot) {
+                    auto name = sprint("%d-%s", truncated_at.time_since_epoch().count(), cf.schema()->cf_name());
+                    f = cf.snapshot(name);
+                }
+                return f.then([&cf, truncated_at] {
+                    return cf.discard_sstables(truncated_at).then([&cf, truncated_at](db::replay_position rp) {
+                        // TODO: indexes.
+                        return db::system_keyspace::save_truncation_record(cf, truncated_at, rp);
+                    });
                 });
             });
         });
