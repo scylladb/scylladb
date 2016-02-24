@@ -67,6 +67,9 @@
 #include "commitlog_entry.hh"
 #include "service/priority_manager.hh"
 
+#include <boost/range/numeric.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+
 static logging::logger logger("commitlog");
 
 class crc32_nbo {
@@ -1283,8 +1286,9 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
         logger.trace("Deleting {} buffers", _temp_buffers.size() - max_temp_buffers);
         _temp_buffers.erase(_temp_buffers.begin() + max_temp_buffers, _temp_buffers.end());
     }
-    totals.buffer_list_bytes = std::accumulate(_temp_buffers.begin(),
-            _temp_buffers.end(), size_t(0), std::plus<size_t>());
+    totals.buffer_list_bytes = boost::accumulate(
+	    _temp_buffers | boost::adaptors::transformed(std::mem_fn(&buffer_type::size)),
+            size_t(0), std::plus<size_t>());
 }
 
 /**
