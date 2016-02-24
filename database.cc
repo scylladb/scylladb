@@ -168,7 +168,7 @@ public:
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-            mutation_reader reader = make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr);
+            mutation_reader reader = make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, pc);
             if (sst->is_shared()) {
                 reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
             }
@@ -206,7 +206,7 @@ public:
             return make_ready_future<mutation_opt>();
         }
         return parallel_for_each(*_sstables | boost::adaptors::map_values, [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-            return sstable->read_row(_schema, _key).then([this](mutation_opt mo) {
+            return sstable->read_row(_schema, _key, _pc).then([this](mutation_opt mo) {
                 apply(_m, std::move(mo));
             });
         }).then([this] {
