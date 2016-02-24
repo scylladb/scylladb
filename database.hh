@@ -203,6 +203,7 @@ private:
     key_source sstables_as_key_source() const;
     partition_presence_checker make_partition_presence_checker(lw_shared_ptr<sstable_list> old_sstables);
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
+    void do_trigger_compaction();
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -358,8 +359,12 @@ public:
     Result run_with_compaction_disabled(Func && func) {
         ++_compaction_disabled;
         return _compaction_manager.remove(this).then(std::forward<Func>(func)).finally([this] {
-            if (--_compaction_disabled == 0) {
-                trigger_compaction();
+            // #934. The pending counter is actually a great indicator into whether we
+            // actually need to trigger a compaction again.
+            if (--_compaction_disabled == 0 && _stats.pending_compactions > 0) {
+                // we're turning if on again, use function that does not increment
+                // the counter further.
+                do_trigger_compaction();
             }
         });
     }
