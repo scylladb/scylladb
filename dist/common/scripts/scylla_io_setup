@@ -1,0 +1,44 @@
+#!/bin/sh -e
+
+is_ami() {
+    if [ "`dmidecode --string system-version | grep \.amazon`" != "" ] && \
+       [ "`curl http://169.254.169.254/latest/meta-data/ami-id | grep ami-`" != "" ]; then
+         echo 1
+    else
+         echo 0
+    fi
+}
+
+is_supported_instance_type() {
+    TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
+    case $TYPE in
+        "m3"|"c3"|"i2") echo 1;;
+        *) echo 0;;
+    esac
+}
+
+if [ ! -f /etc/scylla.d/io.conf ]; then
+    if [ `is_ami` -eq 1 ] && [ `is_supported_instance_type` -eq 1 ]; then
+        NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
+        NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
+
+        NR_SHARDS=$NR_CPU
+        if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
+            NR_SHARDS=$((NR_CPU - 1))
+        fi
+        if [ $NR_DISKS -lt 2 ]; then NR_DISKS=2; fi
+
+        NR_REQS=$((32 * $NR_DISKS / 2))
+
+        NR_IO_QUEUES=$NR_SHARDS
+        if [ $(($NR_REQS/$NR_IO_QUEUES)) -lt 4 ]; then
+            NR_IO_QUEUES=$(($NR_REQS / 4))
+        fi
+
+        NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
+
+        echo "SCYLLA_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
+    else
+        sudo -u scylla iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
+    fi
+fi

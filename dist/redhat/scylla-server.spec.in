@@ -40,6 +40,7 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 mkdir -p $RPM_BUILD_ROOT%{_docdir}/scylla/
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
@@ -50,7 +51,7 @@ install -m644 dist/common/sudoers.d/scylla $RPM_BUILD_ROOT%{_sysconfdir}/sudoers
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
-install -m644 dist/redhat/systemd/scylla-server.service $RPM_BUILD_ROOT%{_unitdir}/
+install -m644 dist/redhat/systemd/*.service $RPM_BUILD_ROOT%{_unitdir}/
 install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
@@ -133,12 +134,14 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
+%attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %{_docdir}/scylla/README.md
 %{_docdir}/scylla/README-DPDK.md
 %{_docdir}/scylla/NOTICE.txt
 %{_docdir}/scylla/ORIGIN
 %{_docdir}/scylla/licenses/
 %{_unitdir}/scylla-server.service
+%{_unitdir}/scylla-io-setup.service
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_prefix}/lib/scylla/scylla_prepare
@@ -150,6 +153,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/scylla_bootparam_setup
 %{_prefix}/lib/scylla/scylla_ntp_setup
 %{_prefix}/lib/scylla/scylla_selinux_setup
+%{_prefix}/lib/scylla/scylla_io_setup
 %{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc

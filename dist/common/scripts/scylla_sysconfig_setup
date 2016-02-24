@@ -3,7 +3,7 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic --disk-count 2"
+    echo "scylla-sysconfig-setup --nic eth0 --mode posix --nr-hugepages 64 --user scylla --group scylla --homedir /var/lib/scylla --confdir /etc/scylla --setup-nic"
     echo "  --nic  specify NIC"
     echo "  --mode  network mode (posix, dpdk)"
     echo "  --nr-hugepages  number of hugepages"
@@ -12,8 +12,6 @@ print_usage() {
     echo "  --homedir  scylla home directory"
     echo "  --confdir  scylla config directory"
     echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
-    echo "  --disk-count disk count"
-    echo "  --ami  AMI instance mode"
     exit 1
 }
 
@@ -25,7 +23,6 @@ else
 fi
 . $SYSCONFIG/scylla-server
 
-DISK_COUNT=0
 if [ $# -eq 0 ]; then
     print_usage
 fi
@@ -63,13 +60,6 @@ while [ $# -gt 0 ]; do
             SETUP_NIC=1
             shift 1
             ;;
-        "--disk-count")
-            DISK_COUNT="$2"
-            shift 2
-            ;;
-        "--ami")
-            AMI=yes
-            ;;
         *)
             print_usage
             ;;
@@ -81,29 +71,11 @@ echo Setting parameters on $SYSCONFIG/scylla-server
 ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
 ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
 NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
-NR_SHARDS=$NR_CPU
 if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
-    NR_SHARDS=$((NR_CPU - 1))
+    NR=$((NR_CPU - 1))
     SET_NIC="yes"
-    SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR_SHARDS  --smp $NR_SHARDS"
+    SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR  --smp $NR"
 fi
-
-if [ "$AMI" = "yes" ] && [ $DISK_COUNT -gt 0 ]; then
-    NR_DISKS=$DISK_COUNT
-    if [ $NR_DISKS -lt 2 ]; then NR_DISKS=2; fi
-
-    NR_REQS=$((32 * $NR_DISKS / 2))
-
-    NR_IO_QUEUES=$NR_SHARDS
-    if [ $(($NR_REQS/$NR_IO_QUEUES)) -lt 4 ]; then
-        NR_IO_QUEUES=$(($NR_REQS / 4))
-    fi
-
-    NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
-
-    SCYLLA_IO="$SCYLLA_IO --num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS"
-fi
-
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
     -e s#^ETHPCIID=.*#ETHPCIID=$ETHPCIID# \
@@ -114,7 +86,5 @@ sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^SCYLLA_CONF=.*#SCYLLA_CONF=$SCYLLA_CONF# \
     -e s#^SET_NIC=.*#SET_NIC=$SET_NIC# \
     -e "s#^SCYLLA_ARGS=.*#SCYLLA_ARGS=\"$SCYLLA_ARGS\"#" \
-    -e "s#^SCYLLA_IO=.*#SCYLLA_IO=\"$SCYLLA_IO\"#" \
-    -e s#^AMI=.*#AMI=$AMI# \
     $SYSCONFIG/scylla-server > /tmp/scylla-server
 mv /tmp/scylla-server $SYSCONFIG/scylla-server
