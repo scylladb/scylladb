@@ -239,8 +239,11 @@ void failure_detector::interpret(inet_address ep) {
     }
     arrival_window& hb_wnd = it->second;
     auto now = clk::now();
-    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - _last_interpret);
-    _last_interpret = now;
+    if (!_last_interpret) {
+        *_last_interpret = now;
+    }
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - *_last_interpret);
+    *_last_interpret = now;
     if (diff > get_max_local_pause()) {
         logger.warn("Not marking nodes down due to local pause of {} > {} (milliseconds)", diff.count(), get_max_local_pause().count());
         _last_paused = now;
