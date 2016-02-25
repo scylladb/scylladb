@@ -1036,7 +1036,11 @@ std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigg
 int gossiper::compare_endpoint_startup(inet_address addr1, inet_address addr2) {
     auto ep1 = get_endpoint_state_for_endpoint(addr1);
     auto ep2 = get_endpoint_state_for_endpoint(addr2);
-    assert(ep1 && ep2);
+    if (!ep1 || !ep2) {
+        auto err = sprint("Can nod get endpoint_state for %s or %s", addr1, addr2);
+        logger.warn(err.c_str());
+        throw std::runtime_error(err);
+    }
     return ep1->get_heart_beat_state().get_generation() - ep2->get_heart_beat_state().get_generation();
 }
 
@@ -1188,7 +1192,14 @@ void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, 
     for (const auto& remote_entry : remote_state.get_application_state_map()) {
         const auto& remote_key = remote_entry.first;
         const auto& remote_value = remote_entry.second;
-        assert(remote_state.get_heart_beat_state().get_generation() == local_state.get_heart_beat_state().get_generation());
+        auto remote_gen = remote_state.get_heart_beat_state().get_generation();
+        auto local_gen = local_state.get_heart_beat_state().get_generation();
+        if(remote_gen != local_gen) {
+            auto err = sprint("Remote generation %d != local generation %d", remote_gen, local_gen);
+            logger.warn(err.c_str());
+            throw std::runtime_error(err);
+        }
+
         local_state.add_application_state(remote_key, remote_value);
     }
     for (const auto& entry : remote_state.get_application_state_map()) {
@@ -1558,7 +1569,9 @@ sstring gossiper::get_gossip_status(const endpoint_state& ep_state) const {
     auto value = app_state->value;
     std::vector<sstring> pieces;
     boost::split(pieces, value, boost::is_any_of(","));
-    assert(pieces.size() > 0);
+    if (pieces.empty()) {
+        return "";
+    }
     return pieces[0];
 }
 
