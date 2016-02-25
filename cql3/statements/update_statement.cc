@@ -137,19 +137,17 @@ update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schem
         throw exceptions::invalid_request_exception("No columns provided to INSERT");
     }
 
+    std::unordered_set<shared_ptr<column_identifier>> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
         auto id = _column_names[i]->prepare_column_identifier(schema);
         auto def = get_column_definition(schema, *id);
         if (!def) {
             throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
         }
-
-        for (size_t j = 0; j < i; j++) {
-            auto other_id = _column_names[j]->prepare_column_identifier(schema);
-            if (*id == *other_id) {
-                throw exceptions::invalid_request_exception(sprint("Multiple definitions found for column %s", *id));
-            }
+        if (column_ids.count(id)) {
+            throw exceptions::invalid_request_exception(sprint("Multiple definitions found for column %s", *id));
         }
+        column_ids.emplace(id);
 
         auto&& value = _column_values[i];
 
