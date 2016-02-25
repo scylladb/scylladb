@@ -59,6 +59,7 @@ install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/s
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
+install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
 install -d -m755 $RPM_BUILD_ROOT%{_docdir}/scylla
 install -m644 README.md $RPM_BUILD_ROOT%{_docdir}/scylla/
 install -m644 README-DPDK.md $RPM_BUILD_ROOT%{_docdir}/scylla/
@@ -74,6 +75,7 @@ install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
+cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -148,6 +150,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_unitdir}/scylla-io-setup.service
 %{_bindir}/scylla
 %{_bindir}/iotune
+%{_bindir}/scyllatop
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup
@@ -164,6 +167,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyo
 %{_prefix}/lib/scylla/swagger-ui/dist/*
 %{_prefix}/lib/scylla/api/api-doc/*
+%{_prefix}/lib/scylla/scyllatop/*
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog

@@ -1,0 +1,5 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2016 ScyllaDB
+
+exec python /usr/lib/scylla/scyllatop/scyllatop.py $@

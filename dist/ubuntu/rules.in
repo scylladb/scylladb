@@ -48,6 +48,7 @@ override_dh_auto_install:
 	cp $(CURDIR)/seastar/scripts/posix_net_conf.sh $(SCRIPTS)
 	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
 	cp $(CURDIR)/dist/ubuntu/scripts/* $(SCRIPTS)
+	cp -r $(CURDIR)/tools/scyllatop $(SCRIPTS)
 
 	mkdir -p $(SWAGGER) && \
 	cp -r $(CURDIR)/swagger-ui/dist $(SWAGGER)
@@ -59,6 +60,8 @@ override_dh_auto_install:
 	cp $(CURDIR)/build/release/scylla \
 		$(CURDIR)/debian/scylla-server/usr/bin/
 	cp $(CURDIR)/build/release/iotune \
+		$(CURDIR)/debian/scylla-server/usr/bin/
+	cp $(CURDIR)/dist/common/bin/scyllatop \
 		$(CURDIR)/debian/scylla-server/usr/bin/
 
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
