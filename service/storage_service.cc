@@ -1145,15 +1145,10 @@ future<> storage_service::check_for_endpoint_collision() {
             if (dht::range_streamer::use_strict_consistency()) {
                 found_bootstrapping_node = false;
                 for (auto& x : gossiper.get_endpoint_states()) {
-                    auto status = x.second.get_application_state(application_state::STATUS);
-                    if (!status) {
+                    auto state = gossiper.get_gossip_status(x.second);
+                    if (state.empty()) {
                         continue;
                     }
-
-                    std::vector<sstring> pieces;
-                    boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-                    assert(pieces.size() > 0);
-                    auto state = pieces[0];
                     logger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||

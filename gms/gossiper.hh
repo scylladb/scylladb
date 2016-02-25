@@ -499,7 +499,7 @@ public:
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
     void mark_as_shutdown(const inet_address& endpoint);
     void force_newer_generation();
-private:
+public:
     sstring get_gossip_status(const endpoint_state& ep_state) const;
     sstring get_gossip_status(const inet_address& endpoint) const;
 public:
