@@ -141,6 +141,14 @@ stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) 
     return sbytes[peer];
 }
 
+stream_bytes stream_manager::get_progress(UUID plan_id) {
+    stream_bytes ret;
+    for (auto& x : _stream_bytes[plan_id]) {
+        ret += x.second;
+    }
+    return ret;
+}
+
 future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
     return get_stream_manager().invoke_on_all([plan_id] (auto& sm) {
         sm.remove_progress(plan_id);
@@ -151,6 +159,16 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
     return get_stream_manager().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
+        },
+        stream_bytes(),
+        std::plus<stream_bytes>()
+    );
+}
+
+future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) {
+    return get_stream_manager().map_reduce0(
+        [plan_id] (auto& sm) {
+            return sm.get_progress(plan_id);
         },
         stream_bytes(),
         std::plus<stream_bytes>()
