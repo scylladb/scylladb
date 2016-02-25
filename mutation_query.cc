@@ -23,6 +23,7 @@
 #include "gc_clock.hh"
 #include "db/serializer.hh"
 #include "mutation_partition_serializer.hh"
+#include "service/priority_manager.hh"
 
 reconcilable_result::~reconcilable_result() {}
 
@@ -99,7 +100,7 @@ mutation_query(schema_ptr s,
 
     return do_with(query_state(range, slice, row_limit, query_time),
                    [&source, s = std::move(s)] (query_state& state) -> future<reconcilable_result> {
-        state.reader = source(std::move(s), state.range);
+        state.reader = source(std::move(s), state.range, service::get_local_sstable_query_read_priority());
         return consume(state.reader, [&state] (mutation&& m) {
             // FIXME: Make data sources respect row_ranges so that we don't have to filter them out here.
             auto is_distinct = state.slice.options.contains(query::partition_slice::option::distinct);

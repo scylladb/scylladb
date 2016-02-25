@@ -114,6 +114,7 @@ class scanning_reader final : public mutation_reader::impl {
     size_t _last_partition_count = 0;
     stdx::optional<query::partition_range> _delegate_range;
     mutation_reader _delegate;
+    const io_priority_class& _pc;
 private:
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = partition_entry::compare(_memtable->_schema);
@@ -147,10 +148,11 @@ private:
         _last_reclaim_counter = current_reclaim_counter;
     }
 public:
-    scanning_reader(schema_ptr s, lw_shared_ptr<memtable> m, const query::partition_range& range)
+    scanning_reader(schema_ptr s, lw_shared_ptr<memtable> m, const query::partition_range& range, const io_priority_class& pc)
         : _memtable(std::move(m))
         , _schema(std::move(s))
         , _range(range)
+        , _pc(pc)
     { }
 
     virtual future<mutation_opt> operator()() override {
@@ -163,7 +165,7 @@ public:
             // FIXME: Use cache. See column_family::make_reader().
             _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
             _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
-                _memtable->_sstable, _schema, *_delegate_range);
+                _memtable->_sstable, _schema, *_delegate_range, _pc);
             _memtable = {};
             _last = {};
             return _delegate();
@@ -184,7 +186,7 @@ public:
 };
 
 mutation_reader
-memtable::make_reader(schema_ptr s, const query::partition_range& range) {
+memtable::make_reader(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
     if (query::is_wrap_around(range, *s)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
@@ -202,7 +204,7 @@ memtable::make_reader(schema_ptr s, const query::partition_range& range) {
         }
         });
     } else {
-        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range);
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), range, pc);
     }
 }
 

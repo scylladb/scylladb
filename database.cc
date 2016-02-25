@@ -158,17 +158,17 @@ class range_sstable_reader final : public mutation_reader::impl {
     mutation_reader _reader;
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
     // the priority changes.
-    const io_priority_class* _pc;
+    const io_priority_class& _pc;
 public:
     range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr, const io_priority_class& pc)
         : _pr(pr)
         , _sstables(std::move(sstables))
-        , _pc(&pc)
+        , _pc(pc)
     {
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-            mutation_reader reader = make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr);
+            mutation_reader reader = make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, pc);
             if (sst->is_shared()) {
                 reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
             }
@@ -192,13 +192,13 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     lw_shared_ptr<sstable_list> _sstables;
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
     // the priority changes.
-    const io_priority_class* _pc;
+    const io_priority_class& _pc;
 public:
     single_key_sstable_reader(schema_ptr schema, lw_shared_ptr<sstable_list> sstables, const partition_key& key, const io_priority_class& pc)
         : _schema(std::move(schema))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
-        , _pc(&pc)
+        , _pc(pc)
     { }
 
     virtual future<mutation_opt> operator()() override {
@@ -206,7 +206,7 @@ public:
             return make_ready_future<mutation_opt>();
         }
         return parallel_for_each(*_sstables | boost::adaptors::map_values, [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-            return sstable->read_row(_schema, _key).then([this](mutation_opt mo) {
+            return sstable->read_row(_schema, _key, _pc).then([this](mutation_opt mo) {
                 apply(_m, std::move(mo));
             });
         }).then([this] {
@@ -315,7 +315,7 @@ column_family::make_reader(schema_ptr s, const query::partition_range& range, co
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range));
+        readers.emplace_back(mt->make_reader(s, range, pc));
     }
 
     if (_config.enable_cache) {
