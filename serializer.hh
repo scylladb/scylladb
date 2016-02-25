@@ -124,8 +124,21 @@ void serialize(Output& output, uint64_t data) {
 template<typename Output>
 void safe_serialize_as_uint32(Output& output, uint64_t data);
 
-// For vectors
 
+template<typename T>
+struct serializer;
+
+template<typename T, typename Output>
+inline void serialize(Output& out, const T& v) {
+    serializer<T>::write(out, v);
+};
+
+template<typename T, typename Input>
+inline T deserialize(Input& in, boost::type<T> t) {
+    return serializer<T>::read(in);
+};
+
+// For vectors
 template<typename T, typename Output>
 inline void serialize(Output& out, const std::vector<T>& v);
 template<typename T, typename Input>

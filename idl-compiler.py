@@ -175,29 +175,36 @@ def declear_methods(hout, name, template_param = ""):
     if config.ns != '':
         fprintln(hout, "namespace ", config.ns, " {")
     fprintln(hout, Template("""
-template <typename Output$tmp_param>
-void $ser_func(Output& buf, const $name& v);
+template <$tmp_param>
+struct serializer<$name> {
+  template <typename Output>
+  static void write(Output& buf, const $name& v);
 
-template <typename Input$tmp_param>
-$name $deser_func(Input& buf, boost::type<$name>);""").substitute({'ser_func': SERIALIZER, 'deser_func' : DESERIALIZER, 'name' : name, 'sizetype' : SIZETYPE, 'tmp_param' : template_param }))
+  template <typename Input>
+  static $name read(Input& buf);
+};
+""").substitute({'name' : name, 'sizetype' : SIZETYPE, 'tmp_param' : template_param }))
     if config.ns != '':
         fprintln(hout, "}")
 
 def handle_enum(enum, hout, cout, namespaces , parent_template_param = []):
     [ns, ns_open, ns_close] = set_namespace(namespaces)
-    temp_def = ',' + ", ".join(map(lambda a: a[0] + " " + a[1], parent_template_param)) if parent_template_param else ""
+    temp_def = ", ".join(map(lambda a: a[0] + " " + a[1], parent_template_param)) if parent_template_param else ""
+    template = "template <"+ temp_def +">"  if temp_def else ""
     name = enum["name"] if ns == "" else ns + "::" + enum["name"]
     declear_methods(hout, name, temp_def)
     fprintln(cout, Template("""
-template<typename Output$temp_def>
-void $ser_func(Output& buf, const $name& v) {
+$template
+template <typename Output>
+void serializer<$name>::write(Output& buf, const $name& v) {
   serialize(buf, static_cast<$type>(v));
 }
 
-template<typename Input$temp_def>
-$name $deser_func(Input& buf, boost::type<$name>) {
-  return  static_cast<$name>(deserialize(buf, boost::type<$type>()));
-}""").substitute({'ser_func': SERIALIZER, 'deser_func' : DESERIALIZER, 'name' : name, 'size_type' : SIZETYPE, 'type': enum['underline_type'], 'temp_def' : temp_def}))
+$template
+template<typename Input>
+$name serializer<$name>::read(Input& buf) {
+  return static_cast<$name>(deserialize(buf, boost::type<$type>()));
+}""").substitute({'name' : name, 'size_type' : SIZETYPE, 'type': enum['underline_type'], 'template' : template}))
 
 
 def join_template(lst):
@@ -703,12 +710,15 @@ inline void skip(seastar::simple_input_stream& v, boost::type<${type}_view>) {
     $skip_impl
 }
 
-template<typename Input>
-${type}_view deserialize(Input& v, boost::type<${type}_view>) {
-   ${type}_view res{v};
-   skip(v, boost::type<${type}_view>());
-   return res;
-}
+template<>
+struct serializer<${type}_view> {
+    template<typename Input>
+    static ${type}_view read(Input& v) {
+        ${type}_view res{v};
+        skip(v, boost::type<${type}_view>());
+        return res;
+    }
+};
 """).substitute({'type' : param_type(cls["name"]), 'skip' : skip, 'skip_impl' : skip_impl}))
 
 def add_views(hout):
@@ -734,9 +744,9 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
     tpl = "template" in cls
     template_param_list = (cls["template"][0]["params"].asList() if tpl else [])
     template_param =  ", ".join(map(lambda a: a[0] + " " + a[1], template_param_list + parent_template_param)) if (template_param_list + parent_template_param) else ""
-    template = "template <"+ template_param +">\n"  if tpl else ""
+    template = "template <"+ template_param +">"  if tpl else ""
     template_class_param = "<" + ",".join(map(lambda a: a[1], template_param_list)) + ">" if tpl else ""
-    temp_def = ',' + template_param if template_param != "" else ""
+    temp_def = template_param if template_param != "" else ""
 
     if ns == "":
         name = cls["name"]
@@ -752,8 +762,9 @@ def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
     modifier = "final" in cls
 
     fprintln(cout, Template("""
-template<typename Output$temp_def>
-void $func(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER, 'name' : full_name, 'temp_def': temp_def}))
+$template
+template <typename Output>
+void serializer<$name>::write(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER, 'name' : full_name, 'template': template}))
     if not modifier:
         fprintln(cout, Template("""  $set_size(buf, obj);""").substitute({'func' : SERIALIZER, 'set_size' : SETSIZE, 'name' : name, 'sizetype' : SIZETYPE}))
     for param in cls["members"]:
@@ -764,8 +775,9 @@ void $func(Output& buf, const $name& obj) {""").substitute({'func' : SERIALIZER,
     fprintln(cout, "}")
 
     fprintln(cout, Template("""
-template<typename Input$temp_def>
-$name$temp_param $func(Input& buf, boost::type<$name$temp_param>) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'temp_def': temp_def, 'temp_param' : template_class_param}))
+$template
+template <typename Input>
+$name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute({'func' : DESERIALIZER, 'name' : name, 'template': template, 'temp_param' : template_class_param}))
     if not modifier:
         fprintln(cout, Template("""  $size_type size = $func(buf, boost::type<$size_type>());
   Input in = buf.read_substream(size - sizeof($size_type));""").substitute({'func' : DESERIALIZER, 'size_type' : SIZETYPE}))
@@ -826,6 +838,7 @@ def load_file(name):
   */
     """)
     print_cw(cout)
+    fprintln(hout, "#include \"serializer.hh\"\n")
     if config.ns != '':
         fprintln(cout, "namespace ", config.ns, " {")
     data = parse_file(name)
