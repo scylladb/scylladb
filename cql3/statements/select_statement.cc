@@ -344,7 +344,7 @@ shared_ptr<transport::messages::result_message> select_statement::process_result
 
     cql3::selection::result_set_builder builder(*_selection, now,
             options.get_cql_serialization_format());
-    query::result_view::consume(results->buf(), cmd->slice,
+    query::result_view::consume(*results, cmd->slice,
             cql3::selection::result_set_builder::visitor(builder, *_schema,
                     *_selection));
     auto rs = builder.build();
