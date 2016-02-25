@@ -394,26 +394,61 @@ void mutation_partition::for_each_row(const schema& schema, const query::range<c
     }
 }
 
+template<typename RowWriter>
+void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+    assert(c.is_live());
+    ser::writer_of_qr_cell wr = w.add();
+    auto after_timestamp = [&, wr = std::move(wr)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
+            return std::move(wr).write_timestamp(c.timestamp());
+        } else {
+            return std::move(wr).skip_timestamp();
+        }
+    }();
+    [&, wr = std::move(after_timestamp)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_expiry>() && c.is_live_and_has_ttl()) {
+            return std::move(wr).write_expiry(c.expiry());
+        } else {
+            return std::move(wr).skip_expiry();
+        }
+    }().write_value(c.value())
+       .end_qr_cell();
+}
+
+template<typename RowWriter>
+void write_cell(RowWriter& w, const query::partition_slice& slice, const data_type& type, collection_mutation_view v) {
+    auto ctype = static_pointer_cast<const collection_type_impl>(type);
+    if (slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
+        ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
+    }
+    w.add().skip_timestamp()
+        .skip_expiry()
+        .write_value(ctype->to_value(v, slice.cql_format()))
+        .end_qr_cell();
+}
+
+template<typename RowWriter>
 static void get_row_slice(const schema& s,
+    const query::partition_slice& slice,
     column_kind kind,
     const row& cells,
     const std::vector<column_id>& columns,
     tombstone tomb,
     gc_clock::time_point now,
-    query::result::row_writer& writer)
+    RowWriter& writer)
 {
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
-            writer.add_empty();
+            writer.write_empty();
         } else {
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb, now)) {
-                    writer.add_empty();
+                    writer.write_empty();
                 } else {
-                    writer.add(cell->as_atomic_cell());
+                    write_cell(writer, slice, cell->as_atomic_cell());
                 }
             } else {
                 auto&& mut = cell->as_collection_mutation();
@@ -423,9 +458,9 @@ static void get_row_slice(const schema& s,
                 // FIXME: Instead of this, write optimistically and retract if empty
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view, now);
                 if (ctype->is_empty(m_ser)) {
-                    writer.add_empty();
+                    writer.write_empty();
                 } else {
-                    writer.add(def.type, m_ser);
+                    write_cell(writer, slice, def.type, m_ser);
                 }
             }
         }
@@ -455,7 +490,7 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     return any_live;
 }
 
-void
+uint32_t
 mutation_partition::query(query::result::partition_writer& pw,
     const schema& s,
     gc_clock::time_point now,
@@ -463,14 +498,23 @@ mutation_partition::query(query::result::partition_writer& pw,
 {
     const query::partition_slice& slice = pw.slice();
 
-    // To avoid retraction of the partition entry in case of limit == 0.
-    assert(limit > 0);
+    if (limit == 0) {
+        pw.retract();
+        return 0;
+    }
+
+    auto static_cells_wr = pw.start().start_static_row().start_cells();
 
     if (!slice.static_columns.empty()) {
-        auto row_builder = pw.add_static_row();
-        get_row_slice(s, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(), now, row_builder);
-        row_builder.finish();
+        get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
+                      now, static_cells_wr);
     }
+
+    auto rows_wr = std::move(static_cells_wr).end_cells()
+            .end_static_row()
+            .start_rows();
+
+    uint32_t row_count = 0;
 
     // Like PK range, an empty row range, should be considered an "exclude all" restriction
     bool has_ck_selector = pw.ranges().empty();
@@ -491,9 +535,11 @@ mutation_partition::query(query::result::partition_writer& pw,
             auto row_tombstone = tombstone_for_row(s, e);
 
             if (row.is_live(s, row_tombstone, now)) {
-                auto row_builder = pw.add_row(e.key());
-                get_row_slice(s, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone, now, row_builder);
-                row_builder.finish();
+                auto cells_wr = rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
+                              now, cells_wr);
+                std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+                ++row_count;
                 if (--limit == 0) {
                     return stop_iteration::yes;
                 }
@@ -507,13 +553,18 @@ mutation_partition::query(query::result::partition_writer& pw,
     // #589
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
-    if (pw.row_count() == 0
+    if (row_count == 0
 			&& (has_ck_selector
 					|| !has_any_live_data(s, column_kind::static_column,
 							static_row(), _tombstone, now))) {
 		pw.retract();
+        return 0;
 	} else {
-		pw.finish();
+        std::move(rows_wr).end_rows().end_qr_partition();
+
+        // The partition is live. If there are no clustered rows, there
+        // must be something live in the static row, which counts as one row.
+        return std::max<uint32_t>(row_count, 1);
 	}
 }
 

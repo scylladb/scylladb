@@ -1579,7 +1579,9 @@ future<lw_shared_ptr<query::result>>
 column_family::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    return do_with(query_state(std::move(s), cmd, partition_ranges), [this] (query_state& qs) {
+    auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, partition_ranges);
+    auto& qs = *qs_ptr;
+    {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
             qs.reader = make_reader(qs.schema, range, service::get_local_sstable_query_read_priority());
@@ -1590,23 +1592,23 @@ column_family::query(schema_ptr s, const query::read_command& cmd, const std::ve
                         auto p_builder = qs.builder.add_partition(*mo->schema(), mo->key());
                         auto is_distinct = qs.cmd.slice.options.contains(query::partition_slice::option::distinct);
                         auto limit = !is_distinct ? qs.limit : 1;
-                        mo->partition().query(p_builder, *qs.schema, qs.cmd.timestamp, limit);
-                        qs.limit -= p_builder.row_count();
+                        auto rows_added = mo->partition().query(p_builder, *qs.schema, qs.cmd.timestamp, limit);
+                        qs.limit -= rows_added;
                     } else {
                         qs.range_empty = true;
                     }
                 });
             });
-        }).then([&qs] {
+        }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
-        });
-    }).finally([lc, this]() mutable {
+        }).finally([lc, this]() mutable {
         _stats.reads.mark(lc);
         if (lc.is_start()) {
             _stats.estimated_read.add(lc.latency(), _stats.reads.count);
         }
-    });
+        });
+    }
 }
 
 mutation_source

@@ -510,6 +510,7 @@ idls = ['idl/gossip_digest.idl.hh',
         'idl/replay_position.idl.hh',
         'idl/truncation_record.idl.hh',
         'idl/mutation.idl.hh',
+        'idl/query.idl.hh',
         'idl/idl_test.idl.hh',
         'idl/commitlog.idl.hh',
         ]
