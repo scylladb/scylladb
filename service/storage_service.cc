@@ -331,7 +331,12 @@ void storage_service::join_token_ring(int delay) {
             set_mode(mode::JOINING, sprint("Replacing a node with token(s): %s", ss.str()), true);
         }
         bootstrap(_bootstrap_tokens);
-        assert(!_is_bootstrap_mode); // bootstrap will block until finished
+        // bootstrap will block until finished
+        if (_is_bootstrap_mode) {
+            auto err = sprint("We are not supposed in bootstrap mode any more");
+            logger.warn(err.c_str());
+            throw std::runtime_error(err);
+        }
     } else {
         size_t num_tokens = _db.local().get_config().num_tokens();
         _bootstrap_tokens = db::system_keyspace::get_saved_tokens().get0();
@@ -376,7 +381,11 @@ void storage_service::join_token_ring(int delay) {
                 gossiper.replaced_endpoint(existing);
             }
         }
-        assert(_token_metadata.sorted_tokens().size() > 0);
+        if (_token_metadata.sorted_tokens().empty()) {
+            auto err = sprint("join_token_ring: Sorted token in token_metadata is empty");
+            logger.error(err.c_str());
+            throw std::runtime_error(err);
+        }
 
         auth::auth::setup().get();
     } else {
@@ -396,7 +405,11 @@ future<> storage_service::join_ring() {
                 db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED).get();
                 ss._is_survey_mode = false;
                 logger.info("Leaving write survey mode and joining ring at operator request");
-                assert(ss._token_metadata.sorted_tokens().size() > 0);
+                if (ss._token_metadata.sorted_tokens().empty()) {
+                    auto err = sprint("join_ring: Sorted token in token_metadata is empty");
+                    logger.error(err.c_str());
+                    throw std::runtime_error(err);
+                }
                 auth::auth::setup().get();
             }
         });
@@ -648,7 +661,10 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("endpoint={} handle_state_left", endpoint);
-    assert(pieces.size() >= 2);
+    if (pieces.size() < 2) {
+        logger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
+        return;
+    }
     auto tokens = get_tokens_for(endpoint);
     logger.debug("Node {} state left, tokens {}", endpoint, tokens);
     excise(tokens, endpoint, extract_expire_time(pieces));
@@ -656,7 +672,10 @@ void storage_service::handle_state_left(inet_address endpoint, std::vector<sstri
 
 void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("endpoint={} handle_state_moving", endpoint);
-    assert(pieces.size() >= 2);
+    if (pieces.size() < 2) {
+        logger.warn("Fail to handle_state_moving endpoint={} pieces={}", endpoint, pieces);
+        return;
+    }
     auto token = dht::global_partitioner().from_sstring(pieces[1]);
     logger.debug("Node {} state moving, new token {}", endpoint, token);
     _token_metadata.add_moving_endpoint(token, endpoint);
@@ -665,7 +684,10 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
     logger.debug("endpoint={} handle_state_removing", endpoint);
-    assert(pieces.size() > 0);
+    if (pieces.empty()) {
+        logger.warn("Fail to handle_state_removing endpoint={} pieces={}", endpoint, pieces);
+        return;
+    }
     if (endpoint == get_broadcast_address()) {
         logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
         try {
@@ -690,16 +712,32 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             get_local_pending_range_calculator_service().update().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
-            assert(state);
+            if (!state) {
+                auto err = sprint("Can not find endpoint_state for endpoint=%s", endpoint);
+                logger.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
             auto value = state->get_application_state(application_state::REMOVAL_COORDINATOR);
-            assert(value);
+            if (!value) {
+                auto err = sprint("Can not find application_state for endpoint=%s", endpoint);
+                logger.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
             std::vector<sstring> coordinator;
             boost::split(coordinator, value->value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-            assert(coordinator.size() == 2);
+            if (coordinator.size() != 2) {
+                auto err = sprint("Can not split REMOVAL_COORDINATOR for endpoint=%s, value=%s", endpoint, value->value);
+                logger.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
             UUID host_id(coordinator[1]);
             // grab any data we are now responsible for and notify responsible node
             auto ep = _token_metadata.get_endpoint_for_host_id(host_id);
-            assert(ep);
+            if (!ep) {
+                auto err = sprint("Can not find host_id=%s", host_id);
+                logger.warn(err.c_str());
+                throw std::runtime_error(err);
+            }
             restore_replica_count(endpoint, ep.value()).get();
         }
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
@@ -750,7 +788,9 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
     if (state == application_state::STATUS) {
         std::vector<sstring> pieces;
         boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-        assert(pieces.size() > 0);
+        if (pieces.empty()) {
+            logger.warn("Fail to split status in on_change: endpoint={}, app_state={}, value={}", endpoint, state, value);
+        }
         sstring move_name = pieces[0];
         if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
             handle_state_bootstrap(endpoint);
@@ -1089,7 +1129,11 @@ future<> storage_service::init_server(int delay) {
 }
 
 future<> storage_service::replicate_to_all_cores() {
-    assert(engine().cpu_id() == 0);
+    if (engine().cpu_id() != 0) {
+        auto err = sprint("replicate_to_all_cores is not ran on cpu zero");
+        logger.warn(err.c_str());
+        throw std::runtime_error(err);
+    }
     // FIXME: There is no back pressure. If the remote cores are slow, and
     // replication is called often, it will queue tasks to the semaphore
     // without end.
@@ -1145,15 +1189,10 @@ future<> storage_service::check_for_endpoint_collision() {
             if (dht::range_streamer::use_strict_consistency()) {
                 found_bootstrapping_node = false;
                 for (auto& x : gossiper.get_endpoint_states()) {
-                    auto status = x.second.get_application_state(application_state::STATUS);
-                    if (!status) {
+                    auto state = gossiper.get_gossip_status(x.second);
+                    if (state.empty()) {
                         continue;
                     }
-
-                    std::vector<sstring> pieces;
-                    boost::split(pieces, status.value().value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-                    assert(pieces.size() > 0);
-                    auto state = pieces[0];
                     logger.debug("Checking bootstrapping/leaving/moving nodes: node={}, status={} (check_for_endpoint_collision)", x.first, state);
                     if (state == sstring(versioned_value::STATUS_BOOTSTRAPPING) ||
                         state == sstring(versioned_value::STATUS_LEAVING) ||
@@ -1318,7 +1357,12 @@ void storage_service::set_mode(mode m, sstring msg, bool log) {
 // Runs inside seastar::async context
 std::unordered_set<dht::token> storage_service::get_local_tokens() {
     auto tokens = db::system_keyspace::get_saved_tokens().get0();
-    assert(!tokens.empty()); // should not be called before initServer sets this
+    // should not be called before initServer sets this
+    if (tokens.empty()) {
+        auto err = sprint("get_local_tokens: tokens is empty");
+        logger.error(err.c_str());
+        throw std::runtime_error(err);
+    }
     return tokens;
 }
 
@@ -2414,7 +2458,12 @@ storage_service::get_new_source_ranges(const sstring& keyspace_name, const std::
         auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
         std::vector<inet_address> sources = snitch->get_sorted_list_by_proximity(my_address, possible_ranges);
 
-        assert (std::find(sources.begin(), sources.end(), my_address) == sources.end());
+        if (std::find(sources.begin(), sources.end(), my_address) != sources.end()) {
+            auto err = sprint("get_new_source_ranges: sources=%s, my_address=%s", sources, my_address);
+            logger.warn(err.c_str());
+            throw std::runtime_error(err);
+        }
+
 
         for (auto& source : sources) {
             if (fd.is_alive(source)) {
