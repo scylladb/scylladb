@@ -1019,7 +1019,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         // were compacted.
 
         BOOST_REQUIRE(cf->sstables_count() == generations->size());
-        cm->submit(&*cf);
+        cf->trigger_compaction();
         BOOST_REQUIRE(cm->get_stats().pending_tasks == 1);
 
         // wait for submitted job to finish.
