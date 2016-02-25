@@ -732,7 +732,7 @@ def add_view(hout, info):
         skip = skip + Template("\n       skip(in, boost::type<${type}>());").substitute({'type': full_type})
 
     fprintln(hout, "};")
-    skip_impl = "seastar::simple_input_stream& in = v;\n       " + skip if is_final(cls) else "v.skip(deserialize(v, boost::type<size_type>()) - sizeof(size_type));"
+    skip_impl = "seastar::simple_input_stream& in = v;\n       " + skip if is_final(cls) else "v.skip(read_frame_size(v));"
     if skip == "":
         skip_impl = ""
 
