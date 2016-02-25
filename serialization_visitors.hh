@@ -33,7 +33,7 @@ struct place_holder {
 
     place_holder(bytes_ostream::place_holder<size_type> ph) : ph(ph) { }
 
-    void set(bytes_ostream& out, bytes_ostream::size_type v) {
+    void set(bytes_ostream& out, size_type v) {
         auto stream = ph.get_stream();
         serialize(stream, v);
     }
