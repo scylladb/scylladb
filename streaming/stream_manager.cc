@@ -132,6 +132,16 @@ void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progres
     }
 }
 
+future<> stream_manager::update_all_progress_info() {
+    return seastar::async([this] {
+        for (auto sr: get_all_streams()) {
+            for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+                session->update_progress().get();
+            }
+        }
+    });
+}
+
 void stream_manager::remove_progress(UUID plan_id) {
     _stream_bytes.erase(plan_id);
 }

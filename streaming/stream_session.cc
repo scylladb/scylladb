@@ -534,4 +534,19 @@ sstring stream_session::description() {
     return _stream_result  ? _stream_result->description : "";
 }
 
+future<> stream_session::update_progress() {
+    return get_local_stream_manager().get_progress_on_all_shards(plan_id(), peer).then([this] (auto sbytes) {
+        auto bytes_sent = sbytes.bytes_sent;
+        if (bytes_sent > 0) {
+            auto tx = progress_info(this->peer, "txnofile", progress_info::direction::OUT, bytes_sent, bytes_sent);
+            _session_info.update_progress(std::move(tx));
+        }
+        auto bytes_received = sbytes.bytes_received;
+        if (bytes_received > 0) {
+            auto rx = progress_info(this->peer, "rxnofile", progress_info::direction::IN, bytes_received, bytes_received);
+            _session_info.update_progress(std::move(rx));
+        }
+    });
+}
+
 } // namespace streaming
