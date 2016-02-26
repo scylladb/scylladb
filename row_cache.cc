@@ -469,12 +469,12 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
             with_allocator(_tracker.allocator(), [this, &m, &presence_checker] () {
                 unsigned quota = 30;
                 auto cmp = cache_entry::compare(_schema);
-                try {
+                {
                     _update_section(_tracker.region(), [&] {
                         auto i = m.partitions.begin();
                         while (i != m.partitions.end() && quota) {
                           with_linearized_managed_bytes([&] {
-                           try {
+                           {
                             partition_entry& mem_e = *i;
                             // FIXME: Optimize knowing we lookup in-order.
                             auto cache_i = _partitions.lower_bound(mem_e.key(), cmp);
@@ -498,9 +498,6 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                             i = m.partitions.erase(i);
                             current_allocator().destroy(&mem_e);
                             --quota;
-                           } catch (...) {
-                            //
-                            clear();
                            }
                           });
                         }
@@ -508,19 +505,6 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                     if (quota == 0 && seastar::thread::should_yield()) {
                         return;
                     }
-                } catch (const std::bad_alloc&) {
-                    // Cache entry may be in an incomplete state if
-                    // _update_section fails due to weak exception guarantees of
-                    // mutation_partition::apply().
-                    auto i = m.partitions.begin();
-                    auto cache_i = _partitions.find(i->key(), cmp);
-                    if (cache_i != _partitions.end()) {
-                      with_linearized_managed_bytes([&] {
-                        _partitions.erase_and_dispose(cache_i, current_deleter<cache_entry>());
-                        _tracker.on_erase();
-                      });
-                    }
-                    throw;
                 }
             });
             seastar::thread::yield();
