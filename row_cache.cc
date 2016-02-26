@@ -451,10 +451,10 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
                   with_linearized_managed_bytes([&] {
                    try {
                     invalidate_locked(entry->key());
-                    deleter(entry);
                    } catch (...) {
                     blow_cache = true;
                    }
+                   deleter(entry);
                   });
                 });
                 if (blow_cache) {
