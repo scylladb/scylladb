@@ -306,8 +306,6 @@ public:
 
     void follower_start_sent();
 
-    void progress(UUID cf_id, progress_info::direction dir, size_t fm_size);
-
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */

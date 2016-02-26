@@ -326,23 +326,6 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t fm_size) {
-    int64_t bytes;
-    if (dir == progress_info::direction::OUT) {
-        add_bytes_sent(fm_size);
-        bytes = get_bytes_sent();
-    } else {
-        add_bytes_received(fm_size);
-        bytes = get_bytes_received();
-    }
-    // FIXME: we can not estimate total number of bytes for a
-    // stream_transfer_task or stream_receive_task, since we don't know the
-    // size of the frozen_mutation until we read it.
-    progress_info progress(peer, cf_id.to_sstring(), dir, bytes, bytes);
-    update_progress(progress);
-    _stream_result->handle_progress(progress);
-}
-
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
         send_complete_message();
