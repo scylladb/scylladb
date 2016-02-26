@@ -357,6 +357,12 @@ def vector_add_method(current, base_state):
         _count++;
         return {_out};
   }""").substitute({'type': param_type(typ[1]), 'name': current["name"], 'set_optional': set_optional})
+        res = res + Template("""
+  void add(${type}_view v) {
+        $set_optional
+        serialize(_out, v);
+        _count++;
+  }""").substitute({'type': param_type(typ[1]), 'set_optional': set_optional})
     return res + Template("""
   after_${basestate}__$name end_$name() && {
         _size.set(_out, _count);
@@ -750,6 +756,10 @@ struct serializer<${type}_view> {
         skip(v, boost::type<${type}_view>());
         return res;
     }
+    template<typename Output>
+    static void write(Output& out, ${type}_view v) {
+        out.write(v.v.begin(), v.v.size());
+    }
 };
 """).substitute({'type' : param_type(cls["name"]), 'skip' : skip, 'skip_impl' : skip_impl}))
 
@@ -760,13 +770,13 @@ def add_views(hout):
 def add_visitors(hout):
     if not local_types:
         return
+    add_views(hout)
     fprintln(hout, "\n////// State holders")
     for k in local_types:
         handle_visitors_state(local_types[k], hout)
     fprintln(hout, "\n////// Nodes")
     for k in sort_dependencies():
         handle_visitors_nodes(local_types[k], hout)
-    add_views(hout)
 
 def handle_class(cls, hout, cout, namespaces=[], parent_template_param = []):
     add_to_types(cls, namespaces, parent_template_param)
