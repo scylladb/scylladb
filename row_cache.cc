@@ -443,13 +443,14 @@ future<> row_cache::update(memtable& m, partition_presence_checker presence_chec
     auto t = seastar::thread(attr, [this, &m, presence_checker = std::move(presence_checker)] {
         auto cleanup = defer([&] {
             with_allocator(_tracker.allocator(), [&m, this] () {
+                logalloc::reclaim_lock _(_tracker.region());
                 bool blow_cache = false;
                 // Note: clear_and_dispose() ought not to look up any keys, so it doesn't require
                 // with_linearized_managed_bytes(), but invalidate() does.
                 m.partitions.clear_and_dispose([this, deleter = current_deleter<partition_entry>(), &blow_cache] (partition_entry* entry) {
                   with_linearized_managed_bytes([&] {
                    try {
-                    invalidate(entry->key());
+                    invalidate_locked(entry->key());
                     deleter(entry);
                    } catch (...) {
                     blow_cache = true;
@@ -541,14 +542,19 @@ void row_cache::touch(const dht::decorated_key& dk) {
  });
 }
 
+void row_cache::invalidate_locked(const dht::decorated_key& dk) {
+    _partitions.erase_and_dispose(dk, cache_entry::compare(_schema),
+        [this, deleter = current_deleter<cache_entry>()](auto&& p) mutable {
+            _tracker.on_erase();
+            deleter(p);
+        });
+}
+
 void row_cache::invalidate(const dht::decorated_key& dk) {
   _read_section(_tracker.region(), [&] {
     with_allocator(_tracker.allocator(), [this, &dk] {
       with_linearized_managed_bytes([&] {
-        _partitions.erase_and_dispose(dk, cache_entry::compare(_schema), [this, deleter = current_deleter<cache_entry>()] (auto&& p) mutable {
-            _tracker.on_erase();
-            deleter(p);
-        });
+        invalidate_locked(dk);
       });
     });
   });
