@@ -34,7 +34,7 @@ if __name__ == '__main__':
                             'Keyborad shortcuts: S - simple view, M - avergages over multiple cores, Q -quits',
                             '',
                             'You need to configure the unix-sock plugin for collectd'
-                            'before you can use this, use the -c option to give you a configuration example',
+                            'before you can use this, use the --print-config option to give you a configuration example',
                             'enjoy!'])
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
