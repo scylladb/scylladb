@@ -129,7 +129,7 @@ void stream_session::init_messaging_service_handler() {
                                 plan_id, from.addr, cf_id);
                     return make_ready_future<>();
                 }
-                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
+                return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
                     try {
                         f.get();
                         return make_ready_future<>();
@@ -156,11 +156,14 @@ void stream_session::init_messaging_service_handler() {
                                 plan_id, from, cf_id);
                     return make_ready_future<>();
                 }
+                std::vector<query::partition_range> query_ranges;
                 try {
                     auto& cf = db.find_column_family(cf_id);
+                    query_ranges.reserve(ranges.size());
                     for (auto& range : ranges) {
-                        cf.get_row_cache().invalidate(query::to_partition_range(range));
+                        query_ranges.push_back(query::to_partition_range(range));
                     }
+                    return cf.flush_streaming_mutations(std::move(query_ranges));
                 } catch (no_such_column_family) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);
@@ -168,7 +171,6 @@ void stream_session::init_messaging_service_handler() {
                 } catch (...) {
                     throw;
                 }
-                return make_ready_future<>();
             });
         });
     });
