@@ -238,6 +238,26 @@ private:
     config _config;
     stats _stats;
     lw_shared_ptr<memtable_list> _memtables;
+
+    // In older incarnations, we simply commited the mutations to memtables.
+    // However, doing that makes it harder for us to provide QoS within the
+    // disk subsystem. Keeping them in separate memtables allow us to properly
+    // classify those streams into its own I/O class
+    //
+    // We could write those directly to disk, but we still want the mutations
+    // coming through the wire to go to a memtable staging area.  This has two
+    // major advantages:
+    //
+    // first, it will allow us to properly order the partitions. They are
+    // hopefuly sent in order but we can't really guarantee that without
+    // sacrificing sender-side parallelism.
+    //
+    // second, we will be able to coalesce writes from multiple plan_id's and
+    // even multiple senders, as well as automatically tapping into the dirty
+    // memory throttling mechanism, guaranteeing we will not overload the
+    // server.
+    lw_shared_ptr<memtable_list> _streaming_memtables;
+
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -256,6 +276,14 @@ private:
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
+    // Because streaming mutations bypass the commitlog, there is
+    // no need for the complications of the flush queue. Besides, it
+    // is easier to just use a common gate than it is to modify the flush_queue
+    // to work both with and without a replay position.
+    //
+    // Last but not least, we seldom need to guarantee any ordering here: as long
+    // as all data is waited for, we're good.
+    seastar::gate _streaming_flush_gate;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
@@ -361,6 +389,7 @@ public:
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
+    void apply_streaming_mutation(schema_ptr, const frozen_mutation&);
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
@@ -373,6 +402,7 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
+    future<> flush_streaming_mutations(std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
     void clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
@@ -497,6 +527,7 @@ private:
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
     future<> seal_active_memtable();
+    future<> seal_active_streaming_memtable();
 
     // filter manifest.json files out
     static bool manifest_json_filter(const sstring& fname);
@@ -767,6 +798,7 @@ public:
     future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
     future<> apply(schema_ptr, const frozen_mutation&);
+    future<> apply_streaming_mutation(schema_ptr, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

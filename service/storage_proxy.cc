@@ -835,6 +835,15 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
     });
 }
 
+future<>
+storage_proxy::mutate_streaming_mutation(const schema_ptr& s, const frozen_mutation& m) {
+    auto shard = _db.local().shard_of(m);
+    return _db.invoke_on(shard, [&m, gs = global_schema_ptr(s)] (database& db) mutable -> future<> {
+        return db.apply_streaming_mutation(gs, m);
+    });
+}
+
+
 /**
  * Helper for create_write_response_handler, shared across mutate/mutate_atomically.
  * Both methods do roughly the same thing, with the latter intermixing batch log ops
