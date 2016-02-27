@@ -132,6 +132,16 @@ void stream_manager::update_progress(UUID cf_id, gms::inet_address peer, progres
     }
 }
 
+future<> stream_manager::update_all_progress_info() {
+    return seastar::async([this] {
+        for (auto sr: get_all_streams()) {
+            for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+                session->update_progress().get();
+            }
+        }
+    });
+}
+
 void stream_manager::remove_progress(UUID plan_id) {
     _stream_bytes.erase(plan_id);
 }
@@ -139,6 +149,14 @@ void stream_manager::remove_progress(UUID plan_id) {
 stream_bytes stream_manager::get_progress(UUID plan_id, gms::inet_address peer) {
     auto& sbytes = _stream_bytes[plan_id];
     return sbytes[peer];
+}
+
+stream_bytes stream_manager::get_progress(UUID plan_id) {
+    stream_bytes ret;
+    for (auto& x : _stream_bytes[plan_id]) {
+        ret += x.second;
+    }
+    return ret;
 }
 
 future<> stream_manager::remove_progress_on_all_shards(UUID plan_id) {
@@ -151,6 +169,16 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id, gm
     return get_stream_manager().map_reduce0(
         [plan_id, peer] (auto& sm) {
             return sm.get_progress(plan_id, peer);
+        },
+        stream_bytes(),
+        std::plus<stream_bytes>()
+    );
+}
+
+future<stream_bytes> stream_manager::get_progress_on_all_shards(UUID plan_id) {
+    return get_stream_manager().map_reduce0(
+        [plan_id] (auto& sm) {
+            return sm.get_progress(plan_id);
         },
         stream_bytes(),
         std::plus<stream_bytes>()

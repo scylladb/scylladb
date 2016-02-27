@@ -32,11 +32,16 @@ namespace hs = httpd::stream_manager_json;
 
 static void set_summaries(const std::vector<streaming::stream_summary>& from,
         json::json_list<hs::stream_summary>& to) {
-    for (auto sum : from) {
+    if (!from.empty()) {
         hs::stream_summary res;
-        res.cf_id = boost::lexical_cast<std::string>(sum.cf_id);
-        res.files = sum.files;
-        res.total_size = sum.total_size;
+        res.cf_id = boost::lexical_cast<std::string>(from.front().cf_id);
+        // For each stream_session, we pretend we are sending/receiving one
+        // file, to make it compatible with nodetool.
+        res.files = 1;
+        // We can not estimate total number of bytes the stream_session will
+        // send or recvieve since we don't know the size of the frozen_mutation
+        // until we read it.
+        res.total_size = 0;
         to.push(res);
     }
 }
@@ -85,18 +90,22 @@ static hs::stream_state get_state(
 void set_stream_manager(http_context& ctx, routes& r) {
     hs::get_current_streams.set(r,
             [] (std::unique_ptr<request> req) {
-                return streaming::get_stream_manager().map_reduce0([](streaming::stream_manager& stream) {
-                    std::vector<hs::stream_state> res;
-                    for (auto i : stream.get_initiated_streams()) {
-                        res.push_back(get_state(*i.second.get()));
-                    }
-                    for (auto i : stream.get_receiving_streams()) {
-                        res.push_back(get_state(*i.second.get()));
-                    }
-                    return res;
-                }, std::vector<hs::stream_state>(),concat<hs::stream_state>).
-                then([](const std::vector<hs::stream_state>& res) {
-                    return make_ready_future<json::json_return_type>(res);
+                return streaming::get_stream_manager().invoke_on_all([] (auto& sm) {
+                    return sm.update_all_progress_info();
+                }).then([] {
+                    return streaming::get_stream_manager().map_reduce0([](streaming::stream_manager& stream) {
+                        std::vector<hs::stream_state> res;
+                        for (auto i : stream.get_initiated_streams()) {
+                            res.push_back(get_state(*i.second.get()));
+                        }
+                        for (auto i : stream.get_receiving_streams()) {
+                            res.push_back(get_state(*i.second.get()));
+                        }
+                        return res;
+                    }, std::vector<hs::stream_state>(),concat<hs::stream_state>).
+                    then([](const std::vector<hs::stream_state>& res) {
+                        return make_ready_future<json::json_return_type>(res);
+                    });
                 });
             });
 

@@ -117,14 +117,19 @@ public:
     }
 
     void update_progress(UUID cf_id, gms::inet_address peer, progress_info::direction dir, size_t fm_size);
+    future<> update_all_progress_info();
 
     void remove_progress(UUID plan_id);
 
     stream_bytes get_progress(UUID plan_id, gms::inet_address peer);
 
+    stream_bytes get_progress(UUID plan_id);
+
     future<> remove_progress_on_all_shards(UUID plan_id);
 
     future<stream_bytes> get_progress_on_all_shards(UUID plan_id, gms::inet_address peer);
+
+    future<stream_bytes> get_progress_on_all_shards(UUID plan_id);
 
     future<stream_bytes> get_progress_on_all_shards(gms::inet_address peer);
 

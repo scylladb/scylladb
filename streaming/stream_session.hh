@@ -306,8 +306,6 @@ public:
 
     void follower_start_sent();
 
-    void progress(UUID cf_id, progress_info::direction dir, size_t fm_size);
-
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
@@ -331,9 +329,7 @@ public:
         return _session_info;
     }
 
-    void update_progress(const progress_info& info) {
-        _session_info.update_progress(info);
-    }
+    future<> update_progress();
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);

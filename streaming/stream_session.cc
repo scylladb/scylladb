@@ -326,23 +326,6 @@ void stream_session::follower_start_sent() {
     this->start_streaming_files();
 }
 
-void stream_session::progress(UUID cf_id, progress_info::direction dir, size_t fm_size) {
-    int64_t bytes;
-    if (dir == progress_info::direction::OUT) {
-        add_bytes_sent(fm_size);
-        bytes = get_bytes_sent();
-    } else {
-        add_bytes_received(fm_size);
-        bytes = get_bytes_received();
-    }
-    // FIXME: we can not estimate total number of bytes for a
-    // stream_transfer_task or stream_receive_task, since we don't know the
-    // size of the frozen_mutation until we read it.
-    progress_info progress(peer, cf_id.to_sstring(), dir, bytes, bytes);
-    update_progress(progress);
-    _stream_result->handle_progress(progress);
-}
-
 void stream_session::complete() {
     if (_state == stream_session_state::WAIT_COMPLETE) {
         send_complete_message();
@@ -549,6 +532,21 @@ utils::UUID stream_session::plan_id() {
 
 sstring stream_session::description() {
     return _stream_result  ? _stream_result->description : "";
+}
+
+future<> stream_session::update_progress() {
+    return get_local_stream_manager().get_progress_on_all_shards(plan_id(), peer).then([this] (auto sbytes) {
+        auto bytes_sent = sbytes.bytes_sent;
+        if (bytes_sent > 0) {
+            auto tx = progress_info(this->peer, "txnofile", progress_info::direction::OUT, bytes_sent, bytes_sent);
+            _session_info.update_progress(std::move(tx));
+        }
+        auto bytes_received = sbytes.bytes_received;
+        if (bytes_received > 0) {
+            auto rx = progress_info(this->peer, "rxnofile", progress_info::direction::IN, bytes_received, bytes_received);
+            _session_info.update_progress(std::move(rx));
+        }
+    });
 }
 
 } // namespace streaming

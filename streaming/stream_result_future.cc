@@ -111,21 +111,28 @@ void stream_result_future::fire_stream_event(Event event) {
 
 void stream_result_future::maybe_complete() {
     auto has_active_sessions = _coordinator->has_active_sessions();
+    auto plan_id = this->plan_id;
     sslog.debug("[Stream #{}] stream_result_future: has_active_sessions={}", plan_id, has_active_sessions);
     if (!has_active_sessions) {
         auto& sm = get_local_stream_manager();
         if (sslog.is_enabled(logging::log_level::debug)) {
             sm.show_streams();
         }
-        sm.remove_stream(plan_id);
-        auto final_state = get_current_state();
-        if (final_state.has_failed_session()) {
-            sslog.warn("[Stream #{}] Stream failed, peers={}", plan_id, _coordinator->get_peers());
-            _done.set_exception(stream_exception(final_state, "Stream failed"));
-        } else {
-            sslog.info("[Stream #{}] All sessions completed, peers={}", plan_id, _coordinator->get_peers());
-            _done.set_value(final_state);
-        }
+        sm.get_progress_on_all_shards(plan_id).then([plan_id] (auto sbytes) {
+            sslog.info("[Stream #{}] bytes_sent = {}, bytes_received = {}", plan_id, sbytes.bytes_sent, sbytes.bytes_received);
+        }).handle_exception([plan_id] (auto ep) {
+            sslog.warn("[Stream #{}] Fail to get progess on all shards: {}", plan_id, ep);
+        }).finally([this, plan_id, &sm] {
+            sm.remove_stream(plan_id);
+            auto final_state = get_current_state();
+            if (final_state.has_failed_session()) {
+                sslog.warn("[Stream #{}] Stream failed, peers={}", plan_id, _coordinator->get_peers());
+                _done.set_exception(stream_exception(final_state, "Stream failed"));
+            } else {
+                sslog.info("[Stream #{}] All sessions completed, peers={}", plan_id, _coordinator->get_peers());
+                _done.set_value(final_state);
+            }
+        });
     }
 }
 
