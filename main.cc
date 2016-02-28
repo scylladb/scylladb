@@ -221,7 +221,19 @@ verify_rlimit(bool developer_mode) {
     }
 }
 
+static bool cpu_sanity() {
+    if (!__builtin_cpu_supports("sse4.2")) {
+        std::cerr << "Scylla requires a processor with SSE 4.2 support\n";
+        return false;
+    }
+    return true;
+}
+
 int main(int ac, char** av) {
+    // early check to avoid triggering
+    if (!cpu_sanity()) {
+        _exit(71);
+    }
     runtime::init_uptime();
     std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template app;
