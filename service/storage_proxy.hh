@@ -165,6 +165,7 @@ private:
     future<> schedule_repair(std::unordered_map<gms::inet_address, std::vector<mutation>> diffs);
     bool need_throttle_writes() const;
     void unthrottle();
+    void handle_read_error(std::exception_ptr eptr);
 
 public:
     storage_proxy(distributed<database>& db);

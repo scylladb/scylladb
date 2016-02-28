@@ -1994,6 +1994,17 @@ storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_comm
     });
 }
 
+void storage_proxy::handle_read_error(std::exception_ptr eptr) {
+    try {
+        std::rethrow_exception(eptr);
+    } catch (read_timeout_exception& ex) {
+        logger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
+        _stats.read_timeouts++;
+    } catch (...) {
+        logger.debug("Error during read query {}", eptr);
+    }
+}
+
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     std::vector<::shared_ptr<abstract_read_executor>> exec;
@@ -2014,8 +2025,10 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
         return rex->execute(timeout);
     }, std::move(merger));
 
-    return f.finally([exec = std::move(exec)] {
+    return f.handle_exception([exec = std::move(exec), p = shared_from_this()] (std::exception_ptr eptr) {
         // hold onto exec until read is complete
+        p->handle_read_error(eptr);
+        return make_exception_future<foreign_ptr<lw_shared_ptr<query::result>>>(eptr);
     });
 }
 
@@ -2094,6 +2107,9 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
         } else {
             return p->query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, std::move(i), std::move(ranges), concurrency_factor);
         }
+    }).handle_exception([p] (std::exception_ptr eptr) {
+        p->handle_read_error(eptr);
+        return make_exception_future<std::vector<foreign_ptr<lw_shared_ptr<query::result>>>>(eptr);
     });
 }
 
