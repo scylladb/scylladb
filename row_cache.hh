@@ -199,6 +199,7 @@ private:
     void on_hit();
     void on_miss();
     void upgrade_entry(cache_entry&);
+    void invalidate_locked(const dht::decorated_key&);
     static thread_local seastar::thread_scheduling_group _update_thread_scheduling_group;
 public:
     ~row_cache();
