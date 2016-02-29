@@ -196,8 +196,8 @@ void storage_service::prepare_to_join() {
 
     auto& gossiper = gms::get_local_gossiper();
     gossiper.register_(this->shared_from_this());
-    // FIXME: SystemKeyspace.incrementAndGetGeneration()
-    gossiper.start_gossiping(get_generation_number(), app_states).then([this] {
+    auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
+    gossiper.start_gossiping(generation_number, app_states).then([this] {
 #if SS_DEBUG
         gms::get_local_gossiper().debug_show();
         _token_metadata.debug_show();
