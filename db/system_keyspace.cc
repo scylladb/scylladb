@@ -67,6 +67,7 @@
 #include "log.hh"
 #include "serializer.hh"
 #include <core/enum.hh>
+#include "service/storage_proxy.hh"
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -1142,6 +1143,37 @@ future<std::vector<compaction_history_entry>> get_compaction_history()
             history.push_back(std::move(entry));
         }
         return std::move(history);
+    });
+}
+
+
+future<int> increment_and_get_generation() {
+    auto req = sprint("SELECT gossip_generation FROM system.%s WHERE key='%s'", LOCAL, LOCAL);
+    return qctx->qp().execute_internal(req).then([] (auto rs) {
+        int generation;
+        if (rs->empty() || !rs->one().has("gossip_generation")) {
+            // seconds-since-epoch isn't a foolproof new generation
+            // (where foolproof is "guaranteed to be larger than the last one seen at this ip address"),
+            // but it's as close as sanely possible
+            generation = service::get_generation_number();
+        } else {
+            // Other nodes will ignore gossip messages about a node that have a lower generation than previously seen.
+            int stored_generation = rs->one().template get_as<int>("gossip_generation") + 1;
+            int now = service::get_generation_number();
+            if (stored_generation >= now) {
+                logger.warn("Using stored Gossip Generation {} as it is greater than current system time {}."
+                            "See CASSANDRA-3654 if you experience problems", stored_generation, now);
+                generation = stored_generation;
+            } else {
+                generation = now;
+            }
+        }
+        auto req = sprint("INSERT INTO system.%s (key, gossip_generation) VALUES ('%s', ?)", LOCAL, LOCAL);
+        return qctx->qp().execute_internal(req, {generation}).then([generation] (auto rs) {
+            return force_blocking_flush(LOCAL);
+        }).then([generation] {
+            return make_ready_future<int>(generation);
+        });
     });
 }
 

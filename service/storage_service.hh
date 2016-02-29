@@ -77,6 +77,7 @@ inline storage_service& get_local_storage_service() {
     return _the_storage_service.local();
 }
 
+int get_generation_number();
 
 /**
  * This abstraction contains the token/identifier of this node

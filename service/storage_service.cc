@@ -80,7 +80,7 @@ static logging::logger logger("storage_service");
 
 distributed<storage_service> _the_storage_service;
 
-static int get_generation_number() {
+int get_generation_number() {
     using namespace std::chrono;
     auto now = high_resolution_clock::now().time_since_epoch();
     int generation_number = duration_cast<seconds>(now).count();
