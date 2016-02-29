@@ -57,7 +57,6 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
-#include <seastar/core/rwlock.hh>
 
 namespace transport {
     class cql_server;
@@ -119,7 +118,7 @@ private:
     shared_ptr<load_broadcaster> _lb;
     shared_ptr<distributed<transport::cql_server>> _cql_server;
     shared_ptr<distributed<thrift_server>> _thrift_server;
-    rwlock _api_lock;
+    sstring _operation_in_progress;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -145,9 +144,6 @@ public:
         return _db;
     }
 
-    rwlock& api_lock() {
-        return _api_lock;
-    };
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() const {
@@ -2290,19 +2286,15 @@ public:
 #endif
 
     template <typename Func>
-    inline auto run_with_write_api_lock(Func&& func) {
-        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            return with_lock(ss.api_lock().for_write(), [&ss, func = std::forward<Func>(func)] () mutable {
-                return func(ss);
-            });
-        });
-    }
-
-    template <typename Func>
-    inline auto run_with_read_api_lock(Func&& func) {
-        return get_storage_service().invoke_on(0, [func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            return with_lock(ss.api_lock().for_read(), [&ss, func = std::forward<Func>(func)] () mutable {
-                return func(ss);
+    inline auto run_with_api_lock(sstring operation, Func&& func) {
+        return get_storage_service().invoke_on(0, [operation = std::move(operation),
+                func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            if (!ss._operation_in_progress.empty()) {
+                throw std::runtime_error(sprint("Operation %s is in progress, try again", ss._operation_in_progress));
+            }
+            ss._operation_in_progress = std::move(operation);
+            return func(ss).finally([&ss] {
+                ss._operation_in_progress = sstring();
             });
         });
     }
