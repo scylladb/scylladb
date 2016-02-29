@@ -1668,7 +1668,7 @@ future<> storage_service::start_native_transport() {
                 });
             });
         }).then([addr, port] {
-            print("Starting listening for CQL clients on %s:%s...\n", addr, port);
+            logger.info("Starting listening for CQL clients on {}:{}...", addr, port);
         });
     });
 }
