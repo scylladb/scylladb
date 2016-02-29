@@ -42,6 +42,7 @@
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "service/pending_range_calculator_service.hh"
+#include "auth/auth.hh"
 
 // TODO : remove once shutdown is ok.
 // Broke these test when doing horror patch for #293
@@ -323,6 +324,8 @@ public:
         return seastar::async([this] {
             // Started by storage_service::init_server()
             gms::get_local_gossiper().stop_gossiping().get();
+            // started by storag-service::join_token_ring()
+            auth::auth::shutdown().get();
 
             _core_local.stop().get();
             db::system_keyspace::deinit_local_cache().get();
