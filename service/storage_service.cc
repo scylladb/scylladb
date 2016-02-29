@@ -122,8 +122,9 @@ std::experimental::optional<UUID> get_replace_node() {
     try {
         return utils::UUID(replace_node);
     } catch (...) {
-        logger.error("Format of host-id = {} is incorrect {}", std::current_exception());
-        throw;
+        auto msg = sprint("Unable to parse %s as host-id", replace_node);
+        logger.error("{}", msg);
+        throw std::runtime_error(msg);
     }
 }
 
