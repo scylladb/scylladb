@@ -172,7 +172,7 @@ private:
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
 private:
-    void update_stats_for_new_sstable(uint64_t new_sstable_data_size);
+    void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     void add_memtable();
