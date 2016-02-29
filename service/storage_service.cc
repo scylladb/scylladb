@@ -985,6 +985,9 @@ future<> storage_service::drain_on_shutdown() {
             }).get();
             logger.info("Drain on shutdown: shutdown messaging_service done");
 
+            auth::auth::shutdown().get();
+            logger.info("Drain on shutdown: auth shutdown");
+
             ss.flush_column_families();
             logger.info("Drain on shutdown: flush column_families done");
 
