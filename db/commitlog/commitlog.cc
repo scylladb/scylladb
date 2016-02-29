@@ -1205,7 +1205,15 @@ void db::commitlog::segment_manager::on_timer() {
         // take outstanding allocations into regard. This is paranoid,
         // but if for some reason the file::open takes longer than timer period,
         // we could flood the reserve list with new segments
-        auto n = _reserve_segments.size() + _reserve_allocating;
+        //
+        // #482 - _reserve_allocating is decremented in the finally clause below.
+        // This is needed because if either allocate_segment _or_ emplacing into
+        // _reserve_segments should throw, we still need the counter reset
+        // However, because of this, it might be that emplace was done, but not decrement,
+        // when we get here again. So occasionally we might get a sum of the two that is
+        // not consistent. It should however always just potentially be _to much_, i.e.
+        // just an indicator that we don't need to do anything. So lets do that.
+        auto n = std::min(_reserve_segments.size() + _reserve_allocating, _num_reserve_segments);
         return parallel_for_each(boost::irange(n, _num_reserve_segments), [this, n](auto i) {
             ++_reserve_allocating;
             return this->allocate_segment(false).then([this](sseg_ptr s) {
