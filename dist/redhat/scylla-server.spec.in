@@ -50,6 +50,7 @@ install -m644 dist/common/sysconfig/scylla-server $RPM_BUILD_ROOT%{_sysconfdir}/
 install -m644 dist/common/limits.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 install -m644 dist/common/sudoers.d/scylla $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
 install -m644 dist/common/collectd.d/scylla.conf $RPM_BUILD_ROOT%{_sysconfdir}/collectd.d/
+install -m644 dist/common/scylla.d/*.conf $RPM_BUILD_ROOT%{_sysconfdir}/scylla.d/
 install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
@@ -112,9 +113,11 @@ if [ -f /etc/systemd/coredump.conf ];then
     /usr/lib/scylla/scylla_coredump_setup
 fi
 %systemd_post scylla-server.service
+%systemd_post scylla-io-setup.service
 
 %preun
 %systemd_preun scylla-server.service
+%systemd_preun scylla-io-setup.service
 
 %postun
 %systemd_postun
@@ -141,6 +144,7 @@ rm -rf $RPM_BUILD_ROOT
 %config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
 %config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
+%config(noreplace) %{_sysconfdir}/scylla.d/*.conf
 %{_docdir}/scylla/README.md
 %{_docdir}/scylla/README-DPDK.md
 %{_docdir}/scylla/NOTICE.txt

@@ -1,6 +1,5 @@
 [Unit]
 Description=Scylla IO Setup
-Before=scylla-server.service
 After=network.target
 
 [Service]
@@ -8,6 +7,3 @@ Type=oneshot
 ExecStart=/usr/lib/scylla/scylla_io_setup
 RemainAfterExit=yes
 TimeoutStartSec=1800
-
-[Install]
-RequiredBy=scylla-server.service
