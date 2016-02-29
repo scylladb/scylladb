@@ -17,7 +17,12 @@ is_supported_instance_type() {
     esac
 }
 
-if [ ! -f /etc/scylla/io_configured ]; then
+is_developer_mode() {
+    . /etc/sysconfig/scylla-server
+    echo $SCYLLA_ARGS|egrep -c "\-\-developer-mode(\s+|=)1"
+}
+
+if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
     if [ `is_ami` -eq 1 ] && [ `is_supported_instance_type` -eq 1 ]; then
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
