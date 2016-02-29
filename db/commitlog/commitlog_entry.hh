@@ -35,6 +35,10 @@ class commitlog_entry {
 public:
     commitlog_entry(stdx::optional<column_mapping> mapping, frozen_mutation&& mutation);
     commitlog_entry(stdx::optional<column_mapping> mapping, const frozen_mutation& mutation);
+    commitlog_entry(commitlog_entry&&);
+    commitlog_entry(const commitlog_entry&) = delete;
+    commitlog_entry& operator=(commitlog_entry&&);
+    commitlog_entry& operator=(const commitlog_entry&) = delete;
     const stdx::optional<column_mapping>& mapping() const { return _mapping; }
     const frozen_mutation& mutation() const { return _mutation; }
 };
