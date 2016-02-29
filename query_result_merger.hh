@@ -23,6 +23,7 @@
 
 #include "core/distributed.hh"
 #include "query-result.hh"
+#include "query-result-reader.hh"
 
 namespace query {
 
@@ -43,19 +44,22 @@ public:
     // which holds the vector of query results and which can be quickly turned
     // into packet fragments by the transport layer without copying the data.
     foreign_ptr<lw_shared_ptr<query::result>> get() {
-        auto merged = make_lw_shared<query::result>();
-
-        size_t total_size = 0;
-        for (auto&& r : _partial) {
-            total_size += r->_w.size();
+        if (_partial.size() == 1) {
+            return std::move(_partial[0]);
         }
 
         bytes_ostream w;
-        w.reserve(total_size);
+        auto partitions = ser::writer_of_query_result(w).start_partitions();
 
         for (auto&& r : _partial) {
-            w.append(r->_w);
+            result_view::do_with(*r, [&] (result_view rv) {
+                for (auto&& pv : rv._v.partitions()) {
+                    partitions.add(pv);
+                }
+            });
         }
+
+        std::move(partitions).end_partitions().end_query_result();
 
         return make_foreign(make_lw_shared<query::result>(std::move(w)));
     }

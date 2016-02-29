@@ -56,13 +56,13 @@ canonical_mutation::canonical_mutation(const mutation& m)
 }
 
 utils::UUID canonical_mutation::column_family_id() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_data.begin()), _data.size());
+    auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
     return mv.table_id();
 }
 
 mutation canonical_mutation::to_mutation(schema_ptr s) const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_data.begin()), _data.size());
+    auto in = ser::as_input_stream(_data);
     auto mv = ser::deserialize(in, boost::type<ser::canonical_mutation_view>());
 
     auto cf_id = mv.table_id();

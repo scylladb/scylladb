@@ -23,6 +23,7 @@
 #include "db/serializer.hh"
 #include "query-request.hh"
 #include "query-result.hh"
+#include "query-result-writer.hh"
 #include "query-result-set.hh"
 #include "to_string.hh"
 #include "bytes.hh"
@@ -141,5 +142,13 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     out << "{" << result_set::from_raw_result(s, slice, *this) << "}";
     return out.str();
 }
+
+result::result()
+    : result([] {
+        bytes_ostream out;
+        ser::writer_of_query_result(out).skip_partitions().end_query_result();
+        return out;
+    }())
+{ }
 
 }

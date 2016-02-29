@@ -180,7 +180,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
         logger.debug("Replaying batch {}", id);
 
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
-        seastar::simple_input_stream in(reinterpret_cast<const char*>(data.begin()), data.size());
+        auto in = ser::as_input_stream(data);
         while (in.size()) {
             fms->emplace_back(ser::deserialize(in, boost::type<canonical_mutation>()));
         }

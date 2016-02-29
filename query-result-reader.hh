@@ -25,7 +25,14 @@
 #include "query-result.hh"
 #include "utils/data_input.hh"
 
-// Refer to query-result.hh for the query result format
+#include "idl/uuid.dist.hh"
+#include "idl/keys.dist.hh"
+#include "idl/query.dist.hh"
+#include "serializer_impl.hh"
+#include "serialization_visitors.hh"
+#include "idl/query.dist.impl.hh"
+#include "idl/keys.dist.impl.hh"
+#include "idl/uuid.dist.impl.hh"
 
 namespace query {
 
@@ -53,60 +60,47 @@ public:
 // Contains cells in the same order as requested by partition_slice.
 // Contains only live cells.
 class result_row_view {
-    bytes_view _v;
-    const partition_slice& _slice;
+    ser::qr_row_view _v;
 public:
-    result_row_view(bytes_view v, const partition_slice& slice) : _v(v), _slice(slice) {}
+    result_row_view(ser::qr_row_view v) : _v(v) {}
 
     class iterator_type {
-        data_input _in;
-        const partition_slice& _slice;
+        using cells_vec = std::vector<std::experimental::optional<ser::qr_cell_view>>;
+        cells_vec _cells;
+        cells_vec::iterator _i;
+        bytes _tmp_value;
     public:
-        iterator_type(bytes_view v, const partition_slice& slice)
-            : _in(v)
-            , _slice(slice)
+        iterator_type(ser::qr_row_view v)
+            : _cells(v.cells())
+            , _i(_cells.begin())
         { }
         std::experimental::optional<result_atomic_cell_view> next_atomic_cell() {
-            auto present = _in.read<int8_t>();
-            if (!present) {
+            auto cell_opt = *_i++;
+            if (!cell_opt) {
                 return {};
             }
-            api::timestamp_type timestamp = api::missing_timestamp;
-            expiry_opt expiry_;
-            if (_slice.options.contains<partition_slice::option::send_timestamp>()) {
-                timestamp = _in.read<api::timestamp_type>();
-            }
-            if (_slice.options.contains<partition_slice::option::send_expiry>()) {
-                auto expiry_rep = _in.read<gc_clock::rep>();
-                if (expiry_rep != std::numeric_limits<gc_clock::rep>::max()) {
-                    expiry_ = gc_clock::time_point(gc_clock::duration(expiry_rep));
-                }
-            }
-            auto value = _in.read_view_to_blob<uint32_t>();
-            return {result_atomic_cell_view(timestamp, expiry_, value)};
+            ser::qr_cell_view v = *cell_opt;
+            api::timestamp_type timestamp = v.timestamp().value_or(api::missing_timestamp);
+            expiry_opt expiry = v.expiry();
+            _tmp_value = v.value();
+            return {result_atomic_cell_view(timestamp, expiry, _tmp_value)};
         }
         std::experimental::optional<bytes_view> next_collection_cell() {
-            auto present = _in.read<int8_t>();
-            if (!present) {
+            auto cell_opt = *_i++;
+            if (!cell_opt) {
                 return {};
             }
-            return _in.read_view_to_blob<uint32_t>();
+            ser::qr_cell_view v = *cell_opt;
+            _tmp_value = v.value();
+            return {bytes_view(_tmp_value)};
         };
         void skip(const column_definition& def) {
-            if (def.is_atomic()) {
-                next_atomic_cell();
-            } else {
-                next_collection_cell();
-            }
+            ++_i;
         }
     };
 
     iterator_type iterator() const {
-        return iterator_type(_v, _slice);
-    }
-
-    bool empty() const {
-        return _v.empty();
+        return iterator_type(_v);
     }
 };
 
@@ -142,50 +136,54 @@ struct result_visitor {
 };
 
 class result_view {
-    bytes_view _v;
+    ser::query_result_view _v;
+    friend class result_merger;
 public:
-    result_view(bytes_view v) : _v(v) {}
+    result_view(bytes_view v) : _v(ser::query_result_view{ser::as_input_stream(v)}) {}
+    result_view(ser::query_result_view v) : _v(v) {}
 
-    template <typename ResultVisitor>
-    static void consume(const bytes_ostream& buf, const partition_slice& slice, ResultVisitor&& visitor) {
+    template <typename Func>
+    static void do_with(const query::result& res, Func&& func) {
+        const bytes_ostream& buf = res.buf();
         // FIXME: This special casing saves us the cost of copying an already
         // linearized response. When we switch views to scattered_reader this will go away.
         if (buf.is_linearized()) {
             result_view view(buf.view());
-            view.consume(slice, std::forward<ResultVisitor>(visitor));
+            func(view);
         } else {
             bytes_ostream w(buf);
             result_view view(w.linearize());
-            view.consume(slice, std::forward<ResultVisitor>(visitor));
+            func(view);
         }
     }
 
     template <typename ResultVisitor>
+    static void consume(const query::result& res, const partition_slice& slice, ResultVisitor&& visitor) {
+        do_with(res, [&] (result_view v) {
+            v.consume(slice, visitor);
+        });
+    }
+
+    template <typename ResultVisitor>
     void consume(const partition_slice& slice, ResultVisitor&& visitor) {
-        data_input in(_v);
-        while (in.has_next()) {
-            auto row_count = in.read<uint32_t>();
+        for (auto&& p : _v.partitions()) {
+            auto rows = p.rows();
+            auto row_count = rows.size();
             if (slice.options.contains<partition_slice::option::send_partition_key>()) {
-                auto key = partition_key::from_bytes(in.read_view_to_blob<uint32_t>());
+                auto key = *p.key();
                 visitor.accept_new_partition(key, row_count);
             } else {
                 visitor.accept_new_partition(row_count);
             }
 
-            bytes_view static_row_view;
-            if (!slice.static_columns.empty()) {
-                static_row_view = in.read_view_to_blob<uint32_t>();
-            }
-            result_row_view static_row(static_row_view, slice);
+            result_row_view static_row(p.static_row());
 
-            while (row_count--) {
+            for (auto&& row : rows) {
+                result_row_view view(row.cells());
                 if (slice.options.contains<partition_slice::option::send_clustering_key>()) {
-                    auto key = clustering_key::from_bytes(in.read_view_to_blob<uint32_t>());
-                    result_row_view row(in.read_view_to_blob<uint32_t>(), slice);
-                    visitor.accept_new_row(key, static_row, row);
+                    visitor.accept_new_row(*row.key(), static_row, view);
                 } else {
-                    result_row_view row(in.read_view_to_blob<uint32_t>(), slice);
-                    visitor.accept_new_row(static_row, row);
+                    visitor.accept_new_row(static_row, view);
                 }
             }
 

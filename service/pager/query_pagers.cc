@@ -280,7 +280,7 @@ private:
         };
 
         myvisitor v(*this, std::min(page_size, _max), builder, *_schema, *_selection);
-        query::result_view::consume(results->buf(), _cmd->slice, v);
+        query::result_view::consume(*results, _cmd->slice, v);
 
         if (_last_pkey) {
             // refs #752, when doing aggregate queries we will re-use same

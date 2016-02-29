@@ -19,7 +19,9 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
+
 #include "bytes_ostream.hh"
+#include "serializer.hh"
 
 namespace ser {
 
@@ -31,7 +33,7 @@ struct place_holder {
 
     place_holder(bytes_ostream::place_holder<size_type> ph) : ph(ph) { }
 
-    void set(bytes_ostream& out, bytes_ostream::size_type v) {
+    void set(bytes_ostream& out, size_type v) {
         auto stream = ph.get_stream();
         serialize(stream, v);
     }
@@ -68,7 +70,20 @@ inline place_holder start_place_holder(bytes_ostream& out) {
 inline frame start_frame(bytes_ostream& out) {
     auto offset = out.size();
     auto size_ph = out.write_place_holder<size_type>();
+    {
+        auto out = size_ph.get_stream();
+        serialize(out, (size_type)0);
+    }
     return frame { size_ph, offset };
+}
+
+template<typename Input>
+size_type read_frame_size(Input& in) {
+    auto sz = deserialize(in, boost::type<size_type>());
+    if (sz < sizeof(size_type)) {
+        throw std::runtime_error("Truncated frame");
+    }
+    return sz - sizeof(size_type);
 }
 
 template<typename T>

@@ -76,52 +76,22 @@ public:
 // binary protocol client. So in the typical case the coordinator would just
 // pass the data using zero-copy to the client, prepending a header.
 //
-// Users which need more complex structure of query results, should
-// transform it to such using appropriate visitors.
-// TODO: insert reference to such visitors here.
-//
-// Query results have dynamic format. In some queries (maybe even in typical
-// ones), we don't need to send partition or clustering keys back to the
-// client, because they are already specified in the query request, and not
-// queried for. The query results hold keys optionally.
-//
-// Also, meta-data like cell timestamp and expiry is optional. It is only needed
-// if the query has writetime() or ttl() functions in it, which it typically
-// won't have.
+// Users which need more complex structure of query results can convert this
+// to query::result_set.
 //
 // Related headers:
 //  - query-result-reader.hh
 //  - query-result-writer.hh
 
-//
-// Query results are serialized to the following form:
-//
-// <result>          ::= <partition>*
-// <partition>       ::= <row-count> [ <partition-key> ] [ <static-row> ] <row>*
-// <static-row>      ::= <row>
-// <row>             ::= <row-length> <cell>+
-// <cell>            ::= <atomic-cell> | <collection-cell>
-// <atomic-cell>     ::= <present-byte> [ <timestamp> ] [ <expiry> ] <value>
-// <collection-cell> ::= <blob>
-//
-// <value>           ::= <blob>
-// <blob>            ::= <blob-length> <uint8_t>*
-// <timestamp>       ::= <uint64_t>
-// <expiry>          ::= <int32_t>
-// <present-byte>    ::= <int8_t>
-// <row-length>      ::= <uint32_t>
-// <row-count>       ::= <uint32_t>
-// <blob-length>     ::= <uint32_t>
-//
+
 class result {
     bytes_ostream _w;
 public:
     class builder;
     class partition_writer;
-    class row_writer;
     friend class result_merger;
 
-    result() {}
+    result();
     result(bytes_ostream&& w) : _w(std::move(w)) {}
     result(result&&) = default;
     result(const result&) = default;

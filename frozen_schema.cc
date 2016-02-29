@@ -43,7 +43,7 @@ frozen_schema::frozen_schema(const schema_ptr& s)
 { }
 
 schema_ptr frozen_schema::unfreeze() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_data.begin()), _data.size());
+    auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, boost::type<ser::schema_view>());
     return db::schema_tables::create_table_from_mutations(sv.mutations(), sv.version());
 }

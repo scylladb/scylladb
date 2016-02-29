@@ -85,12 +85,12 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
     BOOST_REQUIRE_EQUAL(buf1.linearize(), buf2.linearize());
 
     auto bv1 = buf1.linearize();
-    seastar::simple_input_stream in1(reinterpret_cast<const char*>(bv1.data()), bv1.size());
+    auto in1 = ser::as_input_stream(bv1);
     auto deser_sc = ser::deserialize(in1, boost::type<simple_compound>());
     BOOST_REQUIRE_EQUAL(sc, deser_sc);
 
     auto bv2 = buf2.linearize();
-    seastar::simple_input_stream in2(reinterpret_cast<const char*>(bv2.data()), bv2.size());
+    auto in2 = ser::as_input_stream(bv2);
     auto sc_view = ser::deserialize(in2, boost::type<ser::writable_simple_compound_view>());
     BOOST_REQUIRE_EQUAL(sc.foo, sc_view.foo());
     BOOST_REQUIRE_EQUAL(sc.bar, sc_view.bar());
@@ -132,13 +132,13 @@ BOOST_AUTO_TEST_CASE(test_vector)
     BOOST_REQUIRE_EQUAL(buf1.linearize(), buf2.linearize());
 
     auto bv1 = buf1.linearize();
-    seastar::simple_input_stream in1(reinterpret_cast<const char*>(bv1.data()), bv1.size());
+    auto in1 = ser::as_input_stream(bv1);
     auto deser_voc = ser::deserialize(in1, boost::type<vectors_of_compounds>());
     BOOST_REQUIRE_EQUAL(voc.first, deser_voc.first);
     BOOST_REQUIRE_EQUAL(voc.second, deser_voc.second);
 
     auto bv2 = buf2.linearize();
-    seastar::simple_input_stream in2(reinterpret_cast<const char*>(bv2.data()), bv2.size());
+    auto in2 = ser::as_input_stream(bv2);
     auto voc_view = ser::deserialize(in2, boost::type<ser::writable_vectors_of_compounds_view>());
     auto&& first_view = voc_view.first();
     BOOST_REQUIRE_EQUAL(vec1.size(), first_view.size());
@@ -180,7 +180,7 @@ BOOST_AUTO_TEST_CASE(test_variant)
     BOOST_REQUIRE_EQUAL(buf.size(), 120);
 
     auto bv = buf.linearize();
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(bv.data()), bv.size());
+    auto in = ser::as_input_stream(bv);
     auto wv_view = ser::deserialize(in, boost::type<ser::writable_variants_view>());
     BOOST_REQUIRE_EQUAL(wv_view.id(), 17);
 

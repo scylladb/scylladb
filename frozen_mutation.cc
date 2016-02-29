@@ -49,14 +49,14 @@ using namespace db;
 
 utils::UUID
 frozen_mutation::column_family_id() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto in = ser::as_input_stream(_bytes);
     auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
     return mv.table_id();
 }
 
 utils::UUID
 frozen_mutation::schema_version() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto in = ser::as_input_stream(_bytes);
     auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
     return mv.schema_version();
 }
@@ -72,7 +72,7 @@ frozen_mutation::decorated_key(const schema& s) const {
 }
 
 partition_key frozen_mutation::deserialize_key() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto in = ser::as_input_stream(_bytes);
     auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
     return mv.key();
 }
@@ -113,7 +113,7 @@ frozen_mutation freeze(const mutation& m) {
 }
 
 mutation_partition_view frozen_mutation::partition() const {
-    seastar::simple_input_stream in(reinterpret_cast<const char*>(_bytes.begin()), _bytes.size());
+    auto in = ser::as_input_stream(_bytes);
     auto mv = ser::deserialize(in, boost::type<ser::mutation_view>());
     return mutation_partition_view::from_view(mv.partition());
 }
