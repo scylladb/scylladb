@@ -102,6 +102,7 @@ public:
      * Sets up Authenticator and Authorizer.
      */
     static future<> setup();
+    static future<> shutdown();
 
     /**
      * Set up table from given CREATE TABLE statement under system_auth keyspace, if not already done so.

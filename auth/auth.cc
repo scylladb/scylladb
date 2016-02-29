@@ -103,35 +103,41 @@ static auth_migration_listener auth_migration;
  * Should be abstracted to some sort of global server function
  * probably.
  */
+struct waiter {
+    promise<> done;
+    timer<> tmr;
+    waiter() : tmr([this] {done.set_value();})
+    {
+        tmr.arm(auth::auth::SUPERUSER_SETUP_DELAY);
+    }
+    ~waiter() {
+        if (tmr.armed()) {
+            tmr.cancel();
+            done.set_exception(std::runtime_error("shutting down"));
+        }
+        logger.trace("Deleting scheduled task");
+    }
+    void kill() {
+    }
+};
+
+typedef std::unique_ptr<waiter> waiter_ptr;
+
+static std::vector<waiter_ptr> & thread_waiters() {
+    static thread_local std::vector<waiter_ptr> the_waiters;
+    return the_waiters;
+}
+
 void auth::auth::schedule_when_up(scheduled_func f) {
-    struct waiter {
-        promise<> done;
-        timer<> tmr;
-        waiter() : tmr([this] {done.set_value();})
-        {
-            tmr.arm(SUPERUSER_SETUP_DELAY);
-        }
-        ~waiter() {
-            if (tmr.armed()) {
-                tmr.cancel();
-                done.set_exception(std::runtime_error("shutting down"));
-            }
-            logger.trace("Deleting scheduled task");
-        }
-        void kill() {
-        }
-    };
-
-    typedef std::unique_ptr<waiter> waiter_ptr;
-
-    static thread_local std::vector<waiter_ptr> waiters;
-
     logger.trace("Adding scheduled task");
+
+    auto & waiters = thread_waiters();
 
     waiters.emplace_back(std::make_unique<waiter>());
     auto* w = waiters.back().get();
 
     w->done.get_future().finally([w] {
+        auto & waiters = thread_waiters();
         auto i = std::find_if(waiters.begin(), waiters.end(), [w](const waiter_ptr& p) {
                             return p.get() == w;
                         });
@@ -145,7 +151,6 @@ void auth::auth::schedule_when_up(scheduled_func f) {
         return make_ready_future();
     });
 }
-
 
 bool auth::auth::is_class_type(const sstring& type, const sstring& classname) {
     if (type == classname) {
@@ -202,6 +207,15 @@ future<> auth::auth::setup() {
                 }
             });
         });
+    });
+}
+
+future<> auth::auth::shutdown() {
+    // just make sure we don't have pending tasks.
+    // this is mostly relevant for test cases where
+    // db-env-shutdown != process shutdown
+    return smp::invoke_on_all([] {
+        thread_waiters().clear();
     });
 }
 
