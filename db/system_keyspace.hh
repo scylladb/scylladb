@@ -482,46 +482,8 @@ enum class bootstrap_state {
 
 #endif
     future<std::unordered_set<dht::token>> get_saved_tokens();
-#if 0
 
-    public static int incrementAndGetGeneration()
-    {
-        String req = "SELECT gossip_generation FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-
-        int generation;
-        if (result.isEmpty() || !result.one().has("gossip_generation"))
-        {
-            // seconds-since-epoch isn't a foolproof new generation
-            // (where foolproof is "guaranteed to be larger than the last one seen at this ip address"),
-            // but it's as close as sanely possible
-            generation = (int) (System.currentTimeMillis() / 1000);
-        }
-        else
-        {
-            // Other nodes will ignore gossip messages about a node that have a lower generation than previously seen.
-            final int storedGeneration = result.one().getInt("gossip_generation") + 1;
-            final int now = (int) (System.currentTimeMillis() / 1000);
-            if (storedGeneration >= now)
-            {
-                logger.warn("Using stored Gossip Generation {} as it is greater than current system time {}.  See CASSANDRA-3654 if you experience problems",
-                            storedGeneration, now);
-                generation = storedGeneration;
-            }
-            else
-            {
-                generation = now;
-            }
-        }
-
-        req = "INSERT INTO system.%s (key, gossip_generation) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), generation);
-        forceBlockingFlush(LOCAL);
-
-        return generation;
-    }
-#endif
-
+future<int> increment_and_get_generation();
 bool bootstrap_complete();
 bool bootstrap_in_progress();
 bootstrap_state get_bootstrap_state();
