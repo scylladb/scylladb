@@ -1952,7 +1952,7 @@ sstring storage_service::get_load_string() {
 }
 
 future<std::map<sstring, double>> storage_service::get_load_map() {
-    return run_with_read_api_lock([] (storage_service& ss) {
+    return run_with_no_api_lock([] (storage_service& ss) {
         std::map<sstring, double> load_map;
         auto& lb = ss.get_load_broadcaster();
         if (lb) {
