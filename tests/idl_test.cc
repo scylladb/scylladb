@@ -28,10 +28,13 @@
 
 #include <map>
 #include <vector>
+#include <experimental/optional>
 
 #include "bytes.hh"
 #include "bytes_ostream.hh"
 #include "serializer.hh"
+
+namespace stdx = std::experimental;
 
 struct simple_compound {
     // TODO: change this to test for #905
@@ -46,6 +49,27 @@ struct simple_compound {
 std::ostream& operator<<(std::ostream& os, const simple_compound& sc)
 {
     return os << " { foo: " << sc.foo << ", bar: " << sc.bar << " }";
+}
+
+struct compound_with_optional {
+    stdx::optional<simple_compound> first;
+    simple_compound second;
+
+    bool operator==(const compound_with_optional& other) const {
+        return first == other.first && second == other.second;
+    }
+};
+
+std::ostream& operator<<(std::ostream& os, const compound_with_optional& v)
+{
+    os << " { first: ";
+    if (v.first) {
+        os << *v.first;
+    } else {
+        os << "<disengaged>";
+    }
+    os << ", second: " << v.second << " }";
+    return os;
 }
 
 struct wrapped_vector {
@@ -238,4 +262,32 @@ BOOST_AUTO_TEST_CASE(test_variant)
     auto v3 = wv_view.third();
     auto&& compound2 = boost::apply_visitor(expect_writable_compound(), v3);
     BOOST_REQUIRE_EQUAL(compound2, sc2);
+}
+
+BOOST_AUTO_TEST_CASE(test_compound_with_optional)
+{
+    simple_compound foo = { 0xdeadbeef, 0xbadc0ffe };
+    simple_compound bar = { 0x12345678, 0x87654321 };
+
+    compound_with_optional one = { foo, bar };
+
+    bytes_ostream buf1;
+    ser::serialize(buf1, one);
+    BOOST_REQUIRE_EQUAL(buf1.size(), 29);
+
+    auto bv1 = buf1.linearize();
+    seastar::simple_input_stream in1(reinterpret_cast<const char*>(bv1.data()), bv1.size());
+    auto deser_one = ser::deserialize(in1, boost::type<compound_with_optional>());
+    BOOST_REQUIRE_EQUAL(one, deser_one);
+
+    compound_with_optional two = { {}, foo };
+
+    bytes_ostream buf2;
+    ser::serialize(buf2, two);
+    BOOST_REQUIRE_EQUAL(buf2.size(), 17);
+
+    auto bv2 = buf2.linearize();
+    seastar::simple_input_stream in2(reinterpret_cast<const char*>(bv2.data()), bv2.size());
+    auto deser_two = ser::deserialize(in2, boost::type<compound_with_optional>());
+    BOOST_REQUIRE_EQUAL(two, deser_two);
 }
