@@ -30,6 +30,7 @@ import pyparsing as pp
 from functools import reduce
 import textwrap
 from numbers import Number
+from timeit import reindent
 
 EXTENSION = '.idl.hh'
 READ_BUFF = 'input_buffer'
@@ -218,6 +219,16 @@ def param_type(lst):
         return lst[0]
     return lst[0] + join_template(lst[1])
 
+def flat_template(lst):
+    return  ", ".join([param_type(l) for l in lst])
+
+def flat_type(lst):
+    if isinstance(lst, str):
+        return lst
+    if len(lst) == 1:
+        return flat_type(lst[0])
+    return (lst[0] + "__" + "_".join([flat_type(l) for l in lst[1]])).replace('::', '__')
+
 def is_class(obj):
     return obj["type"] == "class" or obj["type"] == "struct"
 
@@ -243,7 +254,7 @@ def is_basic_type(lst):
     if isinstance(lst, str):
         return lst not in local_types
     if len(lst) == 1:
-        return lst[0] not in local_types
+        return isinstance(lst[0], str) and lst[0] not in local_types
     return False
 
 def is_local_type(lst):
@@ -330,39 +341,52 @@ struct $node_name {
 
     fprintln(hout, "};")
 
-def vector_add_method(current, base_state):
-    if is_optional(current["type"][1][0]):
-        typ = current["type"][1][0]
-        res = reindent(4, """
-  void write_empty() {
+def optional_add_methods(typ):
+    res = reindent(4,"""
+    void skip()  {
         serialize(_out, false);
-        _count++;
-  }""")
-        set_optional = "serialize(_out, true);"
+    }""")
+    if is_basic_type(typ):
+        added_type = typ
+    elif is_local_type(typ):
+        added_type = param_type(typ) + "_view"
     else:
-        typ = current["type"]
-        res = ""
-        set_optional = ""
+        print("non supported optional type ", typ)
+        raise "non supported optional type " + param_type(typ)
+    res = res + Template(reindent(4, """
+    void write(const $type& obj) {
+        serialize(_out, true);
+        serialize(_out, obj);
+    }""")).substitute({'type' : added_type})
+    if is_local_type(typ):
+        res = res + Template(reindent(4, """
+    writer_of_$type write() {
+        serialize(_out, true);
+        return {_out};
+    }""")).substitute({'type' : param_type(typ)})
+    return res
+
+
+def vector_add_method(current, base_state):
+    typ = current["type"]
+    res = ""
     if is_basic_type(typ[1]):
         res = res + Template("""
   void add_$name($type t)  {
-        $set_optional
         serialize(_out, t);
         _count++;
-  }""").substitute({'type': param_type(typ[1]), 'name': current["name"], 'set_optional': set_optional})
+  }""").substitute({'type': param_type(typ[1][0]), 'name': current["name"]})
     else:
         res = res + Template("""
   writer_of_$type add() {
-        $set_optional
         _count++;
         return {_out};
-  }""").substitute({'type': param_type(typ[1]), 'name': current["name"], 'set_optional': set_optional})
+  }""").substitute({'type': flat_type(typ[1][0]), 'name': current["name"]})
         res = res + Template("""
-  void add(${type}_view v) {
-        $set_optional
+  void add(${type} v) {
         serialize(_out, v);
         _count++;
-  }""").substitute({'type': param_type(typ[1]), 'set_optional': set_optional})
+  }""").substitute({'type': param_view_type(typ[1][0])})
     return res + Template("""
   after_${basestate}__$name end_$name() && {
         _size.set(_out, _count);
@@ -548,7 +572,23 @@ struct $name {
 };""").substitute({'name': struct_name, 'state' : base_state, 'fun' : fun, 'vector_placeholder': vector_placeholder, 'constructor': constructor}))
 
 def add_vector_node(hout, member, base_state, parents):
+    if get_template_name(member["type"][1][0]):
+        add_template_writer_node(hout,member["type"][1][0] )
     add_node(hout, base_state + "__" + member["name"], member["type"], base_state, "", parents, vector_add_method(member, base_state), True)
+
+optional_nodes = set()
+
+def add_optional_node(hout, typ):
+    global optional_nodes
+    full_type = flat_type(typ)
+    if full_type in optional_nodes:
+        return
+    optional_nodes.add(full_type)
+    fprintln(hout, Template(reindent(0,"""
+struct writer_of_$type {
+    bytes_ostream& _out;
+    $add_method
+};""")).substitute({'type': full_type, 'add_method': optional_add_methods(typ[1][0])}))
 
 def add_variant_nodes(hout, member, param, base_state, parents, classes):
     vr = False
@@ -571,6 +611,11 @@ def add_variant_nodes(hout, member, param, base_state, parents, classes):
             add_node(hout, name, typ, name, "", par, add_param_write({"type": typ, "name" : "variant"}, par))
             vr = True
 writers = set()
+
+def add_template_writer_node(hout, typ):
+    if is_optional(typ):
+        add_optional_node(hout, typ)
+
 
 def add_nodes_when_needed(hout, info, member, base_state_name, parents, member_classes):
     if is_vector(member["type"]):

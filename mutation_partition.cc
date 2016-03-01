@@ -397,7 +397,7 @@ void mutation_partition::for_each_row(const schema& schema, const query::range<c
 template<typename RowWriter>
 void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
     assert(c.is_live());
-    ser::writer_of_qr_cell wr = w.add();
+    ser::writer_of_qr_cell wr = w.add().write();
     auto after_timestamp = [&, wr = std::move(wr)] () mutable {
         if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
             return std::move(wr).write_timestamp(c.timestamp());
@@ -421,7 +421,7 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
     if (slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
         ctype = map_type_impl::get_instance(ctype->name_comparator(), ctype->value_comparator(), true);
     }
-    w.add().skip_timestamp()
+    w.add().write().skip_timestamp()
         .skip_expiry()
         .write_value(ctype->to_value(v, slice.cql_format()))
         .end_qr_cell();
@@ -440,13 +440,13 @@ static void get_row_slice(const schema& s,
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
-            writer.write_empty();
+            writer.add().skip();
         } else {
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb, now)) {
-                    writer.write_empty();
+                    writer.add().skip();
                 } else {
                     write_cell(writer, slice, cell->as_atomic_cell());
                 }
@@ -458,7 +458,7 @@ static void get_row_slice(const schema& s,
                 // FIXME: Instead of this, write optimistically and retract if empty
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view, now);
                 if (ctype->is_empty(m_ser)) {
-                    writer.write_empty();
+                    writer.add().skip();
                 } else {
                     write_cell(writer, slice, def.type, m_ser);
                 }
