@@ -325,7 +325,7 @@ static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
         size_t size = align_up<size_t>(off, 4096);
         return do_with(std::move(f), [size, off, value](file& f) {
             return f.dma_read_exactly<char>(0, size).then([&f, off, value](auto buf) {
-                *reinterpret_cast<uint32_t *>(buf.get_write() + off) = value;
+                *unaligned_cast<uint32_t *>(buf.get_write() + off) = value;
                 auto dst = buf.get();
                 auto size = buf.size();
                 return f.dma_write(0, dst, size).then([buf = std::move(buf)](size_t) {});
