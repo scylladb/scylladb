@@ -511,18 +511,31 @@ void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
     _keep_alive.set_callback([this] {
         auto plan_id = this->plan_id();
         get_local_stream_manager().get_progress_on_all_shards(plan_id, this->peer).then([this] (stream_bytes sbytes) {
-            if (sbytes != this->_last_stream_bytes) {
+            auto now = lowres_clock::now();
+            sslog.debug("[Stream #{}] keep alive timer callback sbytes old: tx={}, rx={} new: tx={} rx={}",
+                       this->plan_id(),
+                       this->_last_stream_bytes.bytes_sent, this->_last_stream_bytes.bytes_received,
+                       sbytes.bytes_sent, sbytes.bytes_received);
+            if (sbytes.bytes_sent > this->_last_stream_bytes.bytes_sent ||
+                sbytes.bytes_received > this->_last_stream_bytes.bytes_received) {
+                // Progress has been made
                 this->_last_stream_bytes = sbytes;
+                this->_last_stream_progress = now;
                 this->start_keep_alive_timer();
-            } else {
+            } else if (now - this->_last_stream_progress >= this->_keep_alive_timeout) {
+                // Timeout
                 sslog.info("[Stream #{}] The session {} is idle for {} seconds, the peer {} is probably gone, close it",
                     this->plan_id(), this, this->_keep_alive_timeout.count(), this->peer);
                 this->on_error();
+            } else {
+                // Start the timer to check again
+                this->start_keep_alive_timer();
             }
         }).handle_exception([plan_id] (auto ep) {
            sslog.info("[Stream #{}] keep alive timer callback fails: {}", plan_id, ep);
         });
     });
+    _last_stream_progress = lowres_clock::now();
     start_keep_alive_timer();
 }
 
