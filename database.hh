@@ -41,6 +41,7 @@
 #include <set>
 #include <iostream>
 #include <boost/functional/hash.hpp>
+#include <boost/range/algorithm/find.hpp>
 #include <experimental/optional>
 #include <string.h>
 #include "types.hh"
@@ -98,7 +99,73 @@ void make(database& db, bool durable, bool volatile_testing_only);
 
 class replay_position_reordered_exception : public std::exception {};
 
-using memtable_list = std::vector<lw_shared_ptr<memtable>>;
+// We could just add all memtables, regardless of types, to a single list, and
+// then filter them out when we read them. Here's why I have chosen not to do
+// it:
+//
+// First, some of the methods in which a memtable is involved (like seal) are
+// assume a commitlog, and go through great care of updating the replay
+// position, flushing the log, etc.  We want to bypass those, and that has to
+// be done either by sprikling the seal code with conditionals, or having a
+// separate method for each seal.
+//
+// Also, if we ever want to put some of the memtables in as separate allocator
+// region group to provide for extra QoS, having the classes properly wrapped
+// will make that trivial: just pass a version of new_memtable() that puts it
+// in a different region, while the list approach would require a lot of
+// conditionals as well.
+//
+// If we are going to have different methods, better have different instances
+// of a common class.
+class memtable_list {
+    using shared_memtable = lw_shared_ptr<memtable>;
+    std::vector<shared_memtable> _memtables;
+    std::function<future<> ()> _seal_fn;
+public:
+    memtable_list(std::function<future<> ()> seal_fn) : _memtables({}), _seal_fn(seal_fn) {}
+    memtable_list(const memtable_list& mt_list) : _memtables(mt_list._memtables), _seal_fn(mt_list._seal_fn) {}
+    shared_memtable back() {
+        return _memtables.back();
+    }
+
+    // The caller has to make sure the element exist before calling this.
+    void erase(const shared_memtable& element) {
+        _memtables.erase(boost::range::find(_memtables, element));
+    }
+    void clear() {
+        _memtables.clear();
+    }
+
+    size_t size() const {
+        return _memtables.size();
+    }
+
+    future<> seal_active_memtable() {
+        return _seal_fn();
+    }
+
+    void emplace_back(shared_memtable mt) {
+        _memtables.emplace_back(std::move(mt));
+    }
+
+    auto begin() noexcept {
+        return _memtables.begin();
+    }
+
+    auto begin() const noexcept {
+        return _memtables.begin();
+    }
+
+    auto end() noexcept {
+        return _memtables.end();
+    }
+
+    auto end() const noexcept {
+        return _memtables.end();
+    }
+
+};
+
 using sstable_list = sstables::sstable_list;
 
 // The CF has a "stats" structure. But we don't want all fields here,

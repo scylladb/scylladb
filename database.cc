@@ -85,7 +85,7 @@ public:
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared(memtable_list{}))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
@@ -101,7 +101,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared(memtable_list{}))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
@@ -140,7 +140,7 @@ column_family::~column_family() {
 
 logalloc::occupancy_stats column_family::occupancy() const {
     logalloc::occupancy_stats res;
-    for (auto m : *_memtables.get()) {
+    for (auto m : *_memtables) {
         res += m->region().occupancy();
     }
     return res;
@@ -637,7 +637,7 @@ column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
                     dblog.error("failed to move memtable to cache: {}", std::current_exception());
                 }
 
-                _memtables->erase(boost::range::find(*_memtables, old));
+                _memtables->erase(old);
                 dblog.debug("Memtable replaced");
 
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -659,7 +659,7 @@ column_family::start() {
 
 future<>
 column_family::stop() {
-    seal_active_memtable();
+    _memtables->seal_active_memtable();
     return _compaction_manager.remove(this).then([this] {
         return _flush_queue->close();
     });
@@ -1742,7 +1742,7 @@ column_family::seal_on_overflow() {
     if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
         // FIXME: if sparse, do some in-memory compaction first
         // FIXME: maybe merge with other in-memory memtables
-        seal_active_memtable();
+        _memtables->seal_active_memtable();
     }
 }
 
@@ -2279,7 +2279,7 @@ future<> column_family::flush() {
     // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
     // anything about previous writes.
     _stats.pending_flushes++;
-    return seal_active_memtable().finally([this]() mutable {
+    return _memtables->seal_active_memtable().finally([this]() mutable {
         _stats.pending_flushes--;
         // In origin memtable_switch_count is incremented inside
         // ColumnFamilyMeetrics Flush.run
@@ -2301,7 +2301,7 @@ future<> column_family::flush(const db::replay_position& pos) {
     // We ignore this for now and just say that if we're asked for
     // a CF and it exists, we pretty much have to have data that needs
     // flushing. Let's do it.
-    return seal_active_memtable();
+    return _memtables->seal_active_memtable();
 }
 
 void column_family::clear() {
