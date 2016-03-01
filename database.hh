@@ -186,6 +186,8 @@ private:
     }
 
     uint64_t calculate_generation_for_new_table() {
+        // FIXME: better way of ensuring we don't attempt to
+        // overwrite an existing table.
         return _sstable_generation++ * smp::count + engine().cpu_id();
     }
 
