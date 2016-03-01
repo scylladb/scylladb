@@ -2792,6 +2792,9 @@ void storage_proxy::init_messaging_service() {
             return local_schema_registry().get_frozen(v);
         });
     });
+    ms.register_schema_check([] {
+        return make_ready_future<utils::UUID>(get_local_storage_service().db().local().get_version());
+    });
 }
 
 void storage_proxy::uninit_messaging_service() {
@@ -2805,6 +2808,7 @@ void storage_proxy::uninit_messaging_service() {
     ms.unregister_read_digest();
     ms.unregister_truncate();
     ms.unregister_replication_finished();
+    ms.unregister_schema_check();
 }
 
 // Merges reconcilable_result:s from different shards into one
