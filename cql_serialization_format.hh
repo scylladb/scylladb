@@ -44,7 +44,7 @@ public:
     bool operator!=(cql_serialization_format x) const { return !operator==(x); }
     cql_protocol_version_type protocol_version() const { return _version; }
     friend std::ostream& operator<<(std::ostream& out, const cql_serialization_format& sf) {
-        return out << sf._version;
+        return out << static_cast<int>(sf._version);
     }
     bool collection_format_unchanged(cql_serialization_format other = cql_serialization_format::latest()) const {
         return using_32_bits_for_collections() == other.using_32_bits_for_collections();
