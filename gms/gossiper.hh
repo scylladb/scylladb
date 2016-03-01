@@ -99,8 +99,10 @@ private:
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
-    future<> _callback_running = make_ready_future<>();
+    semaphore _callback_running{1};
 public:
+    future<> timer_callback_lock() { return _callback_running.wait(); }
+    void timer_callback_unlock() { _callback_running.signal(); }
     sstring get_cluster_name();
     sstring get_partitioner_name();
     inet_address get_broadcast_address() {

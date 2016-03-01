@@ -483,129 +483,131 @@ void gossiper::do_status_check() {
 }
 
 void gossiper::run() {
-    _callback_running = seastar::async([this, g = this->shared_from_this()] {
-        logger.trace("=== Gossip round START");
+    timer_callback_lock().then([this, g = this->shared_from_this()] {
+        seastar::async([this, g] {
+            logger.trace("=== Gossip round START");
 
-        //wait on messaging service to start listening
-        // MessagingService.instance().waitUntilListening();
+            //wait on messaging service to start listening
+            // MessagingService.instance().waitUntilListening();
 
-        /* Update the local heartbeat counter. */
-        auto br_addr = get_broadcast_address();
-        heart_beat_state& hbs = endpoint_state_map[br_addr].get_heart_beat_state();
-        hbs.update_heart_beat();
+            /* Update the local heartbeat counter. */
+            auto br_addr = get_broadcast_address();
+            heart_beat_state& hbs = endpoint_state_map[br_addr].get_heart_beat_state();
+            hbs.update_heart_beat();
 
-        //
-        // We don't care about heart_beat change on other CPUs - so ingnore this
-        // specific change.
-        //
-        _shadow_endpoint_state_map[br_addr].set_heart_beat_state(hbs);
+            //
+            // We don't care about heart_beat change on other CPUs - so ingnore this
+            // specific change.
+            //
+            _shadow_endpoint_state_map[br_addr].set_heart_beat_state(hbs);
 
-        logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
-        std::vector<gossip_digest> g_digests;
-        this->make_random_gossip_digest(g_digests);
+            logger.trace("My heartbeat is now {}", endpoint_state_map[br_addr].get_heart_beat_state().get_heart_beat_version());
+            std::vector<gossip_digest> g_digests;
+            this->make_random_gossip_digest(g_digests);
 
-        if (g_digests.size() > 0) {
-            gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
+            if (g_digests.size() > 0) {
+                gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
-            _gossiped_to_seed = false;
+                _gossiped_to_seed = false;
 
-            /* Gossip to some random live member */
-            do_gossip_to_live_member(message).handle_exception([] (auto ep) {
-                logger.trace("Faill to do_gossip_to_live_member: {}", ep);
-            });
-
-            /* Gossip to some unreachable member with some probability to check if he is back up */
-            do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
-                logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
-            });
-
-            /* Gossip to a seed if we did not do so above, or we have seen less nodes
-               than there are seeds.  This prevents partitions where each group of nodes
-               is only gossiping to a subset of the seeds.
-
-               The most straightforward check would be to check that all the seeds have been
-               verified either as live or unreachable.  To avoid that computation each round,
-               we reason that:
-
-               either all the live nodes are seeds, in which case non-seeds that come online
-               will introduce themselves to a member of the ring by definition,
-
-               or there is at least one non-seed node in the list, in which case eventually
-               someone will gossip to it, and then do a gossip to a random seed from the
-               gossipedToSeed check.
-
-               See CASSANDRA-150 for more exposition. */
-            logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}",
-                         _gossiped_to_seed, _live_endpoints.size(), _seeds.size());
-            if (!_gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
-                do_gossip_to_seed(message).handle_exception([] (auto ep) {
-                    logger.trace("Faill to do_gossip_to_seed: {}", ep);
+                /* Gossip to some random live member */
+                do_gossip_to_live_member(message).handle_exception([] (auto ep) {
+                    logger.trace("Faill to do_gossip_to_live_member: {}", ep);
                 });
-            }
 
-            do_status_check();
-        }
+                /* Gossip to some unreachable member with some probability to check if he is back up */
+                do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
+                    logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
+                });
 
-        //
-        // Gossiper task runs only on CPU0:
-        //
-        //    - If endpoint_state_map or _live_endpoints have changed - duplicate
-        //      them across all other shards.
-        //    - Reschedule the gossiper only after execution on all nodes is done.
-        //
-        bool endpoint_map_changed = (_shadow_endpoint_state_map != endpoint_state_map);
-        bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
-        bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
+                /* Gossip to a seed if we did not do so above, or we have seen less nodes
+                   than there are seeds.  This prevents partitions where each group of nodes
+                   is only gossiping to a subset of the seeds.
 
-        if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
-            if (endpoint_map_changed) {
-                _shadow_endpoint_state_map = endpoint_state_map;
-            }
+                   The most straightforward check would be to check that all the seeds have been
+                   verified either as live or unreachable.  To avoid that computation each round,
+                   we reason that:
 
-            if (live_endpoint_changed) {
-                _shadow_live_endpoints = _live_endpoints;
-            }
+                   either all the live nodes are seeds, in which case non-seeds that come online
+                   will introduce themselves to a member of the ring by definition,
 
-            if (unreachable_endpoint_changed) {
-                _shadow_unreachable_endpoints = _unreachable_endpoints;
-            }
+                   or there is at least one non-seed node in the list, in which case eventually
+                   someone will gossip to it, and then do a gossip to a random seed from the
+                   gossipedToSeed check.
 
-            _the_gossiper.invoke_on_all([this, endpoint_map_changed,
-                live_endpoint_changed, unreachable_endpoint_changed] (gossiper& local_gossiper) {
-                // Don't copy gossiper(CPU0) maps into themselves!
-                if (engine().cpu_id() != 0) {
-                    if (endpoint_map_changed) {
-                        local_gossiper.endpoint_state_map = _shadow_endpoint_state_map;
-                    }
-
-                    if (live_endpoint_changed) {
-                        local_gossiper._live_endpoints = _shadow_live_endpoints;
-                    }
-
-                    if (unreachable_endpoint_changed) {
-                        local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
-                    }
+                   See CASSANDRA-150 for more exposition. */
+                logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}",
+                             _gossiped_to_seed, _live_endpoints.size(), _seeds.size());
+                if (!_gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
+                    do_gossip_to_seed(message).handle_exception([] (auto ep) {
+                        logger.trace("Faill to do_gossip_to_seed: {}", ep);
+                    });
                 }
-            }).get();
-        }
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            _nr_run++;
-            logger.trace("=== Gossip round OK");
-        } catch (...) {
-            logger.trace("=== Gossip round FAIL");
-        }
 
-        if (logger.is_enabled(logging::log_level::trace)) {
-            for (auto& x : endpoint_state_map) {
-                logger.trace("ep={}, eps={}", x.first, x.second);
+                do_status_check();
             }
-        }
-        if (_enabled) {
-            _scheduled_gossip_task.arm(INTERVAL);
-        }
-        return make_ready_future<>();
+
+            //
+            // Gossiper task runs only on CPU0:
+            //
+            //    - If endpoint_state_map or _live_endpoints have changed - duplicate
+            //      them across all other shards.
+            //    - Reschedule the gossiper only after execution on all nodes is done.
+            //
+            bool endpoint_map_changed = (_shadow_endpoint_state_map != endpoint_state_map);
+            bool live_endpoint_changed = (_live_endpoints != _shadow_live_endpoints);
+            bool unreachable_endpoint_changed = (_unreachable_endpoints != _shadow_unreachable_endpoints);
+
+            if (endpoint_map_changed || live_endpoint_changed || unreachable_endpoint_changed) {
+                if (endpoint_map_changed) {
+                    _shadow_endpoint_state_map = endpoint_state_map;
+                }
+
+                if (live_endpoint_changed) {
+                    _shadow_live_endpoints = _live_endpoints;
+                }
+
+                if (unreachable_endpoint_changed) {
+                    _shadow_unreachable_endpoints = _unreachable_endpoints;
+                }
+
+                _the_gossiper.invoke_on_all([this, endpoint_map_changed,
+                    live_endpoint_changed, unreachable_endpoint_changed] (gossiper& local_gossiper) {
+                    // Don't copy gossiper(CPU0) maps into themselves!
+                    if (engine().cpu_id() != 0) {
+                        if (endpoint_map_changed) {
+                            local_gossiper.endpoint_state_map = _shadow_endpoint_state_map;
+                        }
+
+                        if (live_endpoint_changed) {
+                            local_gossiper._live_endpoints = _shadow_live_endpoints;
+                        }
+
+                        if (unreachable_endpoint_changed) {
+                            local_gossiper._unreachable_endpoints = _shadow_unreachable_endpoints;
+                        }
+                    }
+                }).get();
+            }
+        }).then_wrapped([this] (auto&& f) {
+            try {
+                f.get();
+                _nr_run++;
+                logger.trace("=== Gossip round OK");
+            } catch (...) {
+                logger.trace("=== Gossip round FAIL");
+            }
+
+            if (logger.is_enabled(logging::log_level::trace)) {
+                for (auto& x : endpoint_state_map) {
+                    logger.trace("ep={}, eps={}", x.first, x.second);
+                }
+            }
+            if (_enabled) {
+                _scheduled_gossip_task.arm(INTERVAL);
+            }
+            this->timer_callback_unlock();
+        });
     });
 }
 
@@ -1466,7 +1468,7 @@ future<> gossiper::do_stop_gossiping() {
             logger.warn("No local state or state is in silent shutdown, not announcing shutdown");
         }
         _scheduled_gossip_task.cancel();
-        _callback_running.get();
+        timer_callback_lock().get();
         get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
                 get_local_failure_detector().unregister_failure_detection_event_listener(&g);
