@@ -98,7 +98,7 @@ public:
     class segment;
 
 private:
-    std::unique_ptr<segment_manager> _segment_manager;
+    ::shared_ptr<segment_manager> _segment_manager;
 public:
     enum class sync_mode {
         PERIODIC, BATCH

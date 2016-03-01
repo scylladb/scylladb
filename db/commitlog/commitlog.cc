@@ -148,7 +148,7 @@ const std::string db::commitlog::descriptor::FILENAME_PREFIX(
         "CommitLog" + SEPARATOR);
 const std::string db::commitlog::descriptor::FILENAME_EXTENSION(".log");
 
-class db::commitlog::segment_manager {
+class db::commitlog::segment_manager : public ::enable_shared_from_this<segment_manager> {
 public:
     config cfg;
     const uint64_t max_size;
@@ -278,6 +278,8 @@ public:
 
     scollectd::registrations create_counters();
 
+    void orphan_all();
+
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type& id,
             const replay_position& pos);
@@ -375,7 +377,7 @@ private:
  */
 
 class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
-    segment_manager* _segment_manager;
+    ::shared_ptr<segment_manager> _segment_manager;
 
     descriptor _desc;
     file _file;
@@ -447,8 +449,8 @@ public:
     // TODO : tune initial / default size
     static constexpr size_t default_size = align_up<size_t>(128 * 1024, alignment);
 
-    segment(segment_manager* m, const descriptor& d, file && f, bool active)
-            : _segment_manager(m), _desc(std::move(d)), _file(std::move(f)), _sync_time(
+    segment(::shared_ptr<segment_manager> m, const descriptor& d, file && f, bool active)
+            : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)), _sync_time(
                     clock_type::now()), _queue(0)
     {
         ++_segment_manager->totals.segments_created;
@@ -1044,7 +1046,7 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     return open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d, active](file f) {
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
-            auto s = make_lw_shared<segment>(this, d, std::move(f), active);
+            auto s = make_lw_shared<segment>(this->shared_from_this(), d, std::move(f), active);
             return make_ready_future<sseg_ptr>(s);
         });
     });
@@ -1158,6 +1160,9 @@ future<> db::commitlog::segment_manager::shutdown() {
     return make_ready_future<>();
 }
 
+void db::commitlog::segment_manager::orphan_all() {
+    _segments.clear();
+}
 
 /*
  * Sync all segments, then clear them out. To ensure all ops are done.
@@ -1171,7 +1176,7 @@ future<> db::commitlog::segment_manager::clear() {
         for (auto& s : _segments) {
             s->mark_clean();
         }
-       _segments.clear();
+        orphan_all();
     });
 }
 /**
@@ -1346,7 +1351,7 @@ future<db::replay_position> db::commitlog::add_entry(const cf_id_type& id, const
 }
 
 db::commitlog::commitlog(config cfg)
-        : _segment_manager(new segment_manager(std::move(cfg))) {
+        : _segment_manager(::make_shared<segment_manager>(std::move(cfg))) {
 }
 
 db::commitlog::commitlog(commitlog&& v) noexcept
@@ -1354,6 +1359,9 @@ db::commitlog::commitlog(commitlog&& v) noexcept
 }
 
 db::commitlog::~commitlog() {
+    if (_segment_manager != nullptr) {
+        _segment_manager->orphan_all();
+    }
 }
 
 future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
