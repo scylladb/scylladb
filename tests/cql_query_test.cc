@@ -1913,6 +1913,13 @@ SEASTAR_TEST_CASE(test_compact_storage) {
             assert_that(msg).is_rows().with_rows({
                 { int32_type->decompose(1), int32_type->decompose(3), {}, int32_type->decompose(6) },
             });
+            return e.execute_cql("create table tcs4 (p1 int PRIMARY KEY, c1 int, c2 int) with compact storage;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into tcs4 (p1) values (1);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from tcs4;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({ });
         });
     });
 }
