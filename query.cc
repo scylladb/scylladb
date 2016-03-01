@@ -29,6 +29,8 @@
 #include "bytes.hh"
 #include "mutation.hh"
 #include "mutation_partition_serializer.hh"
+#include "query-result-reader.hh"
+#include "query_result_merger.hh"
 
 namespace query {
 
@@ -150,5 +152,26 @@ result::result()
         return out;
     }())
 { }
+
+foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
+    if (_partial.size() == 1) {
+        return std::move(_partial[0]);
+    }
+
+    bytes_ostream w;
+    auto partitions = ser::writer_of_query_result(w).start_partitions();
+
+    for (auto&& r : _partial) {
+        result_view::do_with(*r, [&] (result_view rv) {
+            for (auto&& pv : rv._v.partitions()) {
+                partitions.add(pv);
+            }
+        });
+    }
+
+    std::move(partitions).end_partitions().end_query_result();
+
+    return make_foreign(make_lw_shared<query::result>(std::move(w)));
+}
 
 }
