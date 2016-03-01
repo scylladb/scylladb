@@ -160,7 +160,7 @@ private:
     rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
     int64_t _sstable_generation = 1;
-    unsigned _mutation_count = 0;
+
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog
     db::commitlog* _commitlog;

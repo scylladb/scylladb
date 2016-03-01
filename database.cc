@@ -1718,11 +1718,9 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
 
 void
 column_family::seal_on_overflow() {
-    ++_mutation_count;
     if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
         // FIXME: if sparse, do some in-memory compaction first
         // FIXME: maybe merge with other in-memory memtables
-        _mutation_count = 0;
         seal_active_memtable();
     }
 }
