@@ -44,6 +44,22 @@ commitlog_entry::commitlog_entry(stdx::optional<column_mapping> mapping, const f
       , _mutation(mutation)
 { }
 
+commitlog_entry::commitlog_entry(commitlog_entry&& ce)
+    : _mapping(std::move(ce._mapping))
+    , _mutation_storage(std::move(ce._mutation_storage))
+    , _mutation(_mutation_storage ? *_mutation_storage : ce._mutation)
+{
+}
+
+commitlog_entry& commitlog_entry::operator=(commitlog_entry&& ce)
+{
+    if (this != &ce) {
+        this->~commitlog_entry();
+        new (this) commitlog_entry(std::move(ce));
+    }
+    return *this;
+}
+
 commitlog_entry commitlog_entry_writer::get_entry() const {
     if (_with_schema) {
         return commitlog_entry(_schema->get_column_mapping(), _mutation);

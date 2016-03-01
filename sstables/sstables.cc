@@ -931,6 +931,14 @@ future<> sstable::open_data() {
             return _index_file.size().then([this] (auto size) {
               _index_file_size = size;
             });
+        }).then([this] {
+            // Get disk usage for this sstable (includes all components).
+            _bytes_on_disk = 0;
+            return do_for_each(_components, [this] (component_type c) {
+                return engine().file_size(this->filename(c)).then([this] (uint64_t bytes) {
+                    _bytes_on_disk += bytes;
+                });
+            });
         });
 
     });
@@ -1446,17 +1454,9 @@ uint64_t sstable::data_size() const {
     return _data_file_size;
 }
 
-future<uint64_t> sstable::bytes_on_disk() {
-    if (_bytes_on_disk) {
-        return make_ready_future<uint64_t>(_bytes_on_disk);
-    }
-    return do_for_each(_components, [this] (component_type c) {
-        return engine().file_size(filename(c)).then([this] (uint64_t bytes) {
-            _bytes_on_disk += bytes;
-        });
-    }).then([this] {
-        return make_ready_future<uint64_t>(_bytes_on_disk);
-    });
+uint64_t sstable::bytes_on_disk() {
+    assert(_bytes_on_disk > 0);
+    return _bytes_on_disk;
 }
 
 const bool sstable::has_component(component_type f) const {

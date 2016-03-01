@@ -516,9 +516,9 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
     });
 }
 
-void column_family::update_stats_for_new_sstable(uint64_t new_sstable_data_size) {
-    _stats.live_disk_space_used += new_sstable_data_size;
-    _stats.total_disk_space_used += new_sstable_data_size;
+void column_family::update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable) {
+    _stats.live_disk_space_used += disk_space_used_by_sstable;
+    _stats.total_disk_space_used += disk_space_used_by_sstable;
     _stats.live_sstable_count++;
 }
 
@@ -530,7 +530,7 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     auto generation = sstable->generation();
     // allow in-progress reads to continue using old list
     _sstables = make_lw_shared<sstable_list>(*_sstables);
-    update_stats_for_new_sstable(sstable->data_size());
+    update_stats_for_new_sstable(sstable->bytes_on_disk());
     _sstables->emplace(generation, std::move(sstable));
 }
 

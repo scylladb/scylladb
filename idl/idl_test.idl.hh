@@ -65,3 +65,8 @@ struct writable_variants stub [[writable]] {
     boost::variant<writable_vector, simple_compound, writable_final_simple_compound> second;
     boost::variant<writable_vector, simple_compound, writable_final_simple_compound> third;
 };
+
+struct compound_with_optional {
+    std::experimental::optional<simple_compound> first;
+    simple_compound second;
+};
