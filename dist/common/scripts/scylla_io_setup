@@ -18,7 +18,12 @@ is_supported_instance_type() {
 }
 
 is_developer_mode() {
-    . /etc/sysconfig/scylla-server
+    . /etc/os-release
+    if [ "$NAME" = "Ubuntu" ]; then
+        . /etc/default/scylla-server
+    else
+        . /etc/sysconfig/scylla-server
+    fi
     echo $SCYLLA_ARGS|egrep -c "\-\-developer-mode(\s+|=)1"
 }
 
