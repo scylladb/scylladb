@@ -25,6 +25,7 @@
 #include <vector>
 #include <sstream>
 #include <unordered_set>
+#include <experimental/optional>
 
 template<typename PrintableRange>
 static inline
@@ -83,5 +84,15 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_set<T>& items) {
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::set<T>& items) {
     os << "{" << join(", ", items) << "}";
+    return os;
+}
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::experimental::optional<T>& opt) {
+    if (opt) {
+        os << "{" << *opt << "}";
+    } else {
+        os << "{}";
+    }
     return os;
 }
