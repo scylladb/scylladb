@@ -43,6 +43,7 @@
 #include "query_pager.hh"
 #include "cql3/selection/selection.hh"
 #include "log.hh"
+#include "to_string.hh"
 
 static logging::logger logger("paging");
 
@@ -79,7 +80,7 @@ private:
 
             auto reversed = _cmd->slice.options.contains<query::partition_slice::option::reversed>();
 
-            logger.trace("PKey={}, CKey={}, reversed={}", dpk, *_last_ckey, reversed);
+            logger.trace("PKey={}, CKey={}, reversed={}", dpk, _last_ckey, reversed);
 
             // Note: we're assuming both that the ranges are checked
             // and "cql-compliant", and that storage_proxy will process
