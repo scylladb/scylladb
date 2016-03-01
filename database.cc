@@ -589,9 +589,7 @@ column_family::seal_active_memtable() {
 
 future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
-    // FIXME: better way of ensuring we don't attempt to
-    //        overwrite an existing table.
-    auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+    auto gen = calculate_generation_for_new_table();
 
     auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
         _config.datadir, gen,
