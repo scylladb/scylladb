@@ -797,9 +797,10 @@ template<>
 struct serializer<${type}_view> {
     template<typename Input>
     static ${type}_view read(Input& v) {
-        ${type}_view res{v};
+        auto v_start = v;
+        auto start_size = v.size();
         skip(v, boost::type<${type}_view>());
-        return res;
+        return ${type}_view{v_start.read_substream(start_size - v.size())};
     }
     template<typename Output>
     static void write(Output& out, ${type}_view v) {
