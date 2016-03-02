@@ -1,1 +1,1 @@
-scylla ALL=(ALL) NOPASSWD:SETENV: /usr/lib/scylla/scylla_prepare,/usr/lib/scylla/scylla_stop
+scylla ALL=(ALL) NOPASSWD:SETENV: /usr/lib/scylla/scylla_prepare,/usr/lib/scylla/scylla_stop,/usr/lib/scylla/scylla_io_setup
