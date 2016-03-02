@@ -173,12 +173,12 @@ public:
     }
 
     managed_bytes(bytes_view v) : managed_bytes(initialized_later(), v.size()) {
-        auto p = v.data();
-        auto s = v.size();
         if (!external()) {
-            memcpy(_u.small.data, p, s);
+            std::copy(v.begin(), v.end(), _u.small.data);
             return;
         }
+        auto p = v.data();
+        auto s = v.size();
         auto b = _u.ptr;
         while (s) {
             memcpy(b->data, p, b->frag_size);
