@@ -558,7 +558,7 @@ public:
                                     throw;
                                 }
                             });
-        }).finally([this] {
+        }).finally([this, me] {
             end_flush();
         });
     }
@@ -647,7 +647,7 @@ public:
         forget_schema_versions();
 
         // acquire read lock
-        return begin_write().then([this, size, off, buf = std::move(buf), me]() mutable {
+        return begin_write().then([this, size, off, buf = std::move(buf)]() mutable {
             auto written = make_lw_shared<size_t>(0);
             auto p = buf.get();
             return repeat([this, size, off, written, p]() mutable {
