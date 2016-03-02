@@ -1162,6 +1162,7 @@ future<> db::commitlog::segment_manager::shutdown() {
 
 void db::commitlog::segment_manager::orphan_all() {
     _segments.clear();
+    _reserve_segments.clear();
 }
 
 /*
