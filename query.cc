@@ -20,14 +20,12 @@
  */
 
 #include <limits>
-#include "db/serializer.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "query-result-writer.hh"
 #include "query-result-set.hh"
 #include "to_string.hh"
 #include "bytes.hh"
-#include "mutation.hh"
 #include "mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"

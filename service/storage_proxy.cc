@@ -41,7 +41,6 @@
 
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
-#include "db/serializer.hh"
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
 #include "frozen_mutation.hh"
@@ -50,7 +49,6 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
-#include "db/serializer.hh"
 #include "storage_service.hh"
 #include "core/future-util.hh"
 #include "db/read_repair_decision.hh"

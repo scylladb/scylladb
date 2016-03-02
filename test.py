@@ -40,7 +40,6 @@ boost_tests = [
     'sstable_mutation_test',
     'commitlog_test',
     'hash_test',
-    'serializer_test',
     'test-serialization',
     'cartesian_product_test',
     'allocation_strategy_test',

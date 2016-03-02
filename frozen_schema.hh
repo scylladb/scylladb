@@ -23,7 +23,6 @@
 
 #include "query-result.hh"
 #include "schema.hh"
-#include "db/serializer.hh"
 #include "frozen_mutation.hh"
 
 // Transport for schema_ptr across shards/nodes.
@@ -38,6 +37,5 @@ public:
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
     schema_ptr unfreeze() const;
-    friend class db::serializer<frozen_schema>;
     bytes_view representation() const;
 };

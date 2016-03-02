@@ -25,7 +25,6 @@
 #include "query-result.hh"
 #include "mutation_reader.hh"
 #include "frozen_mutation.hh"
-#include "db/serializer.hh"
 
 class reconcilable_result;
 class frozen_reconcilable_result;

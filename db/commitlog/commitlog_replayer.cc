@@ -53,7 +53,6 @@
 #include "database.hh"
 #include "sstables/sstables.hh"
 #include "db/system_keyspace.hh"
-#include "db/serializer.hh"
 #include "cql3/query_processor.hh"
 #include "log.hh"
 #include "converting_mutation_partition_applier.hh"

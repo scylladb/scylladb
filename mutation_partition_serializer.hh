@@ -47,7 +47,4 @@ public:
 public:
     void write(bytes_ostream&) const;
     void write(ser::writer_of_mutation_partition&&) const;
-public:
-    static mutation_partition_view read_as_view(data_input&);
-    static mutation_partition read(data_input&, schema_ptr);
 };

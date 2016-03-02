@@ -25,7 +25,6 @@
 #include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 #include "query-request.hh"
-#include "db/serializer.hh"
 
 namespace query {
 
