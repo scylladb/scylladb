@@ -22,7 +22,6 @@
 
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"
-#include "db/serializer.hh"
 
 #include "utils/UUID.hh"
 #include "serializer.hh"
@@ -176,24 +175,4 @@ mutation_partition_serializer::write(bytes_ostream& out) const {
 void mutation_partition_serializer::write(ser::writer_of_mutation_partition&& wr) const
 {
     write_serialized(std::move(wr), _schema, _p);
-}
-
-mutation_partition_view
-mutation_partition_serializer::read_as_view(data_input& in) {
-    auto di = in;
-    auto bv = di.read_view(di.avail());
-    seastar::simple_input_stream s(reinterpret_cast<const char*>(bv.data()), bv.size());
-    auto mpv = mutation_partition_view::from_stream(s);
-
-    auto s2 = s;
-    ser::skip(s2, boost::type<ser::mutation_partition_view>());
-    in.skip(s.size() - s2.size());
-    return std::move(mpv);
-}
-
-mutation_partition
-mutation_partition_serializer::read(data_input& in, schema_ptr s) {
-    mutation_partition p(s);
-    p.apply(*s, read_as_view(in), *s);
-    return p;
 }
