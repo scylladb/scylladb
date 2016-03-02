@@ -843,6 +843,9 @@ public:
     sstring get_release_version();
 
     sstring get_schema_version();
+
+    future<std::unordered_map<sstring, std::vector<sstring>>> describe_schema_versions();
+
 #if 0
     public List<String> getLeavingNodes()
     {

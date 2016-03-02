@@ -1378,6 +1378,51 @@ sstring storage_service::get_schema_version() {
     return _db.local().get_version().to_sstring();
 }
 
+static constexpr auto UNREACHABLE = "UNREACHABLE";
+
+future<std::unordered_map<sstring, std::vector<sstring>>> storage_service::describe_schema_versions() {
+    auto live_hosts = gms::get_local_gossiper().get_live_members();
+    std::unordered_map<sstring, std::vector<sstring>> results;
+    return map_reduce(std::move(live_hosts), [] (auto host) {
+        auto f0 = net::get_messaging_service().local().send_schema_check(net::msg_addr{ host, 0 });
+        return std::move(f0).then_wrapped([host] (auto f) {
+            if (f.failed()) {
+                return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, stdx::nullopt);
+            }
+            return std::pair<gms::inet_address, stdx::optional<utils::UUID>>(host, f.get0());
+        });
+    }, std::move(results), [] (auto results, auto host_and_version) {
+        auto version = host_and_version.second ? host_and_version.second->to_sstring() : UNREACHABLE;
+        auto it = results.find(version);
+        if (it == results.end()) {
+            results.emplace(std::move(version), std::vector<sstring> { host_and_version.first.to_sstring() });
+        } else {
+            it->second.emplace_back(host_and_version.first.to_sstring());
+        }
+        return results;
+    }).then([] (auto results) {
+        // we're done: the results map is ready to return to the client.  the rest is just debug logging:
+        auto it_unreachable = results.find(UNREACHABLE);
+        if (it_unreachable != results.end()) {
+            logger.debug("Hosts not in agreement. Didn't get a response from everybody: {}", ::join( ",", it_unreachable->second));
+        }
+        auto my_version = get_local_storage_service().get_schema_version();
+        for (auto&& entry : results) {
+            // check for version disagreement. log the hosts that don't agree.
+            if (entry.first == UNREACHABLE || entry.first == my_version) {
+                continue;
+            }
+            for (auto&& host : entry.second) {
+                logger.debug("{} disagrees ({})", host, entry.first);
+            }
+        }
+        if (results.size() == 1) {
+            logger.debug("Schemas are in agreement.");
+        }
+        return results;
+    });
+};
+
 future<sstring> storage_service::get_operation_mode() {
     return run_with_read_api_lock([] (storage_service& ss) {
         auto mode = ss._operation_mode;
