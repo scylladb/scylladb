@@ -96,7 +96,8 @@ enum class messaging_verb : int32_t {
     // end of streaming verbs
     REPAIR_CHECKSUM_RANGE = 20,
     GET_SCHEMA_VERSION = 21,
-    LAST = 22,
+    SCHEMA_CHECK = 22,
+    LAST = 23,
 };
 
 } // namespace net
@@ -282,6 +283,11 @@ public:
     void register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func);
     void unregister_get_schema_version();
     future<frozen_schema> send_get_schema_version(msg_addr, table_schema_version);
+
+    // Wrapper for SCHEMA_CHECK
+    void register_schema_check(std::function<future<utils::UUID>()>&& func);
+    void unregister_schema_check();
+    future<utils::UUID> send_schema_check(msg_addr);
 
     // Wrapper for READ_MUTATION_DATA
     void register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func);

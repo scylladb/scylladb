@@ -214,16 +214,16 @@ void set_storage_proxy(http_context& ctx, routes& r) {
     });
 
     sp::get_schema_versions.set(r, [](std::unique_ptr<request> req)  {
-        //TBD
-        // FIXME
-        // describe_schema_versions is not implemented yet
-        // this is a work around
-        std::vector<sp::mapper_list> res;
-        sp::mapper_list entry;
-        entry.key = boost::lexical_cast<std::string>(utils::fb_utilities::get_broadcast_address());
-        entry.value.push(service::get_local_storage_service().get_schema_version());
-        res.push_back(entry);
-        return make_ready_future<json::json_return_type>(res);
+        return service::get_local_storage_service().describe_schema_versions().then([] (auto result) {
+            std::vector<sp::mapper_list> res;
+            for (auto e : result) {
+                sp::mapper_list entry;
+                entry.key = std::move(e.first);
+                entry.value = std::move(e.second);
+                res.emplace_back(std::move(entry));
+            }
+            return make_ready_future<json::json_return_type>(std::move(res));
+        });
     });
 
     sp::get_cas_read_timeouts.set(r, [](std::unique_ptr<request> req) {

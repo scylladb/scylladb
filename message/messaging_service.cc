@@ -710,6 +710,16 @@ future<frozen_schema> messaging_service::send_get_schema_version(msg_addr dst, t
     return send_message<frozen_schema>(this, messaging_verb::GET_SCHEMA_VERSION, dst, static_cast<unsigned>(dst.cpu_id), v);
 }
 
+void messaging_service::register_schema_check(std::function<future<utils::UUID>()>&& func) {
+    register_handler(this, net::messaging_verb::SCHEMA_CHECK, std::move(func));
+}
+void messaging_service::unregister_schema_check() {
+    _rpc->unregister_handler(net::messaging_verb::SCHEMA_CHECK);
+}
+future<utils::UUID> messaging_service::send_schema_check(msg_addr dst) {
+    return send_message<utils::UUID>(this, net::messaging_verb::SCHEMA_CHECK, dst);
+}
+
 void messaging_service::register_read_mutation_data(std::function<future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
     register_handler(this, net::messaging_verb::READ_MUTATION_DATA, std::move(func));
 }

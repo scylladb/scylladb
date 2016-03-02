@@ -60,6 +60,9 @@ public:
     bool is_broadcast_address() {
         return _addr == net::ipv4::broadcast_address();
     }
+    sstring to_sstring() const {
+        return sprint("%s", *this);
+    }
     friend inline bool operator==(const inet_address& x, const inet_address& y) {
         return x._addr == y._addr;
     }
