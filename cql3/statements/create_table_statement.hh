@@ -51,6 +51,7 @@
 
 #include "core/shared_ptr.hh"
 
+#include <seastar/util/indirect.hh>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -139,7 +140,8 @@ private:
     create_table_statement::column_set_type _static_columns;
 
     bool _use_compact_storage = false;
-    std::multiset<::shared_ptr<column_identifier>> _defined_names;
+    std::multiset<::shared_ptr<column_identifier>,
+            indirect_less<::shared_ptr<column_identifier>, column_identifier::text_comparator>> _defined_names;
     bool _if_not_exists;
 public:
     raw_statement(::shared_ptr<cf_name> name, bool if_not_exists);

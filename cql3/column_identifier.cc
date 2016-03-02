@@ -121,3 +121,7 @@ column_identifier::new_selector_factory(database& db, schema_ptr schema, std::ve
 }
 
 }
+
+bool cql3::column_identifier::text_comparator::operator()(const cql3::column_identifier& c1, const cql3::column_identifier& c2) const {
+    return c1.text() < c2.text();
+}
