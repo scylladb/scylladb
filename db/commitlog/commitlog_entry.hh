@@ -25,6 +25,7 @@
 
 #include "frozen_mutation.hh"
 #include "schema.hh"
+#include "utils/data_output.hh"
 
 namespace stdx = std::experimental;
 

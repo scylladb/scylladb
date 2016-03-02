@@ -24,7 +24,6 @@
 #include "mutation_partition_view.hh"
 #include "schema.hh"
 #include "atomic_cell.hh"
-#include "db/serializer.hh"
 #include "utils/data_input.hh"
 #include "mutation_partition_serializer.hh"
 #include "mutation_partition.hh"

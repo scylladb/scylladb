@@ -26,6 +26,7 @@
 #include "query-request.hh"
 #include "query-result.hh"
 #include "schema.hh"
+#include "mutation.hh"
 
 #include <experimental/optional>
 #include <stdexcept>

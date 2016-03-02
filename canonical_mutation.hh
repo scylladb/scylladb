@@ -24,7 +24,6 @@
 #include "bytes.hh"
 #include "schema.hh"
 #include "database_fwd.hh"
-#include "db/serializer.hh"
 #include "mutation_partition_visitor.hh"
 #include "mutation_partition_serializer.hh"
 

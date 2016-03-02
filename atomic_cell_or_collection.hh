@@ -29,9 +29,6 @@
 // Which type is stored is determined by the schema.
 class atomic_cell_or_collection final {
     managed_bytes _data;
-
-    template<typename T>
-    friend class db::serializer;
 private:
     atomic_cell_or_collection(managed_bytes&& data) : _data(std::move(data)) {}
 public:

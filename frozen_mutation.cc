@@ -19,7 +19,6 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "db/serializer.hh"
 #include "frozen_mutation.hh"
 #include "mutation_partition.hh"
 #include "mutation.hh"

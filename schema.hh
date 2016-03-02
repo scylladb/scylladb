@@ -37,7 +37,6 @@
 #include "compress.hh"
 #include "compaction_strategy.hh"
 #include "caching_options.hh"
-#include "db/serializer.hh"
 
 using column_count_type = uint32_t;
 
@@ -324,7 +323,6 @@ public:
         }
         return _columns[id + _n_static];
     }
-    friend class db::serializer<column_mapping>;
 };
 
 /*
