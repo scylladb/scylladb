@@ -409,7 +409,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
         // This is maintaining the semantica of only using the write-lock
         // as a gate for flushing, i.e. once we've begun a flush for position X
         // we are ok with writes to positions > X
-        return _dwrite.write_lock().then(std::bind(&segment_manager::begin_flush, _segment_manager)).finally([this] {
+        return _segment_manager->begin_flush().then(std::bind(&rwlock::write_lock, &_dwrite)).finally([this] {
             _dwrite.write_unlock();
         });
     }
@@ -422,12 +422,12 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
         // This is maintaining the semantica of only using the write-lock
         // as a gate for flushing, i.e. once we've begun a flush for position X
         // we are ok with writes to positions > X
-        return _dwrite.read_lock().then(std::bind(&segment_manager::begin_write, _segment_manager));
+        return _segment_manager->begin_write().then(std::bind(&rwlock::read_lock, &_dwrite));
     }
 
     void end_write() {
-        _segment_manager->end_write();
         _dwrite.read_unlock();
+        _segment_manager->end_write();
     }
 
 public:
