@@ -687,13 +687,18 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
         auto&& s = proxy.local().get_db().local().find_schema(key.keyspace_name, key.table_name);
+        logger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
         dropped.emplace_back(s);
     }
     for (auto&& key : diff.entries_only_on_right) {
-        created.emplace_back(create_table_from_mutations(after.at(key)));
+        auto s = create_table_from_mutations(after.at(key));
+        logger.info("Creating {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        created.emplace_back(s);
     }
     for (auto&& key : diff.entries_differing) {
-        altered.emplace_back(create_table_from_mutations(after.at(key)));
+        auto s = create_table_from_mutations(after.at(key));
+        logger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
+        altered.emplace_back(s);
     }
 
     do_with(utils::make_joinpoint([] { return db_clock::now();})
