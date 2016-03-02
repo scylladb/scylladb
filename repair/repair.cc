@@ -247,18 +247,26 @@ static void check_in_shutdown() {
     repair_tracker.check_in_shutdown();
 }
 
+class sha256_hasher {
+    CryptoPP::SHA256 hash{};
+public:
+    void update(const char* ptr, size_t length) {
+        static_assert(sizeof(char) == sizeof(byte), "Assuming lengths will be the same");
+        hash.Update(reinterpret_cast<const byte*>(ptr), length * sizeof(byte));
+    }
+
+    void finalize(std::array<uint8_t, 32>& digest) {
+        static_assert(CryptoPP::SHA256::DIGESTSIZE == std::tuple_size<std::remove_reference_t<decltype(digest)>>::value * sizeof(digest[0]),
+                "digest size");
+        hash.Final(reinterpret_cast<unsigned char*>(digest.data()));
+    }
+};
+
 
 partition_checksum::partition_checksum(const mutation& m) {
-    auto frozen = freeze(m);
-    auto bytes = frozen.representation();
-    CryptoPP::SHA256 hash;
-    static_assert(CryptoPP::SHA256::DIGESTSIZE == std::tuple_size<decltype(_digest)>::value * sizeof(_digest[0]),
-            "digest size");
-    static_assert(sizeof(char) == sizeof(decltype(*bytes.data())),
-            "Assumed that chars are bytes");
-    hash.CalculateDigest(reinterpret_cast<unsigned char*>(_digest.data()),
-            reinterpret_cast<const unsigned char*>(bytes.data()),
-            bytes.size());
+    sha256_hasher h;
+    feed_hash(h, m);
+    h.finalize(_digest);
 }
 
 static inline unaligned<uint64_t>& qword(std::array<uint8_t, 32>& b, int n) {
