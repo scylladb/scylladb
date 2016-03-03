@@ -1390,11 +1390,6 @@ future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, st
     }).finally([p = shared_from_this()] {});
 }
 
-class digest_mismatch_exception : public std::runtime_error {
-public:
-    digest_mismatch_exception() : std::runtime_error("Digest mismatch") {}
-};
-
 class abstract_read_resolver {
 protected:
     db::consistency_level _cl;
@@ -1442,7 +1437,7 @@ public:
 class digest_read_resolver : public abstract_read_resolver {
     size_t _block_for;
     size_t _cl_responses = 0;
-    promise<> _cl_promise; // cl is reached
+    promise<foreign_ptr<lw_shared_ptr<query::result>>, bool> _cl_promise; // cl is reached
     bool _cl_reported = false;
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     std::vector<query::result_digest> _digest_results;
@@ -1457,14 +1452,6 @@ class digest_read_resolver : public abstract_read_resolver {
     }
     virtual size_t response_count() const override {
         return _digest_results.size();
-    }
-    bool digests_match() const {
-        assert(response_count());
-        if (response_count() == 1) {
-            return true;
-        }
-        auto& first = *_digest_results.begin();
-        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
 public:
     digest_read_resolver(db::consistency_level cl, size_t block_for, std::chrono::steady_clock::time_point timeout) : abstract_read_resolver(cl, 0, timeout), _block_for(block_for) {}
@@ -1484,12 +1471,13 @@ public:
             got_response(from);
         }
     }
-    foreign_ptr<lw_shared_ptr<query::result>> resolve() {
-        assert(_data_result);
-        if (!digests_match()) {
-            throw digest_mismatch_exception();
+    bool digests_match() const {
+        assert(response_count());
+        if (response_count() == 1) {
+            return true;
         }
-        return  std::move(_data_result);
+        auto& first = *_digest_results.begin();
+        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
     bool waiting_for(gms::inet_address ep) {
         return db::is_datacenter_local(_cl) ? is_me(ep) || db::is_local(ep) : true;
@@ -1501,7 +1489,7 @@ public:
             }
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
-                _cl_promise.set_value();
+                _cl_promise.set_value(std::move(_data_result), digests_match());
             }
         }
         if (is_completed()) {
@@ -1509,7 +1497,7 @@ public:
             _done_promise.set_value();
         }
     }
-    future<> has_cl() {
+    future<foreign_ptr<lw_shared_ptr<query::result>>, bool> has_cl() {
         return _cl_promise.get_future();
     }
     bool has_data() {
@@ -1805,37 +1793,41 @@ public:
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<> f) {
+        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) {
             try {
                 exec->got_cl();
-                f.get();
-                exec->_result_promise.set_value(digest_resolver->resolve()); // can throw digest missmatch exception
-                auto done = digest_resolver->done();
-                if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
-                    exec->_proxy->_stats.background_reads++;
-                    done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
-                        try {
-                            f.get();
-                            digest_resolver->resolve();
-                            exec->_proxy->_stats.background_reads--;
-                        } catch(digest_mismatch_exception& ex) {
-                            exec->_proxy->_stats.read_repair_repaired_background++;
-                            exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
-                            exec->reconcile(exec->_cl, timeout);
-                            exec->_result_promise.get_future().then_wrapped([exec] (auto f) {
-                                f.ignore_ready_future(); // ignore any failures during background repair
-                                exec->_proxy->_stats.background_reads--;
-                            });
-                        } catch(...) {
-                            // ignore all exception besides digest mismatch during background check
-                        }
-                    });
-                } else {
-                    done.discard_result(); // no need for background check, discard done future explicitly
+
+                foreign_ptr<lw_shared_ptr<query::result>> result;
+                bool digests_match;
+                std::tie(result, digests_match) = f.get(); // can throw
+
+                if (digests_match) {
+                    exec->_result_promise.set_value(std::move(result));
+                    auto done = digest_resolver->done();
+                    if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
+                        exec->_proxy->_stats.background_reads++;
+                        done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
+                            if (f.failed()) {
+                                f.ignore_ready_future(); // ignore all exception besides digest mismatch during background check
+                            } else {
+                                if (!digest_resolver->digests_match()) {
+                                    exec->_proxy->_stats.read_repair_repaired_background++;
+                                    exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                                    exec->reconcile(exec->_cl, timeout);
+                                    exec->_result_promise.get_future().then_wrapped([exec] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+                                        f.ignore_ready_future(); // ignore any failures during background repair
+                                        exec->_proxy->_stats.background_reads--;
+                                    });
+                                } else {
+                                    exec->_proxy->_stats.background_reads--;
+                                }
+                            }
+                        });
+                    }
+                } else { // digest missmatch
+                    exec->reconcile(exec->_cl, timeout);
+                    exec->_proxy->_stats.read_repair_repaired_blocking++;
                 }
-            } catch (digest_mismatch_exception& ex) {
-                exec->reconcile(exec->_cl, timeout);
-                exec->_proxy->_stats.read_repair_repaired_blocking++;
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
