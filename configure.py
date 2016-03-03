@@ -876,7 +876,7 @@ with open(buildfile, 'w') as f:
                                                                    grammar.source.rsplit('.', 1)[0]))
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
-                f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+                f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
         f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja {seastar_deps}\n'
                 .format(**locals()))
         f.write('  subdir = seastar\n')
