@@ -1443,15 +1443,15 @@ class digest_read_resolver : public abstract_read_resolver {
     size_t _cl_responses = 0;
     promise<> _cl_promise; // cl is reached
     bool _cl_reported = false;
-    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _data_results;
+    foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     std::vector<query::result_digest> _digest_results;
 
     virtual void on_timeout() override {
         if (!_cl_reported) {
-            _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_results.size() != 0));
+            _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_result));
         }
         // we will not need them any more
-        _data_results.clear();
+        _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
         _digest_results.clear();
     }
     virtual size_t response_count() const override {
@@ -1471,7 +1471,9 @@ public:
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : result->digest());
-            _data_results.emplace_back(std::move(result));
+            if (!_data_result) {
+                _data_result = std::move(result);
+            }
             got_response(from);
         }
     }
@@ -1482,11 +1484,11 @@ public:
         }
     }
     foreign_ptr<lw_shared_ptr<query::result>> resolve() {
-        assert(_data_results.size());
+        assert(_data_result);
         if (!digests_match()) {
             throw digest_mismatch_exception();
         }
-        return  std::move(*_data_results.begin());
+        return  std::move(_data_result);
     }
     bool waiting_for(gms::inet_address ep) {
         return db::is_datacenter_local(_cl) ? is_me(ep) || db::is_local(ep) : true;
@@ -1496,7 +1498,7 @@ public:
             if (waiting_for(ep)) {
                 _cl_responses++;
             }
-            if (_cl_responses >= _block_for && _data_results.size()) {
+            if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
                 _cl_promise.set_value();
             }
@@ -1510,7 +1512,7 @@ public:
         return _cl_promise.get_future();
     }
     bool has_data() {
-        return _data_results.size() != 0;
+        return _data_result;
     }
     void add_wait_targets(size_t targets_count) {
         _targets_count += targets_count;
