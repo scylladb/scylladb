@@ -49,8 +49,8 @@ if [ "$RELEASE" = "15.10" ]; then
     sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++/g" debian/control
 else
-    sed -i -e "s/@@COMPILER@@/g++-4.9/g" debian/rules
-    sed -i -e "s/@@COMPILER@@/g++-4.9/g" debian/control
+    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/control
 fi
 
 
@@ -59,8 +59,8 @@ fi
 if [ "$RELEASE" != "15.10" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
-    sudo apt-get -y install g++-4.9
 fi
+sudo apt-get -y install g++-5
 echo Y | sudo mk-build-deps -i -r
 
 debuild -r fakeroot -us -uc
