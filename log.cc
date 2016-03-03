@@ -99,7 +99,9 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
         auto residual_millis =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
         auto tm = std::chrono::system_clock::to_time_t(now);
-        out << std::put_time(std::localtime(&tm), " %Y-%m-%d %T") << sprint(",%03d", residual_millis);
+        char tmp[100];
+        strftime(tmp, sizeof(tmp), "%Y-%m-%d %T", std::localtime(&tm));
+        out << tmp << sprint(",%03d", residual_millis);
         syslog_offset += 24;
     }
     out << " [shard " << engine().cpu_id() << "] " << _name << " - ";
