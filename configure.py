@@ -664,6 +664,8 @@ if args.dpdk:
     seastar_flags += ['--enable-dpdk']
 elif args.dpdk_target:
     seastar_flags += ['--dpdk-target', args.dpdk_target]
+if args.staticcxx:
+    seastar_flags += ['--static-stdc++']
 
 seastar_cflags = args.user_cflags + " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--cflags=%s' % (seastar_cflags)]
