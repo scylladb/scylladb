@@ -1448,7 +1448,7 @@ class digest_read_resolver : public abstract_read_resolver {
     std::vector<query::result_digest> _digest_results;
 
     virtual void on_timeout() override {
-        if (_cl_responses < _block_for) {
+        if (!_cl_reported) {
             _cl_promise.set_exception(read_timeout_exception(_cl, _cl_responses, _block_for, _data_results.size() != 0));
         }
         // we will not need them any more
