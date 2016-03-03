@@ -1,0 +1,9 @@
+#!/bin/sh
+
+IP=$(hostname -i)
+sed -i "s/LOCALHOST/$IP/g" /etc/scylla/scylla.yaml
+/usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 --developer-mode true --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
+
+source /etc/default/scylla-jmx
+export SCYLLA_HOME SCYLLA_CONF
+exec /usr/lib/scylla/jmx/scylla-jmx -l /usr/lib/scylla/jmx &
