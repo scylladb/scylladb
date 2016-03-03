@@ -520,6 +520,7 @@ mutation_partition::query(query::result::partition_writer& pw,
     bool has_ck_selector = pw.ranges().empty();
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
     for (auto&& row_range : pw.ranges()) {
         if (limit == 0) {
             break;
@@ -535,7 +536,13 @@ mutation_partition::query(query::result::partition_writer& pw,
             auto row_tombstone = tombstone_for_row(s, e);
 
             if (row.is_live(s, row_tombstone, now)) {
-                auto cells_wr = rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                auto cells_wr = [&] {
+                    if (send_ck) {
+                        return rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                    } else {
+                        return rows_wr.add().skip_key().start_cells().start_cells();
+                    }
+                }();
                 get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
                               now, cells_wr);
                 std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
