@@ -862,7 +862,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
             std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
 
-    db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
+    db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
 
     return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints));
 }

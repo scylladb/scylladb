@@ -241,7 +241,7 @@ is_sufficient_live_nodes(consistency_level cl,
 
         if (rs.get_type() == replication_strategy_type::network_topology) {
             for (auto& entry : count_per_dc_endpoints(ks, live_endpoints)) {
-                if (entry.second < local_quorum_for(ks, entry.first)) {
+                if (entry.second.live < local_quorum_for(ks, entry.first)) {
                     return false;
                 }
             }

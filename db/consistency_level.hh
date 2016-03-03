@@ -88,10 +88,16 @@ filter_for_query(consistency_level cl,
 
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints);
 
-template <typename Range>
-inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
+struct dc_node_count {
+    size_t live = 0;
+    size_t pending = 0;
+};
+
+template <typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
+inline std::unordered_map<sstring, dc_node_count> count_per_dc_endpoints(
         keyspace& ks,
-        Range& live_endpoints) {
+        Range& live_endpoints,
+        const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
@@ -100,9 +106,9 @@ inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
     network_topology_strategy* nrs =
             static_cast<network_topology_strategy*>(&rs);
 
-    std::unordered_map<sstring, size_t> dc_endpoints;
+    std::unordered_map<sstring, dc_node_count> dc_endpoints;
     for (auto& dc : nrs->get_datacenters()) {
-        dc_endpoints.emplace(dc, 0);
+        dc_endpoints.emplace(dc, dc_node_count());
     }
 
     //
@@ -111,7 +117,11 @@ inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
     // nrs->get_datacenters().
     //
     for (auto& endpoint : live_endpoints) {
-        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)]);
+        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].live);
+    }
+
+    for (auto& endpoint : pending_endpoints) {
+        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)].pending);
     }
 
     return dc_endpoints;
@@ -122,21 +132,23 @@ is_sufficient_live_nodes(consistency_level cl,
                          keyspace& ks,
                          const std::vector<gms::inet_address>& live_endpoints);
 
-template<typename Range>
+template<typename Range, typename PendingRange>
 inline bool assure_sufficient_live_nodes_each_quorum(
         consistency_level cl,
         keyspace& ks,
-        Range& live_endpoints) {
+        Range& live_endpoints,
+        const PendingRange& pending_endpoints) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
 
     if (rs.get_type() == replication_strategy_type::network_topology) {
-        for (auto& entry : count_per_dc_endpoints(ks, live_endpoints)) {
+        for (auto& entry : count_per_dc_endpoints(ks, live_endpoints, pending_endpoints)) {
             auto dc_block_for = local_quorum_for(ks, entry.first);
-            auto dc_live = entry.second;
+            auto dc_live = entry.second.live;
+            auto dc_pending = entry.second.pending;
 
-            if (dc_live < dc_block_for) {
+            if (dc_live < dc_block_for + dc_pending) {
                 throw exceptions::unavailable_exception(cl, dc_block_for, dc_live);
             }
         }
@@ -147,11 +159,12 @@ inline bool assure_sufficient_live_nodes_each_quorum(
     return false;
 }
 
-template<typename Range>
+template<typename Range, typename PendingRange = std::array<gms::inet_address, 0>>
 inline void assure_sufficient_live_nodes(
         consistency_level cl,
         keyspace& ks,
-        Range& live_endpoints) {
+        Range& live_endpoints,
+        const PendingRange& pending_endpoints = std::array<gms::inet_address, 0>()) {
     size_t need = block_for(ks, cl);
 
     switch (cl) {
@@ -159,13 +172,13 @@ inline void assure_sufficient_live_nodes(
         // local hint is acceptable, and local node is always live
         break;
     case consistency_level::LOCAL_ONE:
-        if (count_local_endpoints(live_endpoints) == 0) {
+        if (count_local_endpoints(live_endpoints) < count_local_endpoints(pending_endpoints) + 1) {
             throw exceptions::unavailable_exception(cl, 1, 0);
         }
         break;
     case consistency_level::LOCAL_QUORUM: {
         size_t local_live = count_local_endpoints(live_endpoints);
-        if (local_live < need) {
+        if (local_live < need + count_local_endpoints(pending_endpoints)) {
 #if 0
             if (logger.isDebugEnabled())
             {
@@ -184,14 +197,15 @@ inline void assure_sufficient_live_nodes(
         break;
     }
     case consistency_level::EACH_QUORUM:
-        if (assure_sufficient_live_nodes_each_quorum(cl, ks, live_endpoints)) {
+        if (assure_sufficient_live_nodes_each_quorum(cl, ks, live_endpoints, pending_endpoints)) {
             break;
         }
     // Fallthough on purpose for SimpleStrategy
     default:
         size_t live = live_endpoints.size();
-        if (live < need) {
-            cl_logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", live, need);
+        size_t pending = pending_endpoints.size();
+        if (live < need + pending) {
+            cl_logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required, {} pending)", live, need, pending);
             throw exceptions::unavailable_exception(cl, need, live);
         }
         break;
