@@ -21,8 +21,9 @@
 
 #pragma once
 
-#include "types.hh"
-#include "net/byteorder.hh"
+#include <boost/range/iterator_range.hpp>
+
+#include "bytes.hh"
 #include "core/unaligned.hh"
 #include "hashing.hh"
 #include "seastar/core/simple-stream.hh"
@@ -177,14 +178,6 @@ public:
         }
     };
 
-    // Writes given values in big-endian format
-    template <typename T>
-    inline
-    std::enable_if_t<std::is_fundamental<T>::value, void>
-    write(T val) {
-        *reinterpret_cast<unaligned<T>*>(alloc(sizeof(T))) = net::hton(val);
-    }
-
     // Returns a place holder for a value to be written later.
     template <typename T>
     inline
@@ -220,19 +213,6 @@ public:
 
     void write(const char* ptr, size_t size) {
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
-    }
-
-    // Writes given sequence of bytes with a preceding length component encoded in big-endian format
-    inline void write_blob(bytes_view v) {
-        assert((size_type)v.size() == v.size());
-        write<size_type>(v.size());
-        write(v);
-    }
-
-    // Writes given value into the place holder in big-endian format
-    template <typename T>
-    inline void set(place_holder<T> ph, T val) {
-        *reinterpret_cast<unaligned<T>*>(ph.ptr) = net::hton(val);
     }
 
     bool is_linearized() const {
