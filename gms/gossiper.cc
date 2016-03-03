@@ -1469,6 +1469,12 @@ future<> gossiper::do_stop_gossiping() {
         }
         _scheduled_gossip_task.cancel();
         timer_callback_lock().get();
+        //
+        // Release the timer semaphore since storage_proxy may be waiting for
+        // it.
+        // Gossiper timer is promised to be neither running nor scheduled.
+        //
+        timer_callback_unlock();
         get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
                 get_local_failure_detector().unregister_failure_detection_event_listener(&g);
