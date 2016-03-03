@@ -298,11 +298,11 @@ void gossiper::uninit_messaging_service_handler() {
     _ms_registered = false;
 }
 
-future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
+future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
     std::vector<inet_address> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
     if (size < 1) {
-        return make_ready_future<bool>(false);
+        return make_ready_future<>();
     }
     /* Generate a random number from 0 -> size */
     std::uniform_int_distribution<int> dist(0, size - 1);
@@ -310,13 +310,12 @@ future<bool> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_addr
     inet_address to = __live_endpoints[index];
     auto id = get_msg_addr(to);
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
+    _gossiped_to_seed = _seeds.count(to);
     return ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
         // tries to send a SYN message to a peer node which is down before
         // failure_detector thinks that peer node is down.
         logger.trace("Fail to send GossipDigestSyn to {}: {}", id, ep);
-    }).then([this, to] {
-        return make_ready_future<bool>(_seeds.count(to));
     });
 }
 
@@ -508,11 +507,17 @@ void gossiper::run() {
         if (g_digests.size() > 0) {
             gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
+            _gossiped_to_seed = false;
+
             /* Gossip to some random live member */
-            bool gossiped_to_seed = std::get<0>(do_gossip_to_live_member(message).get());
+            do_gossip_to_live_member(message).handle_exception([] (auto ep) {
+                logger.trace("Faill to do_gossip_to_live_member: {}", ep);
+            });
 
             /* Gossip to some unreachable member with some probability to check if he is back up */
-            do_gossip_to_unreachable_member(message).get();
+            do_gossip_to_unreachable_member(message).handle_exception([] (auto ep) {
+                logger.trace("Faill to do_gossip_to_unreachable_member: {}", ep);
+            });
 
             /* Gossip to a seed if we did not do so above, or we have seen less nodes
                than there are seeds.  This prevents partitions where each group of nodes
@@ -530,9 +535,12 @@ void gossiper::run() {
                gossipedToSeed check.
 
                See CASSANDRA-150 for more exposition. */
-            logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}", gossiped_to_seed, _live_endpoints.size(), _seeds.size());
-            if (!gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
-                do_gossip_to_seed(message).get();
+            logger.trace("gossiped_to_seed={}, _live_endpoints.size={}, _seeds.size={}",
+                         _gossiped_to_seed, _live_endpoints.size(), _seeds.size());
+            if (!_gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
+                do_gossip_to_seed(message).handle_exception([] (auto ep) {
+                    logger.trace("Faill to do_gossip_to_seed: {}", ep);
+                });
             }
 
             do_status_check();
@@ -876,10 +884,10 @@ future<int> gossiper::get_current_heart_beat_version(inet_address endpoint) {
     });
 }
 
-future<bool> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
+future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message) {
     size_t size = _live_endpoints.size();
     if (size == 0) {
-        return make_ready_future<bool>(false);
+        return make_ready_future<>();
     }
     logger.trace("do_gossip_to_live_member: live_endpoint nr={}", _live_endpoints.size());
     if (!_live_endpoints_just_added.empty()) {
@@ -906,7 +914,7 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
             }
             logger.trace("do_gossip_to_unreachable_member: live_endpoint nr={} unreachable_endpoints nr={}",
                 live_endpoint_count, unreachable_endpoint_count);
-            return send_gossip(message, addrs).discard_result();
+            return send_gossip(message, addrs);
         }
     }
     return make_ready_future<>();
@@ -921,7 +929,7 @@ future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
 
         if (_live_endpoints.size() == 0) {
             logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", 0, _seeds.size());
-            return send_gossip(prod, _seeds).discard_result();
+            return send_gossip(prod, _seeds);
         } else {
             /* Gossip with the seed with some probability. */
             double probability = _seeds.size() / (double) (_live_endpoints.size() + _unreachable_endpoints.size());
@@ -929,7 +937,7 @@ future<> gossiper::do_gossip_to_seed(gossip_digest_syn prod) {
             double rand_dbl = dist(_random);
             if (rand_dbl <= probability) {
                 logger.trace("do_gossip_to_seed: live_endpoints nr={}, seeds nr={}", _live_endpoints.size(), _seeds.size());
-                return send_gossip(prod, _seeds).discard_result();
+                return send_gossip(prod, _seeds);
             }
         }
     }
@@ -1352,7 +1360,7 @@ future<> gossiper::do_shadow_round() {
                 logger.trace("Sending a GossipDigestSyn (ShadowRound) to {} ...", id);
                 ms().send_gossip_digest_syn(id, std::move(message)).handle_exception([id] (auto ep) {
                     logger.trace("Fail to send GossipDigestSyn (ShadowRound) to {}: {}", id, ep);
-                }).get();
+                });
             }
             auto& ss = service::get_local_storage_service();
             sleep(std::chrono::seconds(1)).get();

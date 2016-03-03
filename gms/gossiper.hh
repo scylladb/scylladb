@@ -357,10 +357,10 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    future<bool> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    future<> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
 
     /* Sends a Gossip message to a live member and returns true if the recipient was a seed */
-    future<bool> do_gossip_to_live_member(gossip_digest_syn message);
+    future<> do_gossip_to_live_member(gossip_digest_syn message);
 
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
@@ -507,6 +507,7 @@ public:
 private:
     uint64_t _nr_run = 0;
     bool _ms_registered = false;
+    bool _gossiped_to_seed = false;
 };
 
 extern distributed<gossiper> _the_gossiper;
