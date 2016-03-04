@@ -88,7 +88,7 @@ public:
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
@@ -103,7 +103,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
@@ -1727,7 +1727,7 @@ column_family::apply(const mutation& m, const db::replay_position& rp) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     _memtables->active_memtable().apply(m, rp);
-    seal_on_overflow();
+    _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.writes.count);
@@ -1740,19 +1740,10 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     _stats.writes.set_latency(lc);
     check_valid_rp(rp);
     _memtables->active_memtable().apply(m, m_schema, rp);
-    seal_on_overflow();
+    _memtables->seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
         _stats.estimated_write.add(lc.latency(), _stats.writes.count);
-    }
-}
-
-void
-column_family::seal_on_overflow() {
-    if (_memtables->active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
-        // FIXME: if sparse, do some in-memory compaction first
-        // FIXME: maybe merge with other in-memory memtables
-        _memtables->seal_active_memtable();
     }
 }
 
