@@ -2497,8 +2497,21 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             return cf.reshuffle_sstables(max_seen_sstable);
         });
-    }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
-        int64_t new_gen = 1;
+    }).then_wrapped([this, ks_name, cf_name] (future<std::vector<sstables::entry_descriptor>> f) {
+        std::vector<sstables::entry_descriptor> new_tables;
+        std::exception_ptr eptr;
+        int64_t new_gen = -1;
+
+        try {
+            new_tables = f.get0();
+        } catch(std::exception& e) {
+            logger.error("Loading of new tables failed to {}.{} due to {}", ks_name, cf_name, e.what());
+            eptr = std::current_exception();
+        } catch(...) {
+            logger.error("Loading of new tables failed to {}.{} due to unexpected reason", ks_name, cf_name);
+            eptr = std::current_exception();
+        }
+
         if (new_tables.size() > 0) {
             new_gen = new_tables.back().generation;
         }
@@ -2509,8 +2522,11 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
             auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
             logger.info("CF {} at shard {} had SSTables writes disabled for {} usec", cf_name, engine().cpu_id(), disabled);
             return make_ready_future<>();
-        }).then([new_tables = std::move(new_tables)] {
-            return std::move(new_tables);
+        }).then([new_tables = std::move(new_tables), eptr = std::move(eptr)] {
+            if (eptr) {
+                return make_exception_future<std::vector<sstables::entry_descriptor>>(eptr);
+            }
+            return make_ready_future<std::vector<sstables::entry_descriptor>>(std::move(new_tables));
         });
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
