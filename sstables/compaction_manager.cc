@@ -322,7 +322,7 @@ future<> compaction_manager::remove(column_family* cf) {
             return cf == entry;
         }),
         _cfs_to_cleanup.end());
-    _stats.pending_tasks = _cfs_to_compact.size();
+    _stats.pending_tasks = _cfs_to_compact.size() + _cfs_to_cleanup.size();
     cf->set_compaction_manager_queued(false);
     // We need to guarantee that a task being stopped will not re-queue the
     // column family being removed.
