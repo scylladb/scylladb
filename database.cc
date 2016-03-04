@@ -85,14 +85,13 @@ public:
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
 {
-    add_memtable();
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
     }
@@ -101,14 +100,13 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }))
+    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
     , _compaction_manager(compaction_manager)
     , _flush_queue(std::make_unique<memtable_flush_queue>())
 {
-    add_memtable();
     if (!_config.enable_disk_writes) {
         dblog.warn("Writes disabled, column family no durable.");
     }
@@ -533,10 +531,8 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     _sstables->emplace(generation, std::move(sstable));
 }
 
-void column_family::add_memtable() {
-    // allow in-progress reads to continue using old list
-    _memtables = make_lw_shared(memtable_list(*_memtables));
-    _memtables->emplace_back(make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group));
+lw_shared_ptr<memtable> column_family::new_memtable() {
+    return make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group);
 }
 
 future<>
@@ -563,7 +559,7 @@ column_family::seal_active_memtable() {
         dblog.debug("Memtable is empty");
         return make_ready_future<>();
     }
-    add_memtable();
+    _memtables->add_memtable();
 
     assert(_highest_flushed_rp < old->replay_position()
     || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
@@ -2307,7 +2303,7 @@ future<> column_family::flush(const db::replay_position& pos) {
 void column_family::clear() {
     _cache.clear();
     _memtables->clear();
-    add_memtable();
+    _memtables->add_memtable();
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
