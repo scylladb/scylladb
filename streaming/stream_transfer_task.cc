@@ -109,7 +109,7 @@ future<stop_iteration> do_send_mutations(auto si, auto fm) {
 
 future<> send_mutations(auto si) {
     auto& cf = si->db.find_column_family(si->cf_id);
-    auto& priority = service::get_local_mutation_stream_priority();
+    auto& priority = service::get_local_streaming_read_priority();
     return do_with(cf.make_reader(cf.schema(), si->pr, priority), [si] (auto& reader) {
         return repeat([si, &reader] () {
             return reader().then([si] (auto mopt) {
