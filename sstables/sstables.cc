@@ -1021,7 +1021,7 @@ static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) 
 
 // Intended to write all cell components that follow column name.
 void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
-    // FIXME: range tombstone and counter cells aren't supported yet.
+    // FIXME: counter cell isn't supported yet.
 
     uint64_t timestamp = cell.timestamp();
 
