@@ -122,8 +122,13 @@ class memtable_list {
     std::vector<shared_memtable> _memtables;
     std::function<future<> ()> _seal_fn;
     std::function<shared_memtable ()> _new_memtable;
+    size_t _max_memtable_size;
 public:
-    memtable_list(std::function<future<> ()> seal_fn, std::function<shared_memtable()> new_mt) : _memtables({}), _seal_fn(seal_fn), _new_memtable(new_mt) {
+    memtable_list(std::function<future<> ()> seal_fn, std::function<shared_memtable()> new_mt, size_t max_memtable_size)
+        : _memtables({})
+        , _seal_fn(seal_fn)
+        , _new_memtable(new_mt)
+        , _max_memtable_size(max_memtable_size) {
         add_memtable();
     }
 
@@ -169,6 +174,13 @@ public:
 
     void add_memtable() {
         _memtables.emplace_back(_new_memtable());
+    }
+    void seal_on_overflow() {
+        if (active_memtable().occupancy().total_space() >= _max_memtable_size) {
+            // FIXME: if sparse, do some in-memory compaction first
+            // FIXME: maybe merge with other in-memory memtables
+            _seal_fn();
+        }
     }
 };
 
@@ -495,7 +507,6 @@ private:
     template <typename Func>
     future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
-    void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
