@@ -12,7 +12,7 @@ print_usage() {
     echo "  --homedir  scylla home directory"
     echo "  --confdir  scylla config directory"
     echo "  --setup-nic  setup NIC's interrupts, RPS, XPS"
-    echo "  -a  AMI instance mode"
+    echo "  --ami  AMI instance mode"
     exit 1
 }
 
@@ -61,8 +61,9 @@ while [ $# -gt 0 ]; do
             SETUP_NIC=1
             shift 1
             ;;
-        "-a")
+        "--ami")
             AMI=yes
+            shift 1
             ;;
         *)
             print_usage
