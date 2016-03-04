@@ -326,7 +326,7 @@ static future<partition_checksum> checksum_range_shard(database &db,
         const ::range<dht::token>& range) {
     auto& cf = db.find_column_family(keyspace_name, cf_name);
     return do_with(query::to_partition_range(range), [&cf] (const auto& partition_range) {
-        return do_with(cf.make_reader(cf.schema(), partition_range, service::get_local_mutation_stream_priority()), partition_checksum(),
+        return do_with(cf.make_reader(cf.schema(), partition_range, service::get_local_streaming_read_priority()), partition_checksum(),
             [] (auto& reader, auto& checksum) {
             return repeat([&reader, &checksum] () {
                 return reader().then([&checksum] (auto mopt) {
