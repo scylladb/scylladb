@@ -1730,7 +1730,7 @@ void
 column_family::apply(const mutation& m, const db::replay_position& rp) {
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
-    active_memtable().apply(m, rp);
+    _memtables->active_memtable().apply(m, rp);
     seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
@@ -1743,7 +1743,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     check_valid_rp(rp);
-    active_memtable().apply(m, m_schema, rp);
+    _memtables->active_memtable().apply(m, m_schema, rp);
     seal_on_overflow();
     _stats.writes.mark(lc);
     if (lc.is_start()) {
@@ -1753,7 +1753,7 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
 
 void
 column_family::seal_on_overflow() {
-    if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
+    if (_memtables->active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
         // FIXME: if sparse, do some in-memory compaction first
         // FIXME: maybe merge with other in-memory memtables
         _memtables->seal_active_memtable();

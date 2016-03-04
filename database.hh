@@ -164,6 +164,9 @@ public:
         return _memtables.end();
     }
 
+    memtable& active_memtable() {
+        return *_memtables.back();
+    }
 };
 
 using sstable_list = sstables::sstable_list;
@@ -318,7 +321,7 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    memtable& active_memtable() { return *_memtables->back(); }
+    memtable& active_memtable() { return _memtables->active_memtable(); }
     const row_cache& get_row_cache() const {
         return _cache;
     }
