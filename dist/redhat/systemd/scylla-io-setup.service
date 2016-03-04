@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/sysconfig/scylla-server
 ExecStart=/usr/lib/scylla/scylla_io_setup
 RemainAfterExit=yes
 TimeoutStartSec=1800
