@@ -413,6 +413,16 @@ private:
 
     input_stream<char> data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc);
 
+    // Return an input_stream which reads exactly the specified byte range
+    // from the data file (after uncompression, if the file is compressed).
+    // Unlike data_read() below, this method does not read the entire byte
+    // range into memory all at once. Rather, this method allows reading the
+    // data incrementally as a stream. Knowing in advance the exact amount
+    // of bytes to be read using this stream, we can make better choices
+    // about the buffer size to read, and where exactly to stop reading
+    // (even when a large buffer size is used).
+    input_stream<char> data_stream(uint64_t pos, size_t len, const io_priority_class& pc);
+
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
     // a specific row from the data file (its position and length can be

@@ -829,21 +829,20 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority
     uint64_t quantity = downsampling::get_effective_index_interval_after_index(summary_idx, _summary.header.sampling_level,
         _summary.header.min_index_interval);
 
-    uint64_t estimated_size;
+    uint64_t end;
     if (++summary_idx >= _summary.header.size) {
-        estimated_size = index_size() - position;
+        end = index_size();
     } else {
-        estimated_size = _summary.entries[summary_idx].position - position;
+        end = _summary.entries[summary_idx].position;
     }
 
-    estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(estimated_size, uint64_t(8 << 10)));
-    estimated_size = std::max<size_t>(estimated_size, 8192);
-
-    return do_with(index_consumer(quantity), [this, position, estimated_size, &pc] (index_consumer& ic) {
+    return do_with(index_consumer(quantity), [this, position, end, &pc] (index_consumer& ic) {
         file_input_stream_options options;
-        options.buffer_size = estimated_size;
+        options.buffer_size = sstable_buffer_size;
         options.io_priority_class = pc;
-        auto stream = make_file_input_stream(this->_index_file, position, std::move(options));
+        auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
+        // TODO: it's redundant to constrain the consumer here to stop at
+        // index_size()-position, the input stream is already constrained.
         auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
         return ctx->consume_input(*ctx).then([ctx, &ic] {
             return make_ready_future<index_list>(std::move(ic.indexes));
@@ -1587,6 +1586,10 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
     return reverse_map(s, _component_map);
 }
 
+// NOTE: Prefer using data_stream() if you know the byte position at which the
+// read will stop. Knowing the end allows data_stream() to use a large a read-
+// ahead buffer before reaching the end, but not over-read at the end, so
+// data_stream() is more efficient than data_stream_at().
 input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc) {
     if (_compression) {
         return make_compressed_file_input_stream(
@@ -1599,13 +1602,26 @@ input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size, cons
     }
 }
 
-// FIXME: to read a specific byte range, we shouldn't use the input stream
-// interface - it may cause too much read when we intend to read a small
-// range, and too small reads, and repeated waits, when reading a large range
-// which we should have started at once.
+input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc) {
+    if (_compression) {
+        // FIXME: we should pass "len" to make_compressed_file_input_stream
+        // to allow it to read-ahead several compressed chunks from disk, and
+        // stop reading ahead when reaching the intended end of the read.
+        // However, currently, the code in compress.cc is not as sophisticated
+        // as the code in fstream.cc, and it reads exactly one compressed
+        // chunk at a time, so the "len" parameter can't help it.
+        return make_compressed_file_input_stream(
+                _data_file, &_compression, pc, pos);
+    } else {
+        file_input_stream_options options;
+        options.buffer_size = sstable_buffer_size;
+        options.io_priority_class = pc;
+        return make_file_input_stream(_data_file, pos, len, std::move(options));
+    }
+}
+
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, const io_priority_class& pc) {
-    auto estimated_size = std::min(uint64_t(sstable_buffer_size), align_up(len, uint64_t(8 << 10)));
-    return do_with(data_stream_at(pos, estimated_size, pc), [len] (auto& stream) {
+    return do_with(data_stream(pos, len, pc), [len] (auto& stream) {
         return stream.read_exactly(len);
     });
 }
