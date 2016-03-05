@@ -386,15 +386,10 @@ private:
     // But it is possible to synchronously wait for the seal to complete by
     // waiting on this future. This is useful in situations where we want to
     // synchronously flush data to disk.
-    //
-    // FIXME: A better interface would guarantee that all writes before this
-    // one are also complete
     future<> seal_active_memtable();
 
     // filter manifest.json files out
     static bool manifest_json_filter(const sstring& fname);
-
-    seastar::gate _in_flight_seals;
 
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
