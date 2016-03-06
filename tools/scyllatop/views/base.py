@@ -13,6 +13,7 @@ class Base(object):
     def writeStatusLine(self, measurements):
         line = 'time: {0}| {1} measurements, at most {2} visible'.format(time.asctime(), len(measurements), self.availableLines())
         columns = self.dimensions()['columns']
+        line = line[:columns]
         self._window.addstr(0, 0, line.ljust(columns), curses.A_REVERSE)
 
     def availableLines(self):
@@ -34,7 +35,13 @@ class Base(object):
         self._window.move(0, 0)
 
     def writeLine(self, thing, line):
-        self._window.addstr(line, 0, str(thing))
+        columns = self.dimensions()['columns']
+        lines = self.dimensions()['lines']
+        if line == lines - 1:
+            output = str(thing)[:columns - 1]
+        else:
+            output = str(thing)
+        self._window.addstr(line, 0, output)
 
     def dimensions(self):
         lines, columns = self._window.getmaxyx()

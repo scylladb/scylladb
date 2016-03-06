@@ -10,8 +10,7 @@ class Simple(base.Base):
         visible = liveData.measurements[:self.availableLines()]
         tableForm = self._prepareTable(visible)
         for index, row in enumerate(tableForm.rows()):
-            line = row[: self.dimensions()['columns']]
-            self.writeLine(line, index + 1)
+            self.writeLine(row, index + 1)
         self.refresh()
 
     def _prepareTable(self, measurements):
