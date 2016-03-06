@@ -1591,31 +1591,25 @@ sstable::component_type sstable::component_from_sstring(sstring &s) {
 // ahead buffer before reaching the end, but not over-read at the end, so
 // data_stream() is more efficient than data_stream_at().
 input_stream<char> sstable::data_stream_at(uint64_t pos, uint64_t buf_size, const io_priority_class& pc) {
+    file_input_stream_options options;
+    options.buffer_size = buf_size;
+    options.io_priority_class = pc;
     if (_compression) {
-        return make_compressed_file_input_stream(
-                _data_file, &_compression, pc, pos);
+        return make_compressed_file_input_stream(_data_file, &_compression,
+                pos, _compression.data_len - pos, std::move(options));
     } else {
-        file_input_stream_options options;
-        options.buffer_size = buf_size;
-        options.io_priority_class = pc;
         return make_file_input_stream(_data_file, pos, std::move(options));
     }
 }
 
 input_stream<char> sstable::data_stream(uint64_t pos, size_t len, const io_priority_class& pc) {
+    file_input_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    options.io_priority_class = pc;
     if (_compression) {
-        // FIXME: we should pass "len" to make_compressed_file_input_stream
-        // to allow it to read-ahead several compressed chunks from disk, and
-        // stop reading ahead when reaching the intended end of the read.
-        // However, currently, the code in compress.cc is not as sophisticated
-        // as the code in fstream.cc, and it reads exactly one compressed
-        // chunk at a time, so the "len" parameter can't help it.
-        return make_compressed_file_input_stream(
-                _data_file, &_compression, pc, pos);
+        return make_compressed_file_input_stream(_data_file, &_compression,
+                pos, len, std::move(options));
     } else {
-        file_input_stream_options options;
-        options.buffer_size = sstable_buffer_size;
-        options.io_priority_class = pc;
         return make_file_input_stream(_data_file, pos, len, std::move(options));
     }
 }

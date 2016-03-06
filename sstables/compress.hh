@@ -202,4 +202,4 @@ public:
 // as long as we have *sstables* work in progress, we need to keep the whole
 // sstable alive, and the compression metadata is only a part of it.
 input_stream<char> make_compressed_file_input_stream(
-        file f, sstables::compression *cm, const io_priority_class& pc, uint64_t offset = 0);
+        file f, sstables::compression *cm, uint64_t offset, size_t len, class file_input_stream_options options);

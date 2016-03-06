@@ -22,8 +22,9 @@
 #include <stdexcept>
 #include <cstdlib>
 
-#include "core/align.hh"
-#include "core/unaligned.hh"
+#include <seastar/core/align.hh>
+#include <seastar/core/unaligned.hh>
+#include <seastar/core/fstream.hh>
 
 #include "compress.hh"
 
@@ -217,23 +218,46 @@ size_t compress_max_size_snappy(size_t input_len) {
 }
 
 class compressed_file_data_source_impl : public data_source_impl {
-    file _file;
+    input_stream<char> _input_stream;
     sstables::compression* _compression_metadata;
-    uint64_t _pos = 0;
-    const io_priority_class* _pc;
+    uint64_t _pos;
+    uint64_t _beg_pos;
+    uint64_t _end_pos;
 public:
-    compressed_file_data_source_impl(file f, const io_priority_class& pc,
-            sstables::compression* cm, uint64_t pos)
-            : _file(std::move(f)), _compression_metadata(cm)
-            , _pos(pos)
-            , _pc(&pc)
-            {}
+    compressed_file_data_source_impl(file f, sstables::compression* cm,
+                uint64_t pos, size_t len, file_input_stream_options options)
+            : _compression_metadata(cm)
+    {
+        _beg_pos = pos;
+        if (pos >= _compression_metadata->data_len) {
+            throw std::runtime_error("attempt to uncompress beyond end");
+        }
+        if (len <= _compression_metadata->data_len - pos) {
+            _end_pos = pos + len;
+        } else {
+            _end_pos = _compression_metadata->data_len;
+        }
+        // _beg_pos and _end_pos specify positions in the compressed stream.
+        // We need to translate them into a range of uncompressed chunks,
+        // and open a file_input_stream to read that range.
+        auto start = _compression_metadata->locate(_beg_pos);
+        auto end = _compression_metadata->locate(_end_pos - 1);
+        _input_stream = make_file_input_stream(std::move(f),
+                start.chunk_start, end.chunk_start + end.chunk_len,
+                std::move(options));
+        _pos = _beg_pos;
+    }
     virtual future<temporary_buffer<char>> get() override {
-        if (_pos >= _compression_metadata->data_len) {
+        if (_pos >= _end_pos) {
             return make_ready_future<temporary_buffer<char>>();
         }
         auto addr = _compression_metadata->locate(_pos);
-        return _file.dma_read_exactly<char>(addr.chunk_start, addr.chunk_len, *_pc).
+        // Uncompress the next chunk. We need to skip part of the first
+        // chunk, but then continue to read from beginning of chunks.
+        if (_pos != _beg_pos && addr.offset != 0) {
+            throw std::runtime_error("compressed reader out of sync");
+        }
+        return _input_stream.read_exactly(addr.chunk_len).
             then([this, addr](temporary_buffer<char> buf) {
                 // The last 4 bytes of the chunk are the adler32 checksum
                 // of the rest of the (compressed) chunk.
@@ -265,16 +289,17 @@ public:
 
 class compressed_file_data_source : public data_source {
 public:
-    compressed_file_data_source(file f, const io_priority_class& pc,
-            sstables::compression* cm, uint64_t offset)
+    compressed_file_data_source(file f, sstables::compression* cm,
+            uint64_t offset, size_t len, file_input_stream_options options)
         : data_source(std::make_unique<compressed_file_data_source_impl>(
-                std::move(f), pc, cm, offset))
+                std::move(f), cm, offset, len, std::move(options)))
         {}
 };
 
 input_stream<char> make_compressed_file_input_stream(
-        file f, sstables::compression* cm, const io_priority_class& pc, uint64_t offset)
+        file f, sstables::compression* cm, uint64_t offset, size_t len,
+        file_input_stream_options options)
 {
     return input_stream<char>(compressed_file_data_source(
-            std::move(f), pc, cm, offset));
+            std::move(f), cm, offset, len, std::move(options)));
 }
