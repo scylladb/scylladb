@@ -588,6 +588,8 @@ void set_storage_service(http_context& ctx, routes& r) {
         auto val_str = req->get_query_param("value");
         bool value = (val_str == "True") || (val_str == "true") || (val_str == "1");
         return service::get_local_storage_service().db().invoke_on_all([value] (database& db) {
+            db.set_enable_incremental_backups(value);
+
             // Change both KS and CF, so they are in sync
             for (auto& pair: db.get_keyspaces()) {
                 auto& ks = pair.second;
