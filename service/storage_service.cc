@@ -2470,6 +2470,8 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         _loading_new_sstables = true;
     }
 
+    logger.info("Loading new SSTables for {}.{}...", ks_name, cf_name);
+
     // First, we need to stop SSTable creation for that CF in all shards. This is a really horrible
     // thing to do, because under normal circumnstances this can make dirty memory go up to the point
     // of explosion.
@@ -2515,12 +2517,15 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         if (new_tables.size() > 0) {
             new_gen = new_tables.back().generation;
         }
+        if (new_tables.empty() && !eptr) {
+            logger.info("No new SSTables were found for {}.{}", ks_name, cf_name);
+        }
 
         logger.debug("Now accepting writes for sstables with generation larger or equal than {}", new_gen);
         return _db.invoke_on_all([ks_name, cf_name, new_gen] (database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             auto disabled = std::chrono::duration_cast<std::chrono::microseconds>(cf.enable_sstable_write(new_gen)).count();
-            logger.info("CF {} at shard {} had SSTables writes disabled for {} usec", cf_name, engine().cpu_id(), disabled);
+            logger.info("CF {}.{} at shard {} had SSTables writes disabled for {} usec", ks_name, cf_name, engine().cpu_id(), disabled);
             return make_ready_future<>();
         }).then([new_tables = std::move(new_tables), eptr = std::move(eptr)] {
             if (eptr) {
@@ -2531,7 +2536,9 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     }).then([this, ks_name, cf_name] (std::vector<sstables::entry_descriptor> new_tables) {
         return _db.invoke_on_all([ks_name = std::move(ks_name), cf_name = std::move(cf_name), new_tables = std::move(new_tables)] (database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.load_new_sstables(new_tables);
+            return cf.load_new_sstables(new_tables).then([ks_name = std::move(ks_name), cf_name = std::move(cf_name)] {
+                logger.info("Done loading new SSTables for {}.{}", ks_name, cf_name);
+            });
         });
     }).finally([this] {
         _loading_new_sstables = false;
