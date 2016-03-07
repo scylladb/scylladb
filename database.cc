@@ -1181,12 +1181,13 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
-                for (auto& t: tables) {
+                return parallel_for_each(tables.begin(), tables.end(), [this] (auto& t) {
                     auto s = t.second;
                     auto& ks = this->find_keyspace(s->ks_name());
                     auto cfg = ks.make_column_family_config(*s);
-                    this->add_column_family(std::move(s), std::move(cfg));
-                }
+                    this->add_column_family(s, std::move(cfg));
+                    return ks.make_directory_for_column_family(s->cf_name(), s->id()).then([s] {});
+                });
             });
         });
     });
