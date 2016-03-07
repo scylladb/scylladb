@@ -1817,7 +1817,6 @@ public:
                 if (digests_match) {
                     exec->_result_promise.set_value(std::move(result));
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
-                        exec->_proxy->_stats.background_reads++;
                         background_repair_check = true;
                     }
                 } else { // digest missmatch
@@ -1828,22 +1827,20 @@ public:
                 exec->_result_promise.set_exception(ex);
             }
 
-            digest_resolver->done().then_wrapped([exec = std::move(exec), digest_resolver, timeout, background_repair_check] (future<>&& f){
-                if (f.failed()) {
-                    f.ignore_ready_future(); // ignore all exceptions during background repair check
-                } else if (background_repair_check) {
-                    if (!digest_resolver->digests_match()) {
-                        exec->_proxy->_stats.read_repair_repaired_background++;
-                        exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
-                        exec->reconcile(exec->_cl, timeout);
-                        exec->_result_promise.get_future().then_wrapped([exec] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
-                            f.ignore_ready_future(); // ignore any failures during background repair
-                            exec->_proxy->_stats.background_reads--;
-                        });
-                    } else {
-                        exec->_proxy->_stats.background_reads--;
-                    }
+            exec->_proxy->_stats.background_reads++;
+            digest_resolver->done().then([exec, digest_resolver, timeout, background_repair_check] () mutable {
+                if (background_repair_check && !digest_resolver->digests_match()) {
+                    exec->_proxy->_stats.read_repair_repaired_background++;
+                    exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                    exec->reconcile(exec->_cl, timeout);
+                    return exec->_result_promise.get_future().discard_result();
+                } else {
+                    return make_ready_future<>();
                 }
+            }).handle_exception([] (std::exception_ptr eptr) {
+                // ignore any failures during background repair
+            }).then([exec] {
+                exec->_proxy->_stats.background_reads--;
             });
         });
 
