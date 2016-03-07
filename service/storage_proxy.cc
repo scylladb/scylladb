@@ -1802,7 +1802,8 @@ public:
             // hold on to executor until all queries are complete
         });
 
-        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) {
+        digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<foreign_ptr<lw_shared_ptr<query::result>>, bool> f) mutable {
+            bool background_repair_check = false;
             try {
                 exec->got_cl();
 
@@ -1812,26 +1813,9 @@ public:
 
                 if (digests_match) {
                     exec->_result_promise.set_value(std::move(result));
-                    auto done = digest_resolver->done();
                     if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
                         exec->_proxy->_stats.background_reads++;
-                        done.then_wrapped([exec, digest_resolver, timeout] (future<>&& f){
-                            if (f.failed()) {
-                                f.ignore_ready_future(); // ignore all exception besides digest mismatch during background check
-                            } else {
-                                if (!digest_resolver->digests_match()) {
-                                    exec->_proxy->_stats.read_repair_repaired_background++;
-                                    exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
-                                    exec->reconcile(exec->_cl, timeout);
-                                    exec->_result_promise.get_future().then_wrapped([exec] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
-                                        f.ignore_ready_future(); // ignore any failures during background repair
-                                        exec->_proxy->_stats.background_reads--;
-                                    });
-                                } else {
-                                    exec->_proxy->_stats.background_reads--;
-                                }
-                            }
-                        });
+                        background_repair_check = true;
                     }
                 } else { // digest missmatch
                     exec->reconcile(exec->_cl, timeout);
@@ -1840,6 +1824,24 @@ public:
             } catch (read_timeout_exception& ex) {
                 exec->_result_promise.set_exception(ex);
             }
+
+            digest_resolver->done().then_wrapped([exec = std::move(exec), digest_resolver, timeout, background_repair_check] (future<>&& f){
+                if (f.failed()) {
+                    f.ignore_ready_future(); // ignore all exceptions during background repair check
+                } else if (background_repair_check) {
+                    if (!digest_resolver->digests_match()) {
+                        exec->_proxy->_stats.read_repair_repaired_background++;
+                        exec->_result_promise = promise<foreign_ptr<lw_shared_ptr<query::result>>>();
+                        exec->reconcile(exec->_cl, timeout);
+                        exec->_result_promise.get_future().then_wrapped([exec] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+                            f.ignore_ready_future(); // ignore any failures during background repair
+                            exec->_proxy->_stats.background_reads--;
+                        });
+                    } else {
+                        exec->_proxy->_stats.background_reads--;
+                    }
+                }
+            });
         });
 
         return _result_promise.get_future();
