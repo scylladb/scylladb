@@ -1214,6 +1214,7 @@ public:
         if (_active) {
             assert(_active->is_empty());
             free_segment(_active);
+            _active = nullptr;
         }
         if (_group) {
             _group->del(this);
