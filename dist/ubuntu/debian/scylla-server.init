@@ -29,8 +29,8 @@ SCRIPTNAME=/etc/init.d/$NAME
 [ -x "$DAEMON" ] || exit 0
 
 # Read configuration variable file if it is present
-[ -r /etc/default/$NAME ] && . /etc/default/$NAME
-export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS
+eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
+eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
 
 # Define LSB log_* functions.
 . /lib/lsb/init-functions
