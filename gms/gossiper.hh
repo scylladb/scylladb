@@ -99,8 +99,10 @@ private:
     bool _enabled = false;
     std::set<inet_address> _seeds_from_config;
     sstring _cluster_name;
-    future<> _callback_running = make_ready_future<>();
+    semaphore _callback_running{1};
 public:
+    future<> timer_callback_lock() { return _callback_running.wait(); }
+    void timer_callback_unlock() { _callback_running.signal(); }
     sstring get_cluster_name();
     sstring get_partitioner_name();
     inet_address get_broadcast_address() {
@@ -114,6 +116,7 @@ public:
 public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
     std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
+    std::unordered_map<inet_address, endpoint_state> shadow_endpoint_state_map;
 
     const std::vector<sstring> DEAD_STATES = {
         versioned_value::REMOVING_TOKEN,
@@ -197,7 +200,6 @@ private:
 
     clk::time_point _last_processed_message_at = now();
 
-    std::unordered_map<inet_address, endpoint_state> _shadow_endpoint_state_map;
     std::map<inet_address, clk::time_point> _shadow_unreachable_endpoints;
     std::set<inet_address> _shadow_live_endpoints;
 
