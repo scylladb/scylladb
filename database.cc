@@ -1028,6 +1028,7 @@ database::database() : database(db::config())
 database::database(const db::config& cfg)
     : _cfg(std::make_unique<db::config>(cfg))
     , _version(empty_version)
+    , _enable_incremental_backups(cfg.incremental_backups())
 {
     _memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
     if (!_memtable_total_space) {
@@ -1834,7 +1835,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     cfg.cf_stats = &_cf_stats;
-    cfg.enable_incremental_backups = _cfg->incremental_backups();
+    cfg.enable_incremental_backups = _enable_incremental_backups;
     return cfg;
 }
 

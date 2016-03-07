@@ -570,6 +570,7 @@ class database {
     std::vector<scollectd::registration> _collectd;
     timer<> _throttling_timer{[this] { unthrottle(); }};
     circular_buffer<promise<>> _throttled_requests;
+    bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position&);
@@ -588,6 +589,8 @@ private:
     void unthrottle();
 public:
     static utils::UUID empty_version;
+
+    void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
