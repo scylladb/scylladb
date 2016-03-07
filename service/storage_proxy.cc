@@ -1432,6 +1432,8 @@ public:
             std::rethrow_exception(eptr);
         } catch (rpc::closed_error&) {
             return; // do not report connection closed exception, gossiper does that
+        } catch (rpc::timeout_error&) {
+            return; // do not report timeouts, the whole operation will timeout and be reported
         } catch(std::exception& e) {
             why = e.what();
         } catch(...) {
@@ -1652,6 +1654,7 @@ protected:
     using targets_iterator = std::vector<gms::inet_address>::iterator;
     using digest_resolver_ptr = ::shared_ptr<digest_read_resolver>;
     using data_resolver_ptr = ::shared_ptr<data_read_resolver>;
+    using clock_type = std::chrono::steady_clock;
 
     schema_ptr _schema;
     shared_ptr<storage_proxy> _proxy;
@@ -1674,37 +1677,37 @@ public:
     };
 
 protected:
-    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep) {
+    future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         if (is_me(ep)) {
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, *cmd, _partition_range).then([this](reconcilable_result&& result) {
+            return ms.send_read_mutation_data(net::messaging_service::msg_addr{ep, 0}, timeout, *cmd, _partition_range).then([this](reconcilable_result&& result) {
                     return make_foreign(::make_lw_shared<reconcilable_result>(std::move(result)));
             });
         }
     }
-    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep) {
+    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout) {
         if (is_me(ep)) {
             return _proxy->query_singular_local(_schema, _cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
+            return ms.send_read_data(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range).then([this](query::result&& result) {
                 return make_foreign(::make_lw_shared<query::result>(std::move(result)));
             });
         }
     }
-    future<query::result_digest> make_digest_request(gms::inet_address ep) {
+    future<query::result_digest> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         if (is_me(ep)) {
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
         } else {
             auto& ms = net::get_local_messaging_service();
-            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, *_cmd, _partition_range);
+            return ms.send_read_digest(net::messaging_service::msg_addr{ep, 0}, timeout, *_cmd, _partition_range);
         }
     }
-    future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
-        return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+    future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
+        return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
                 try {
                     resolver->add_mutate_data(ep, f.get0());
                 } catch(...) {
@@ -1713,9 +1716,9 @@ protected:
             });
         });
     }
-    future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
-        return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_data_request(ep).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+    future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
+        return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
+            return make_data_request(ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
                 try {
                     resolver->add_data(ep, f.get0());
                 } catch(...) {
@@ -1724,9 +1727,9 @@ protected:
             });
         });
     }
-    future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end) {
-        return parallel_for_each(begin, end, [this, resolver = std::move(resolver)] (gms::inet_address ep) {
-            return make_digest_request(ep).then_wrapped([resolver, ep] (future<query::result_digest> f) {
+    future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
+        return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
+            return make_digest_request(ep, timeout).then_wrapped([resolver, ep] (future<query::result_digest> f) {
                 try {
                     resolver->add_digest(ep, f.get0());
                 } catch(...) {
@@ -1735,10 +1738,10 @@ protected:
             });
         });
     }
-    virtual future<> make_requests(digest_resolver_ptr resolver) {
+    virtual future<> make_requests(digest_resolver_ptr resolver, clock_type::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
-        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
-                        make_digest_requests(resolver, _targets.begin() + 1, _targets.end())).discard_result();
+        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout),
+                        make_digest_requests(resolver, _targets.begin() + 1, _targets.end(), timeout)).discard_result();
     }
     virtual void got_cl() {}
     uint32_t original_row_limit() const {
@@ -1748,7 +1751,7 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end()).finally([exec]{});
+        make_mutation_data_requests(cmd, data_resolver, _targets.begin(), _targets.end(), timeout).finally([exec]{});
 
         data_resolver->done().then_wrapped([this, exec, data_resolver, cmd = std::move(cmd), cl, timeout] (future<> f) {
             try {
@@ -1798,7 +1801,7 @@ public:
         digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_cl, _block_for, timeout);
         auto exec = shared_from_this();
 
-        make_requests(digest_resolver).finally([exec]() {
+        make_requests(digest_resolver, timeout).finally([exec]() {
             // hold on to executor until all queries are complete
         });
 
@@ -1857,10 +1860,10 @@ public:
 class always_speculating_read_executor : public abstract_read_executor {
 public:
     using abstract_read_executor::abstract_read_executor;
-    virtual future<> make_requests(digest_resolver_ptr resolver) {
+    virtual future<> make_requests(digest_resolver_ptr resolver, std::chrono::steady_clock::time_point timeout) {
         resolver->add_wait_targets(_targets.size());
-        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2),
-                        make_digest_requests(resolver, _targets.begin() + 2, _targets.end())).discard_result();
+        return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout),
+                        make_digest_requests(resolver, _targets.begin() + 2, _targets.end(), timeout)).discard_result();
     }
 };
 
@@ -1869,19 +1872,19 @@ class speculating_read_executor : public abstract_read_executor {
     timer<> _speculate_timer;
 public:
     using abstract_read_executor::abstract_read_executor;
-    virtual future<> make_requests(digest_resolver_ptr resolver) {
-        _speculate_timer.set_callback([this, resolver] {
+    virtual future<> make_requests(digest_resolver_ptr resolver, std::chrono::steady_clock::time_point timeout) {
+        _speculate_timer.set_callback([this, resolver, timeout] {
             if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
                 resolver->add_wait_targets(1); // we send one more request so wait for it too
                 future<> f = resolver->has_data() ?
-                        make_digest_requests(resolver, _targets.end() - 1, _targets.end()) :
-                        make_data_requests(resolver, _targets.end() - 1, _targets.end());
+                        make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout) :
+                        make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
                 f.finally([exec = shared_from_this()]{});
             }
         });
         // FIXME: the timeout should come from previous latency statistics for a partition
-        auto timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2);
-        _speculate_timer.arm(timeout);
+        auto speculate_timeout = std::chrono::steady_clock::now() + std::chrono::milliseconds(_proxy->get_db().local().get_config().read_request_timeout_in_ms()/2);
+        _speculate_timer.arm(speculate_timeout);
 
         // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
         // that the last replica in our list is "extra."
@@ -1890,13 +1893,13 @@ public:
             // We're hitting additional targets for read repair.  Since our "extra" replica is the least-
             // preferred by the snitch, we do an extra data read to start with against a replica more
             // likely to reply; better to let RR fail than the entire query.
-            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2),
-                            make_digest_requests(resolver, _targets.begin() + 2, _targets.end())).discard_result();
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout),
+                            make_digest_requests(resolver, _targets.begin() + 2, _targets.end(), timeout)).discard_result();
         } else {
             // not doing read repair; all replies are important, so it doesn't matter which nodes we
             // perform data reads against vs digest.
-            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1),
-                            make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1)).discard_result();
+            return when_all(make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout),
+                            make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1, timeout)).discard_result();
         }
     }
     virtual void got_cl() override {

@@ -696,8 +696,8 @@ void messaging_service::register_read_data(std::function<future<foreign_ptr<lw_s
 void messaging_service::unregister_read_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_DATA);
 }
-future<query::result> messaging_service::send_read_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr) {
-    return send_message<query::result>(this, messaging_verb::READ_DATA, std::move(id), cmd, pr);
+future<query::result> messaging_service::send_read_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+    return send_message_timeout<query::result>(this, messaging_verb::READ_DATA, std::move(id), timeout, cmd, pr);
 }
 
 void messaging_service::register_get_schema_version(std::function<future<frozen_schema>(unsigned, table_schema_version)>&& func) {
@@ -726,8 +726,8 @@ void messaging_service::register_read_mutation_data(std::function<future<foreign
 void messaging_service::unregister_read_mutation_data() {
     _rpc->unregister_handler(net::messaging_verb::READ_MUTATION_DATA);
 }
-future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr id, const query::read_command& cmd, const query::partition_range& pr) {
-    return send_message<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), cmd, pr);
+future<reconcilable_result> messaging_service::send_read_mutation_data(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+    return send_message_timeout<reconcilable_result>(this, messaging_verb::READ_MUTATION_DATA, std::move(id), timeout, cmd, pr);
 }
 
 void messaging_service::register_read_digest(std::function<future<query::result_digest> (const rpc::client_info&, query::read_command cmd, query::partition_range pr)>&& func) {
@@ -736,8 +736,8 @@ void messaging_service::register_read_digest(std::function<future<query::result_
 void messaging_service::unregister_read_digest() {
     _rpc->unregister_handler(net::messaging_verb::READ_DIGEST);
 }
-future<query::result_digest> messaging_service::send_read_digest(msg_addr id, const query::read_command& cmd, const query::partition_range& pr) {
-    return send_message<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), cmd, pr);
+future<query::result_digest> messaging_service::send_read_digest(msg_addr id, clock_type::time_point timeout, const query::read_command& cmd, const query::partition_range& pr) {
+    return send_message_timeout<query::result_digest>(this, net::messaging_verb::READ_DIGEST, std::move(id), timeout, cmd, pr);
 }
 
 // Wrapper for TRUNCATE
