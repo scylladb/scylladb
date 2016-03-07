@@ -205,12 +205,20 @@ class datacenter_write_response_handler : public abstract_write_response_handler
         }
     }
 public:
-    using abstract_write_response_handler::abstract_write_response_handler;
+    datacenter_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            schema_ptr s, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
+            std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
+                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(s), std::move(mutation),
+                        std::move(targets), boost::range::count_if(pending_endpoints, db::is_local), std::move(dead_endpoints)) {}
 };
 
 class write_response_handler : public abstract_write_response_handler {
 public:
-    using abstract_write_response_handler::abstract_write_response_handler;
+    write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
+            schema_ptr s, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets,
+            std::vector<gms::inet_address> pending_endpoints, std::vector<gms::inet_address> dead_endpoints) :
+                abstract_write_response_handler(std::move(p), ks, cl, type, std::move(s), std::move(mutation),
+                        std::move(targets), pending_endpoints.size(), std::move(dead_endpoints)) {}
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
@@ -228,16 +236,20 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
 public:
     datacenter_sync_write_response_handler(shared_ptr<storage_proxy> p, keyspace& ks, db::consistency_level cl, db::write_type type,
             schema_ptr s,
-            lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints,
+            lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address> pending_endpoints,
             std::vector<gms::inet_address> dead_endpoints) :
-        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(s), std::move(mutation), targets, pending_endpoints, dead_endpoints) {
+        abstract_write_response_handler(std::move(p), ks, cl, type, std::move(s), std::move(mutation), targets, 0, dead_endpoints) {
         auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
         for (auto& target : targets) {
             auto dc = snitch_ptr->get_datacenter(target);
 
             if (_dc_responses.find(dc) == _dc_responses.end()) {
-                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc));
+                auto pending_for_dc = boost::range::count_if(pending_endpoints, [&snitch_ptr, &dc] (gms::inet_address& ep){
+                    return snitch_ptr->get_datacenter(ep) == dc;
+                });
+                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc) + pending_for_dc).first;
+                _pending_endpoints += pending_for_dc;
             }
         }
     }
@@ -316,17 +328,15 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(sch
 {
     std::unique_ptr<abstract_write_response_handler> h;
     auto& rs = ks.get_replication_strategy();
-    size_t pending_count = pending_endpoints.size();
 
     auto m = make_lw_shared<const frozen_mutation>(std::move(mutation));
 
     if (db::is_datacenter_local(cl)) {
-        pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints));
     } else if (cl == db::consistency_level::EACH_QUORUM && rs.get_type() == locator::replication_strategy_type::network_topology){
-        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<datacenter_sync_write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints));
     } else {
-        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), pending_count, std::move(dead_endpoints));
+        h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
 }
