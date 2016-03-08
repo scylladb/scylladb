@@ -25,20 +25,20 @@ chdir /var/lib/scylla
 env HOME=/var/lib/scylla
 
 pre-start script
-    . /etc/default/scylla-server
-    export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS SCYLLA_IO
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
     sudo /usr/lib/scylla/scylla_prepare
     sudo /usr/lib/scylla/scylla_io_setup
 end script
 
 script
-    . /etc/default/scylla-server
-    export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS SCYLLA_IO
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
     exec /usr/bin/scylla $SCYLLA_ARGS $SCYLLA_IO
 end script
 
 post-stop script
-    . /etc/default/scylla-server
-    export NETWORK_MODE TAP BRIDGE ETHDRV ETHPCIID NR_HUGEPAGES USER GROUP SCYLLA_HOME SCYLLA_CONF SCYLLA_ARGS SCYLLA_IO
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
+    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
     sudo /usr/lib/scylla/scylla_stop
 end script
