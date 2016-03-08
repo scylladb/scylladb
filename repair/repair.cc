@@ -465,7 +465,11 @@ static future<> repair_cf_range(seastar::sharded<database>& db,
     // next, but doing too many of these operations in parallel also doesn't
     // make sense, so we limit the number of concurrent ongoing checksum
     // requests with a semaphore.
-    constexpr int parallelism = 100;
+    //
+    // FIXME: We shouldn't use a magic number here, but rather bind it to
+    // some resource. Otherwise we'll be doing too little in some machines,
+    // and too much in others.
+    constexpr int parallelism = 10;
     return do_with(semaphore(parallelism), true, std::move(keyspace), std::move(cf), std::move(ranges),
         [&db, &neighbors, parallelism] (auto& sem, auto& success, const auto& keyspace, const auto& cf, const auto& ranges) {
         return do_for_each(ranges, [&sem, &success, &db, &neighbors, &keyspace, &cf]
