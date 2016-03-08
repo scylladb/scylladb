@@ -28,6 +28,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
+#include "gms/gossiper.hh"
 #include "query-request.hh"
 #include "query-result.hh"
 #include "rpc/rpc.hh"
@@ -493,18 +494,32 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
         return repeat_until_value([ms, verb, id, timeout, wait, nr_retry, &retry, &messages...] {
             return send_message_timeout<MsgIn>(ms, verb, id, timeout, messages...).then_wrapped(
                     [ms, verb, id, timeout, wait, nr_retry, &retry] (auto&& f) mutable {
+                auto vb = int(verb);
                 try {
                     MsgInTuple ret = f.get();
                     if (retry != nr_retry) {
-                        logger.info("Retry verb={} to {}, retry={}: OK", int(verb), id, retry);
+                        logger.info("Retry verb={} to {}, retry={}: OK", vb, id, retry);
                     }
                     return make_ready_future<stdx::optional<MsgInTuple>>(std::move(ret));
                 } catch (rpc::timeout_error) {
-                    logger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", int(verb), id, retry, timeout.count());
+                    logger.info("Retry verb={} to {}, retry={}: timeout in {} seconds", vb, id, retry, timeout.count());
                     throw;
                 } catch (rpc::closed_error) {
-                    logger.info("Retry verb={} to {}, retry={}: {}", int(verb), id, retry, std::current_exception());
-                    if (--retry == 0 || ms->is_stopping()) {
+                    logger.info("Retry verb={} to {}, retry={}: {}", vb, id, retry, std::current_exception());
+                    // Stop retrying if retry reaches 0 or message service is shutdown
+                    // or the remote node is removed from gossip (on_remove())
+                    retry--;
+                    if (retry == 0) {
+                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: retry == 0", vb, id, retry);
+                        throw;
+                    }
+                    if (ms->is_stopping()) {
+                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: messaging_service is stopped",
+                                     vb, id, retry);
+                    }
+                    if (!gms::get_local_gossiper().is_known_endpoint(id.addr)) {
+                        logger.debug("Retry verb={} to {}, retry={}: stop retrying: node is removed from the cluster",
+                                     vb, id, retry);
                         throw;
                     }
                     return sleep(wait).then([] {
