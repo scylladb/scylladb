@@ -1559,10 +1559,11 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 struct query_state {
     explicit query_state(schema_ptr s,
                          const query::read_command& cmd,
+                         query::result_request request,
                          const std::vector<query::partition_range>& ranges)
             : schema(std::move(s))
             , cmd(cmd)
-            , builder(cmd.slice)
+            , builder(cmd.slice, request)
             , limit(cmd.row_limit)
             , current_partition_range(ranges.begin())
             , range_end(ranges.end()){
@@ -1581,10 +1582,10 @@ struct query_state {
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) {
+column_family::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& partition_ranges) {
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
-    auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, partition_ranges);
+    auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, request, partition_ranges);
     auto& qs = *qs_ptr;
     {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
@@ -1624,9 +1625,9 @@ column_family::as_mutation_source() const {
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(schema_ptr s, const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
+database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, ranges);
+    return cf.query(std::move(s), cmd, request, ranges);
 }
 
 future<reconcilable_result>

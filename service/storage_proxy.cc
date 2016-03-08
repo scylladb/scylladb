@@ -2119,16 +2119,16 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 
 future<query::result_digest>
 storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
-    return query_singular_local(std::move(s), std::move(cmd), pr).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+    return query_singular_local(std::move(s), std::move(cmd), pr, query::result_request::only_digest).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
         return *result->digest();
     });
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
+storage_proxy::query_singular_local(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr, query::result_request request) {
     unsigned shard = _db.local().shard_of(pr.start()->value().token());
-    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd] (database& db) {
-        return db.query(gs, *cmd, prv).then([](auto&& f) {
+    return _db.invoke_on(shard, [gs = global_schema_ptr(s), prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd, request] (database& db) {
+        return db.query(gs, *cmd, request, prv).then([](auto&& f) {
             return make_foreign(std::move(f));
         });
     });

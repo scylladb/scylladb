@@ -107,7 +107,7 @@ class result::builder {
     ser::query_result__partitions _w;
     result_request _request;
 public:
-    builder(const partition_slice& slice, result_request request = result_request::result_and_digest)
+    builder(const partition_slice& slice, result_request request)
         : _slice(slice)
         , _w(ser::writer_of_query_result(_out).start_partitions())
         , _request(request)

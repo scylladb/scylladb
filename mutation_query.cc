@@ -55,7 +55,7 @@ bool reconcilable_result::operator!=(const reconcilable_result& other) const {
 
 query::result
 to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::partition_slice& slice) {
-    query::result::builder builder(slice);
+    query::result::builder builder(slice, query::result_request::only_result);
     for (const partition& p : r.partitions()) {
         auto pb = builder.add_partition(*s, p._m.key(*s));
         p.mut().unfreeze(s).partition().query(pb, *s, gc_clock::time_point::min(), query::max_rows);

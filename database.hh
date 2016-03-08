@@ -252,7 +252,7 @@ public:
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
-        const query::read_command& cmd,
+        const query::read_command& cmd, query::result_request request,
         const std::vector<query::partition_range>& ranges);
 
     future<> populate(sstring datadir);
@@ -653,7 +653,7 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
+    future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
     future<> apply(schema_ptr, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
