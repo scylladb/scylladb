@@ -55,7 +55,7 @@ public:
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(cell, _h, col.type);
+        feed_hash(_h, cell);
     }
 
     virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) {
@@ -80,6 +80,6 @@ public:
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
-        feed_hash(cell, _h, col.type);
+        feed_hash(_h, cell);
     }
 };
