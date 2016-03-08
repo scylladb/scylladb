@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/sh
 
 is_ami() {
     if [ "`dmidecode --string system-version | grep \.amazon`" != "" ] && \
@@ -50,6 +50,12 @@ if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
         echo "SCYLLA_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
         iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
+        if [ $? -ne 0 ]; then
+            logger -p user.err "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
+            logger -p user.err "This is a non-supported setup, and performance is expected to be very bad."
+            logger -p user.err "For better performance, placing your data on XFS-formatted directories is required."
+            logger -p user.err " To override this error, see the developer_mode configuration option."
+        fi
     fi
     touch /etc/scylla/io_configured
 fi
