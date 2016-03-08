@@ -1474,7 +1474,7 @@ public:
     void add_data(gms::inet_address from, foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_timedout) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
-            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : result->digest());
+            _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest());
             if (!_data_result) {
                 _data_result = std::move(result);
             }
@@ -2120,7 +2120,7 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
 future<query::result_digest>
 storage_proxy::query_singular_local_digest(schema_ptr s, lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
     return query_singular_local(std::move(s), std::move(cmd), pr).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
-        return result->digest();
+        return *result->digest();
     });
 }
 
