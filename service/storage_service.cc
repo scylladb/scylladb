@@ -992,6 +992,14 @@ future<> storage_service::drain_on_shutdown() {
                 return db.commitlog()->shutdown();
             }).get();
             logger.info("Drain on shutdown: shutdown commitlog done");
+
+            // NOTE: We currently don't destory migration_manager nor
+            // storage_service in scylla, so when we reach here
+            // migration_manager should to be still alive. Be careful, when
+            // scylla starts to destroy migration_manager in the shutdown
+            // process.
+            service::get_local_migration_manager().unregister_listener(&ss);
+
             logger.info("Drain on shutdown: done");
         });
     });
@@ -1063,6 +1071,10 @@ future<> storage_service::init_server(int delay) {
         logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
 #endif
         _initialized = true;
+
+        // Register storage_service to migration_manager so we can update
+        // pending ranges when keyspace is chagned
+        service::get_local_migration_manager().register_listener(this);
 #if 0
         try
         {
@@ -2907,6 +2919,13 @@ future<> storage_service::block_until_update_pending_ranges_finished() {
         return do_until(
             [] { return !(get_local_storage_service()._update_jobs > 0); },
             [] { return sleep(std::chrono::milliseconds(100)); });
+    });
+}
+
+future<> storage_service::keyspace_changed(const sstring& ks_name) {
+    // Update pending ranges since keyspace can be changed after we calculate pending ranges.
+    return update_pending_ranges().handle_exception([ks_name] (auto ep) {
+        logger.warn("Failed to update pending ranges for ks = {}: {}", ks_name, ep);
     });
 }
 
