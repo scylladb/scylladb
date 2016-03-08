@@ -338,13 +338,8 @@ lists::do_append(shared_ptr<term> t,
         if (!value) {
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
-            auto&& to_add = list_value->_elements;
-            auto deref = [] (const bytes_opt& v) { return *v; };
-            auto&& newv = collection_mutation{list_type_impl::pack(
-                    boost::make_transform_iterator(to_add.begin(), deref),
-                    boost::make_transform_iterator(to_add.end(), deref),
-                    to_add.size(), cql_serialization_format::internal())};
-            m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(newv)));
+            auto newv = list_value->get_with_protocol_version(cql_serialization_format::internal());
+            m.set_cell(prefix, column, params.make_cell(std::move(newv)));
         }
     }
 }
