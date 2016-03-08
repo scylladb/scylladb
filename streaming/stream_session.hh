@@ -126,15 +126,12 @@ class stream_result_future;
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-class stream_session : public gms::i_endpoint_state_change_subscriber, public enable_shared_from_this<stream_session> {
+class stream_session : public enable_shared_from_this<stream_session> {
 private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
     using msg_addr = net::messaging_service::msg_addr;
     using inet_address = gms::inet_address;
-    using endpoint_state = gms::endpoint_state;
-    using application_state = gms::application_state;
-    using versioned_value = gms::versioned_value;
     using UUID = utils::UUID;
     using token = dht::token;
     using ring_position = dht::ring_position;
@@ -260,7 +257,7 @@ public:
     void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
-private:
+
     void close_session(stream_session_state final_state);
 
 public:
@@ -337,16 +334,6 @@ public:
 
     void receive_task_completed(UUID cf_id);
     void transfer_task_completed(UUID cf_id);
-
-public:
-    virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
-    virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_state_key, const versioned_value& new_value) override {}
-    virtual void on_change(inet_address endpoint, application_state state, const versioned_value& value) override {}
-    virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
-    virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
-    virtual void on_remove(inet_address endpoint) override { close_session(stream_session_state::FAILED); }
-    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
-
 private:
     void send_complete_message();
     bool maybe_completed();
