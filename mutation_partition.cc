@@ -528,11 +528,14 @@ mutation_partition::query(query::result::partition_writer& pw,
     auto static_cells_wr = pw.start().start_static_row().start_cells();
 
     if (!slice.static_columns.empty()) {
-        get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
-                      now, static_cells_wr);
-
-        ::feed_hash(pw.digest(), partition_tombstone());
-        hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
+        if (pw.requested_result()) {
+            get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
+                          now, static_cells_wr);
+        }
+        if (pw.requested_digest()) {
+            ::feed_hash(pw.digest(), partition_tombstone());
+            hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
+        }
     }
 
     auto rows_wr = std::move(static_cells_wr).end_cells()
@@ -560,21 +563,25 @@ mutation_partition::query(query::result::partition_writer& pw,
             auto& row = e.row();
             auto row_tombstone = tombstone_for_row(s, e);
 
-            e.key().feed_hash(pw.digest(), s);
-            ::feed_hash(pw.digest(), row_tombstone);
-            hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+            if (pw.requested_digest()) {
+                e.key().feed_hash(pw.digest(), s);
+                ::feed_hash(pw.digest(), row_tombstone);
+                hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+            }
 
             if (row.is_live(s, row_tombstone, now)) {
-                auto cells_wr = [&] {
-                    if (send_ck) {
-                        return rows_wr.add().write_key(e.key()).start_cells().start_cells();
-                    } else {
-                        return rows_wr.add().skip_key().start_cells().start_cells();
-                    }
-                }();
-                get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
-                              now, cells_wr);
-                std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+                if (pw.requested_result()) {
+                    auto cells_wr = [&] {
+                        if (send_ck) {
+                            return rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                        } else {
+                            return rows_wr.add().skip_key().start_cells().start_cells();
+                        }
+                    }();
+                    get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
+                                  now, cells_wr);
+                    std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+                }
                 ++row_count;
                 if (--limit == 0) {
                     return stop_iteration::yes;

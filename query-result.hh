@@ -32,6 +32,12 @@ namespace stdx = std::experimental;
 
 namespace query {
 
+enum class result_request {
+    only_result,
+    only_digest,
+    result_and_digest,
+};
+
 class result_digest {
 public:
     static_assert(16 == CryptoPP::Weak::MD5::DIGESTSIZE, "MD5 digest size is all wrong");
