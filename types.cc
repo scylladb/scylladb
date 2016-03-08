@@ -1773,7 +1773,7 @@ map_type_impl::cql3_type_name() const {
     return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) const -> mutation_view {
+auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
     auto&& in = cm.data;
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
