@@ -14,7 +14,7 @@ Environment="HOME=/var/lib/scylla"
 EnvironmentFile=/etc/sysconfig/scylla-server
 EnvironmentFile=/etc/scylla.d/*.conf
 ExecStartPre=/usr/bin/sudo -E /usr/lib/scylla/scylla_prepare
-ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SCYLLA_IO
+ExecStart=/usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO
 ExecStopPost=/usr/bin/sudo -E /usr/lib/scylla/scylla_stop
 TimeoutStartSec=900
 KillMode=process

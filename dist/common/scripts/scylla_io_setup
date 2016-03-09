@@ -41,7 +41,7 @@ if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
 
         NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
 
-        echo "SCYLLA_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
+        echo "SEASTAR_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
         iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
         if [ $? -ne 0 ]; then
