@@ -258,6 +258,8 @@ std::ostream& operator<<(std::ostream& out, const std::exception_ptr& eptr) {
             out << " (error " << e.code() << ", " << e.code().message() << ")";
         } catch(const std::exception& e) {
             out << " (" << e.what() << ")";
+        } catch(...) {
+            // no extra info
         }
     }
     return out;
