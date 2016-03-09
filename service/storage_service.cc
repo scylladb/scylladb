@@ -1370,8 +1370,17 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             for (const gms::inet_address& endpoint : endpoints.second) {
                 float ownership = 0.0f;
                 for (range<token> r : ss.get_ranges_for_endpoint(keyspace_name, endpoint)) {
-                    if (token_ownership.find(r.end().value().value()) != token_ownership.end()) {
-                        ownership += token_ownership[r.end().value().value()];
+                    // get_ranges_for_endpoint will unwrap the first range.
+                    // With t0 t1 t2 t3, the first range (t3,t0] will be splitted
+                    // as (min,t0] and (t3,max]. Skippping the range (t3,max]
+                    // we will get the correct ownership number as if the first
+                    // range were not splitted.
+                    if (!r.end()) {
+                        continue;
+                    }
+                    auto end_token = r.end()->value();
+                    if (token_ownership.find(end_token) != token_ownership.end()) {
+                        ownership += token_ownership[end_token];
                     }
                 }
                 final_ownership[endpoint] = ownership;
