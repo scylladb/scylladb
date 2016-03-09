@@ -40,6 +40,7 @@
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
 #include "log.hh"
+#include "streaming/stream_session_state.hh"
 
 namespace streaming {
 
@@ -213,6 +214,34 @@ future<stream_bytes> stream_manager::get_progress_on_all_shards() {
         stream_bytes(),
         std::plus<stream_bytes>()
     );
+}
+
+void stream_manager::fail_sessions(inet_address endpoint) {
+    for (auto sr : get_all_streams()) {
+        for (auto session : sr->get_coordinator()->get_all_stream_sessions()) {
+            if (session->peer == endpoint) {
+                session->close_session(stream_session_state::FAILED);
+            }
+        }
+    }
+}
+
+void stream_manager::on_remove(inet_address endpoint) {
+    sslog.info("stream_manager: Close all stream_session with peer = {} in on_remove", endpoint);
+    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        sm.fail_sessions(endpoint);
+    }).handle_exception([endpoint] (auto ep) {
+        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_remove", endpoint);
+    });
+}
+
+void stream_manager::on_restart(inet_address endpoint, endpoint_state ep_state) {
+    sslog.info("stream_manager: Close all stream_session with peer = {} in on_restart", endpoint);
+    get_stream_manager().invoke_on_all([endpoint] (auto& sm) {
+        sm.fail_sessions(endpoint);
+    }).handle_exception([endpoint] (auto ep) {
+        sslog.warn("stream_manager: Fail to close sessions peer = {} in on_restart", endpoint);
+    });
 }
 
 } // namespace streaming
