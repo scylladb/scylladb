@@ -121,7 +121,14 @@ void stream_session::init_messaging_service_handler() {
         return do_with(std::move(fm), [plan_id, from] (const auto& fm) {
             auto fm_size = fm.representation().size();
             get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
-            return service::get_schema_for_write(fm.schema_version(), from).then([&fm] (schema_ptr s) {
+            return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm] (schema_ptr s) {
+                auto cf_id = fm.column_family_id();
+                auto& db = service::get_local_storage_proxy().get_db().local();
+                if (!db.column_family_exists(cf_id)) {
+                    sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
+                                plan_id, from.addr, cf_id);
+                    return make_ready_future<>();
+                }
                 return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
             });
         });
@@ -131,11 +138,17 @@ void stream_session::init_messaging_service_handler() {
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
             session->receive_task_completed(cf_id);
-            return session->get_db().invoke_on_all([ranges = std::move(ranges), cf_id] (database& db) {
+            return session->get_db().invoke_on_all([ranges = std::move(ranges), plan_id, from, cf_id] (database& db) {
+                if (!db.column_family_exists(cf_id)) {
+                    sslog.debug("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
+                                plan_id, from, cf_id);
+                    return make_ready_future<>();
+                }
                 auto& cf = db.find_column_family(cf_id);
                 for (auto& range : ranges) {
                     cf.get_row_cache().invalidate(query::to_partition_range(range));
                 }
+                return make_ready_future<>();
             });
         });
     });

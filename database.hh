@@ -644,6 +644,7 @@ public:
     const column_family& find_column_family(const utils::UUID&) const throw (no_such_column_family);
     column_family& find_column_family(const schema_ptr&) throw (no_such_column_family);
     const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
+    bool column_family_exists(const utils::UUID& uuid) const;
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
     bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
