@@ -264,7 +264,6 @@ add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
 
 defines = []
-scylla_libs = '-llz4 -lsnappy -lz -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
 
 extra_cxxflags = {}
 
