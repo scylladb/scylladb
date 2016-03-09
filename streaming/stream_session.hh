@@ -144,7 +144,6 @@ public:
     static database& get_local_db() { return _db->local(); }
     static distributed<database>& get_db() { return *_db; };
     static future<> init_streaming_service(distributed<database>& db);
-    static future<> test(distributed<cql3::query_processor>& qp);
 public:
     /**
      * Streaming endpoint.
