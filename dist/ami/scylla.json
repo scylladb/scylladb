@@ -8,10 +8,10 @@
       "security_group_id": "{{user `security_group_id`}}",
       "region": "{{user `region`}}",
       "associate_public_ip_address": "{{user `associate_public_ip_address`}}",
-      "source_ami": "ami-f3102499",
+      "source_ami": "{{user `source_ami`}}",
       "user_data_file": "user_data.txt",
       "instance_type": "{{user `instance_type`}}",
-      "ssh_username": "centos",
+      "ssh_username": "{{user `ssh_username`}}",
       "ssh_timeout": "5m",
       "ami_name": "{{user `ami_prefix`}}scylla_{{isotime | clean_ami_name}}",
       "enhanced_networking": true,
@@ -62,17 +62,17 @@
     {
       "type": "file",
       "source": "files/",
-      "destination": "/home/centos/"
+      "destination": "/home/{{user `ssh_username`}}/"
     },
     {
       "type": "file",
       "source": "../../scripts/scylla_install_pkg",
-      "destination": "/home/centos/scylla_install_pkg"
+      "destination": "/home/{{user `ssh_username`}}/scylla_install_pkg"
     },
     {
       "type": "shell",
       "inline": [
-         "sudo /home/centos/scylla-ami/scylla_install_ami {{ user `install_args` }}"
+         "sudo /home/{{user `ssh_username`}}/scylla-ami/scylla_install_ami {{ user `install_args` }}"
        ]
     }
   ],
@@ -85,6 +85,8 @@
     "associate_public_ip_address": "",
     "instance_type": "",
     "install_args": "",
-    "ami_prefix": ""
+    "ami_prefix": "",
+    "source_ami": "",
+    "ssh_username": ""
   }
 }
