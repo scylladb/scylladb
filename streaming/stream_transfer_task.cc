@@ -118,7 +118,7 @@ future<> send_mutations(auto si) {
     return do_with(cf.make_reader(cf.schema(), si->pr, priority), [si] (auto& reader) {
         return repeat([si, &reader] () {
             return reader().then([si] (auto mopt) {
-                if (mopt) {
+                if (mopt && si->db.column_family_exists(si->cf_id)) {
                     si->mutations_nr++;
                     auto fm = frozen_mutation(*mopt);
                     return do_send_mutations(si, std::move(fm));
