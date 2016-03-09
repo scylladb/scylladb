@@ -71,6 +71,7 @@ struct send_info {
     uint32_t dst_cpu_id;
     size_t mutations_nr{0};
     semaphore mutations_done{0};
+    bool error_logged = false;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
               query::partition_range pr_, net::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_)
@@ -92,7 +93,12 @@ future<stop_iteration> do_send_mutations(auto si, auto fm) {
             get_local_stream_manager().update_progress(si->plan_id, si->id.addr, progress_info::direction::OUT, fm_size);
             si->mutations_done.signal();
         }).handle_exception([si] (auto ep) {
-            sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
+            // There might be larger number of STREAM_MUTATION inflight.
+            // Log one error per column_family per range
+            if (!si->error_logged) {
+                si->error_logged = true;
+                sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION to {}: {}", si->plan_id, si->id, ep);
+            }
             si->mutations_done.broken();
         }).finally([] {
             get_local_stream_manager().mutation_send_limiter().signal();
