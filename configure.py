@@ -699,7 +699,7 @@ for mode in build_modes:
 seastar_deps = 'practically_anything_can_change_so_lets_run_it_every_time_and_restat.'
 
 args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem' + ' -lcrypt'
+libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem' + ' -lcrypt' + ' -lboost_date_time'
 for pkg in pkgs:
     args.user_cflags += ' ' + pkg_config('--cflags', pkg)
     libs += ' ' + pkg_config('--libs', pkg)
