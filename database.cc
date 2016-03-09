@@ -1374,6 +1374,10 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     }
 }
 
+bool database::column_family_exists(const utils::UUID& uuid) const {
+    return _column_families.count(uuid);
+}
+
 void
 keyspace::create_replication_strategy(const std::map<sstring, sstring>& options) {
     using namespace locator;
