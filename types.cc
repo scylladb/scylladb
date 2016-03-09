@@ -40,6 +40,14 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include "utils/big_decimal.hh"
 
+template<typename T>
+sstring time_point_to_string(const T& tp)
+{
+    auto timestamp = tp.time_since_epoch().count();
+    auto time = boost::posix_time::from_time_t(0) + boost::posix_time::milliseconds(timestamp);
+    return boost::posix_time::to_iso_extended_string(time);
+}
+
 static const char* int32_type_name     = "org.apache.cassandra.db.marshal.Int32Type";
 static const char* long_type_name      = "org.apache.cassandra.db.marshal.LongType";
 static const char* ascii_type_name     = "org.apache.cassandra.db.marshal.AsciiType";
@@ -421,7 +429,11 @@ public:
     }
     virtual bytes from_string(sstring_view s) const override;
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "";
+        }
+        return time_point_to_string(from_value(v).get());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
@@ -684,7 +696,11 @@ public:
         return b;
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+        auto v = deserialize(b);
+        if (v.is_null()) {
+            return "";
+        }
+        return time_point_to_string(from_value(v).get());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
