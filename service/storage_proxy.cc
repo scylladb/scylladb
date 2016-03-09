@@ -377,6 +377,11 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
+                , "total_operations", "read retries")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_retries)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write timeouts")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
         ),
@@ -1779,6 +1784,7 @@ protected:
                         }
                     });
                 } else {
+                    _proxy->_stats.read_retries++;
                     _retry_cmd = make_lw_shared<query::read_command>(*cmd);
                     // We asked t (= _cmd->row_limit) live columns and got l (=rr.row_count) ones.
                     // From that, we can estimate that on this row, for x requested

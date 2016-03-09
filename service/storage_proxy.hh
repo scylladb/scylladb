@@ -98,6 +98,7 @@ public:
         uint64_t queued_write_bytes = 0;
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
+        uint64_t read_retries = 0; // read is retried with new limit
     };
 private:
     distributed<database>& _db;
