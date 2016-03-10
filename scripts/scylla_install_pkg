@@ -36,14 +36,29 @@ done
 . /etc/os-release
 
 if [ "$ID" = "ubuntu" ]; then
-    if [ "$LOCAL_PKG" = "" ]; then
+    echo "#!/bin/sh" >> /usr/sbin/policy-rc.d
+    echo "exit 101" >> /usr/sbin/policy-rc.d
+    chmod +x /usr/sbin/policy-rc.d
+    cp /etc/hosts /etc/hosts.orig
+    echo 127.0.0.1 `hostname` >> /etc/hosts
+    if [ $UNSTABLE -eq 0 ]; then
         echo "deb http://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
-        apt-get update
+    else
+        echo "deb https://s3.amazonaws.com/downloads.scylladb.com/deb/unstable/ubuntu/master/latest trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
+    fi
+    apt-get update
+    if [ "$LOCAL_PKG" = "" ]; then
         apt-get install -y --force-yes scylla-server scylla-jmx scylla-tools
     else
-        apt-get install -y --force-yes gdebi-core
-        gdebi $LOCAL_PKG/scylla-server*.deb $LOCAL_PKG/scylla-jmx*.deb $LOCAL_PKG/scylla-tools*.deb
+        if [ ! -f /usr/bin/gdebi ]; then
+            apt-get install -y --force-yes gdebi-core
+        fi
+        echo Y | gdebi $LOCAL_PKG/scylla-server*.deb
+        echo Y | gdebi $LOCAL_PKG/scylla-jmx*.deb
+        echo Y | gdebi $LOCAL_PKG/scylla-tools*.deb
     fi
+    mv /etc/hosts.orig /etc/hosts
+    rm /usr/sbin/policy-rc.d
 else
     if [ "$ID" = "fedora" ]; then
         if [ $UNSTABLE -eq 0 ]; then
