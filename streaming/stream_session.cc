@@ -389,7 +389,7 @@ std::vector<column_family*> stream_session::get_column_family_stores(const sstri
             auto cf_name = cf.schema()->cf_name();
             auto ks_name = cf.schema()->ks_name();
             if (ks_name == keyspace) {
-                sslog.info("Find ks={} cf={}", ks_name, cf_name);
+                sslog.debug("Find ks={} cf={}", ks_name, cf_name);
                 stores.push_back(&cf);
             }
         }
