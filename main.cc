@@ -332,11 +332,10 @@ int main(int ac, char** av) {
             using namespace locator;
             // Re-apply strict-dma after we've read the config file, this time
             // to all reactors
-            return parallel_for_each(boost::irange(0u, smp::count), [devmode = opts.count("developer-mode")] (unsigned cpu) {
+            return smp::invoke_on_all([devmode = opts.count("developer-mode")] () {
                 if (devmode) {
                     engine().set_strict_dma(false);
                 }
-                return make_ready_future<>();
             }).then([cfg] {
                 supervisor_notify("creating snitch");
                 return i_endpoint_snitch::create_snitch(cfg->endpoint_snitch());
