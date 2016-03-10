@@ -27,6 +27,7 @@
 #include "compound_compat.hh"
 #include "utils/managed_bytes.hh"
 #include "hashing.hh"
+#include "database_fwd.hh"
 
 //
 // This header defines type system for primary key holders.
@@ -49,13 +50,6 @@
 // (the key value itself). Any information which can be inferred from schema
 // is not stored. Therefore accessors need to be provided with a pointer to
 // schema, from which information about structure is extracted.
-
-class partition_key;
-class partition_key_view;
-class clustering_key_prefix;
-class clustering_key_prefix_view;
-using clustering_key = clustering_key_prefix;
-using clustering_key_view = clustering_key_prefix_view;
 
 // Abstracts a view to serialized compound.
 template <typename TopLevelView>

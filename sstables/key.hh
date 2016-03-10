@@ -25,8 +25,6 @@
 #include "core/future.hh"
 #include "database_fwd.hh"
 
-class partition_key_view;
-
 namespace sstables {
 
 class key_view {
