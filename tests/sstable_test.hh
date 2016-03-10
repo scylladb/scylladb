@@ -100,6 +100,10 @@ public:
         _sst->_generation = generation;
     }
 
+    void change_dir(sstring dir) {
+        _sst->_dir = dir;
+    }
+
     future<> store() {
         _sst->_components.erase(sstable::component_type::Index);
         _sst->_components.erase(sstable::component_type::Data);
