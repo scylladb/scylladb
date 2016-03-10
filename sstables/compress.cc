@@ -243,7 +243,8 @@ public:
         auto start = _compression_metadata->locate(_beg_pos);
         auto end = _compression_metadata->locate(_end_pos - 1);
         _input_stream = make_file_input_stream(std::move(f),
-                start.chunk_start, end.chunk_start + end.chunk_len,
+                start.chunk_start,
+                end.chunk_start + end.chunk_len - start.chunk_start,
                 std::move(options));
         _pos = _beg_pos;
     }
