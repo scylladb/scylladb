@@ -119,6 +119,7 @@ private:
     shared_ptr<distributed<transport::cql_server>> _cql_server;
     shared_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
+    bool _ms_stopped = false;
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
@@ -285,6 +286,7 @@ public:
 private:
     future<> do_stop_rpc_server();
     future<> do_stop_native_transport();
+    future<> do_stop_ms();
 #if 0
     public void stopTransports()
     {

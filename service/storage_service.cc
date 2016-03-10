@@ -980,9 +980,7 @@ future<> storage_service::drain_on_shutdown() {
             ss.shutdown_client_servers().get();
             logger.info("Drain on shutdown: shutdown rpc and cql server done");
 
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            ss.do_stop_ms().get();
             logger.info("Drain on shutdown: shutdown messaging_service done");
 
             auth::auth::shutdown().get();
@@ -1470,6 +1468,18 @@ future<> storage_service::stop_gossiping() {
     });
 }
 
+future<> storage_service::do_stop_ms() {
+    if (_ms_stopped) {
+        return make_ready_future<>();
+    }
+    _ms_stopped = true;
+    return net::get_messaging_service().invoke_on_all([] (auto& ms) {
+        return ms.stop();
+    }).then([] {
+        logger.info("messaging_service stopped");
+    });
+}
+
 future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
     auto& ks = db.find_keyspace(ks_name);
     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
@@ -1788,9 +1798,7 @@ future<> storage_service::decommission() {
             logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
             logger.debug("DECOMMISSIONING: stop_gossiping done");
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            ss.do_stop_ms().get();
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
             logger.debug("DECOMMISSIONING: set_bootstrap_state done");
@@ -1942,10 +1950,8 @@ future<> storage_service::drain() {
             ss.shutdown_client_servers().get();
             gms::get_local_gossiper().stop_gossiping().get();
 
-            ss.set_mode(mode::DRAINING, "shutting down MessageService", false);
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
+            ss.do_stop_ms().get();
 
 #if 0
     StorageProxy.instance.verifyNoHintsInProgress();
