@@ -52,6 +52,13 @@ namespace sstables {
 
 logging::logger sstlog("sstable");
 
+future<file> new_sstable_component_file(sstring name, open_flags flags) {
+    return open_file_dma(name, flags).handle_exception([name] (auto ep) {
+        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
+        return make_exception_future<file>(ep);
+    });
+}
+
 thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
@@ -749,7 +756,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     sstlog.debug("Writing TOC file {} ", file_path);
 
     // Writing TOC content to temporary file.
-    file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -792,7 +799,7 @@ void write_crc(const sstring file_path, checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = open_file_dma(file_path, oflags).get0();
+    file f = new_sstable_component_file(file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -806,7 +813,7 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = open_file_dma(file_path, oflags).get0();
+    auto f = new_sstable_component_file(file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -877,7 +884,7 @@ template <sstable::component_type Type, typename T>
 void sstable::write_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
-    file f = open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
+    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -938,8 +945,8 @@ future<> sstable::open_data() {
 
 future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    return when_all(open_file_dma(filename(component_type::Index), oflags),
-                    open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
+    return when_all(new_sstable_component_file(filename(component_type::Index), oflags),
+                    new_sstable_component_file(filename(component_type::Data), oflags)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed
