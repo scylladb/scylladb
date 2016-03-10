@@ -49,7 +49,7 @@ fi
 
 . /etc/os-release
 if [ "$NAME" = "Ubuntu" ]; then
-    apt-get -y install mdadm xfsprogs
+    env DEBIAN_FRONTEND=noninteractive apt-get -y install mdadm xfsprogs
 else
     yum -y install mdadm xfsprogs
 fi
