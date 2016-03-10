@@ -755,6 +755,11 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
+    bool toc_exists = file_exists(filename(sstable::component_type::TOC)).get0();
+    if (toc_exists) {
+        throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _ks, _cf));
+    }
+
     // Writing TOC content to temporary file.
     file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
