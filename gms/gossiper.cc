@@ -1443,6 +1443,10 @@ future<> gossiper::add_local_application_state(application_state state, versione
 }
 
 future<> gossiper::do_stop_gossiping() {
+    if (!is_enabled()) {
+        logger.info("gossip is already stopped");
+        return make_ready_future<>();
+    }
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
