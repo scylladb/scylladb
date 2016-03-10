@@ -367,6 +367,27 @@ int main(int ac, char** av) {
                         });
                     });
                 });
+            }).then([&db, &dirs] {
+                supervisor_notify("creating data directories");
+                return dirs.touch_and_lock(db.local().get_config().data_file_directories());
+            }).then([&db, &dirs] {
+                supervisor_notify("creating commitlog directory");
+                return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
+            }).then([&db] {
+                supervisor_notify("verifying data and commitlog directories");
+                std::unordered_set<sstring> directories;
+                directories.insert(db.local().get_config().data_file_directories().cbegin(),
+                        db.local().get_config().data_file_directories().cend());
+                directories.insert(db.local().get_config().commitlog_directory());
+                return do_with(std::move(directories), [&db] (auto& directories) {
+                    return parallel_for_each(directories, [&db] (sstring pathname) {
+                        return disk_sanity(pathname, db.local().get_config().developer_mode());
+                    });
+                });
+            }).then([&db] {
+                return db.invoke_on_all([] (database& db) {
+                    return db.init_system_keyspace();
+                });
             }).then([cfg, listen_address] {
                 supervisor_notify("starting gossip");
                 // Moved local parameters here, esp since with the
@@ -439,33 +460,12 @@ int main(int ac, char** av) {
                     // #293 - do not stop anything
                     // engine().at_exit([] { return db::get_batchlog_manager().stop(); });
                 });
-            }).then([&db, &dirs] {
-                supervisor_notify("creating data directories");
-                return dirs.touch_and_lock(db.local().get_config().data_file_directories());
-            }).then([&db, &dirs] {
-                supervisor_notify("creating commitlog directory");
-                return dirs.touch_and_lock(db.local().get_config().commitlog_directory());
-            }).then([&db] {
-                supervisor_notify("verifying data and commitlog directories");
-                std::unordered_set<sstring> directories;
-                directories.insert(db.local().get_config().data_file_directories().cbegin(),
-                        db.local().get_config().data_file_directories().cend());
-                directories.insert(db.local().get_config().commitlog_directory());
-                return do_with(std::move(directories), [&db] (auto& directories) {
-                    return parallel_for_each(directories, [&db] (sstring pathname) {
-                        return disk_sanity(pathname, db.local().get_config().developer_mode());
-                    });
-                });
             }).then([&db] {
                 supervisor_notify("loading sstables");
-                return db.invoke_on_all([] (database& db) {
-                    return db.init_system_keyspace();
-                }).then([&db] {
-                    auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
-                    return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
-                        auto cfm = pair.second;
-                        return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
-                    });
+                auto& ks = db.local().find_keyspace(db::system_keyspace::NAME);
+                return parallel_for_each(ks.metadata()->cf_meta_data(), [&ks] (auto& pair) {
+                    auto cfm = pair.second;
+                    return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
                 });
             }).then([&db, &proxy] {
                 supervisor_notify("loading sstables");
