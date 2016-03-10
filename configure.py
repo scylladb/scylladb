@@ -847,6 +847,7 @@ with open(buildfile, 'w') as f:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
             gen_headers += ['seastar/build/{}/http/request_parser.hh'.format(mode)]
+            gen_headers += ['seastar/build/{}/http/http_response_parser.hh'.format(mode)]
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
@@ -899,6 +900,10 @@ with open(buildfile, 'w') as f:
            command = {ninja} -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
            description = GEN seastar/http/request_parser.hh
         build seastar/build/release/http/request_parser.hh seastar/build/debug/http/request_parser.hh: request_parser_hh
+        rule http_response_parser_hh
+           command = {ninja} -C seastar build/release/gen/http/http_response_parser.hh build/debug/gen/http/http_response_parser.hh
+           description = GEN seastar/http/http_response_parser.hh
+        build seastar/build/release/http/http_response_parser.hh seastar/build/debug/http/http_response_parser.hh: http_response_parser_hh
         rule clean
             command = rm -rf build
             description = CLEAN
