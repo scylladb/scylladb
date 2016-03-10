@@ -380,7 +380,21 @@ int main(int ac, char** av) {
             parallel_for_each(directories, [&db] (sstring pathname) {
                 return disk_sanity(pathname, db.local().get_config().developer_mode());
             }).get();
+
+            // Deletion of previous stale, temporary SSTables is done by Shard0. Therefore,
+            // let's run Shard0 first. Technically, we could just have all shards agree on
+            // the deletion and just delete it later, but that is prone to races.
+            //
+            // Those races are not supposed to happen during normal operation, but if we have
+            // bugs, they can. Scylla's Github Issue #1014 is an example of a situation where
+            // that can happen, making existing problems worse. So running a single shard first
+            // and getting making sure that all temporary tables are deleted provides extra
+            // protection against such situations.
+            db.invoke_on(0, [] (database& db) { return db.init_system_keyspace(); }).get();
             db.invoke_on_all([] (database& db) {
+                if (engine().cpu_id() == 0) {
+                    return make_ready_future<>();
+                }
                 return db.init_system_keyspace();
             }).get();
             supervisor_notify("starting gossip");
@@ -447,7 +461,13 @@ int main(int ac, char** av) {
                 return ks.make_directory_for_column_family(cfm->cf_name(), cfm->id());
             }).get();
             supervisor_notify("loading sstables");
+            // See comment on top of our call to init_system_keyspace as per why we invoke
+            // on Shard0 first. Scylla's Github Issue #1014 for details
+            db.invoke_on(0, [&proxy] (database& db) { return db.load_sstables(proxy); }).get();
             db.invoke_on_all([&proxy] (database& db) {
+                if (engine().cpu_id() == 0) {
+                    return make_ready_future<>();
+                }
                 return db.load_sstables(proxy);
             }).get();
             api::set_server_load_sstable(ctx).get();
