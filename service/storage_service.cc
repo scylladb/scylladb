@@ -980,9 +980,7 @@ future<> storage_service::drain_on_shutdown() {
             ss.shutdown_client_servers().get();
             logger.info("Drain on shutdown: shutdown rpc and cql server done");
 
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            ss.do_stop_ms().get();
             logger.info("Drain on shutdown: shutdown messaging_service done");
 
             auth::auth::shutdown().get();
@@ -1531,6 +1529,18 @@ future<> storage_service::stop_gossiping() {
     });
 }
 
+future<> storage_service::do_stop_ms() {
+    if (_ms_stopped) {
+        return make_ready_future<>();
+    }
+    _ms_stopped = true;
+    return net::get_messaging_service().invoke_on_all([] (auto& ms) {
+        return ms.stop();
+    }).then([] {
+        logger.info("messaging_service stopped");
+    });
+}
+
 future<> check_snapshot_not_exist(database& db, sstring ks_name, sstring name) {
     auto& ks = db.find_keyspace(ks_name);
     return parallel_for_each(ks.metadata()->cf_meta_data(), [&db, ks_name = std::move(ks_name), name = std::move(name)] (auto& pair) {
@@ -1833,29 +1843,28 @@ future<> storage_service::decommission() {
                 }
             }
 
-            logger.debug("DECOMMISSIONING");
+            logger.info("DECOMMISSIONING: starts");
             ss.start_leaving().get();
             // FIXME: long timeout = Math.max(RING_DELAY, BatchlogManager.instance.getBatchlogTimeout());
             auto timeout = ss.get_ring_delay();
             ss.set_mode(mode::LEAVING, sprint("sleeping %s ms for batch processing and pending range setup", timeout.count()), true);
             sleep(timeout).get();
 
-            logger.debug("DECOMMISSIONING: unbootstrap starts");
+            logger.info("DECOMMISSIONING: unbootstrap starts");
             ss.unbootstrap();
-            logger.debug("DECOMMISSIONING: unbootstrap done");
+            logger.info("DECOMMISSIONING: unbootstrap done");
 
-            // FIXME: proper shutdown
             ss.shutdown_client_servers().get();
-            logger.debug("DECOMMISSIONING: shutdown rpc and cql server done");
+            logger.info("DECOMMISSIONING: shutdown rpc and cql server done");
             gms::get_local_gossiper().stop_gossiping().get();
-            logger.debug("DECOMMISSIONING: stop_gossiping done");
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            logger.info("DECOMMISSIONING: stop_gossiping done");
+            ss.do_stop_ms().get();
+            logger.info("DECOMMISSIONING: stop messaging_service done");
             // StageManager.shutdownNow();
             db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::DECOMMISSIONED).get();
-            logger.debug("DECOMMISSIONING: set_bootstrap_state done");
+            logger.info("DECOMMISSIONING: set_bootstrap_state done");
             ss.set_mode(mode::DECOMMISSIONED, true);
+            logger.info("DECOMMISSIONING: done");
             // let op be responsible for killing the process
         });
     });
@@ -2003,10 +2012,8 @@ future<> storage_service::drain() {
             ss.shutdown_client_servers().get();
             gms::get_local_gossiper().stop_gossiping().get();
 
-            ss.set_mode(mode::DRAINING, "shutting down MessageService", false);
-            net::get_messaging_service().invoke_on_all([] (auto& ms) {
-                return ms.stop();
-            }).get();
+            ss.set_mode(mode::DRAINING, "shutting down messaging_service", false);
+            ss.do_stop_ms().get();
 
 #if 0
     StorageProxy.instance.verifyNoHintsInProgress();

@@ -1443,9 +1443,16 @@ future<> gossiper::add_local_application_state(application_state state, versione
 }
 
 future<> gossiper::do_stop_gossiping() {
+    if (!is_enabled()) {
+        logger.info("gossip is already stopped");
+        return make_ready_future<>();
+    }
     return seastar::async([this, g = this->shared_from_this()] {
         _enabled = false;
         auto my_ep_state = get_endpoint_state_for_endpoint(get_broadcast_address());
+        if (my_ep_state) {
+            logger.info("My status = {}", get_gossip_status(*my_ep_state));
+        }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             logger.info("Announcing shutdown");
             add_local_application_state(application_state::STATUS, storage_service_value_factory().shutdown(true)).get();
