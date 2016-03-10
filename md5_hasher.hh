@@ -40,4 +40,10 @@ public:
         hash.Final(reinterpret_cast<unsigned char*>(digest.begin()));
         return digest;
     }
+
+    std::array<uint8_t, CryptoPP::Weak::MD5::DIGESTSIZE> finalize_array() {
+        std::array<uint8_t, CryptoPP::Weak::MD5::DIGESTSIZE> array;
+        hash.Final(reinterpret_cast<unsigned char*>(array.data()));
+        return array;
+    }
 };
