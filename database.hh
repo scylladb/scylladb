@@ -159,7 +159,7 @@ private:
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
     mutable row_cache _cache; // Cache covers only sstables.
-    int64_t _sstable_generation = 1;
+    std::experimental::optional<int64_t> _sstable_generation = {};
 
     db::replay_position _highest_flushed_rp;
     // Provided by the database that owns this commitlog
@@ -182,13 +182,17 @@ private:
 
     // update the sstable generation, making sure that new new sstables don't overwrite this one.
     void update_sstables_known_generation(unsigned generation) {
-        _sstable_generation = std::max<uint64_t>(_sstable_generation, generation /  smp::count + 1);
+        if (!_sstable_generation) {
+            _sstable_generation = 1;
+        }
+        _sstable_generation = std::max<uint64_t>(*_sstable_generation, generation /  smp::count + 1);
     }
 
     uint64_t calculate_generation_for_new_table() {
+        assert(_sstable_generation);
         // FIXME: better way of ensuring we don't attempt to
         // overwrite an existing table.
-        return _sstable_generation++ * smp::count + engine().cpu_id();
+        return (*_sstable_generation)++ * smp::count + engine().cpu_id();
     }
 
     // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
@@ -207,6 +211,27 @@ private:
     std::chrono::steady_clock::time_point _sstable_writes_disabled_at;
     void do_trigger_compaction();
 public:
+
+    // This function should be called when this column family is ready for writes, IOW,
+    // to produce SSTables. Extensive details about why this is important can be found
+    // in Scylla's Github Issue #1014
+    //
+    // Nothing should be writing to SSTables before we have the chance to populate the
+    // existing SSTables and calculate what should the next generation number be.
+    //
+    // However, if that happens, we want to protect against it in a way that does not
+    // involve overwriting existing tables. This is one of the ways to do it: every
+    // column family starts in an unwriteable state, and when it can finally be written
+    // to, we mark it as writeable.
+    //
+    // Note that this *cannot* be a part of add_column_family. That adds a column family
+    // to a db in memory only, and if anybody is about to write to a CF, that was most
+    // likely already called. We need to call this explicitly when we are sure we're ready
+    // to issue disk operations safely.
+    void mark_ready_for_writes() {
+        update_sstables_known_generation(0);
+    }
+
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // Note: for data queries use query() instead.
