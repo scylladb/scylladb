@@ -37,6 +37,9 @@ eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
 
 do_start()
 {
+	if [ "$AMI" = "yes" ]; then
+		/usr/lib/scylla/scylla-ami/scylla_ami_setup
+ 	fi
 	/usr/lib/scylla/scylla_prepare	
         /usr/lib/scylla/scylla_io_setup
 	# Return
