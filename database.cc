@@ -588,9 +588,7 @@ column_family::seal_active_memtable() {
 
 future<stop_iteration>
 column_family::try_flush_memtable_to_sstable(lw_shared_ptr<memtable> old) {
-    // FIXME: better way of ensuring we don't attempt to
-    //        overwrite an existing table.
-    auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+    auto gen = calculate_generation_for_new_table();
 
     auto newtab = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
         _config.datadir, gen,
@@ -1017,6 +1015,9 @@ future<> column_family::populate(sstring sstdir) {
                 return make_ready_future<>();
             });
         });
+    }).then([this] {
+        // Make sure this is called even if CF is empty
+        mark_ready_for_writes();
     });
 }
 
@@ -1202,6 +1203,14 @@ database::init_system_keyspace() {
     return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
             return init_commitlog();
+        });
+    }).then([this] {
+        auto& ks = find_keyspace(db::system_keyspace::NAME);
+        return parallel_for_each(ks.metadata()->cf_meta_data(), [this] (auto& pair) {
+            auto cfm = pair.second;
+            auto& cf = this->find_column_family(cfm);
+            cf.mark_ready_for_writes();
+            return make_ready_future<>();
         });
     });
 }
@@ -1724,11 +1733,9 @@ column_family::apply(const frozen_mutation& m, const schema_ptr& m_schema, const
 
 void
 column_family::seal_on_overflow() {
-    ++_mutation_count;
     if (active_memtable().occupancy().total_space() >= _config.max_memtable_size) {
         // FIXME: if sparse, do some in-memory compaction first
         // FIXME: maybe merge with other in-memory memtables
-        _mutation_count = 0;
         seal_active_memtable();
     }
 }
