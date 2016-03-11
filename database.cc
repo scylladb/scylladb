@@ -1014,6 +1014,9 @@ future<> column_family::populate(sstring sstdir) {
                 return make_ready_future<>();
             });
         });
+    }).then([this] {
+        // Make sure this is called even if CF is empty
+        mark_ready_for_writes();
     });
 }
 
@@ -1197,6 +1200,14 @@ database::init_system_keyspace() {
     return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
             return init_commitlog();
+        });
+    }).then([this] {
+        auto& ks = find_keyspace(db::system_keyspace::NAME);
+        return parallel_for_each(ks.metadata()->cf_meta_data(), [this] (auto& pair) {
+            auto cfm = pair.second;
+            auto& cf = this->find_column_family(cfm);
+            cf.mark_ready_for_writes();
+            return make_ready_future<>();
         });
     });
 }
