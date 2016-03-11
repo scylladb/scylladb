@@ -27,6 +27,9 @@ env HOME=/var/lib/scylla
 pre-start script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
     eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
+    if [ "$AMI" = "yes" ]; then
+        sudo /usr/lib/scylla/scylla-ami/scylla_ami_setup
+    fi
     sudo /usr/lib/scylla/scylla_prepare
 end script
 
