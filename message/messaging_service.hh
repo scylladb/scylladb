@@ -329,5 +329,4 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
-future<> init_messaging_service(sstring listen_address, db::seed_provider_type seed_provider);
 } // namespace net
