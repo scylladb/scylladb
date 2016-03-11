@@ -516,6 +516,7 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                     if (ms->is_stopping()) {
                         logger.debug("Retry verb={} to {}, retry={}: stop retrying: messaging_service is stopped",
                                      vb, id, retry);
+                        throw;
                     }
                     if (!gms::get_local_gossiper().is_known_endpoint(id.addr)) {
                         logger.debug("Retry verb={} to {}, retry={}: stop retrying: node is removed from the cluster",
