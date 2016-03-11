@@ -857,6 +857,7 @@ SEASTAR_TEST_CASE(reshuffle) {
             cfg.enable_incremental_backups = false;
             auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm);
             cf->start();
+            cf->mark_ready_for_writes();
             return cf->reshuffle_sstables(3).then([cm, cf] (std::vector<sstables::entry_descriptor> reshuffled) {
                 BOOST_REQUIRE(reshuffled.size() == 2);
                 BOOST_REQUIRE(reshuffled[0].generation  == 3);
