@@ -154,7 +154,7 @@ void stream_transfer_task::start() {
         return session->ms().send_stream_mutation_done(id, plan_id, _ranges,
                 cf_id, session->dst_cpu_id).handle_exception([plan_id, id, cf_id] (auto ep) {
             sslog.error("[Stream #{}] stream_transfer_task: Fail to send STREAM_MUTATION_DONE to {}: {}", plan_id, id, ep);
-            throw;
+            std::rethrow_exception(ep);
         });
     }).then([this, id, plan_id, cf_id] {
         sslog.debug("[Stream #{}] GOT STREAM_MUTATION_DONE Reply from {}", plan_id, id.addr);
