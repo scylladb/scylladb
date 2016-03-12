@@ -755,13 +755,20 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     sstlog.debug("Writing TOC file {} ", file_path);
 
+    // Writing TOC content to temporary file.
+    // If creation of temporary TOC failed, it implies that that boot failed to
+    // delete a sstable with temporary for this column family, or there is a
+    // sstable being created in parallel with the same generation.
+    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+
     bool toc_exists = file_exists(filename(sstable::component_type::TOC)).get0();
     if (toc_exists) {
+        // TOC will exist at this point if write_components() was called with
+        // the generation of a sstable that exists.
+        f.close().get();
+        remove_file(file_path).get();
         throw std::runtime_error(sprint("SSTable write failed due to existence of TOC file for generation %ld of %s.%s", _generation, _ks, _cf));
     }
-
-    // Writing TOC content to temporary file.
-    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::truncate).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
