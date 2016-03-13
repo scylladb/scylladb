@@ -59,7 +59,7 @@ future<file> new_sstable_component_file(sstring name, open_flags flags) {
     });
 }
 
-thread_local std::unordered_map<sstring, unsigned> sstable::_shards_agreeing_to_remove_sstable;
+thread_local std::unordered_map<sstring, std::unordered_set<unsigned>> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
     static thread_local utils::phased_barrier gate;
@@ -1742,9 +1742,11 @@ sstable::shared_remove_by_toc_name(sstring toc_name, bool shared) {
         return remove_by_toc_name(toc_name);
     } else {
         auto shard = std::hash<sstring>()(toc_name) % smp::count;
-        return smp::submit_to(shard, [toc_name] {
-            auto& counter = _shards_agreeing_to_remove_sstable[toc_name];
-            if (++counter == smp::count) {
+        return smp::submit_to(shard, [toc_name, src_shard = engine().cpu_id()] {
+            auto& remove_set = _shards_agreeing_to_remove_sstable[toc_name];
+            remove_set.insert(src_shard);
+            auto counter = remove_set.size();
+            if (counter == smp::count) {
                 _shards_agreeing_to_remove_sstable.erase(toc_name);
                 return remove_by_toc_name(toc_name);
             } else {
