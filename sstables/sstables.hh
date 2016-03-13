@@ -343,7 +343,7 @@ private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
-    static thread_local std::unordered_map<sstring, unsigned> _shards_agreeing_to_remove_sstable;
+    static thread_local std::unordered_map<sstring, std::unordered_set<unsigned>> _shards_agreeing_to_remove_sstable;
 
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
