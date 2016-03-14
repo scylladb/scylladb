@@ -52,10 +52,12 @@
 
 namespace service {
 
-class migration_manager {
+class migration_manager : public seastar::async_sharded_service<migration_manager> {
     std::vector<migration_listener*> _listeners;
 
     static const std::chrono::milliseconds migration_delay;
+
+    bool ms_inited = false;
 public:
     migration_manager();
 
@@ -118,6 +120,10 @@ public:
     future<> stop();
 
     bool is_ready_for_bootstrap();
+
+    void init_messaging_service();
+private:
+    void uninit_messaging_service();
 };
 
 extern distributed<migration_manager> _the_migration_manager;
