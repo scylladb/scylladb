@@ -491,6 +491,10 @@ int main(int ac, char** av) {
                     }
                 }
             }
+            supervisor_notify("initializing migration manager RPC verbs");
+            service::get_migration_manager().invoke_on_all([] (auto& mm) {
+                mm.init_messaging_service();
+            }).get();
             supervisor_notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_server().get();
