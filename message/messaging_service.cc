@@ -113,11 +113,11 @@ struct messaging_service::rpc_protocol_wrapper : public rpc_protocol { using rpc
 class messaging_service::rpc_protocol_client_wrapper {
     std::unique_ptr<rpc_protocol::client> _p;
 public:
-    rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr())
-            : _p(std::make_unique<rpc_protocol::client>(proto, addr, local)) {
+    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, ipv4_addr addr, ipv4_addr local = ipv4_addr())
+            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, local)) {
     }
-    rpc_protocol_client_wrapper(rpc_protocol& proto, ipv4_addr addr, ipv4_addr local, ::shared_ptr<seastar::tls::server_credentials> c)
-            : _p(std::make_unique<rpc_protocol::client>(proto, addr, seastar::tls::connect(c, addr, local)))
+    rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, ipv4_addr addr, ipv4_addr local, ::shared_ptr<seastar::tls::server_credentials> c)
+            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, seastar::tls::connect(c, addr, local)))
     {}
     auto get_stats() const { return _p->get_stats(); }
     future<> stop() { return _p->stop(); }
@@ -391,10 +391,14 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     auto remote_addr = ipv4_addr(get_preferred_ip(id.addr).raw_addr(), must_encrypt ? _ssl_port : _port);
     auto local_addr = ipv4_addr{_listen_address.raw_addr(), 0};
 
+    rpc::client_options opts;
+    // send keepalive messages each minute if connection is idle, drop connection after 10 failures
+    opts.keepalive = std::experimental::optional<net::tcp_keepalive_params>({60s, 60s, 10});
+
     auto client = must_encrypt ?
-                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc,
+                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
                                     remote_addr, local_addr, _credentials) :
-                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc,
+                    ::make_shared<rpc_protocol_client_wrapper>(*_rpc, std::move(opts),
                                     remote_addr, local_addr);
 
     it = _clients[idx].emplace(id, shard_info(std::move(client))).first;
