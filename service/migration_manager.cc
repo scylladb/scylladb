@@ -66,7 +66,41 @@ migration_manager::migration_manager()
 
 future<> migration_manager::stop()
 {
+    if (ms_inited) {
+        uninit_messaging_service();
+    }
     return make_ready_future<>();
+}
+
+void migration_manager::init_messaging_service()
+{
+    ms_inited = true;
+    auto& ms = net::get_local_messaging_service();
+    ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
+        auto src = net::messaging_service::get_source(cinfo);
+        do_with(std::move(m), get_local_shared_storage_proxy(), [src] (const std::vector<frozen_mutation>& mutations, shared_ptr<storage_proxy>& p) {
+            return service::get_local_migration_manager().merge_schema_from(src, mutations);
+        }).then_wrapped([src] (auto&& f) {
+            if (f.failed()) {
+                logger.error("Failed to update definitions from {}: {}", src, f.get_exception());
+            } else {
+                logger.debug("Applied definitions update from {}.", src);
+            }
+        });
+        return net::messaging_service::no_wait();
+    });
+    ms.register_migration_request([this] () {
+        return db::schema_tables::convert_schema_to_mutations(get_storage_proxy()).finally([p = get_local_shared_storage_proxy()] {
+            // keep local proxy alive
+        });
+    });
+}
+
+void migration_manager::uninit_messaging_service()
+{
+    auto& ms = net::get_local_messaging_service();
+    ms.unregister_migration_request();
+    ms.unregister_definitions_update();
 }
 
 void migration_manager::register_listener(migration_listener* listener)
