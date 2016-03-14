@@ -81,12 +81,12 @@ public:
     // Keep mutations alive around whole async operation.
     future<> merge_schema_from(net::messaging_service::msg_addr src, const std::vector<frozen_mutation>& mutations);
 
-    void notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    void notify_create_column_family(const schema_ptr& cfm);
-    void notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
-    void notify_update_column_family(const schema_ptr& cfm, bool columns_changed);
-    void notify_drop_keyspace(const sstring& ks_name);
-    void notify_drop_column_family(const schema_ptr& cfm);
+    future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    future<> notify_create_column_family(const schema_ptr& cfm);
+    future<> notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    future<> notify_update_column_family(const schema_ptr& cfm, bool columns_changed);
+    future<> notify_drop_keyspace(const sstring& ks_name);
+    future<> notify_drop_column_family(const schema_ptr& cfm);
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
 
