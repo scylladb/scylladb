@@ -108,6 +108,7 @@ private:
     private final AtomicLong notificationSerialNumber = new AtomicLong();
 #endif
     distributed<database>& _db;
+    int _update_jobs{0};
     // Note that this is obviously only valid for the current shard. Users of
     // this facility should elect a shard to be the coordinator based on any
     // given objective criteria
@@ -126,6 +127,10 @@ public:
 
     // Needed by distributed<>
     future<> stop();
+
+    void do_update_pending_ranges();
+    future<> update_pending_ranges();
+    future<> block_until_update_pending_ranges_finished();
 
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;

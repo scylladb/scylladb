@@ -409,8 +409,14 @@ future<> gossiper::apply_state_locally(const std::map<inet_address, endpoint_sta
 // Runs inside seastar::async context
 void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-    _subscribers.for_each([endpoint] (auto& subscriber) {
-        subscriber->on_remove(endpoint);
+    // We can not run on_remove callbacks here becasue on_remove in
+    // storage_service might take the gossiper::timer_callback_lock
+    seastar::async([this, endpoint] {
+        _subscribers.for_each([endpoint] (auto& subscriber) {
+            subscriber->on_remove(endpoint);
+        });
+    }).handle_exception([] (auto ep) {
+        logger.warn("Fail to call on_remove callback: {}", ep);
     });
 
     if(_seeds.count(endpoint)) {

@@ -54,7 +54,6 @@
 #include "locator/local_strategy.hh"
 #include "version.hh"
 #include "unimplemented.hh"
-#include "service/pending_range_calculator_service.hh"
 #include "streaming/stream_plan.hh"
 #include "streaming/stream_state.hh"
 #include "dht/range_streamer.hh"
@@ -265,7 +264,7 @@ void storage_service::join_token_ring(int delay) {
         }
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
-        get_local_pending_range_calculator_service().block_until_finished().get();
+        block_until_update_pending_ranges_finished().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 
@@ -292,7 +291,7 @@ void storage_service::join_token_ring(int delay) {
                 set_mode(mode::JOINING, "waiting for schema information to complete", true);
                 sleep(std::chrono::seconds(1)).get();
             }
-            get_local_pending_range_calculator_service().block_until_finished().get();
+            block_until_update_pending_ranges_finished().get();
         }
         logger.info("Checking bootstrapping/leaving/moving nodes: ok");
 
@@ -463,7 +462,7 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
     }
 
     _token_metadata.add_bootstrap_tokens(tokens, endpoint);
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 
     auto& gossiper = gms::get_local_gossiper();
     if (gossiper.uses_host_id(endpoint)) {
@@ -561,7 +560,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     // a race where natural endpoint was updated to contain node A, but A was
     // not yet removed from pending endpoints
     _token_metadata.update_normal_tokens(tokens_to_update_in_metadata, endpoint);
-    get_local_pending_range_calculator_service().do_update();
+    do_update_pending_ranges();
 
     for (auto ep : endpoints_to_remove) {
         remove_endpoint(ep);
@@ -608,7 +607,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
         }).get();
     }
 
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
     if (logger.is_enabled(logging::log_level::debug)) {
         auto ver = _token_metadata.get_ring_version();
         for (auto& x : _token_metadata.get_token_to_endpoint()) {
@@ -643,7 +642,7 @@ void storage_service::handle_state_leaving(inet_address endpoint) {
     // at this point the endpoint is certainly a member with this token, so let's proceed
     // normally
     _token_metadata.add_leaving_endpoint(endpoint);
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 }
 
 void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
@@ -660,7 +659,7 @@ void storage_service::handle_state_moving(inet_address endpoint, std::vector<sst
     auto token = dht::global_partitioner().from_sstring(pieces[1]);
     logger.debug("Node {} state moving, new token {}", endpoint, token);
     _token_metadata.add_moving_endpoint(token, endpoint);
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 }
 
 void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
@@ -687,7 +686,7 @@ void storage_service::handle_state_removing(inet_address endpoint, std::vector<s
             logger.debug("Tokens {} removed manually (endpoint was {})", remove_tokens, endpoint);
             // Note that the endpoint is being removed
             _token_metadata.add_leaving_endpoint(endpoint);
-            get_local_pending_range_calculator_service().update().get();
+            update_pending_ranges().get();
             // find the endpoint coordinating this removal that we need to notify when we're done
             auto state = gossiper.get_endpoint_state_for_endpoint(endpoint);
             assert(state);
@@ -790,7 +789,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
 void storage_service::on_remove(gms::inet_address endpoint) {
     logger.debug("endpoint={} on_remove", endpoint);
     _token_metadata.remove_endpoint(endpoint);
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 }
 
 void storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state state) {
@@ -1665,7 +1664,7 @@ future<> storage_service::decommission() {
                 throw std::runtime_error(sprint("Node in %s state; wait for status to become normal or restart", ss._operation_mode));
             }
 
-            get_local_pending_range_calculator_service().block_until_finished().get();
+            ss.update_pending_ranges().get();
 
             auto non_system_keyspaces = db.get_non_system_keyspaces();
             for (const auto& keyspace_name : non_system_keyspaces) {
@@ -1764,7 +1763,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
             }
             ss._removing_node = endpoint;
             tm.add_leaving_endpoint(endpoint);
-            get_local_pending_range_calculator_service().update().get();
+            ss.update_pending_ranges().get();
 
             // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
             // we add our own token so other nodes to let us know when they're done
@@ -2135,7 +2134,7 @@ void storage_service::excise(std::unordered_set<token> tokens, inet_address endp
         }
     }).get();
 
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 }
 
 void storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint, int64_t expire_time) {
@@ -2184,7 +2183,7 @@ future<> storage_service::confirm_replication(inet_address node) {
 void storage_service::leave_ring() {
     db::system_keyspace::set_bootstrap_state(db::system_keyspace::bootstrap_state::NEEDS_BOOTSTRAP).get();
     _token_metadata.remove_endpoint(get_broadcast_address());
-    get_local_pending_range_calculator_service().update().get();
+    update_pending_ranges().get();
 
     auto& gossiper = gms::get_local_gossiper();
     auto expire_time = gossiper.compute_expire_time().time_since_epoch().count();
@@ -2283,7 +2282,7 @@ future<> storage_service::start_leaving() {
     auto& gossiper = gms::get_local_gossiper();
     return gossiper.add_local_application_state(application_state::STATUS, value_factory.leaving(get_local_tokens())).then([this] {
         _token_metadata.add_leaving_endpoint(get_broadcast_address());
-        return get_local_pending_range_calculator_service().update();
+        return update_pending_ranges();
     });
 }
 
@@ -2635,7 +2634,7 @@ future<> storage_service::move(token new_token) {
 
             auto keyspaces_to_process = ss._db.local().get_non_system_keyspaces();
 
-            get_local_pending_range_calculator_service().block_until_finished().get();
+            ss.block_until_update_pending_ranges_finished().get();
 
             // checking if data is moving to this node
             for (auto keyspace_name : keyspaces_to_process) {
@@ -2678,6 +2677,40 @@ std::chrono::milliseconds storage_service::get_ring_delay() {
     auto ring_delay = _db.local().get_config().ring_delay_ms();
     logger.trace("Set RING_DELAY to {}ms", ring_delay);
     return std::chrono::milliseconds(ring_delay);
+}
+
+void storage_service::do_update_pending_ranges() {
+    if (engine().cpu_id() != 0) {
+        throw std::runtime_error("do_update_pending_ranges should be called on cpu zero");
+    }
+    // long start = System.currentTimeMillis();
+    auto keyspaces = _db.local().get_non_system_keyspaces();
+    for (auto& keyspace_name : keyspaces) {
+        auto& ks = _db.local().find_keyspace(keyspace_name);
+        auto& strategy = ks.get_replication_strategy();
+        get_local_storage_service().get_token_metadata().calculate_pending_ranges(strategy, keyspace_name);
+    }
+    // logger.debug("finished calculation for {} keyspaces in {}ms", keyspaces.size(), System.currentTimeMillis() - start);
+}
+
+future<> storage_service::update_pending_ranges() {
+    return get_storage_service().invoke_on(0, [] (auto& ss){
+        ss._update_jobs++;
+        ss.do_update_pending_ranges();
+        // calculate_pending_ranges will modify token_metadata, we need to repliate to other cores
+        return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
+            ss._update_jobs--;
+        });
+    });
+}
+
+future<> storage_service::block_until_update_pending_ranges_finished() {
+    // We want to be sure the job we're blocking for is actually finished and we can't trust the TPE's active job count
+    return smp::submit_to(0, [] {
+        return do_until(
+            [] { return !(get_local_storage_service()._update_jobs > 0); },
+            [] { return sleep(std::chrono::milliseconds(100)); });
+    });
 }
 
 } // namespace service

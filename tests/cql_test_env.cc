@@ -41,19 +41,14 @@
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
-#include "service/pending_range_calculator_service.hh"
 
 // TODO : remove once shutdown is ok.
 // Broke these test when doing horror patch for #293
 // Simpler to copy the code from init.cc than trying to do clever parameterization
 // and whatnot.
 static future<> tst_init_storage_service(distributed<database>& db) {
-    return service::get_pending_range_calculator_service().start(std::ref(db)).then([] {
-        engine().at_exit([] { return service::get_pending_range_calculator_service().stop(); });
-    }).then([&db] {
-        return service::init_storage_service(db).then([] {
-            engine().at_exit([] { return service::deinit_storage_service(); });
-        });
+    return service::init_storage_service(db).then([] {
+        engine().at_exit([] { return service::deinit_storage_service(); });
     });
 }
 
@@ -340,7 +335,6 @@ public:
             _db->stop().get();
 
             service::get_storage_service().stop().get();
-            service::get_pending_range_calculator_service().stop().get();
 
             locator::i_endpoint_snitch::stop_snitch().get();
 
