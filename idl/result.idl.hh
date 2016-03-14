@@ -20,10 +20,14 @@
  */
 
 namespace query {
-class result final {
-    bytes_ostream buf();
-};
+
 class result_digest final {
     std::array<uint8_t, 16> get();
 };
+
+class result {
+    bytes_ostream buf();
+    std::experimental::optional<query::result_digest> digest();
+};
+
 }

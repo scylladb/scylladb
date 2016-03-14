@@ -25,8 +25,18 @@
 #include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 #include "query-request.hh"
+#include "md5_hasher.hh"
+#include <experimental/optional>
+
+namespace stdx = std::experimental;
 
 namespace query {
+
+enum class result_request {
+    only_result,
+    only_digest,
+    result_and_digest,
+};
 
 class result_digest {
 public:
@@ -85,6 +95,7 @@ public:
 
 class result {
     bytes_ostream _w;
+    stdx::optional<result_digest> _digest;
 public:
     class builder;
     class partition_writer;
@@ -92,6 +103,7 @@ public:
 
     result();
     result(bytes_ostream&& w) : _w(std::move(w)) {}
+    result(bytes_ostream&& w, stdx::optional<result_digest> d) : _w(std::move(w)), _digest(d) {}
     result(result&&) = default;
     result(const result&) = default;
     result& operator=(result&&) = default;
@@ -101,12 +113,8 @@ public:
         return _w;
     }
 
-    result_digest digest() {
-        CryptoPP::Weak::MD5 hash;
-        result_digest::type digest;
-        bytes_view v = _w.linearize();
-        hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest.data()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
-        return result_digest(std::move(digest));
+    const stdx::optional<result_digest>& digest() const {
+        return _digest;
     }
     sstring pretty_print(schema_ptr, const query::partition_slice&) const;
 };

@@ -139,7 +139,17 @@ to_partition_range(query::range<dht::token> r) {
 sstring
 result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     std::ostringstream out;
-    out << "{" << result_set::from_raw_result(s, slice, *this) << "}";
+    out << "{ result: " << result_set::from_raw_result(s, slice, *this);
+    out << " digest: ";
+    if (_digest) {
+        out << std::hex << std::setw(2);
+        for (auto&& c : _digest->get()) {
+            out << unsigned(c) << " ";
+        }
+    } else {
+        out << "{}";
+    }
+    out << " }";
     return out.str();
 }
 

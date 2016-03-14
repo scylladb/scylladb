@@ -127,8 +127,10 @@ bool mutation::operator!=(const mutation& m) const {
 }
 
 query::result
-mutation::query(const query::partition_slice& slice, gc_clock::time_point now, uint32_t row_limit) const {
-    query::result::builder builder(slice);
+mutation::query(const query::partition_slice& slice, query::result_request request,
+    gc_clock::time_point now, uint32_t row_limit) const
+{
+    query::result::builder builder(slice, request);
     auto pb = builder.add_partition(*schema(), key());
     partition().query(pb, *schema(), now, row_limit);
     return builder.build();

@@ -33,7 +33,7 @@
 #include "schema_builder.hh"
 
 static query::result to_data_query_result(mutation_reader& reader, const query::partition_slice& slice) {
-    query::result::builder builder(slice);
+    query::result::builder builder(slice, query::result_request::only_result);
     auto now = gc_clock::now();
     while (true) {
         mutation_opt mo = reader().get0();

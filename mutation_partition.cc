@@ -25,6 +25,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query-result-writer.hh"
+#include "atomic_cell_hash.hh"
 
 template<bool reversed>
 struct reversal_traits;
@@ -427,6 +428,27 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, const data_ty
         .end_qr_cell();
 }
 
+static void hash_row_slice(md5_hasher& hasher,
+    const schema& s,
+    column_kind kind,
+    const row& cells,
+    const std::vector<column_id>& columns)
+{
+    for (auto id : columns) {
+        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        if (!cell) {
+            continue;
+        }
+        feed_hash(hasher, id);
+        auto&& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            feed_hash(hasher, cell->as_atomic_cell());
+        } else {
+            feed_hash(hasher, cell->as_collection_mutation());
+        }
+    }
+}
+
 template<typename RowWriter>
 static void get_row_slice(const schema& s,
     const query::partition_slice& slice,
@@ -506,8 +528,14 @@ mutation_partition::query(query::result::partition_writer& pw,
     auto static_cells_wr = pw.start().start_static_row().start_cells();
 
     if (!slice.static_columns.empty()) {
-        get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
-                      now, static_cells_wr);
+        if (pw.requested_result()) {
+            get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
+                          now, static_cells_wr);
+        }
+        if (pw.requested_digest()) {
+            ::feed_hash(pw.digest(), partition_tombstone());
+            hash_row_slice(pw.digest(), s, column_kind::static_column, static_row(), slice.static_columns);
+        }
     }
 
     auto rows_wr = std::move(static_cells_wr).end_cells()
@@ -520,6 +548,7 @@ mutation_partition::query(query::result::partition_writer& pw,
     bool has_ck_selector = pw.ranges().empty();
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
+    auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
     for (auto&& row_range : pw.ranges()) {
         if (limit == 0) {
             break;
@@ -534,11 +563,25 @@ mutation_partition::query(query::result::partition_writer& pw,
             auto& row = e.row();
             auto row_tombstone = tombstone_for_row(s, e);
 
+            if (pw.requested_digest()) {
+                e.key().feed_hash(pw.digest(), s);
+                ::feed_hash(pw.digest(), row_tombstone);
+                hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+            }
+
             if (row.is_live(s, row_tombstone, now)) {
-                auto cells_wr = rows_wr.add().write_key(e.key()).start_cells().start_cells();
-                get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
-                              now, cells_wr);
-                std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+                if (pw.requested_result()) {
+                    auto cells_wr = [&] {
+                        if (send_ck) {
+                            return rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                        } else {
+                            return rows_wr.add().skip_key().start_cells().start_cells();
+                        }
+                    }();
+                    get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
+                                  now, cells_wr);
+                    std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+                }
                 ++row_count;
                 if (--limit == 0) {
                     return stop_iteration::yes;

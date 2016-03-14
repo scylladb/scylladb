@@ -27,16 +27,18 @@
 #include "atomic_cell.hh"
 #include "hashing.hh"
 
-template<typename Hasher>
-void feed_hash(collection_mutation_view cell, Hasher& h, const data_type& type) {
-    auto&& ctype = static_pointer_cast<const collection_type_impl>(type);
-    auto m_view = ctype->deserialize_mutation_form(cell);
-    ::feed_hash(h, m_view.tomb);
-    for (auto&& key_and_value : m_view.cells) {
-        ::feed_hash(h, key_and_value.first);
-        ::feed_hash(h, key_and_value.second);
+template<>
+struct appending_hash<collection_mutation_view> {
+    template<typename Hasher>
+    void operator()(Hasher& h, collection_mutation_view cell) const {
+        auto m_view = collection_type_impl::deserialize_mutation_form(cell);
+        ::feed_hash(h, m_view.tomb);
+        for (auto&& key_and_value : m_view.cells) {
+            ::feed_hash(h, key_and_value.first);
+            ::feed_hash(h, key_and_value.second);
+        }
     }
-}
+};
 
 template<>
 struct appending_hash<atomic_cell_view> {

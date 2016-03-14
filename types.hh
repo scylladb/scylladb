@@ -721,7 +721,7 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
-    mutation_view deserialize_mutation_form(collection_mutation_view in) const;
+    static mutation_view deserialize_mutation_form(collection_mutation_view in);
     bool is_empty(collection_mutation_view in) const;
     bool is_any_live(collection_mutation_view in, tombstone tomb, gc_clock::time_point now) const;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
