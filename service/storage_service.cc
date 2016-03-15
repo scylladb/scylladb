@@ -197,12 +197,7 @@ void storage_service::prepare_to_join() {
     auto& gossiper = gms::get_local_gossiper();
     gossiper.register_(this->shared_from_this());
     auto generation_number = db::system_keyspace::increment_and_get_generation().get0();
-    gossiper.start_gossiping(generation_number, app_states).then([this] {
-#if SS_DEBUG
-        gms::get_local_gossiper().debug_show();
-        _token_metadata.debug_show();
-#endif
-    }).get();
+    gossiper.start_gossiping(generation_number, app_states).get();
 
     // gossip snitch infos (local DC and rack)
     gossip_snitch_info().get();
@@ -1064,6 +1059,9 @@ future<> storage_service::drain_on_shutdown() {
 
 future<> storage_service::init_server(int delay) {
     return seastar::async([this, delay] {
+        get_storage_service().invoke_on_all([] (auto& ss) {
+            ss.init_messaging_service();
+        }).get();
         auto& gossiper = gms::get_local_gossiper();
 #if 0
         logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
@@ -1231,6 +1229,7 @@ future<> storage_service::gossip_snitch_info() {
 }
 
 future<> storage_service::stop() {
+    uninit_messaging_service();
     return make_ready_future<>();
 }
 
@@ -2927,6 +2926,18 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_pending_ranges().handle_exception([ks_name] (auto ep) {
         logger.warn("Failed to update pending ranges for ks = {}: {}", ks_name, ep);
     });
+}
+
+void storage_service::init_messaging_service() {
+    auto& ms = net::get_local_messaging_service();
+    ms.register_replication_finished([] (gms::inet_address from) {
+        return get_local_storage_service().confirm_replication(from);
+    });
+}
+
+void storage_service::uninit_messaging_service() {
+    auto& ms = net::get_local_messaging_service();
+    ms.unregister_replication_finished();
 }
 
 } // namespace service

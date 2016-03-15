@@ -128,6 +128,8 @@ public:
 
     // Needed by distributed<>
     future<> stop();
+    void init_messaging_service();
+    void uninit_messaging_service();
 
     future<> keyspace_changed(const sstring& ks_name);
     void do_update_pending_ranges();
