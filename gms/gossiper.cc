@@ -225,6 +225,14 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     });
 }
 
+future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
+    set_last_processed_message_at();
+    auto& remote_ep_state_map = msg.get_endpoint_state_map();
+    /* Notify the Failure Detector */
+    notify_failure_detector(remote_ep_state_map);
+    return apply_state_locally(remote_ep_state_map);
+}
+
 void gossiper::init_messaging_service_handler() {
     if (_ms_registered) {
         return;
@@ -252,12 +260,7 @@ void gossiper::init_messaging_service_handler() {
     });
     ms().register_gossip_digest_ack2([] (gossip_digest_ack2 msg) {
         smp::submit_to(0, [msg = std::move(msg)] () mutable {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at();
-            auto& remote_ep_state_map = msg.get_endpoint_state_map();
-            /* Notify the Failure Detector */
-            gossiper.notify_failure_detector(remote_ep_state_map);
-            return gossiper.apply_state_locally(remote_ep_state_map);
+            return gms::get_local_gossiper().handle_ack2_msg(std::move(msg));
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_DIGEST_ACK2: {}", ep);
         });
