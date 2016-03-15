@@ -1722,14 +1722,15 @@ future<> storage_service::start_rpc_server() {
         auto& cfg = ss._db.local().get_config();
         auto port = cfg.rpc_port();
         auto addr = cfg.rpc_address();
-        return dns::gethostbyname(addr).then([&ss, tserver, addr, port] (dns::hostent e) {
+        auto keepalive = cfg.rpc_keepalive();
+        return dns::gethostbyname(addr).then([&ss, tserver, addr, port, keepalive] (dns::hostent e) {
             auto ip = e.addresses[0].in.s_addr;
-            return tserver->start(std::ref(ss._db)).then([tserver, port, addr, ip] {
+            return tserver->start(std::ref(ss._db)).then([tserver, port, addr, ip, keepalive] {
                 // #293 - do not stop anything
                 //engine().at_exit([tserver] {
                 //    return tserver->stop();
                 //});
-                return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port});
+                return tserver->invoke_on_all(&thrift_server::listen, ipv4_addr{ip, port}, keepalive);
             });
         }).then([addr, port] {
             print("Thrift server listening on %s:%s ...\n", addr, port);
@@ -1774,10 +1775,11 @@ future<> storage_service::start_native_transport() {
         auto port = cfg.native_transport_port();
         auto addr = cfg.rpc_address();
         auto ceo = cfg.client_encryption_options();
+        auto keepalive = cfg.rpc_keepalive();
         transport::cql_load_balance lb = transport::parse_load_balance(cfg.load_balance());
-        return dns::gethostbyname(addr).then([cserver, addr, port, lb, ceo = std::move(ceo)] (dns::hostent e) {
+        return dns::gethostbyname(addr).then([cserver, addr, port, lb, keepalive, ceo = std::move(ceo)] (dns::hostent e) {
             auto ip = e.addresses[0].in.s_addr;
-            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo]() {
+            return cserver->start(std::ref(service::get_storage_proxy()), std::ref(cql3::get_query_processor()), lb).then([cserver, port, addr, ip, ceo, keepalive]() {
                 // #293 - do not stop anything
                 //engine().at_exit([cserver] {
                 //    return cserver->stop();
@@ -1792,8 +1794,8 @@ future<> storage_service::start_native_transport() {
                     cred = ::make_shared<seastar::tls::server_credentials>(::make_shared<seastar::tls::dh_params>(seastar::tls::dh_params::level::MEDIUM));
                     f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
                 }
-                return f.then([cserver, addr, cred] {
-                    return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred);
+                return f.then([cserver, addr, cred, keepalive] {
+                    return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred, keepalive);
                 });
             });
         }).then([addr, port] {

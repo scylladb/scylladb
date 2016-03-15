@@ -275,7 +275,7 @@ future<> cql_server::stop() {
 }
 
 future<>
-cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials> creds) {
+cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials> creds, bool keepalive) {
     _notifier = std::make_unique<event_notifier>(addr.port);
     service::get_local_migration_manager().register_listener(_notifier.get());
     service::get_local_storage_service().register_subscriber(_notifier.get());
@@ -286,14 +286,14 @@ cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials
                     ? seastar::tls::listen(creds, make_ipv4_address(addr), lo)
                     : engine().listen(make_ipv4_address(addr), lo);
     _listeners.emplace_back(std::move(ss));
-    _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1)).discard_result();
+    _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive)).discard_result();
     return make_ready_future<>();
 }
 
 future<>
-cql_server::do_accepts(int which) {
+cql_server::do_accepts(int which, bool keepalive) {
     ++_connections_being_accepted;
-    return _listeners[which].accept().then_wrapped([this, which] (future<connected_socket, socket_address> f_cs_sa) mutable {
+    return _listeners[which].accept().then_wrapped([this, which, keepalive] (future<connected_socket, socket_address> f_cs_sa) mutable {
         --_connections_being_accepted;
         if (_stopping) {
             f_cs_sa.ignore_ready_future();
@@ -304,6 +304,7 @@ cql_server::do_accepts(int which) {
         auto fd = std::get<0>(std::move(cs_sa));
         auto addr = std::get<1>(std::move(cs_sa));
         fd.set_nodelay(true);
+        fd.set_keepalive(keepalive);
         auto conn = make_shared<connection>(*this, std::move(fd), std::move(addr));
         ++_connects;
         ++_connections;
@@ -315,7 +316,7 @@ cql_server::do_accepts(int which) {
                 logger.debug("connection error: {}", std::current_exception());
             }
         });
-        do_accepts(which);
+        do_accepts(which, keepalive);
     }).then_wrapped([] (future<> f) {
         try {
             f.get();

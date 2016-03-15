@@ -169,18 +169,19 @@ public:
 };
 
 future<>
-thrift_server::listen(ipv4_addr addr) {
+thrift_server::listen(ipv4_addr addr, bool keepalive) {
     listen_options lo;
     lo.reuse_address = true;
     _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));
-    do_accepts(_listeners.size() - 1);
+    do_accepts(_listeners.size() - 1, keepalive);
     return make_ready_future<>();
 }
 
 void
-thrift_server::do_accepts(int which) {
-    _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
+thrift_server::do_accepts(int which, bool keepalive) {
+    _listeners[which].accept().then([this, which, keepalive] (connected_socket fd, socket_address addr) mutable {
         fd.set_nodelay(true);
+        fd.set_keepalive(keepalive);
         auto conn = new connection(*this, std::move(fd), addr);
         conn->process().then_wrapped([this, conn] (future<> f) {
             delete conn;
@@ -190,7 +191,7 @@ thrift_server::do_accepts(int which) {
                 logger.debug("request error {}", ex.what());
             }
         });
-        do_accepts(which);
+        do_accepts(which, keepalive);
     }).then_wrapped([] (future<> f) {
         try {
             f.get();

@@ -556,7 +556,7 @@ public:
     val(start_rpc, bool, false, Used,                \
             "Starts the Thrift RPC server"  \
     )   \
-    val(rpc_keepalive, bool, true, Unused,     \
+    val(rpc_keepalive, bool, true, Used,     \
             "Enable or disable keepalive on client connections (RPC or native)."  \
     )   \
     val(rpc_max_threads, uint32_t, 0, Invalid,     \
