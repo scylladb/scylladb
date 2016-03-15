@@ -333,7 +333,6 @@ public:
 
             gms::get_gossiper().stop().get();
             gms::get_failure_detector().stop().get();
-            net::get_messaging_service().stop().get();
 
             _db->stop().get();
 
@@ -342,6 +341,8 @@ public:
             locator::i_endpoint_snitch::stop_snitch().get();
 
             sstables::await_background_jobs_on_all_shards().get();
+
+            net::get_messaging_service().stop().get();
 
             bool old_active = true;
             assert(active.compare_exchange_strong(old_active, false));
