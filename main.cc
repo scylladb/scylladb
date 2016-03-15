@@ -427,15 +427,6 @@ int main(int ac, char** av) {
             streaming::stream_session::init_streaming_service(db).get();
             api::set_server_stream_manager(ctx).get();
             supervisor_notify("starting messaging service");
-            // Start handling REPAIR_CHECKSUM_RANGE messages
-            net::get_messaging_service().invoke_on_all([&db] (auto& ms) {
-                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range) {
-                    return do_with(std::move(keyspace), std::move(cf), std::move(range),
-                            [&db] (auto& keyspace, auto& cf, auto& range) {
-                        return checksum_range(db, keyspace, cf, range);
-                    });
-                });
-            }).get();
             api::set_server_messaging_service(ctx).get();
             supervisor_notify("starting storage proxy");
             proxy.start(std::ref(db)).get();
@@ -498,6 +489,15 @@ int main(int ac, char** av) {
             supervisor_notify("initializing storage proxy RPC verbs");
             proxy.invoke_on_all([] (service::storage_proxy& p) {
                 p.init_messaging_service();
+            }).get();
+            // Start handling REPAIR_CHECKSUM_RANGE messages
+            net::get_messaging_service().invoke_on_all([&db] (auto& ms) {
+                ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range) {
+                    return do_with(std::move(keyspace), std::move(cf), std::move(range),
+                            [&db] (auto& keyspace, auto& cf, auto& range) {
+                        return checksum_range(db, keyspace, cf, range);
+                    });
+                });
             }).get();
             supervisor_notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
