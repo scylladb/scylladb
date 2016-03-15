@@ -160,6 +160,8 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
     }
 }
 
+// Depends on
+// - no external dependency
 future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     logger.trace("cluster_name:peer={},local={},partitioner_name:peer={},local={}",
         syn_msg.cluster_id(), get_cluster_name(), syn_msg.partioner(), get_partitioner_name());
@@ -186,6 +188,12 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     return this->ms().send_gossip_digest_ack(from, std::move(ack_msg));
 }
 
+// Depends on
+// - failure_detector
+// - on_change callbacks, e.g., storage_service -> access db system_table
+// - on_restart callbacks
+// - on_join callbacks
+// - on_alive
 future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     this->set_last_processed_message_at();
     if (!this->is_enabled() && !this->is_in_shadow_round()) {
@@ -225,6 +233,12 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     });
 }
 
+// Depends on
+// - failure_detector
+// - on_change callbacks, e.g., storage_service -> access db system_table
+// - on_restart callbacks
+// - on_join callbacks
+// - on_alive callbacks
 future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     set_last_processed_message_at();
     if (!is_enabled()) {
@@ -500,6 +514,9 @@ void gossiper::do_status_check() {
     }
 }
 
+// Depends on:
+// - failure_detector
+// - on_remove callbacks, e.g, storage_service -> access token_metadata
 void gossiper::run() {
     timer_callback_lock().then([this, g = this->shared_from_this()] {
         seastar::async([this, g] {
@@ -692,6 +709,10 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) {
     }
 }
 
+// Depends on
+// - on_dead callbacks
+// It is called from failure_detector
+//
 // Runs inside seastar::async context
 void gossiper::convict(inet_address endpoint, double phi) {
     auto it = endpoint_state_map.find(endpoint);
@@ -1434,6 +1455,9 @@ void gossiper::add_saved_endpoint(inet_address ep) {
     logger.trace("Adding saved endpoint {} {}", ep, ep_state.get_heart_beat_state().get_generation());
 }
 
+// Depends on:
+// - before_change callbacks
+// - on_change callbacks
 future<> gossiper::add_local_application_state(application_state state, versioned_value value) {
     return get_gossiper().invoke_on(0, [state, value = std::move(value)] (auto& gossiper) mutable {
         return seastar::async([&gossiper, g = gossiper.shared_from_this(), state, value = std::move(value)] () mutable {
