@@ -84,7 +84,7 @@ int get_generation_number();
  * This class will also maintain histograms of the load information
  * of other nodes in the cluster.
  */
-class storage_service : public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
+class storage_service : public service::migration_listener, public gms::i_endpoint_state_change_subscriber, public seastar::async_sharded_service<storage_service> {
 public:
     struct snapshot_details {
         int64_t live;
@@ -129,6 +129,7 @@ public:
     // Needed by distributed<>
     future<> stop();
 
+    future<> keyspace_changed(const sstring& ks_name);
     void do_update_pending_ranges();
     future<> update_pending_ranges();
     future<> block_until_update_pending_ranges_finished();
@@ -704,6 +705,26 @@ public:
     virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_remove(gms::inet_address endpoint) override;
     virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
+
+public:
+    // For migration_listener
+    virtual void on_create_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
+    virtual void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {}
+    virtual void on_create_user_type(const sstring& ks_name, const sstring& type_name) override {}
+    virtual void on_create_function(const sstring& ks_name, const sstring& function_name) override {}
+    virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+
+    virtual void on_update_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool) override {}
+    virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
+    virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
+    virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
+    virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
+    virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
+    virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override {}
+    virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
 private:
     void update_peer_info(inet_address endpoint);
     void do_update_system_peers_table(gms::inet_address endpoint, const application_state& state, const versioned_value& value);

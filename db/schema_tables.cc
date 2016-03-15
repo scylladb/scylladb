@@ -607,10 +607,10 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 #endif
        proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-           for (auto&& keyspace_to_drop : keyspaces_to_drop) {
+           return do_for_each(keyspaces_to_drop, [&db] (auto keyspace_to_drop) {
                db.drop_keyspace(keyspace_to_drop);
-               service::get_local_migration_manager().notify_drop_keyspace(keyspace_to_drop);
-           }
+               return service::get_local_migration_manager().notify_drop_keyspace(keyspace_to_drop);
+            });
        }).get0();
    });
 }
@@ -650,7 +650,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
             return do_for_each(created, [&db](auto&& val) {
                 auto ksm = create_keyspace_from_schema_partition(val);
                 return db.create_keyspace(ksm).then([ksm] {
-                    service::get_local_migration_manager().notify_create_keyspace(ksm);
+                    return service::get_local_migration_manager().notify_create_keyspace(ksm);
                 });
             }).then([&altered, &db] () mutable {
                 for (auto&& name : altered) {
