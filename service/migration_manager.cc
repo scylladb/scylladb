@@ -94,6 +94,9 @@ void migration_manager::init_messaging_service()
             // keep local proxy alive
         });
     });
+    ms.register_schema_check([] {
+        return make_ready_future<utils::UUID>(service::get_local_storage_service().db().local().get_version());
+    });
 }
 
 void migration_manager::uninit_messaging_service()
@@ -101,6 +104,7 @@ void migration_manager::uninit_messaging_service()
     auto& ms = net::get_local_messaging_service();
     ms.unregister_migration_request();
     ms.unregister_definitions_update();
+    ms.unregister_schema_check();
 }
 
 void migration_manager::register_listener(migration_listener* listener)
