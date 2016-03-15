@@ -238,6 +238,17 @@ future<> gossiper::handle_echo_msg() {
     return make_ready_future<>();
 }
 
+future<> gossiper::handle_shutdown_msg(inet_address from) {
+    set_last_processed_message_at();
+    if (!is_enabled()) {
+        logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
+        return make_ready_future<>();
+    }
+    return seastar::async([this, from] {
+        this->mark_as_shutdown(from);
+    });
+}
+
 void gossiper::init_messaging_service_handler() {
     if (_ms_registered) {
         return;
@@ -278,15 +289,7 @@ void gossiper::init_messaging_service_handler() {
     });
     ms().register_gossip_shutdown([] (inet_address from) {
         smp::submit_to(0, [from] {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at();
-            if (!gossiper.is_enabled()) {
-                logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
-                return make_ready_future<>();
-            }
-            return seastar::async([from] {
-                gms::get_local_gossiper().mark_as_shutdown(from);
-            });
+            return gms::get_local_gossiper().handle_shutdown_msg(from);
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
