@@ -56,8 +56,6 @@ class migration_manager : public seastar::async_sharded_service<migration_manage
     std::vector<migration_listener*> _listeners;
 
     static const std::chrono::milliseconds migration_delay;
-
-    bool ms_inited = false;
 public:
     migration_manager();
 

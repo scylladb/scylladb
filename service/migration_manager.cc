@@ -66,15 +66,12 @@ migration_manager::migration_manager()
 
 future<> migration_manager::stop()
 {
-    if (ms_inited) {
-        uninit_messaging_service();
-    }
+    uninit_messaging_service();
     return make_ready_future<>();
 }
 
 void migration_manager::init_messaging_service()
 {
-    ms_inited = true;
     auto& ms = net::get_local_messaging_service();
     ms.register_definitions_update([this] (const rpc::client_info& cinfo, std::vector<frozen_mutation> m) {
         auto src = net::messaging_service::get_source(cinfo);
