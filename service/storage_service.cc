@@ -1051,6 +1051,9 @@ future<> storage_service::drain_on_shutdown() {
 
 future<> storage_service::init_server(int delay) {
     return seastar::async([this, delay] {
+        get_storage_service().invoke_on_all([] (auto& ss) {
+            ss.init_messaging_service();
+        }).get();
         auto& gossiper = gms::get_local_gossiper();
 #if 0
         logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
@@ -1214,6 +1217,7 @@ future<> storage_service::gossip_snitch_info() {
 }
 
 future<> storage_service::stop() {
+    uninit_messaging_service();
     return make_ready_future<>();
 }
 
@@ -2903,6 +2907,18 @@ future<> storage_service::block_until_update_pending_ranges_finished() {
             [] { return !(get_local_storage_service()._update_jobs > 0); },
             [] { return sleep(std::chrono::milliseconds(100)); });
     });
+}
+
+void storage_service::init_messaging_service() {
+    auto& ms = net::get_local_messaging_service();
+    ms.register_replication_finished([] (gms::inet_address from) {
+        return get_local_storage_service().confirm_replication(from);
+    });
+}
+
+void storage_service::uninit_messaging_service() {
+    auto& ms = net::get_local_messaging_service();
+    ms.unregister_replication_finished();
 }
 
 } // namespace service

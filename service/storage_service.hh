@@ -128,6 +128,8 @@ public:
 
     // Needed by distributed<>
     future<> stop();
+    void init_messaging_service();
+    void uninit_messaging_service();
 
     void do_update_pending_ranges();
     future<> update_pending_ranges();
