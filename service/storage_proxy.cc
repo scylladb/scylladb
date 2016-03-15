@@ -344,7 +344,6 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(sch
 
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
-    init_messaging_service();
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
