@@ -270,6 +270,7 @@ SEASTAR_TEST_CASE(test_list_mutations) {
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
+    return seastar::async([] {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
@@ -280,7 +281,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, [s] (column_family& cf) {
+    with_column_family(s, cfg, [s] (column_family& cf) {
         const column_definition& r1_col = *s->get_column_definition("r1");
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
 
@@ -291,26 +292,30 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
             cf.apply(std::move(m));
             return cf.flush();
         };
-        return when_all(
-                insert_row(1001, 2001),
-                insert_row(1002, 2002),
-                insert_row(1003, 2003)).discard_result().then([s, &r1_col, &cf, key] {
+        insert_row(1001, 2001).get();
+        insert_row(1002, 2002).get();
+        insert_row(1003, 2003).get();
+        {
             auto verify_row = [&] (int32_t c1, int32_t r1) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-                return cf.find_row(cf.schema(), dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
+                auto p_key = dht::global_partitioner().decorate_key(*s, key);
+                auto r = cf.find_row(cf.schema(), p_key, c_key).get0();
+                {
                     BOOST_REQUIRE(r);
                     auto i = r->find_cell(r1_col.id);
                     BOOST_REQUIRE(i);
                     auto cell = i->as_atomic_cell();
                     BOOST_REQUIRE(cell.is_live());
                     BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
-                });
+                }
             };
             verify_row(1001, 2001);
             verify_row(1002, 2002);
             verify_row(1003, 2003);
-        });
-    }).then([cf_stats] {});
+        }
+        return make_ready_future<>();
+    }).get();
+    });
 }
 
 SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
