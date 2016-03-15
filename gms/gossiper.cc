@@ -233,6 +233,11 @@ future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     return apply_state_locally(remote_ep_state_map);
 }
 
+future<> gossiper::handle_echo_msg() {
+    set_last_processed_message_at();
+    return make_ready_future<>();
+}
+
 void gossiper::init_messaging_service_handler() {
     if (_ms_registered) {
         return;
@@ -268,9 +273,7 @@ void gossiper::init_messaging_service_handler() {
     });
     ms().register_gossip_echo([] {
         return smp::submit_to(0, [] {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_last_processed_message_at();
-            return make_ready_future<>();
+            return gms::get_local_gossiper().handle_echo_msg();
         });
     });
     ms().register_gossip_shutdown([] (inet_address from) {
