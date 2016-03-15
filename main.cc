@@ -423,9 +423,6 @@ int main(int ac, char** av) {
                     , cluster_name
                     , phi).get();
             api::set_server_gossip(ctx).get();
-            supervisor_notify("starting streaming service");
-            streaming::stream_session::init_streaming_service(db).get();
-            api::set_server_stream_manager(ctx).get();
             supervisor_notify("starting messaging service");
             api::set_server_messaging_service(ctx).get();
             supervisor_notify("starting storage proxy");
@@ -490,6 +487,9 @@ int main(int ac, char** av) {
             proxy.invoke_on_all([] (service::storage_proxy& p) {
                 p.init_messaging_service();
             }).get();
+            supervisor_notify("starting streaming service");
+            streaming::stream_session::init_streaming_service(db).get();
+            api::set_server_stream_manager(ctx).get();
             // Start handling REPAIR_CHECKSUM_RANGE messages
             net::get_messaging_service().invoke_on_all([&db] (auto& ms) {
                 ms.register_repair_checksum_range([&db] (sstring keyspace, sstring cf, query::range<dht::token> range) {
