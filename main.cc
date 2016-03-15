@@ -495,6 +495,10 @@ int main(int ac, char** av) {
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();
             }).get();
+            supervisor_notify("initializing storage proxy RPC verbs");
+            proxy.invoke_on_all([] (service::storage_proxy& p) {
+                p.init_messaging_service();
+            }).get();
             supervisor_notify("starting storage service", true);
             auto& ss = service::get_local_storage_service();
             ss.init_server().get();

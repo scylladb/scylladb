@@ -121,7 +121,6 @@ private:
     std::uniform_real_distribution<> _read_repair_chance = std::uniform_real_distribution<>(0,1);
     std::unique_ptr<scollectd::registrations> _collectd_registrations;
 private:
-    void init_messaging_service();
     void uninit_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
     response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
@@ -173,6 +172,8 @@ public:
     distributed<database>& get_db() {
         return _db;
     }
+
+    void init_messaging_service();
 
     future<> mutate_locally(const mutation& m);
     future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
