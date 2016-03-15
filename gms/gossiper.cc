@@ -227,6 +227,9 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
 future<> gossiper::handle_ack2_msg(gossip_digest_ack2 msg) {
     set_last_processed_message_at();
+    if (!is_enabled()) {
+        return make_ready_future<>();
+    }
     auto& remote_ep_state_map = msg.get_endpoint_state_map();
     /* Notify the Failure Detector */
     notify_failure_detector(remote_ep_state_map);
