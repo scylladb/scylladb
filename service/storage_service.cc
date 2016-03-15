@@ -260,7 +260,7 @@ void storage_service::join_token_ring(int delay) {
         }
         set_mode(mode::JOINING, "schema complete, ready to bootstrap", true);
         set_mode(mode::JOINING, "waiting for pending range calculation", true);
-        block_until_update_pending_ranges_finished().get();
+        update_pending_ranges().get();
         set_mode(mode::JOINING, "calculation complete, ready to bootstrap", true);
         logger.debug("... got ring + schema info");
 
@@ -287,7 +287,7 @@ void storage_service::join_token_ring(int delay) {
                 set_mode(mode::JOINING, "waiting for schema information to complete", true);
                 sleep(std::chrono::seconds(1)).get();
             }
-            block_until_update_pending_ranges_finished().get();
+            update_pending_ranges().get();
         }
         logger.info("Checking bootstrapping/leaving/moving nodes: ok");
 
@@ -2844,7 +2844,7 @@ future<> storage_service::move(token new_token) {
 
             auto keyspaces_to_process = ss._db.local().get_non_system_keyspaces();
 
-            ss.block_until_update_pending_ranges_finished().get();
+            ss.update_pending_ranges().get();
 
             // checking if data is moving to this node
             for (auto keyspace_name : keyspaces_to_process) {
@@ -2911,15 +2911,6 @@ future<> storage_service::update_pending_ranges() {
         return ss.replicate_to_all_cores().finally([&ss, ss0 = ss.shared_from_this()] {
             ss._update_jobs--;
         });
-    });
-}
-
-future<> storage_service::block_until_update_pending_ranges_finished() {
-    // We want to be sure the job we're blocking for is actually finished and we can't trust the TPE's active job count
-    return smp::submit_to(0, [] {
-        return do_until(
-            [] { return !(get_local_storage_service()._update_jobs > 0); },
-            [] { return sleep(std::chrono::milliseconds(100)); });
     });
 }
 

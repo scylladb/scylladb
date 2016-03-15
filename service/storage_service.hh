@@ -131,10 +131,12 @@ public:
     void init_messaging_service();
     void uninit_messaging_service();
 
-    future<> keyspace_changed(const sstring& ks_name);
+private:
     void do_update_pending_ranges();
+
+public:
+    future<> keyspace_changed(const sstring& ks_name);
     future<> update_pending_ranges();
-    future<> block_until_update_pending_ranges_finished();
 
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
