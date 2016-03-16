@@ -71,6 +71,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 
 #include "checked-file-impl.hh"
+#include "disk-error-handler.hh"
 
 static logging::logger logger("commitlog");
 
@@ -464,7 +465,7 @@ public:
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
-            ::unlink(
+            commit_io_check(::unlink,
                     (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
         } else {
             logger.warn("Segment {} is dirty and is left on disk.", *this);
@@ -897,7 +898,7 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) {
         }
     };
 
-    return engine().open_directory(dirname).then([this, dirname](file dir) {
+    return open_checked_directory(commit_error, dirname).then([this, dirname](file dir) {
         auto h = make_lw_shared<helper>(std::move(dirname), std::move(dir));
         return h->done().then([h]() {
             return make_ready_future<std::vector<db::commitlog::descriptor>>(std::move(h->_result));
@@ -1443,6 +1444,8 @@ const db::commitlog::config& db::commitlog::active_config() const {
     return _segment_manager->cfg;
 }
 
+// No commit_io_check needed in the log reader since the database will fail
+// on error at startup if required
 future<std::unique_ptr<subscription<temporary_buffer<char>, db::replay_position>>>
 db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func next, position_type off) {
     return open_checked_file_dma(commit_error, filename, open_flags::ro).then([next = std::move(next), off](file f) {
@@ -1451,6 +1454,8 @@ db::commitlog::read_log_file(const sstring& filename, commit_load_reader_func ne
     });
 }
 
+// No commit_io_check needed in the log reader since the database will fail
+// on error at startup if required
 subscription<temporary_buffer<char>, db::replay_position>
 db::commitlog::read_log_file(file f, commit_load_reader_func next, position_type off) {
     struct work {

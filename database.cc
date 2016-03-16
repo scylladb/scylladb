@@ -61,6 +61,7 @@
 #include "service/priority_manager.hh"
 
 #include "checked-file-impl.hh"
+#include "disk-error-handler.hh"
 
 using namespace std::chrono_literals;
 
@@ -432,9 +433,9 @@ private:
 
 
 future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_type walker, filter_type filter) {
-    return engine().open_directory(name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
-        auto l = make_lw_shared<lister>(std::move(f), type, walker, filter, name);
-        return l->done().then([l] { });
+    return open_checked_directory(general_disk_error, name).then([type, walker = std::move(walker), filter = std::move(filter), name] (file f) {
+            auto l = make_lw_shared<lister>(std::move(f), type, walker, filter, name);
+            return l->done().then([l] { });
     });
 }
 
@@ -1202,7 +1203,7 @@ database::init_system_keyspace() {
     db::system_keyspace::make(*this, durable, _cfg->volatile_system_keyspace_for_testing());
 
     // FIXME support multiple directories
-    return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
+    return io_check(touch_directory, _cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
             return init_commitlog();
         });
@@ -1441,7 +1442,7 @@ keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
 
 future<>
 keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
-    return touch_directory(column_family_directory(name, uuid));
+    return io_check(touch_directory, column_family_directory(name, uuid));
 }
 
 no_such_keyspace::no_such_keyspace(const sstring& ks_name)
@@ -1507,7 +1508,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     create_in_memory_keyspace(ksm);
     auto& datadir = _keyspaces.at(ksm->name()).datadir();
     if (datadir != "") {
-        return touch_directory(datadir);
+        return io_check(touch_directory, datadir);
     } else {
         return make_ready_future<>();
     }
@@ -2062,7 +2063,7 @@ seal_snapshot(sstring jsondir) {
 
     dblog.debug("Storing manifest {}", jsonfile);
 
-    return recursive_touch_directory(jsondir).then([jsonfile, json = std::move(json)] {
+    return io_check(recursive_touch_directory, jsondir).then([jsonfile, json = std::move(json)] {
         return open_checked_file_dma(general_disk_error, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
             return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
                 return out.write(json.c_str(), json.size()).then([&out] {
@@ -2073,7 +2074,7 @@ seal_snapshot(sstring jsondir) {
             });
         });
     }).then([jsondir] {
-        return sync_directory(std::move(jsondir));
+        return io_check(sync_directory, std::move(jsondir));
     }).finally([jsondir] {
         pending_snapshots.erase(jsondir);
         return make_ready_future<>();
@@ -2088,7 +2089,7 @@ future<> column_family::snapshot(sstring name) {
 
             return parallel_for_each(tables, [name](sstables::shared_sstable sstable) {
                 auto dir = sstable->get_dir() + "/snapshots/" + name;
-                return recursive_touch_directory(dir).then([sstable, dir] {
+                return io_check(recursive_touch_directory, dir).then([sstable, dir] {
                     return sstable->create_links(dir).then_wrapped([] (future<> f) {
                         // If the SSTables are shared, one of the CPUs will fail here.
                         // That is completely fine, though. We only need one link.
@@ -2106,7 +2107,7 @@ future<> column_family::snapshot(sstring name) {
                 // This is not just an optimization. If we have no files, jsondir may not have been created,
                 // and sync_directory would throw.
                 if (tables.size()) {
-                    return sync_directory(std::move(jsondir));
+                    return io_check(sync_directory, std::move(jsondir));
                 } else {
                     return make_ready_future<>();
                 }
@@ -2151,7 +2152,7 @@ future<> column_family::snapshot(sstring name) {
 
 future<bool> column_family::snapshot_exists(sstring tag) {
     sstring jsondir = _config.datadir + "/snapshots/" + tag;
-    return engine().open_directory(std::move(jsondir)).then_wrapped([] (future<file> f) {
+    return open_checked_directory(general_disk_error, std::move(jsondir)).then_wrapped([] (future<file> f) {
         try {
             f.get0();
             return make_ready_future<bool>(true);
@@ -2200,20 +2201,20 @@ future<> column_family::clear_snapshot(sstring tag) {
             }
             auto newdir = curr_dir + "/" + de.name;
             recurse = lister::scan_dir(newdir, dir_and_files, [this, curr_dir = newdir] (directory_entry de) {
-                return remove_file(curr_dir + "/" + de.name);
+                return io_check(remove_file, curr_dir + "/" + de.name);
             });
         }
         return recurse.then([fname = curr_dir + "/" + de.name] {
-            return remove_file(fname);
+            return io_check(remove_file, fname);
         });
     }).then_wrapped([jsondir] (future<> f) {
         // Fine if directory does not exist. If it did, we delete it
         if (file_missing(std::move(f)) == missing::no) {
-            return remove_file(jsondir);
+            return io_check(remove_file, jsondir);
         }
         return make_ready_future<>();
     }).then([parent] {
-        return sync_directory(parent).then_wrapped([] (future<> f) {
+        return io_check(sync_directory, parent).then_wrapped([] (future<> f) {
             // Should always exist for empty tags, but may not exist for a single tag if we never took
             // snapshots. We will check this here just to mask out the exception, without silencing
             // unexpected ones.
@@ -2226,7 +2227,7 @@ future<> column_family::clear_snapshot(sstring tag) {
 future<std::unordered_map<sstring, column_family::snapshot_details>> column_family::get_snapshot_details() {
     std::unordered_map<sstring, snapshot_details> all_snapshots;
     return do_with(std::move(all_snapshots), [this] (auto& all_snapshots) {
-        return engine().file_exists(_config.datadir + "/snapshots").then([this, &all_snapshots](bool file_exists) {
+        return io_check([&] { return engine().file_exists(_config.datadir + "/snapshots"); }).then([this, &all_snapshots](bool file_exists) {
             if (!file_exists) {
                 return make_ready_future<>();
             }
@@ -2235,7 +2236,7 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
             auto snapshot = _config.datadir + "/snapshots/" + snapshot_name;
             all_snapshots.emplace(snapshot_name, snapshot_details());
             return lister::scan_dir(snapshot,  { directory_entry_type::regular }, [this, &all_snapshots, snapshot, snapshot_name] (directory_entry de) {
-                return file_size(snapshot + "/" + de.name).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
+                return io_check(file_size, snapshot + "/" + de.name).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
                     // The manifest is the only file expected to be in this directory not belonging to the SSTable.
                     // For it, we account the total size, but zero it for the true size calculation.
                     //
@@ -2251,7 +2252,7 @@ future<std::unordered_map<sstring, column_family::snapshot_details>> column_fami
                 }).then([this, &all_snapshots, snapshot_name, name = de.name] (auto size) {
                     // FIXME: When we support multiple data directories, the file may not necessarily
                     // live in this same location. May have to test others as well.
-                    return file_size(_config.datadir + "/" + name).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
+                    return io_check(file_size, _config.datadir + "/" + name).then_wrapped([&all_snapshots, snapshot_name, size] (auto fut) {
                         try {
                             // File exists in the main SSTable directory. Snapshots are not contributing to size
                             fut.get0();

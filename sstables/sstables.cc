@@ -123,6 +123,7 @@ public:
         return random_access_reader::close().then([this] {
             return _file.close().handle_exception([save = _file] (auto ep) {
                 sstlog.warn("sstable close failed: {}", ep);
+                general_disk_error();
             });
         });
     }
@@ -792,23 +793,28 @@ void sstable::write_toc(const io_priority_class& pc) {
 
     // Flushing parent directory to guarantee that temporary TOC file reached
     // the disk.
-    file dir_f = engine().open_directory(_dir).get0();
-    dir_f.flush().get();
-    dir_f.close().get();
+    file dir_f = open_checked_directory(sstable_write_error, _dir).get0();
+    sstable_write_io_check([&] {
+        dir_f.flush().get();
+        dir_f.close().get();
+    });
 }
 
 void sstable::seal_sstable() {
     // SSTable sealing is about renaming temporary TOC file after guaranteeing
     // that each component reached the disk safely.
 
-    file dir_f = engine().open_directory(_dir).get0();
-    // Guarantee that every component of this sstable reached the disk.
-    dir_f.flush().get();
-    // Rename TOC because it's no longer temporary.
-    engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC)).get();
-    // Guarantee that the changes above reached the disk.
-    dir_f.flush().get();
-    dir_f.close().get();
+    file dir_f = open_checked_directory(sstable_write_error, _dir).get0();
+
+    sstable_write_io_check([&] {
+        // Guarantee that every component of this sstable reached the disk.
+        dir_f.flush().get();
+        // Rename TOC because it's no longer temporary.
+        engine().rename_file(filename(sstable::component_type::TemporaryTOC), filename(sstable::component_type::TOC)).get();
+        // Guarantee that the changes above reached the disk.
+        dir_f.flush().get();
+        dir_f.close().get();
+    });
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", _generation, _ks, _cf);
 }
@@ -961,7 +967,9 @@ future<> sstable::open_data() {
             // Get disk usage for this sstable (includes all components).
             _bytes_on_disk = 0;
             return do_for_each(_components, [this] (component_type c) {
-                return engine().file_size(this->filename(c)).then([this] (uint64_t bytes) {
+                return sstable_write_io_check([&] {
+                    return engine().file_size(this->filename(c));
+                }).then([this] (uint64_t bytes) {
                     _bytes_on_disk += bytes;
                 });
             });
@@ -1467,7 +1475,7 @@ future<> sstable::write_components(::mutation_reader mr,
 
         if (backup) {
             auto dir = get_dir() + "/backups/";
-            touch_directory(dir).get();
+            sstable_write_io_check(touch_directory, dir).get();
             create_links(dir).get();
         }
     });
@@ -1525,8 +1533,8 @@ const sstring sstable::filename(sstring dir, sstring ks, sstring cf, version_typ
 future<> sstable::create_links(sstring dir, int64_t generation) const {
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
-    return ::link_file(filename(component_type::TOC), dst).then([dir] {
-        return sync_directory(dir);
+    return sstable_write_io_check(::link_file, filename(component_type::TOC), dst).then([dir] {
+        return sstable_write_io_check(sync_directory, dir);
     }).then([this, dir, generation] {
         // FIXME: Should clean already-created links if we failed midway.
         return parallel_for_each(_components, [this, dir, generation] (auto comp) {
@@ -1534,23 +1542,25 @@ future<> sstable::create_links(sstring dir, int64_t generation) const {
                 return make_ready_future<>();
             }
             auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, comp);
-            return ::link_file(this->filename(comp), dst);
+            return sstable_write_io_check(::link_file, this->filename(comp), dst);
         });
     }).then([dir] {
-        return sync_directory(dir);
+        return sstable_write_io_check(sync_directory, dir);
     }).then([dir, this, generation] {
         auto src = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TemporaryTOC);
         auto dst = sstable::filename(dir, _ks, _cf, _version, generation, _format, component_type::TOC);
-        return engine().rename_file(src, dst);
+        return sstable_write_io_check([&] {
+            return engine().rename_file(src, dst);
+        });
     }).then([dir] {
-        return sync_directory(dir);
+        return sstable_write_io_check(sync_directory, dir);
     });
 }
 
 future<> sstable::set_generation(int64_t new_generation) {
     return create_links(_dir, new_generation).then([this] {
         return remove_file(filename(component_type::TOC)).then([this] {
-            return sync_directory(_dir);
+            return sstable_write_io_check(sync_directory, _dir);
         }).then([this] {
             return parallel_for_each(_components, [this] (auto comp) {
                 if (comp == component_type::TOC) {
@@ -1722,11 +1732,13 @@ sstable::~sstable() {
     if (_index_file) {
         _index_file.close().handle_exception([save = _index_file, op = background_jobs().start()] (auto ep) {
             sstlog.warn("sstable close index_file failed: {}", ep);
+            general_disk_error();
         });
     }
     if (_data_file) {
         _data_file.close().handle_exception([save = _data_file, op = background_jobs().start()] (auto ep) {
             sstlog.warn("sstable close data_file failed: {}", ep);
+            general_disk_error();
         });
     }
 
@@ -1776,9 +1788,11 @@ sstable::shared_remove_by_toc_name(sstring toc_name, bool shared) {
 
 future<>
 fsync_directory(sstring fname) {
-    return open_directory(dirname(fname)).then([] (file f) {
-        return do_with(std::move(f), [] (file& f) {
-            return f.flush();
+    return sstable_write_io_check([&] {
+        return open_checked_directory(sstable_write_error ,dirname(fname)).then([] (file f) {
+            return do_with(std::move(f), [] (file& f) {
+                return f.flush();
+            });
         });
     });
 }
@@ -1794,8 +1808,8 @@ remove_by_toc_name(sstring sstable_toc_name) {
         in.close().get();
         sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
         auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
-        rename_file(sstable_toc_name, new_toc_name).get();
-        fsync_directory(dir).get();
+        sstable_write_io_check(rename_file, sstable_toc_name, new_toc_name).get();
+        sstable_write_io_check(fsync_directory, dir).get();
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
@@ -1808,21 +1822,21 @@ remove_by_toc_name(sstring sstable_toc_name) {
                 // already deleted
                 return make_ready_future<>();
             }
-            return remove_file(prefix + component);
+            return sstable_write_io_check(remove_file, prefix + component);
         }).get();
-        fsync_directory(dir).get();
-        remove_file(new_toc_name).get();
+        sstable_write_io_check(fsync_directory, dir).get();
+        sstable_write_io_check(remove_file, new_toc_name).get();
     });
 }
 
 future<>
 sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     return seastar::async([ks, cf, dir, generation, v, f] {
-        auto toc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
+        auto toc = sstable_write_io_check(file_exists, filename(dir, ks, cf, v, generation, f, component_type::TOC)).get0();
         // assert that toc doesn't exist for sstable with temporary toc.
         assert(toc == false);
 
-        auto tmptoc = file_exists(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
+        auto tmptoc = sstable_write_io_check(file_exists, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get0();
         // assert that temporary toc exists for this sstable.
         assert(tmptoc == true);
 
@@ -1842,17 +1856,17 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
 
             auto file_path = filename(dir, ks, cf, v, generation, f, entry.first);
             // Skip component that doesn't exist.
-            auto exists = file_exists(file_path).get0();
+            auto exists = sstable_write_io_check(file_exists, file_path).get0();
             if (!exists) {
                 continue;
             }
-            remove_file(file_path).get();
+            sstable_write_io_check(remove_file, file_path).get();
         }
-        fsync_directory(dir).get();
+        sstable_write_io_check(fsync_directory, dir).get();
         // Removing temporary
-        remove_file(filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
+        sstable_write_io_check(remove_file, filename(dir, ks, cf, v, generation, f, component_type::TemporaryTOC)).get();
         // Fsync'ing column family dir to guarantee that deletion completed.
-        fsync_directory(dir).get();
+        sstable_write_io_check(fsync_directory, dir).get();
     });
 }
 

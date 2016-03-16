@@ -77,3 +77,24 @@ auto do_io_check(disk_error_signal_type& signal, Func&& func, Args&&... args) {
         throw;
     }
 }
+
+template<typename Func, typename... Args>
+auto commit_io_check(Func&& func, Args&&... args) {
+    return do_io_check(commit_error, func, std::forward<Args>(args)...);
+}
+
+template<typename Func, typename... Args>
+auto sstable_read_io_check(Func&& func, Args&&... args) {
+    return do_io_check(sstable_read_error, func, std::forward<Args>(args)...);
+}
+
+template<typename Func, typename... Args>
+auto sstable_write_io_check(Func&& func, Args&&... args) {
+    return do_io_check(sstable_write_error, func, std::forward<Args>(args)...);
+}
+
+template<typename Func, typename... Args>
+auto io_check(Func&& func, Args&&... args) {
+    return do_io_check(general_disk_error, func, std::forward<Args>(args)...);
+}
+

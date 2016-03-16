@@ -29,6 +29,8 @@
 #include "sstables.hh"
 #include "utils/bloom_filter.hh"
 
+#include "disk-error-handler.hh"
+
 namespace sstables {
 
 future<> sstable::read_filter(const io_priority_class& pc) {
@@ -43,7 +45,9 @@ future<> sstable::read_filter(const io_priority_class& pc) {
             bs.load(filter.buckets.elements.begin(), filter.buckets.elements.end());
             _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
         }).then([this] {
-            return engine().file_size(this->filename(sstable::component_type::Filter));
+            return io_check([&] {
+                return engine().file_size(this->filename(sstable::component_type::Filter));
+            });
         });
     }).then([this] (auto size) {
         _filter_file_size = size;

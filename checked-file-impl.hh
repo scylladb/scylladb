@@ -134,3 +134,14 @@ inline open_checked_file_dma(disk_error_signal_type& signal,
         });
     });
 }
+
+future<file>
+inline open_checked_directory(disk_error_signal_type& signal,
+                              sstring name)
+{
+    return do_io_check(signal, [&] {
+        return engine().open_directory(name).then([&] (file f) {
+            return make_ready_future<file>(make_checked_file(signal, f));
+        });
+    });
+}
