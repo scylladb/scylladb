@@ -46,9 +46,9 @@ SEASTAR_TEST_CASE(test_boot_shutdown){
         gms::get_gossiper().start().get();
         gms::get_gossiper().stop().get();
         gms::get_failure_detector().stop().get();
-        net::get_messaging_service().stop().get();
         db.stop().get();
         service::get_storage_service().stop().get();
+        net::get_messaging_service().stop().get();
         locator::i_endpoint_snitch::stop_snitch().get();
     });
 }
