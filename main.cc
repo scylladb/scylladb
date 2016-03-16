@@ -352,7 +352,6 @@ int main(int ac, char** av) {
             print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
             supervisor_notify("initializing storage service");
             init_storage_service(db).get();
-            api::set_server_storage_service(ctx).get();
             supervisor_notify("starting per-shard database core");
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();
@@ -422,14 +421,11 @@ int main(int ac, char** av) {
                     , seed_provider
                     , cluster_name
                     , phi).get();
-            api::set_server_gossip(ctx).get();
             supervisor_notify("starting messaging service");
-            api::set_server_messaging_service(ctx).get();
             supervisor_notify("starting storage proxy");
             proxy.start(std::ref(db)).get();
             // #293 - do not stop anything
             // engine().at_exit([&proxy] { return proxy.stop(); });
-            api::set_server_storage_proxy(ctx).get();
             supervisor_notify("starting migration manager");
             mm.start().get();
             // #293 - do not stop anything
@@ -458,7 +454,6 @@ int main(int ac, char** av) {
                 }
                 return db.load_sstables(proxy);
             }).get();
-            api::set_server_load_sstable(ctx).get();
             supervisor_notify("setting up system keyspace");
             db::system_keyspace::setup(db, qp).get();
             supervisor_notify("starting commit log");
@@ -479,6 +474,11 @@ int main(int ac, char** av) {
                     }
                 }
             }
+            api::set_server_storage_service(ctx).get();
+            api::set_server_gossip(ctx).get();
+            api::set_server_messaging_service(ctx).get();
+            api::set_server_storage_proxy(ctx).get();
+            api::set_server_load_sstable(ctx).get();
             supervisor_notify("initializing migration manager RPC verbs");
             service::get_migration_manager().invoke_on_all([] (auto& mm) {
                 mm.init_messaging_service();
