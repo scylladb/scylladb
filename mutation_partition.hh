@@ -59,7 +59,7 @@ class row {
             , _cell(std::move(cell))
         { }
         cell_entry(cell_entry&&) noexcept;
-        cell_entry(const cell_entry&) noexcept;
+        cell_entry(const cell_entry&);
 
         column_id id() const { return _id; }
         const atomic_cell_or_collection& cell() const { return _cell; }

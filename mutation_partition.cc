@@ -1058,7 +1058,7 @@ row::~row() {
     }
 }
 
-row::cell_entry::cell_entry(const cell_entry& o) noexcept
+row::cell_entry::cell_entry(const cell_entry& o)
     : _id(o._id)
     , _cell(o._cell)
 { }
