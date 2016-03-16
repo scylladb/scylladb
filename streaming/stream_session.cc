@@ -125,11 +125,23 @@ void stream_session::init_messaging_service_handler() {
                 auto cf_id = fm.column_family_id();
                 auto& db = service::get_local_storage_proxy().get_db().local();
                 if (!db.column_family_exists(cf_id)) {
-                    sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
+                    sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from.addr, cf_id);
                     return make_ready_future<>();
                 }
-                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm);
+                return service::get_storage_proxy().local().mutate_locally(std::move(s), fm).then_wrapped([plan_id, cf_id, from] (auto&& f) {
+                    try {
+                        f.get();
+                        return make_ready_future<>();
+                    } catch (no_such_column_family) {
+                        sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
+                                plan_id, from.addr, cf_id);
+                        return make_ready_future<>();
+                    } catch (...) {
+                        throw;
+                    }
+                    return make_ready_future<>();
+                });
             });
         });
     });
@@ -140,13 +152,21 @@ void stream_session::init_messaging_service_handler() {
             session->receive_task_completed(cf_id);
             return session->get_db().invoke_on_all([ranges = std::move(ranges), plan_id, from, cf_id] (database& db) {
                 if (!db.column_family_exists(cf_id)) {
-                    sslog.debug("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
+                    sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
                                 plan_id, from, cf_id);
                     return make_ready_future<>();
                 }
-                auto& cf = db.find_column_family(cf_id);
-                for (auto& range : ranges) {
-                    cf.get_row_cache().invalidate(query::to_partition_range(range));
+                try {
+                    auto& cf = db.find_column_family(cf_id);
+                    for (auto& range : ranges) {
+                        cf.get_row_cache().invalidate(query::to_partition_range(range));
+                    }
+                } catch (no_such_column_family) {
+                    sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
+                                plan_id, from, cf_id);
+                    return make_ready_future<>();
+                } catch (...) {
+                    throw;
                 }
                 return make_ready_future<>();
             });
