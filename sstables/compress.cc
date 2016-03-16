@@ -232,6 +232,11 @@ public:
         if (pos >= _compression_metadata->data_len) {
             throw std::runtime_error("attempt to uncompress beyond end");
         }
+        if (len == 0) {
+            // Nothing to read
+            _end_pos = _pos = _beg_pos;
+            return;
+        }
         if (len <= _compression_metadata->data_len - pos) {
             _end_pos = pos + len;
         } else {
