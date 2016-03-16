@@ -229,10 +229,10 @@ public:
             : _compression_metadata(cm)
     {
         _beg_pos = pos;
-        if (pos >= _compression_metadata->data_len) {
+        if (pos > _compression_metadata->data_len) {
             throw std::runtime_error("attempt to uncompress beyond end");
         }
-        if (len == 0) {
+        if (len == 0 || pos == _compression_metadata->data_len) {
             // Nothing to read
             _end_pos = _pos = _beg_pos;
             return;
