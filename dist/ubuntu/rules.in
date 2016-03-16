@@ -72,6 +72,9 @@ override_dh_auto_install:
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog
 	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/coredump
 
+	mkdir -p $(CURDIR)/debian/scylla-server-dbg/usr/lib/scylla
+	cp $(CURDIR)/scylla-gdb.py $(CURDIR)/debian/scylla-server-dbg/usr/lib/scylla
+
 override_dh_installinit:
 	dh_installinit --no-start
 
