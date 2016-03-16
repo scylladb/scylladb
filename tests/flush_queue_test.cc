@@ -32,6 +32,11 @@
 #include "utils/flush_queue.hh"
 #include "log.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 std::random_device rd;
 std::default_random_engine e1(rd());
 

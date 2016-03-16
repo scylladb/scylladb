@@ -26,6 +26,11 @@
 #include "query-request.hh"
 #include "schema_builder.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 static
 bool includes_token(const schema& s, const query::partition_range& r, const dht::token& tok) {
     dht::ring_position_comparator cmp(s);

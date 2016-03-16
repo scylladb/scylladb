@@ -26,6 +26,11 @@
 #include "utils/crc.hh"
 #include <seastar/core/print.hh>
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 inline
 uint32_t
 do_compute_crc(crc32& c) {

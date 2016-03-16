@@ -26,6 +26,11 @@
 
 #include "utils/dynamic_bitset.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 BOOST_AUTO_TEST_CASE(test_set_clear_test) {
     utils::dynamic_bitset bits;
     bits.resize(178);

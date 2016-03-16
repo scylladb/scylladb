@@ -30,6 +30,11 @@
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace std::literals::chrono_literals;
 
 void test_parsing_fails(const shared_ptr<const abstract_type>& type, sstring str)

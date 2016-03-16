@@ -30,6 +30,11 @@
 #include "types.hh"
 #include "schema_builder.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 static dht::token token_from_long(uint64_t value) {
     auto t = net::hton(value);
     bytes b(bytes::initialized_later(), 8);

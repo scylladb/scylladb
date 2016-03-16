@@ -57,6 +57,7 @@
 #include "streaming/stream_state.hh"
 #include "streaming/stream_plan.hh"
 #include <seastar/core/distributed.hh>
+#include "disk-error-handler.hh"
 
 namespace transport {
     class cql_server;
@@ -77,6 +78,8 @@ inline storage_service& get_local_storage_service() {
 }
 
 int get_generation_number();
+
+enum class disk_error { regular, commit };
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -124,7 +127,17 @@ private:
 public:
     storage_service(distributed<database>& db)
         : _db(db) {
+        sstable_read_error.connect([this] { isolate_on_error(); });
+        sstable_write_error.connect([this] { isolate_on_error(); });
+        general_disk_error.connect([this] { isolate_on_error(); });
+        commit_error.connect([this] { isolate_on_commit_error(); });
     }
+    void isolate_on_error() {
+        do_isolate_on_error(disk_error::regular);
+    };
+    void isolate_on_commit_error() {
+        do_isolate_on_error(disk_error::commit);
+    };
 
     // Needed by distributed<>
     future<> stop();
@@ -2365,6 +2378,8 @@ public:
             return func(ss);
         });
     }
+private:
+    void do_isolate_on_error(disk_error type);
 };
 
 inline future<> init_storage_service(distributed<database>& db) {

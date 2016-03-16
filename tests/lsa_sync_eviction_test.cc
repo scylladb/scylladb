@@ -30,6 +30,11 @@
 #include "tests/perf/perf.hh"
 #include "log.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;

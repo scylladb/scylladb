@@ -29,6 +29,11 @@
 #include <string>
 #include <tuple>
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
 
 future<> one_test(const std::string& property_fname, bool exp_result) {

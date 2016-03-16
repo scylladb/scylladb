@@ -22,6 +22,11 @@
 #include "utils/murmur_hash.hh"
 #include "tests/perf/perf.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 volatile uint64_t black_hole;
 
 int main(int argc, char* argv[]) {

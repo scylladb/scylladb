@@ -35,6 +35,11 @@
 #include "mutation_source_test.hh"
 #include "tmpdir.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace sstables;
 
 SEASTAR_TEST_CASE(nonexistent_key) {

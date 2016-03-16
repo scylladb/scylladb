@@ -48,12 +48,18 @@
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
 
+#include "checked-file-impl.hh"
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type sstable_read_error;
+thread_local disk_error_signal_type sstable_write_error;
+
 namespace sstables {
 
 logging::logger sstlog("sstable");
 
-future<file> new_sstable_component_file(sstring name, open_flags flags) {
-    return open_file_dma(name, flags).handle_exception([name] (auto ep) {
+future<file> new_sstable_component_file(disk_error_signal_type& signal, sstring name, open_flags flags) {
+    return open_checked_file_dma(signal, name, flags).handle_exception([name] (auto ep) {
         sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
         return make_exception_future<file>(ep);
     });
@@ -686,7 +692,7 @@ future<> sstable::read_toc() {
 
     sstlog.debug("Reading TOC file {} ", file_path);
 
-    return open_file_dma(file_path, open_flags::ro).then([this] (file f) {
+    return open_checked_file_dma(sstable_read_error, file_path, open_flags::ro).then([this] (file f) {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
@@ -759,7 +765,7 @@ void sstable::write_toc(const io_priority_class& pc) {
     // If creation of temporary TOC failed, it implies that that boot failed to
     // delete a sstable with temporary for this column family, or there is a
     // sstable being created in parallel with the same generation.
-    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(sstable_write_error, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     bool toc_exists = file_exists(filename(sstable::component_type::TOC)).get0();
     if (toc_exists) {
@@ -811,7 +817,7 @@ void write_crc(const sstring file_path, checksum& c) {
     sstlog.debug("Writing CRC file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    file f = new_sstable_component_file(file_path, oflags).get0();
+    file f = new_sstable_component_file(sstable_write_error, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -825,7 +831,7 @@ void write_digest(const sstring file_path, uint32_t full_checksum) {
     sstlog.debug("Writing Digest file {} ", file_path);
 
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    auto f = new_sstable_component_file(file_path, oflags).get0();
+    auto f = new_sstable_component_file(sstable_write_error, file_path, oflags).get0();
 
     file_output_stream_options options;
     options.buffer_size = 4096;
@@ -874,7 +880,8 @@ future<> sstable::read_simple(T& component, const io_priority_class& pc) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
-    return open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
+    return open_file_dma(file_path, open_flags::ro).then([this, &component] (file fi) {
+        auto f = make_checked_file(sstable_read_error, fi);
         auto r = make_lw_shared<file_random_access_reader>(std::move(f), sstable_buffer_size);
         auto fut = parse(*r, component);
         return fut.finally([r = std::move(r)] {
@@ -895,7 +902,7 @@ template <sstable::component_type Type, typename T>
 void sstable::write_simple(T& component, const io_priority_class& pc) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
-    file f = new_sstable_component_file(file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
+    file f = new_sstable_component_file(sstable_write_error, file_path, open_flags::wo | open_flags::create | open_flags::exclusive).get0();
 
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
@@ -935,8 +942,9 @@ void sstable::write_statistics(const io_priority_class& pc) {
 }
 
 future<> sstable::open_data() {
-    return when_all(open_file_dma(filename(component_type::Index), open_flags::ro),
-                    open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
+    return when_all(open_checked_file_dma(sstable_read_error, filename(component_type::Index), open_flags::ro),
+                    open_checked_file_dma(sstable_read_error, filename(component_type::Data), open_flags::ro))
+                    .then([this] (auto files) {
         _index_file = std::get<file>(std::get<0>(files).get());
         _data_file  = std::get<file>(std::get<1>(files).get());
         return _data_file.size().then([this] (auto size) {
@@ -964,8 +972,8 @@ future<> sstable::open_data() {
 
 future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    return when_all(new_sstable_component_file(filename(component_type::Index), oflags),
-                    new_sstable_component_file(filename(component_type::Data), oflags)).then([this] (auto files) {
+    return when_all(new_sstable_component_file(sstable_write_error, filename(component_type::Index), oflags),
+                    new_sstable_component_file(sstable_write_error, filename(component_type::Data), oflags)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed
@@ -1779,7 +1787,7 @@ future<>
 remove_by_toc_name(sstring sstable_toc_name) {
     return seastar::async([sstable_toc_name] {
         auto dir = dirname(sstable_toc_name);
-        auto toc_file = open_file_dma(sstable_toc_name, open_flags::ro).get0();
+        auto toc_file = open_checked_file_dma(sstable_read_error, sstable_toc_name, open_flags::ro).get0();
         auto in = make_file_input_stream(toc_file);
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();

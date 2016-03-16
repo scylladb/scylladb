@@ -27,6 +27,11 @@
 #include "compound_compat.hh"
 #include "tests/range_assert.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 static std::vector<bytes> to_bytes_vec(std::vector<sstring> values) {
     std::vector<bytes> result;
     for (auto&& v : values) {

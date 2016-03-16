@@ -25,6 +25,11 @@
 #include "cql3/error_collector.hh"
 #include "cql3/CqlParser.hpp"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace cql3;
 
 int main(int argc, char* argv[]) {

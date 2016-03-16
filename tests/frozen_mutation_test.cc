@@ -29,6 +29,11 @@
 #include "tests/mutation_assertions.hh"
 #include "tests/mutation_source_test.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 static schema_builder new_table() {
     return { "some_keyspace", "some_table" };
 }

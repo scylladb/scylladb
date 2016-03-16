@@ -30,6 +30,11 @@
 #include "core/future-util.hh"
 #include "db/config.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace db;
 
 // stock, default cassandra.yaml

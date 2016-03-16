@@ -48,12 +48,16 @@
 #include <core/file.hh>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include "disk-error-handler.hh"
 
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
 
 logging::logger startlog("init");
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
 
 void
 supervisor_notify(sstring msg, bool ready = false) {

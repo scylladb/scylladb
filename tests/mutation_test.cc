@@ -46,6 +46,11 @@
 #include "tests/result_set_assertions.hh"
 #include "mutation_source_test.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace std::chrono_literals;
 
 static sstring some_keyspace("ks");

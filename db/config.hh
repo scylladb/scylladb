@@ -192,7 +192,7 @@ public:
     /* Before starting a node for the first time, you should carefully evaluate your requirements. */   \
     /* Common initialization properties */  \
     /* Note: Be sure to set the properties in the Quick start section as well. */   \
-    val(commit_failure_policy, sstring, "stop", Unused, \
+    val(commit_failure_policy, sstring, "stop", Used, \
             "Policy for commit disk failures:\n"    \
             "\n"    \
             "\tdie          Shut down gossip and Thrift and kill the JVM, so the node can be replaced.\n"   \
@@ -201,7 +201,7 @@ public:
             "\tignore       Ignore fatal errors and let the batches fail."\
             , "die", "stop", "stop_commit", "ignore"    \
     )   \
-    val(disk_failure_policy, sstring, "stop", Unused, \
+    val(disk_failure_policy, sstring, "stop", Used, \
             "Sets how Cassandra responds to disk failure. Recommend settings are stop or best_effort.\n"    \
             "\n"    \
             "\tdie              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"   \

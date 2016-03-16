@@ -29,6 +29,11 @@
 #include <map>
 #include <set>
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 using namespace std;
 
 BOOST_AUTO_TEST_CASE(both_empty) {

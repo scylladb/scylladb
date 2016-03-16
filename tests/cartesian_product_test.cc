@@ -43,6 +43,11 @@
 #include <boost/range/algorithm/copy.hpp>
 #include "cartesian_product.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 template<typename Range>
 auto to_vec(Range&& r) {
     std::vector<typename Range::iterator::value_type> v;

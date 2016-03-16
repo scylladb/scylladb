@@ -28,6 +28,11 @@
 #include "mutation_source_test.hh"
 #include "mutation_assertions.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 BOOST_AUTO_TEST_CASE(test_conversion_back_and_forth) {
     for_each_mutation([] (const mutation& m) {
         canonical_mutation cm(m);

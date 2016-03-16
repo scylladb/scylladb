@@ -44,6 +44,11 @@
 #include "db/config.hh"
 #include "cql3/query_processor.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 SEASTAR_TEST_CASE(test_data_resource) {
     auth::data_resource root, keyspace("fisk"), column_family("fisk", "notter");
 

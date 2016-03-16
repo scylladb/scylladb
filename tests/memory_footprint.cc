@@ -34,6 +34,11 @@
 #include "sstables/sstables.hh"
 #include "canonical_mutation.hh"
 
+#include "disk-error-handler.hh"
+
+thread_local disk_error_signal_type commit_error;
+thread_local disk_error_signal_type general_disk_error;
+
 class size_calculator {
     class nest {
     public:

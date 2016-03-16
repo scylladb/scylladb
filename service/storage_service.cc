@@ -68,6 +68,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "auth/auth.hh"
 #include <seastar/net/tls.hh>
+#include "utils/exceptions.hh"
 
 using token = dht::token;
 using UUID = utils::UUID;
@@ -2931,6 +2932,24 @@ void storage_service::init_messaging_service() {
 void storage_service::uninit_messaging_service() {
     auto& ms = net::get_local_messaging_service();
     ms.unregister_replication_finished();
+}
+
+static std::atomic<bool> isolated = { false };
+
+void storage_service::do_isolate_on_error(disk_error type)
+{
+    auto& cfg = _db.local().get_config();
+    bool must_isolate = cfg.disk_failure_policy() == "stop";
+
+    if (type == disk_error::commit) {
+        must_isolate = cfg.commit_failure_policy() == "stop";
+    }
+
+    if (must_isolate && !isolated.exchange(true)) {
+        logger.warn("Shutting down communications due to I/O errors until operator intervention");
+        // isolated protect us against multiple stops
+        service::get_storage_service().invoke_on_all([] (service::storage_service& s) { s.stop_native_transport(); });
+    }
 }
 
 } // namespace service

@@ -60,6 +60,8 @@
 #include "schema_registry.hh"
 #include "service/priority_manager.hh"
 
+#include "checked-file-impl.hh"
+
 using namespace std::chrono_literals;
 
 logging::logger dblog("database");
@@ -2061,7 +2063,7 @@ seal_snapshot(sstring jsondir) {
     dblog.debug("Storing manifest {}", jsonfile);
 
     return recursive_touch_directory(jsondir).then([jsonfile, json = std::move(json)] {
-        return open_file_dma(jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
+        return open_checked_file_dma(general_disk_error, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate).then([json](file f) {
             return do_with(make_file_output_stream(std::move(f)), [json] (output_stream<char>& out) {
                 return out.write(json.c_str(), json.size()).then([&out] {
                    return out.flush();
