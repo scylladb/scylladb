@@ -1085,6 +1085,7 @@ void row::vector_to_set()
 {
     assert(_type == storage_type::vector);
     map_type set;
+    try {
     for (unsigned i = 0; i < _storage.vector.size(); i++) {
         auto& c = _storage.vector[i];
         if (!bool(c)) {
@@ -1092,6 +1093,13 @@ void row::vector_to_set()
         }
         auto e = current_allocator().construct<cell_entry>(i, std::move(c));
         set.insert(set.end(), *e);
+    }
+    } catch (...) {
+        set.clear_and_dispose([this, del = current_deleter<cell_entry>()] (cell_entry* ce) noexcept {
+            _storage.vector[ce->id()] = std::move(ce->cell());
+            del(ce);
+        });
+        throw;
     }
     _storage.vector.~vector_type();
     new (&_storage.set) map_type(std::move(set));
