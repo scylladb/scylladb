@@ -495,52 +495,59 @@ class mutation_reader::impl {
 private:
     mp_row_consumer _consumer;
     std::experimental::optional<data_consume_context> _context;
-    std::experimental::optional<future<data_consume_context>> _context_future;
+    std::function<future<data_consume_context> ()> _get_context;
 public:
     impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end,
          const io_priority_class &pc)
         : _consumer(schema, pc)
-        , _context(sst.data_consume_rows(_consumer, start, end)) { }
+        , _get_context([&sst, this, start, end] {
+            return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer, start, end));
+        }) { }
     impl(sstable& sst, schema_ptr schema,
          const io_priority_class &pc)
         : _consumer(schema, pc)
-        , _context(sst.data_consume_rows(_consumer)) { }
-    impl(sstable& sst, schema_ptr schema, future<uint64_t> start, future<uint64_t> end, const io_priority_class& pc)
+        , _get_context([this, &sst] {
+            return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer));
+        }) { }
+    impl(sstable& sst, schema_ptr schema, std::function<future<uint64_t>()> start, std::function<future<uint64_t>()> end, const io_priority_class& pc)
         : _consumer(schema, pc)
-        , _context_future(start.then([this, &sst, end = std::move(end)] (uint64_t start) mutable {
-                      return end.then([this, &sst, start] (uint64_t end) mutable {
-                          return sst.data_consume_rows(_consumer, start, end);
-                      });
-                    })) { }
-    impl() : _consumer() { }
+        , _get_context([this, &sst, start = std::move(start), end = std::move(end)] () {
+            return start().then([this, &sst, end = std::move(end)] (uint64_t start) {
+                return end().then([this, &sst, start] (uint64_t end) {
+                    return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer, start, end));
+                });
+            });
+        }) { }
+    impl() : _consumer(), _get_context() { }
 
     // Reference to _consumer is passed to data_consume_rows() in the constructor so we must not allow move/copy
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
     future<mutation_opt> read() {
-        if (_context) {
-            return _context->read().then([this] {
-                // We want after returning a mutation that _consumer.mut()
-                // will be left in unengaged state (so on EOF we return an
-                // unengaged optional). Moving _consumer.mut is *not* enough.
-                auto ret = std::move(_consumer.mut);
-                _consumer.mut = {};
-                return std::move(ret);
-            });
-        } else if (_context_future) {
-            return _context_future->then([this] (auto context) {
-                _context = std::move(context);
-                return _context->read().then([this] {
-                    auto ret = std::move(_consumer.mut);
-                    _consumer.mut = {};
-                    return std::move(ret);
-                });
-            });
-        } else {
+        if (!_get_context) {
             // empty mutation reader returns EOF immediately
             return make_ready_future<mutation_opt>();
         }
+
+        if (_context) {
+            return do_read();
+        }
+        return (_get_context)().then([this] (data_consume_context context) {
+            _context = std::move(context);
+            return do_read();
+        });
+    }
+private:
+    future<mutation_opt> do_read() {
+        return _context->read().then([this] {
+            // We want after returning a mutation that _consumer.mut()
+            // will be left in unengaged state (so on EOF we return an
+            // unengaged optional). Moving _consumer.mut is *not* enough.
+            auto ret = std::move(_consumer.mut);
+            _consumer.mut = {};
+            return std::move(ret);
+        });
     }
 };
 
@@ -649,17 +656,19 @@ sstable::read_range_rows(schema_ptr schema, const query::partition_range& range,
         fail(unimplemented::cause::WRAP_AROUND);
     }
 
-    future<uint64_t> start = range.start()
-        ? (range.start()->is_inclusive()
+    auto start = [this, range, schema, pc] {
+        return range.start() ? (range.start()->is_inclusive()
                  ? lower_bound(schema, range.start()->value(), pc)
                  : upper_bound(schema, range.start()->value(), pc))
         : make_ready_future<uint64_t>(0);
+    };
 
-    future<uint64_t> end = range.end()
-        ? (range.end()->is_inclusive()
+    auto end = [this, range, schema, pc] {
+        return range.end() ? (range.end()->is_inclusive()
                  ? upper_bound(schema, range.end()->value(), pc)
                  : lower_bound(schema, range.end()->value(), pc))
         : make_ready_future<uint64_t>(data_size());
+    };
 
     return std::make_unique<mutation_reader::impl>(
         *this, std::move(schema), std::move(start), std::move(end), pc);
