@@ -27,6 +27,8 @@
 
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determined by the schema.
+// Has an "empty" state.
+// Objects moved-from are left in an empty state.
 class atomic_cell_or_collection final {
     managed_bytes _data;
 private:

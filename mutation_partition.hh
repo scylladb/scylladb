@@ -176,7 +176,23 @@ private:
     auto with_both_ranges(const row& other, Func&& func) const;
 
     void vector_to_set();
+
+    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    //
+    // Func() is allowed to modify the cell. Emptying a cell makes it still
+    // visible to for_each().
+    //
+    // In case of exception, calls Rollback(column_id, atomic_cell_or_collection&) on
+    // all cells on which Func() was successfully invoked in reverse order.
+    //
+    template<typename Func, typename Rollback>
+    void for_each_cell(Func&&, Rollback&&);
 public:
+    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    // noexcept if Func doesn't throw.
+    template<typename Func>
+    void for_each_cell(Func&&);
+
     template<typename Func>
     void for_each_cell(Func&& func) const {
         for_each_cell_until([func = std::forward<Func>(func)] (column_id id, const atomic_cell_or_collection& c) {
@@ -204,46 +220,32 @@ public:
         }
     }
 
-    template<typename Func>
-    void for_each_cell_until(Func&& func) {
-        if (_type == storage_type::vector) {
-            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
-                auto& cell = _storage.vector.v[i];
-                if (func(i, cell) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        } else {
-            for (auto& cell : _storage.set) {
-                auto& c = cell.cell();
-                if (c && func(cell.id(), c) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        }
-    }
-
     // Merges cell's value into the row.
     void apply(const column_definition& column, const atomic_cell_or_collection& cell);
 
     //
     // Merges cell's value into the row.
     //
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
+    // In case of exception the current object is left with a value equivalent to the original state.
+    //
+    // The external cell is left in a valid state, such that it will commute with
+    // current object to the same value should the exception had not occurred.
     //
     void apply(const column_definition& column, atomic_cell_or_collection&& cell);
+
+    // Equivalent to calling apply_reversibly() with a row containing only given cell.
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const column_definition& column, atomic_cell_or_collection& cell);
+    // See reversibly_mergeable.hh
+    void revert(const column_definition& column, atomic_cell_or_collection& cell) noexcept;
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
-    void merge(const schema& s, column_kind kind, const row& other);
-
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
-    void merge(const schema& s, column_kind kind, row&& other);
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema&, column_kind, row& src);
+    // See reversibly_mergeable.hh
+    void revert(const schema&, column_kind, row& src) noexcept;
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
