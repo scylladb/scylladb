@@ -22,10 +22,17 @@ is_developer_mode() {
 }
 
 if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
+    if [ `is_ami` -eq 1 ]; then
+        SMP=`echo $SCYLLA_ARGS|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
+        CPUSET=`echo $SCYLLA_ARGS|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
+    fi
     if [ `is_ami` -eq 1 ] && [ `is_supported_instance_type` -eq 1 ]; then
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
 
+        if [ "$SMP" != "" ]; then
+            NR_CPU=$SMP
+        fi
         NR_SHARDS=$NR_CPU
         if [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
             NR_SHARDS=$((NR_CPU - 1))
@@ -43,7 +50,7 @@ if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
 
         echo "SCYLLA_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
-        iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf
+        iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf $CPUSET
         if [ $? -ne 0 ]; then
             logger -p user.err "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
             logger -p user.err "This is a non-supported setup, and performance is expected to be very bad."
