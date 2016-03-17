@@ -103,8 +103,6 @@ void stream_session::init_messaging_service_handler() {
             auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
-            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
-                session->plan_id(), from, session->peer, session->dst_cpu_id);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
