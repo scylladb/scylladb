@@ -18,7 +18,7 @@ is_supported_instance_type() {
 }
 
 is_developer_mode() {
-    echo $SCYLLA_ARGS|egrep -c "\-\-developer-mode(\s+|=)1"
+    echo $SCYLLA_ARGS|egrep -c "\-\-developer-mode(\s+|=)(1|true)"
 }
 
 if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
