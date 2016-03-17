@@ -58,6 +58,9 @@ class row {
             : _id(id)
             , _cell(std::move(cell))
         { }
+        cell_entry(column_id id)
+            : _id(id)
+        { }
         cell_entry(cell_entry&&) noexcept;
         cell_entry(const cell_entry&);
 
