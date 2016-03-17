@@ -411,3 +411,104 @@ SEASTAR_TEST_CASE(test_large_allocation) {
     });
 }
 #endif
+
+SEASTAR_TEST_CASE(test_region_groups) {
+    return seastar::async([] {
+        logalloc::region_group just_four;
+        logalloc::region_group all;
+        logalloc::region_group one_and_two(&all);
+
+        auto one = std::make_unique<logalloc::region>(one_and_two);
+        auto two = std::make_unique<logalloc::region>(one_and_two);
+        auto three = std::make_unique<logalloc::region>(all);
+        auto four = std::make_unique<logalloc::region>(just_four);
+        auto five = std::make_unique<logalloc::region>();
+
+        constexpr size_t one_count = 1024 * 1024;
+        std::vector<managed_ref<int>> one_objs;
+        with_allocator(one->allocator(), [&] {
+            for (size_t i = 0; i < one_count; i++) {
+                one_objs.emplace_back(make_managed<int>());
+            }
+        });
+        BOOST_REQUIRE_GE(ssize_t(one->occupancy().used_space()), ssize_t(one_count * sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(one->occupancy().total_space()), ssize_t(one->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one->occupancy().total_space());
+
+        constexpr size_t two_count = 512 * 1024;
+        std::vector<managed_ref<int>> two_objs;
+        with_allocator(two->allocator(), [&] {
+            for (size_t i = 0; i < two_count; i++) {
+                two_objs.emplace_back(make_managed<int>());
+            }
+        });
+        BOOST_REQUIRE_GE(ssize_t(two->occupancy().used_space()), ssize_t(two_count * sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(two->occupancy().total_space()), ssize_t(two->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space() + two->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used());
+
+        constexpr size_t three_count = 2048 * 1024;
+        std::vector<managed_ref<int>> three_objs;
+        with_allocator(three->allocator(), [&] {
+            for (size_t i = 0; i < three_count; i++) {
+                three_objs.emplace_back(make_managed<int>());
+            }
+        });
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t(three_count * sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+
+        constexpr size_t four_count = 256 * 1024;
+        std::vector<managed_ref<int>> four_objs;
+        with_allocator(four->allocator(), [&] {
+            for (size_t i = 0; i < four_count; i++) {
+                four_objs.emplace_back(make_managed<int>());
+            }
+        });
+        BOOST_REQUIRE_GE(ssize_t(four->occupancy().used_space()), ssize_t(four_count * sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(four->occupancy().total_space()), ssize_t(four->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(just_four.memory_used(), four->occupancy().total_space());
+
+        with_allocator(five->allocator(), [] {
+            std::vector<managed_ref<int>> five_objs;
+            for (size_t i = 0; i < 16 * 1024; i++) {
+                five_objs.emplace_back(make_managed<int>());
+            }
+        });
+
+        three->merge(*four);
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(just_four.memory_used(), 0);
+
+        three->merge(*five);
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().used_space()), ssize_t((three_count  + four_count)* sizeof(int)));
+        BOOST_REQUIRE_GE(ssize_t(three->occupancy().total_space()), ssize_t(three->occupancy().used_space()));
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+
+        with_allocator(two->allocator(), [&] {
+            two_objs.clear();
+        });
+        two.reset();
+        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), one->occupancy().total_space());
+        BOOST_REQUIRE_EQUAL(all.memory_used(), one_and_two.memory_used() + three->occupancy().total_space());
+
+        with_allocator(one->allocator(), [&] {
+            one_objs.clear();
+        });
+        one.reset();
+        BOOST_REQUIRE_EQUAL(one_and_two.memory_used(), 0);
+        BOOST_REQUIRE_EQUAL(all.memory_used(), three->occupancy().total_space());
+
+        with_allocator(three->allocator(), [&] {
+            three_objs.clear();
+            four_objs.clear();
+        });
+        three.reset();
+        four.reset();
+        five.reset();
+        BOOST_REQUIRE_EQUAL(all.memory_used(), 0);
+    });
+}
