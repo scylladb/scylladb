@@ -1211,6 +1211,7 @@ public:
             assert(seg->is_empty());
             free_segment(seg);
         }
+        _closed_occupancy = {};
         if (_active) {
             assert(_active->is_empty());
             free_segment(_active);
