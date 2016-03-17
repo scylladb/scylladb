@@ -36,6 +36,7 @@ if [ `is_developer_mode` -eq 0 ]; then
         CPUSET=`echo $SCYLLA_ARGS|grep cpuset|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
+        TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
 
         if [ "$SMP" != "" ]; then
             NR_CPU=$SMP
@@ -54,6 +55,9 @@ if [ `is_developer_mode` -eq 0 ]; then
         fi
 
         NR_REQS=$(($(($NR_REQS / $NR_IO_QUEUES)) * $NR_IO_QUEUES))
+        if [ "$TYPE" = "i2" ]; then
+            NR_REQS=$(($NR_REQS * 2))
+        fi
 
         echo "SEASTAR_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
