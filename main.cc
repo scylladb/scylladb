@@ -293,9 +293,19 @@ int main(int ac, char** av) {
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
 
             if (!broadcast_address.empty()) {
-                utils::fb_utilities::set_broadcast_address(broadcast_address);
+                try {
+                    utils::fb_utilities::set_broadcast_address(broadcast_address);
+                } catch (...) {
+                    startlog.error("Bad configuration: invalid 'broadcast_address': {}: {}", broadcast_address, std::current_exception());
+                    throw bad_configuration_error();
+                }
             } else if (!listen_address.empty()) {
-                utils::fb_utilities::set_broadcast_address(listen_address);
+                try {
+                    utils::fb_utilities::set_broadcast_address(listen_address);
+                } catch (...) {
+                    startlog.error("Bad configuration: invalid 'listen_address': {}: {}", listen_address, std::current_exception());
+                    throw bad_configuration_error();
+                }
             } else {
                 startlog.error("Bad configuration: neither listen_address nor broadcast_address are defined\n");
                 throw bad_configuration_error();
