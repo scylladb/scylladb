@@ -989,13 +989,24 @@ future<> column_family::populate(sstring sstdir) {
             return make_ready_future<>();
         }, &manifest_json_filter).then([&futures] {
             return when_all(futures.begin(), futures.end()).then([] (std::vector<future<>> ret) {
-                try {
-                    for (auto& f : ret) {
-                        f.get();
+                std::exception_ptr eptr;
+
+                for (auto& f : ret) {
+                    try {
+                        if (eptr) {
+                            f.ignore_ready_future();
+                        } else {
+                            f.get();
+                        }
+                    } catch(...) {
+                        eptr = std::current_exception();
                     }
-                } catch(...) {
-                    throw;
                 }
+
+                if (eptr) {
+                    return make_exception_future<>(eptr);
+                }
+                return make_ready_future<>();
             });
         }).then([verifier, sstdir, descriptor, this] {
             return parallel_for_each(*verifier, [sstdir = std::move(sstdir), descriptor, this] (auto v) {
