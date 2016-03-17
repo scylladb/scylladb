@@ -80,7 +80,7 @@ class managed_bytes {
                 _state.clear();
             }
         }
-        void forget(const blob_storage* p);
+        void forget(const blob_storage* p) noexcept;
     };
     static thread_local linearization_context _linearization_context;
 public:
