@@ -1186,6 +1186,9 @@ row& row::operator=(row&& other) {
 }
 
 void row::merge(const schema& s, column_kind kind, const row& other) {
+    if (other.empty()) {
+        return;
+    }
     if (other._type == storage_type::vector) {
         reserve(other._storage.vector.size() - 1);
     } else {
