@@ -103,8 +103,6 @@ void stream_session::init_messaging_service_handler() {
             auto session = get_session(plan_id, from, "PREPARE_MESSAGE");
             session->init(sr);
             session->dst_cpu_id = src_cpu_id;
-            sslog.debug("[Stream #{}] GOT PREPARE_MESSAGE from {}: get session peer={}, dst_cpu_id={}",
-                session->plan_id(), from, session->peer, session->dst_cpu_id);
             return session->prepare(std::move(msg.requests), std::move(msg.summaries));
         });
     });
@@ -123,6 +121,8 @@ void stream_session::init_messaging_service_handler() {
             get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, fm_size);
             return service::get_schema_for_write(fm.schema_version(), from).then([plan_id, from, &fm] (schema_ptr s) {
                 auto cf_id = fm.column_family_id();
+                sslog.debug("[Stream #{}] GOT STREAM_MUTATION from {}: cf_id={}", plan_id, from.addr, cf_id);
+
                 auto& db = service::get_local_storage_proxy().get_db().local();
                 if (!db.column_family_exists(cf_id)) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
