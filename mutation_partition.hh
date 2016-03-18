@@ -457,6 +457,14 @@ public:
     void apply(tombstone t) {
         _t.apply(t);
     }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_tombstones_entry& e) {
+        _t.apply_reversibly(e._t);
+    }
+    // See reversibly_mergeable.hh
+    void revert(row_tombstones_entry& e) noexcept {
+        _t.revert(e._t);
+    }
     struct compare {
         clustering_key_prefix::less_compare _c;
         compare(const schema& s) : _c(s) {}
