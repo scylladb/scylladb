@@ -762,6 +762,217 @@ SEASTAR_TEST_CASE(test_marker_apply) {
     return make_ready_future<>();
 }
 
+class failure_injecting_allocation_strategy : public allocation_strategy {
+    allocation_strategy& _delegate;
+    uint64_t _alloc_count;
+    uint64_t _fail_at = std::numeric_limits<uint64_t>::max();
+public:
+    failure_injecting_allocation_strategy(allocation_strategy& delegate) : _delegate(delegate) {}
+
+    virtual void* alloc(migrate_fn mf, size_t size, size_t alignment) override {
+        if (_alloc_count >= _fail_at) {
+            stop_failing();
+            throw std::bad_alloc();
+        }
+        ++_alloc_count;
+        return _delegate.alloc(mf, size, alignment);
+    }
+
+    virtual void free(void* ptr) override {
+        _delegate.free(ptr);
+    }
+
+    // Counts allocation attempts which are not failed due to fail_at().
+    uint64_t alloc_count() const {
+        return _alloc_count;
+    }
+
+    void fail_after(uint64_t count) {
+        _fail_at = _alloc_count + count;
+    }
+
+    void stop_failing() {
+        _fail_at = std::numeric_limits<uint64_t>::max();
+    }
+};
+
+SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
+    auto builder = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck1", bytes_type, column_kind::clustering_key)
+            .with_column("ck2", bytes_type, column_kind::clustering_key);
+
+    // Create enough columns so that row can overflow its vector storage
+    std::vector<sstring> regular_column_names;
+    std::vector<sstring> static_column_names;
+    column_id column_count = row::max_vector_size * 2;
+    for (column_id i = 0; i < column_count; ++i) {
+        {
+            auto column_name = sprint("v%d", i);
+            regular_column_names.push_back(column_name);
+            builder.with_column(to_bytes(column_name), bytes_type, column_kind::regular_column);
+        }
+        {
+            auto column_name = sprint("s%d", i);
+            static_column_names.push_back(column_name);
+            builder.with_column(to_bytes(column_name), bytes_type, column_kind::static_column);
+        }
+    }
+
+    auto s = builder.build();
+
+    // Should be enough to force use of external bytes storage
+    constexpr size_t external_blob_size = 128;
+
+    std::vector<bytes> blobs;
+    for (int i = 0; i < 1024; ++i) {
+        blobs.emplace_back(make_blob(external_blob_size));
+    }
+
+    std::random_device rd;
+    // In case of errors, replace the seed with a fixed value to get a deterministic run.
+    auto seed = rd();
+    std::mt19937 gen(seed);
+    BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
+
+    auto expiry_dist = [] (auto& gen) {
+        static thread_local std::uniform_int_distribution<int> dist(0, 2);
+        return gc_clock::time_point() + std::chrono::seconds(dist(gen));
+    };
+
+    auto make_random_mutation = [&] {
+        std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
+        std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
+        std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
+        std::normal_distribution<> ck_index_dist(blobs.size() / 2, 1.5);
+        std::uniform_int_distribution<int> bool_dist(0, 1);
+
+        std::uniform_int_distribution<api::timestamp_type> timestamp_dist(api::min_timestamp, api::min_timestamp + 2); // 3 values
+
+        auto pkey = partition_key::from_single_value(*s, blobs[0]);
+        mutation m(pkey, s);
+
+        auto set_random_cells = [&] (row& r, column_kind kind) {
+            auto columns_to_set = column_count_dist(gen);
+            for (column_id i = 0; i < columns_to_set; ++i) {
+                // FIXME: generate expiring cells
+                auto cell = bool_dist(gen)
+                    ? atomic_cell::make_live(timestamp_dist(gen), blobs[value_blob_index_dist(gen)])
+                    : atomic_cell::make_dead(timestamp_dist(gen), expiry_dist(gen));
+                r.apply(s->column_at(kind, column_id_dist(gen)), std::move(cell));
+            }
+        };
+
+        auto random_tombstone = [&] {
+            return tombstone(timestamp_dist(gen), expiry_dist(gen));
+        };
+
+        auto random_row_marker = [&] {
+            static thread_local std::uniform_int_distribution<int> dist(0, 3);
+            switch (dist(gen)) {
+                case 0: return row_marker();
+                case 1: return row_marker(random_tombstone());
+                case 2: return row_marker(timestamp_dist(gen));
+                case 3: return row_marker(timestamp_dist(gen), std::chrono::seconds(1), expiry_dist(gen));
+                default: assert(0);
+            }
+        };
+
+        if (bool_dist(gen)) {
+            m.partition().apply(random_tombstone());
+        }
+
+        set_random_cells(m.partition().static_row(), column_kind::static_column);
+
+        auto random_blob = [&] {
+            return blobs[std::min(blobs.size() - 1, static_cast<size_t>(std::max(0.0, ck_index_dist(gen))))];
+        };
+
+        auto row_count_dist = [&] (auto& gen) {
+            static thread_local std::normal_distribution<> dist(32, 1.5);
+            return static_cast<size_t>(std::min(100.0, std::max(0.0, dist(gen))));
+        };
+
+        size_t row_count = row_count_dist(gen);
+        for (size_t i = 0; i < row_count; ++i) {
+            auto ckey = clustering_key::from_exploded(*s, {random_blob(), random_blob()});
+            deletable_row& row = m.partition().clustered_row(ckey);
+            set_random_cells(row.cells(), column_kind::regular_column);
+            row.marker() = random_row_marker();
+        }
+
+        size_t range_tombstone_count = row_count_dist(gen);
+        for (size_t i = 0; i < range_tombstone_count; ++i) {
+            auto key = clustering_key::from_exploded(*s, {random_blob()});
+            m.partition().apply_row_tombstone(*s, key, random_tombstone());
+        }
+        return m;
+    };
+
+    failure_injecting_allocation_strategy alloc(standard_allocator());
+    with_allocator(alloc, [&] {
+        auto target = make_random_mutation();
+
+        BOOST_TEST_MESSAGE(sprint("Target: %s", target));
+
+        for (int i = 0; i < 10; ++i) {
+            auto second = make_random_mutation();
+
+            BOOST_TEST_MESSAGE(sprint("Second: %s", second));
+
+            auto expected_apply_result = target;
+            expected_apply_result.apply(second);
+
+            BOOST_TEST_MESSAGE(sprint("Expected: %s", expected_apply_result));
+
+            // Test the apply(const mutation&) variant
+            {
+                auto m = target;
+
+                // Try to fail at every possible allocation point during apply()
+                size_t fail_offset = 0;
+                while (true) {
+                    BOOST_TEST_MESSAGE(sprint("Failing allocation at %d", fail_offset));
+                    alloc.fail_after(fail_offset++);
+                    try {
+                        m.apply(second);
+                        alloc.stop_failing();
+                        BOOST_TEST_MESSAGE("Checking that apply has expected result");
+                        assert_that(m).is_equal_to(expected_apply_result);
+                        break; // we exhausted all allocation points
+                    } catch (const std::bad_alloc&) {
+                        BOOST_TEST_MESSAGE("Checking that apply was reverted");
+                        assert_that(m).is_equal_to(target);
+                    }
+                }
+            }
+
+            // Test the apply(mutation&&) variant
+            {
+                size_t fail_offset = 0;
+                while (true) {
+                    auto copy_of_second = second;
+                    auto m = target;
+                    alloc.fail_after(fail_offset++);
+                    try {
+                        m.apply(std::move(copy_of_second));
+                        alloc.stop_failing();
+                        assert_that(m).is_equal_to(expected_apply_result);
+                        break; // we exhausted all allocation points
+                    } catch (const std::bad_alloc&) {
+                        assert_that(m).is_equal_to(target);
+                        // they should still commute
+                        m.apply(copy_of_second);
+                        assert_that(m).is_equal_to(expected_apply_result);
+                    }
+                }
+            }
+        }
+    });
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
