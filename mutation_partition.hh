@@ -613,8 +613,8 @@ class mutation_partition final {
     using row_tombstones_type = boost::intrusive::set<row_tombstones_entry,
         boost::intrusive::member_hook<row_tombstones_entry, boost::intrusive::set_member_hook<>, &row_tombstones_entry::_link>,
         boost::intrusive::compare<row_tombstones_entry::compare>>;
-    friend rows_entry;
-    friend row_tombstones_entry;
+    friend class rows_entry;
+    friend class row_tombstones_entry;
     friend class size_calculator;
 private:
     tombstone _tombstone;
