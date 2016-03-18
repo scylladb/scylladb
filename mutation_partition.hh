@@ -119,6 +119,7 @@ public:
     row(row&& other);
     row& operator=(row&& other);
     size_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
 
     void reserve(column_id);
 
