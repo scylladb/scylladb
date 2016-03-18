@@ -669,19 +669,21 @@ public:
     // Commutative when this_schema == p_schema. If schemas differ, data in p which
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
-    // Basic exception guarantees. If apply() throws after being called in
-    // some entry state p0, the object is left in some consistent state p1 and
-    // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
-    //
-    // FIXME: make stronger exception guarantees (p1 = p0).
+    // Strong exception guarantees.
     void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
     //
-    // Same guarantees as for apply(const schema&, const mutation_partition&).
+    // Applies p to current object.
     //
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
+    // Commutative when this_schema == p_schema. If schemas differ, data in p which
+    // is not representable in this_schema is dropped, thus apply() loses commutativity.
+    //
+    // If exception is thrown, this object will be left in a state equivalent to the entry state
+    // and p will be left in a state which will commute with current object to the same value
+    // should the exception had not occurred.
     void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
+    // Use in case this instance and p share the same schema.
+    // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
+    void apply(const schema& s, mutation_partition&& p);
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
 
