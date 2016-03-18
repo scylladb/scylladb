@@ -267,7 +267,7 @@ public:
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
 
 class row_marker;
-int compare_row_marker_for_merge(const row_marker& left, const row_marker& right);
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept;
 
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
@@ -330,6 +330,10 @@ public:
             *this = rm;
         }
     }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_marker& rm) noexcept;
+    // See reversibly_mergeable.hh
+    void revert(row_marker& rm) noexcept;
     // Expires cells and tombstones. Removes items covered by higher level
     // tombstones.
     // Returns true if row marker is live.

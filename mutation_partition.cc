@@ -668,7 +668,7 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
 constexpr gc_clock::duration row_marker::no_ttl;
 constexpr gc_clock::duration row_marker::dead;
 
-int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) {
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept {
     if (left.timestamp() != right.timestamp()) {
         return left.timestamp() > right.timestamp() ? 1 : -1;
     }
@@ -1459,4 +1459,16 @@ mutation_partition::upgrade(const schema& old_schema, const schema& new_schema) 
     converting_mutation_partition_applier v(old_schema.get_column_mapping(), new_schema, tmp);
     accept(old_schema, v);
     *this = std::move(tmp);
+}
+
+void row_marker::apply_reversibly(row_marker& rm) noexcept {
+    if (compare_row_marker_for_merge(*this, rm) < 0) {
+        std::swap(*this, rm);
+    } else {
+        rm = *this;
+    }
+}
+
+void row_marker::revert(row_marker& rm) noexcept {
+    std::swap(*this, rm);
 }
