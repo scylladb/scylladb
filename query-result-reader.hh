@@ -143,17 +143,17 @@ public:
     result_view(ser::query_result_view v) : _v(v) {}
 
     template <typename Func>
-    static void do_with(const query::result& res, Func&& func) {
+    static auto do_with(const query::result& res, Func&& func) {
         const bytes_ostream& buf = res.buf();
         // FIXME: This special casing saves us the cost of copying an already
         // linearized response. When we switch views to scattered_reader this will go away.
         if (buf.is_linearized()) {
             result_view view(buf.view());
-            func(view);
+            return func(view);
         } else {
             bytes_ostream w(buf);
             result_view view(w.linearize());
-            func(view);
+            return func(view);
         }
     }
 

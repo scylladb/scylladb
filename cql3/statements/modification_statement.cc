@@ -291,13 +291,11 @@ modification_statement::read_required_rows(
     query::read_command cmd(s->id(), s->version(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
     return proxy.local().query(s, make_lw_shared(std::move(cmd)), std::move(pr), cl).then([this, ps] (auto result) {
-        // FIXME: copying
-        // FIXME: Use scattered_reader to avoid copying
-        bytes_ostream buf(result->buf());
-        query::result_view v(buf.linearize());
-        auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
-        v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
-        return prefetched_rows;
+        return query::result_view::do_with(*result, [&] (query::result_view v) {
+            auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
+            v.consume(ps, prefetch_data_builder(s, prefetched_rows.value(), ps));
+            return prefetched_rows;
+        });
     });
 }
 
