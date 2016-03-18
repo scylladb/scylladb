@@ -817,7 +817,7 @@ SEASTAR_TEST_CASE(test_large_blobs) {
 
         auto make_blob = [] (size_t blob_size) -> bytes {
             bytes big_blob(bytes::initialized_later(), blob_size);
-            std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
+            static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
             for (auto&& b : big_blob) {
                 b = random_bytes();
             }
