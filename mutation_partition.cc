@@ -704,6 +704,18 @@ deletable_row::equal(column_kind kind, const schema& s, const deletable_row& oth
     return _cells.equal(kind, s, other._cells, other_schema);
 }
 
+void deletable_row::apply_reversibly(const schema& s, deletable_row& src) {
+    _cells.apply_reversibly(s, column_kind::regular_column, src._cells);
+    _deleted_at.apply_reversibly(src._deleted_at); // noexcept
+    _marker.apply_reversibly(src._marker); // noexcept
+}
+
+void deletable_row::revert(const schema& s, deletable_row& src) {
+    _cells.revert(s, column_kind::regular_column, src._cells);
+    _deleted_at.revert(src._deleted_at);
+    _marker.revert(src._marker);
+}
+
 bool
 rows_entry::equal(const schema& s, const rows_entry& other) const {
     return equal(s, other, s);
