@@ -50,6 +50,7 @@ struct test_config {
     unsigned partitions;
     unsigned concurrency;
     bool query_single_key;
+    unsigned duration_in_seconds;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config::run_mode& m) {
@@ -79,7 +80,7 @@ future<> test_read(cql_test_env& env, test_config& cfg) {
         return time_parallel([&env, &cfg, id] {
             bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
             return env.execute_prepared(id, {{std::move(key)}}).discard_result();
-        }, cfg.concurrency);
+        }, cfg.concurrency, cfg.duration_in_seconds);
     });
 }
 
@@ -95,7 +96,7 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
             return time_parallel([&env, &cfg, id] {
                 bytes key = make_key(cfg.query_single_key ? 0 : std::rand() % cfg.partitions);
                 return env.execute_prepared(id, {{std::move(key)}}).discard_result();
-            }, cfg.concurrency);
+            }, cfg.concurrency, cfg.duration_in_seconds);
         });
 }
 
@@ -125,6 +126,7 @@ int main(int argc, char** argv) {
     app.add_options()
         ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
         ("write", "test write path instead of read path")
+        ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
         ("query-single-key", "test write path instead of read path")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core");
 
@@ -132,6 +134,7 @@ int main(int argc, char** argv) {
         make_env_for_test().then([&app] (auto env) {
             auto cfg = make_lw_shared<test_config>();
             cfg->partitions = app.configuration()["partitions"].as<unsigned>();
+            cfg->duration_in_seconds = app.configuration()["duration"].as<unsigned>();
             cfg->concurrency = app.configuration()["concurrency"].as<unsigned>();
             cfg->mode = app.configuration().count("write") ? test_config::run_mode::write : test_config::run_mode::read;
             cfg->query_single_key = app.configuration().count("query-single-key");
