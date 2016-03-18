@@ -20,6 +20,7 @@
  */
 
 #include <boost/range/adaptor/reversed.hpp>
+#include <seastar/util/defer.hh>
 #include "mutation_partition.hh"
 #include "mutation_partition_applier.hh"
 #include "converting_mutation_partition_applier.hh"
@@ -91,6 +92,109 @@ struct reversal_traits<true> {
         return boost::make_iterator_range(reverse_iterator(r.end()), reverse_iterator(r.begin()));
     }
 };
+
+
+//
+// apply_reversibly_intrusive_set() and revert_intrusive_set() implement ReversiblyMergeable
+// for a boost::intrusive_set<> container of ReversiblyMergeable entries.
+//
+// See reversibly_mergeable.hh
+//
+// Requirements:
+//  - entry has distinct key and value states
+//  - entries are ordered only by key in the container
+//  - entry can have an empty value
+//  - presence of an entry with an empty value doesn't affect equality of the containers
+//  - E::empty() returns true iff the value is empty
+//  - E(e.key()) creates an entry with empty value but the same key as that of e.
+//
+// Implementation of ReversiblyMergeable for the entry's value is provided via Apply and Revert functors.
+//
+// ReversiblyMergeable is constructed assuming the following properties of the 'apply' operation
+// on containers:
+//
+//  apply([{k1, v1}], [{k1, v2}]) = [{k1, apply(v1, v2)}]
+//  apply([{k1, v1}], [{k2, v2}]) = [{k1, v1}, {k2, v2}]
+//
+
+// revert for apply_reversibly_intrusive_set()
+template<typename Container, typename Revert = default_reverter<typename Container::value_type>>
+void revert_intrusive_set_range(Container& dst, Container& src,
+    typename Container::iterator start,
+    typename Container::iterator end,
+    Revert&& revert = Revert()) noexcept
+{
+    using value_type = typename Container::value_type;
+    auto deleter = current_deleter<value_type>();
+    while (start != end) {
+        auto& e = *start;
+        // lower_bound() can allocate if linearization is required but it should have
+        // been already performed by the lower_bound() invocation in apply_reversibly_intrusive_set() and
+        // stored in the linearization context.
+        auto i = dst.find(e);
+        assert(i != dst.end());
+        value_type& dst_e = *i;
+
+        if (e.empty()) {
+            dst.erase(i);
+            start = src.erase_and_dispose(start, deleter);
+            start = src.insert_before(start, dst_e);
+        } else {
+            revert(dst_e, e);
+        }
+
+        ++start;
+    }
+}
+
+template<typename Container, typename Revert = default_reverter<typename Container::value_type>>
+void revert_intrusive_set(Container& dst, Container& src, Revert&& revert = Revert()) noexcept {
+    revert_intrusive_set_range(dst, src, src.begin(), src.end(), std::forward<Revert>(revert));
+}
+
+// Applies src onto dst. See comment above revert_intrusive_set_range() for more details.
+//
+// Returns an object which upon going out of scope, unless cancel() is called on it,
+// reverts the applicaiton by calling revert_intrusive_set(). The references to containers
+// must be stable as long as the returned object is live.
+template<typename Container,
+        typename Apply = default_reversible_applier<typename Container::value_type>,
+        typename Revert = default_reverter<typename Container::value_type>>
+auto apply_reversibly_intrusive_set(Container& dst, Container& src, Apply&& apply = Apply(), Revert&& revert = Revert()) {
+    using value_type = typename Container::value_type;
+    auto src_i = src.begin();
+    try {
+        while (src_i != src.end()) {
+            value_type& src_e = *src_i;
+
+            // neutral entries will be given special meaning for the purpose of revert, so
+            // get rid of empty rows from the input as if they were not there. This doesn't change
+            // the value of src.
+            if (src_e.empty()) {
+                src_i = src.erase_and_dispose(src_i, current_deleter<value_type>());
+                continue;
+            }
+
+            auto i = dst.lower_bound(src_e);
+            if (i == dst.end() || dst.key_comp()(src_e, *i)) {
+                // Construct neutral entry which will represent missing dst entry for revert.
+                value_type* empty_e = current_allocator().construct<value_type>(src_e.key());
+                [&] () noexcept {
+                    src_i = src.erase(src_i);
+                    src_i = src.insert_before(src_i, *empty_e);
+                    dst.insert_before(i, src_e);
+                }();
+            } else {
+                apply(*i, src_e);
+            }
+            ++src_i;
+        }
+        return defer([&dst, &src, revert] { revert_intrusive_set(dst, src, revert); });
+    } catch (...) {
+        revert_intrusive_set_range(dst, src, src.begin(), src_i, revert);
+        throw;
+    }
+}
 
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)

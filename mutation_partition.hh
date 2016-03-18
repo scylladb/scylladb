@@ -440,12 +440,18 @@ public:
         : _prefix(std::move(prefix))
         , _t(std::move(t))
     { }
+    row_tombstones_entry(const clustering_key_prefix& prefix)
+        : _prefix(prefix)
+    { }
     row_tombstones_entry(row_tombstones_entry&& o) noexcept;
     row_tombstones_entry(const row_tombstones_entry&) = default;
     clustering_key_prefix& prefix() {
         return _prefix;
     }
     const clustering_key_prefix& prefix() const {
+        return _prefix;
+    }
+    const clustering_key_prefix& key() const {
         return _prefix;
     }
     tombstone& t() {
@@ -498,6 +504,9 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
     bool equal(const schema& s, const row_tombstones_entry& other) const;
+    bool empty() const {
+        return !_t;
+    }
 };
 
 class rows_entry {
