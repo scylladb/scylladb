@@ -275,7 +275,7 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
         auto cf_id = summary.cf_id;
-        // Make sure cf the peer node will sent to us exists
+        // Make sure cf the peer node will send to us exists
         try {
             db.find_column_family(cf_id);
         } catch (no_such_column_family) {
