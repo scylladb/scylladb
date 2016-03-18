@@ -28,6 +28,8 @@
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 
+#include <seastar/core/bitset-iter.hh>
+
 #include "schema.hh"
 #include "tombstone.hh"
 #include "keys.hh"
@@ -99,11 +101,16 @@ public:
 private:
     using vector_type = managed_vector<atomic_cell_or_collection, internal_count, size_type>;
 
+    struct vector_storage {
+        std::bitset<max_vector_size> present;
+        vector_type v;
+    };
+
     union storage {
         storage() { }
         ~storage() { }
         map_type set;
-        vector_type vector;
+        vector_storage vector;
     } _storage;
 public:
     row();
@@ -123,13 +130,14 @@ private:
     template<typename Func>
     void remove_if(Func&& func) {
         if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& c = _storage.vector[i];
-                if (!bool(c)) {
+            for (unsigned i = 0; i < _storage.vector.v.size(); i++) {
+                if (!_storage.vector.present.test(i)) {
                     continue;
                 }
+                auto& c = _storage.vector.v[i];
                 if (func(i, c)) {
                     c = atomic_cell_or_collection();
+                    _storage.vector.present.reset(i);
                     _size--;
                 }
             }
@@ -149,11 +157,12 @@ private:
 
 private:
     auto get_range_vector() const {
-        auto range = boost::make_iterator_range(_storage.vector.begin(), _storage.vector.end());
-        return range | boost::adaptors::filtered([] (const atomic_cell_or_collection& c) { return bool(c); })
-               | boost::adaptors::transformed([this] (const atomic_cell_or_collection& c) {
-            auto id = &c - _storage.vector.data();
-            return std::pair<column_id, const atomic_cell_or_collection&>(id, std::cref(c));
+        auto id_range = boost::irange<column_id>(0, _storage.vector.v.size());
+        return boost::combine(id_range, _storage.vector.v)
+        | boost::adaptors::filtered([this] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
+            return _storage.vector.present.test(t.get<0>());
+        }) | boost::adaptors::transformed([] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
+            return std::pair<column_id, const atomic_cell_or_collection&>(t.get<0>(), t.get<1>());
         });
     }
     auto get_range_set() const {
@@ -178,11 +187,8 @@ public:
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
         if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& cell = _storage.vector[i];
-                if (!bool(cell)) {
-                    continue;
-                }
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                auto& cell = _storage.vector.v[i];
                 if (func(i, cell) == stop_iteration::yes) {
                     break;
                 }
@@ -190,7 +196,7 @@ public:
         } else {
             for (auto& cell : _storage.set) {
                 const auto& c = cell.cell();
-                if (c && func(cell.id(), c) == stop_iteration::yes) {
+                if (func(cell.id(), c) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -200,11 +206,8 @@ public:
     template<typename Func>
     void for_each_cell_until(Func&& func) {
         if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& cell = _storage.vector[i];
-                if (!bool(cell)) {
-                    continue;
-                }
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                auto& cell = _storage.vector.v[i];
                 if (func(i, cell) == stop_iteration::yes) {
                     break;
                 }
