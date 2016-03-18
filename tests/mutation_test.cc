@@ -68,6 +68,15 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
     return std::move(mo->partition());
 }
 
+bytes make_blob(size_t blob_size) {
+    static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
+    bytes big_blob(bytes::initialized_later(), blob_size);
+    for (auto&& b : big_blob) {
+        b = random_bytes();
+    }
+    return big_blob;
+};
+
 template <typename Func>
 future<>
 with_column_family(schema_ptr s, column_family::config cfg, Func func) {
@@ -814,15 +823,6 @@ SEASTAR_TEST_CASE(test_large_blobs) {
             {{"p1", utf8_type}}, {}, {}, {{"s1", bytes_type}}, utf8_type));
 
         auto mt = make_lw_shared<memtable>(s);
-
-        auto make_blob = [] (size_t blob_size) -> bytes {
-            bytes big_blob(bytes::initialized_later(), blob_size);
-            static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
-            for (auto&& b : big_blob) {
-                b = random_bytes();
-            }
-            return big_blob;
-        };
 
         auto blob1 = make_blob(1234567);
         auto blob2 = make_blob(2345678);
