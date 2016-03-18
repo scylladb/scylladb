@@ -244,7 +244,7 @@ public:
         o._u.small.size = 0;
     }
 
-    managed_bytes& operator=(managed_bytes&& o) {
+    managed_bytes& operator=(managed_bytes&& o) noexcept {
         if (this != &o) {
             this->~managed_bytes();
             new (this) managed_bytes(std::move(o));
