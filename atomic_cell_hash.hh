@@ -57,3 +57,19 @@ struct appending_hash<atomic_cell_view> {
         }
     }
 };
+
+template<>
+struct appending_hash<atomic_cell> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const atomic_cell& cell) const {
+        feed_hash(h, static_cast<atomic_cell_view>(cell));
+    }
+};
+
+template<>
+struct appending_hash<collection_mutation> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const collection_mutation& cm) const {
+        feed_hash(h, static_cast<collection_mutation_view>(cm));
+    }
+};
