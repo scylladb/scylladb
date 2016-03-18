@@ -174,21 +174,21 @@ if [ $INTERACTIVE -eq 1 ]; then
     if [ $RAID_SETUP -eq 1 ]; then
         echo "Please select disks from following list: "
         while true; do
-            lsblk -d -i -n -p -r|awk '{print $1}'|sed -e ':loop;N;$!b loop;s/\n/ /g'
+            lsblk -d -i -n -r|awk '{print $1}'|sed -e ':loop;N;$!b loop;s/\n/ /g'
             echo "type 'done' to finish selection. selected: $DISKS"
             echo -n "> "
             read dsk
             if [ "$dsk" = "done" ]; then
                 break
             fi
-            if [ -e $dsk ]; then
+            if [ -e /dev/$dsk ]; then
                 if [ "$DISKS" = "" ]; then
-                    DISKS=$dsk
+                    DISKS=/dev/$dsk
                 else
-                    DISKS="$DISKS,$dsk"
+                    DISKS="$DISKS,/dev/$dsk"
                 fi
             else
-                echo "$dsk not found"
+                echo "/dev/$dsk not found"
             fi
         done
     fi
