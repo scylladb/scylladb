@@ -704,6 +704,64 @@ SEASTAR_TEST_CASE(test_row_counting) {
     });
 }
 
+SEASTAR_TEST_CASE(test_tombstone_apply) {
+    auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+    auto pkey = partition_key::from_single_value(*s, "key1");
+
+    mutation m1(pkey, s);
+
+    BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone(), tombstone());
+
+    mutation m2(pkey, s);
+    auto tomb = tombstone(api::new_timestamp(), gc_clock::now());
+    m2.partition().apply(tomb);
+    BOOST_REQUIRE_EQUAL(m2.partition().partition_tombstone(), tomb);
+
+    m1.apply(m2);
+
+    BOOST_REQUIRE_EQUAL(m1.partition().partition_tombstone(), tomb);
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_marker_apply) {
+    auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("ck", bytes_type, column_kind::clustering_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+    auto pkey = partition_key::from_single_value(*s, "pk1");
+    auto ckey = clustering_key::from_single_value(*s, "ck1");
+
+    auto mutation_with_marker = [&] (row_marker rm) {
+        mutation m(pkey, s);
+        m.partition().clustered_row(ckey).marker() = rm;
+        return m;
+    };
+
+    {
+        mutation m(pkey, s);
+        auto marker = row_marker(api::new_timestamp());
+        auto mm = mutation_with_marker(marker);
+        m.apply(mm);
+        BOOST_REQUIRE_EQUAL(m.partition().clustered_row(ckey).marker(), marker);
+    }
+
+    {
+        mutation m(pkey, s);
+        auto marker = row_marker(api::new_timestamp(), std::chrono::seconds(1), gc_clock::now());
+        m.apply(mutation_with_marker(marker));
+        BOOST_REQUIRE_EQUAL(m.partition().clustered_row(ckey).marker(), marker);
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_mutation_diff) {
     return seastar::async([] {
         auto my_set_type = set_type_impl::get_instance(int32_type, true);
