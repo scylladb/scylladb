@@ -239,29 +239,12 @@ mutation_partition::apply(const schema& s, const mutation_partition& p, const sc
     if (s.version() != p_schema.version()) {
         auto p2 = p;
         p2.upgrade(p_schema, s);
-        apply(s, std::move(p2), s);
+        apply(s, std::move(p2));
         return;
     }
 
-    _tombstone.apply(p._tombstone);
-
-    for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(s, e.prefix(), e.t());
-    }
-
-    _static_row.merge(s, column_kind::static_column, p._static_row);
-
-    for (auto&& entry : p._rows) {
-        auto i = _rows.find(entry);
-        if (i == _rows.end()) {
-            auto e = current_allocator().construct<rows_entry>(entry);
-            _rows.insert(i, *e);
-        } else {
-            i->row().apply(entry.row().deleted_at());
-            i->row().apply(entry.row().marker());
-            i->row().cells().merge(s, column_kind::regular_column, entry.row().cells());
-        }
-    }
+    mutation_partition tmp(p);
+    apply(s, std::move(tmp));
 }
 
 void
@@ -272,42 +255,42 @@ mutation_partition::apply(const schema& s, mutation_partition&& p, const schema&
         return;
     }
 
-    _tombstone.apply(p._tombstone);
+    apply(s, std::move(p));
+}
 
-    p._row_tombstones.clear_and_dispose([this, &s] (row_tombstones_entry* e) {
-        apply_row_tombstone(s, e);
+void
+mutation_partition::apply(const schema& s, mutation_partition&& p) {
+    auto revert_row_tombstones = apply_reversibly_intrusive_set(_row_tombstones, p._row_tombstones);
+
+    _static_row.apply_reversibly(s, column_kind::static_column, p._static_row);
+    auto revert_static_row = defer([&] {
+        _static_row.revert(s, column_kind::static_column, p._static_row);
     });
 
-    _static_row.merge(s, column_kind::static_column, std::move(p._static_row));
+    auto revert_rows = apply_reversibly_intrusive_set(_rows, p._rows,
+        [&s] (rows_entry& dst, rows_entry& src) { dst.apply_reversibly(s, src); },
+        [&s] (rows_entry& dst, rows_entry& src) noexcept { dst.revert(s, src); });
 
-    auto p_i = p._rows.begin();
-    auto p_end = p._rows.end();
-    while (p_i != p_end) {
-        rows_entry& entry = *p_i;
-        auto i = _rows.find(entry);
-        if (i == _rows.end()) {
-            p_i = p._rows.erase(p_i);
-            _rows.insert(i, entry);
-        } else {
-            i->row().apply(entry.row().deleted_at());
-            i->row().apply(entry.row().marker());
-            i->row().cells().merge(s, column_kind::regular_column, std::move(entry.row().cells()));
-            p_i = p._rows.erase_and_dispose(p_i, current_deleter<rows_entry>());
-        }
-    }
+    _tombstone.apply(p._tombstone); // noexcept
+
+    revert_rows.cancel();
+    revert_row_tombstones.cancel();
+    revert_static_row.cancel();
 }
 
 void
 mutation_partition::apply(const schema& s, mutation_partition_view p, const schema& p_schema) {
     if (p_schema.version() == s.version()) {
-        mutation_partition_applier applier(s, *this);
-        p.accept(s, applier);
+        mutation_partition p2(*this, copy_comparators_only{});
+        partition_builder b(s, p2);
+        p.accept(s, b);
+        apply(s, std::move(p2));
     } else {
         mutation_partition p2(*this, copy_comparators_only{});
         partition_builder b(p_schema, p2);
         p.accept(p_schema, b);
         p2.upgrade(p_schema, s);
-        apply(s, std::move(p2), s);
+        apply(s, std::move(p2));
     }
 }
 
