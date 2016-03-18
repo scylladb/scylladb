@@ -411,6 +411,11 @@ public:
     void remove_tombstone() {
         _deleted_at = tombstone();
     }
+
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema& s, deletable_row& src);
+    // See reversibly_mergeable.hh
+    void revert(const schema& s, deletable_row& src);
 public:
     tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -524,6 +529,14 @@ public:
     }
     void apply(tombstone t) {
         _row.apply(t);
+    }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema& s, rows_entry& e) {
+        _row.apply_reversibly(s, e._row);
+    }
+    // See reversibly_mergeable.hh
+    void revert(const schema& s, rows_entry& e) noexcept {
+        _row.revert(s, e._row);
     }
     bool empty() const {
         return _row.empty();
