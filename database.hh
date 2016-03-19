@@ -213,6 +213,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
     struct no_commitlog {};
@@ -295,6 +296,7 @@ private:
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
     lw_shared_ptr<memtable> new_memtable();
+    lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
@@ -671,6 +673,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
 private:
@@ -732,6 +735,7 @@ public:
 class database {
     ::cf_stats _cf_stats;
     logalloc::region_group _dirty_memory_region_group;
+    logalloc::region_group _streaming_dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
@@ -742,8 +746,6 @@ class database {
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
     std::vector<scollectd::registration> _collectd;
-    timer<> _throttling_timer{[this] { unthrottle(); }};
-    circular_buffer<promise<>> _throttled_requests;
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
@@ -758,9 +760,34 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-    future<> throttle();
+
+    class throttle_state {
+        size_t _max_space;
+        logalloc::region_group& _region_group;
+        throttle_state* _parent;
+
+        circular_buffer<promise<>> _throttled_requests;
+        timer<> _throttling_timer{[this] { unthrottle(); }};
+        void unthrottle();
+        bool should_throttle() const {
+            if (_region_group.memory_used() > _max_space) {
+                return true;
+            }
+            if (_parent) {
+                return _parent->should_throttle();
+            }
+            return false;
+        }
+    public:
+        throttle_state(size_t max_space, logalloc::region_group& region);
+        throttle_state(size_t max_space, logalloc::region_group& region, throttle_state& parent);
+        future<> throttle();
+    };
+
+    throttle_state _memtables_throttler;
+    throttle_state _streaming_throttler;
+
     future<> do_apply(schema_ptr, const frozen_mutation&);
-    void unthrottle();
 public:
     static utils::UUID empty_version;
 

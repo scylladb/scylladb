@@ -87,7 +87,7 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
     , _config(std::move(config))
     , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_memtable(); }, _config.max_memtable_size) :
+        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
         make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
@@ -105,7 +105,7 @@ column_family::column_family(schema_ptr schema, config config, no_commitlog cl, 
     , _config(std::move(config))
     , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_memtable(); }, _config.max_memtable_size) :
+        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
         make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
@@ -543,6 +543,11 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
 lw_shared_ptr<memtable> column_family::new_memtable() {
     return make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group);
 }
+
+lw_shared_ptr<memtable> column_family::new_streaming_memtable() {
+    return make_lw_shared<memtable>(_schema, _config.streaming_dirty_memory_region_group);
+}
+
 
 future<>
 column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstables) {
@@ -1132,14 +1137,24 @@ database::database() : database(db::config())
 {}
 
 database::database(const db::config& cfg)
-    : _cfg(std::make_unique<db::config>(cfg))
+    : _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
+    , _cfg(std::make_unique<db::config>(cfg))
+    , _memtable_total_space([this] {
+        auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
+        if (!memtable_total_space) {
+            return memory::stats().total_memory() / 2;
+        }
+        return memtable_total_space;
+    }())
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
+    , _memtables_throttler(_memtable_total_space, _dirty_memory_region_group)
+    // We have to be careful here not to set the streaming limit for less than
+    // a memtable maximum size. Allow up to 25 % to be used up by streaming memtables
+    // in the common case
+    , _streaming_throttler(_memtable_total_space * std::min(0.25, cfg.memtable_cleanup_threshold()),
+                           _streaming_dirty_memory_region_group, _memtables_throttler)
 {
-    _memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
-    if (!_memtable_total_space) {
-        _memtable_total_space = memory::stats().total_memory() / 2;
-    }
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
     setup_collectd();
@@ -1529,6 +1544,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
     cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
+    cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
     cfg.cf_stats = _config.cf_stats;
     cfg.enable_incremental_backups = _config.enable_incremental_backups;
 
@@ -1888,9 +1904,20 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     return apply_in_memory(m, s, db::replay_position());
 }
 
-future<> database::throttle() {
-    if (_dirty_memory_region_group.memory_used() < _memtable_total_space
-            && _throttled_requests.empty()) {
+database::throttle_state::throttle_state(size_t max_space, logalloc::region_group& rg)
+    : _max_space(max_space)
+    , _region_group(rg)
+    , _parent(nullptr)
+{}
+
+database::throttle_state::throttle_state(size_t max_space, logalloc::region_group& rg, throttle_state& parent)
+    : _max_space(max_space)
+    , _region_group(rg)
+    , _parent(&parent)
+{}
+
+future<> database::throttle_state::throttle() {
+    if (!should_throttle() && _throttled_requests.empty()) {
         // All is well, go ahead
         return make_ready_future<>();
     }
@@ -1902,13 +1929,13 @@ future<> database::throttle() {
     return _throttled_requests.back().get_future();
 }
 
-void database::unthrottle() {
+void database::throttle_state::unthrottle() {
     // Release one request per free 1MB we have
     // FIXME: improve this
-    if (_dirty_memory_region_group.memory_used() >= _memtable_total_space) {
+    if (should_throttle()) {
         return;
     }
-    size_t avail = (_memtable_total_space - _dirty_memory_region_group.memory_used()) >> 20;
+    size_t avail = (_max_space - _region_group.memory_used()) >> 20;
     avail = std::min(_throttled_requests.size(), avail);
     for (size_t i = 0; i < avail; ++i) {
         _throttled_requests.front().set_value();
@@ -1923,7 +1950,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    return throttle().then([this, &m, s = std::move(s)] {
+    return _memtables_throttler.throttle().then([this, &m, s = std::move(s)] {
         return do_apply(std::move(s), m);
     });
 }
@@ -1949,7 +1976,7 @@ future<> database::apply_streaming_mutation(schema_ptr s, const frozen_mutation&
     // is the best solution, we can just change the memtable creation method so
     // that each kind of memtable creates from a different region group - and then
     // update the throttle conditions accordingly.
-    return throttle().then([this, &m, s = std::move(s)] {
+    return _streaming_throttler.throttle().then([this, &m, s = std::move(s)] {
         auto uuid = m.column_family_id();
         auto& cf = find_column_family(uuid);
         cf.apply_streaming_mutation(s, std::move(m));
@@ -1976,6 +2003,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.max_memtable_size = std::numeric_limits<size_t>::max();
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
+    cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
     cfg.cf_stats = &_cf_stats;
     cfg.enable_incremental_backups = _enable_incremental_backups;
     return cfg;
