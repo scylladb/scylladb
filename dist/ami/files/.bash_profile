@@ -30,7 +30,21 @@ echo 'More documentation available at: '
 echo '	http://www.scylladb.com/doc/'
 echo
 
-if [ "`systemctl is-active scylla-server`" = "active" ]; then
+. /etc/os-release
+if [ "$ID" = "ubuntu" ]; then
+	if [ "`initctl status ssh|grep "running, process"`" != "" ]; then
+		STARTED=1
+	else
+		STARTED=0
+	fi
+else
+	if [ "`systemctl is-active scylla-server`" = "active" ]; then
+		STARTED=1
+	else
+		STARTED=0
+	fi
+fi
+if [ $STARTED -eq 1 ]; then
 	tput setaf 4
 	tput bold
 	echo "    ScyllaDB is active."
@@ -42,6 +56,13 @@ else
 	echo "    ScyllaDB is not started!"
 	tput sgr0
 	echo "Please wait for startup. To see status of ScyllaDB, run "
-	echo " 'systemctl status scylla-server'"
-	echo
+	if [ "$ID" = "ubuntu" ]; then
+		echo " 'initctl status scylla-server'"
+		echo "and"
+		echo " 'cat /var/log/upstart/scylla-server.log'"
+		echo
+	else
+		echo " 'systemctl status scylla-server'"
+		echo
+	fi
 fi
