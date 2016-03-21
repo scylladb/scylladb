@@ -22,6 +22,9 @@ fi
 if [ ! -f /usr/bin/add-apt-repository ]; then
     sudo apt-get -y install software-properties-common
 fi
+if [ ! -f /usr/bin/wget ]; then
+    sudo apt-get -y install wget
+fi
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
