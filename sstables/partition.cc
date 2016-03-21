@@ -656,14 +656,14 @@ sstable::read_range_rows(schema_ptr schema, const query::partition_range& range,
         fail(unimplemented::cause::WRAP_AROUND);
     }
 
-    auto start = [this, range, schema, pc] {
+    auto start = [this, range, schema, &pc] {
         return range.start() ? (range.start()->is_inclusive()
                  ? lower_bound(schema, range.start()->value(), pc)
                  : upper_bound(schema, range.start()->value(), pc))
         : make_ready_future<uint64_t>(0);
     };
 
-    auto end = [this, range, schema, pc] {
+    auto end = [this, range, schema, &pc] {
         return range.end() ? (range.end()->is_inclusive()
                  ? upper_bound(schema, range.end()->value(), pc)
                  : lower_bound(schema, range.end()->value(), pc))
