@@ -45,18 +45,18 @@ namespace streaming {
 extern logging::logger sslog;
 
 stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, std::vector<query::range<token>> ranges) {
-    return request_ranges(from, keyspace, ranges, {});
+    return request_ranges(from, keyspace, std::move(ranges), {});
 }
 
 stream_plan& stream_plan::request_ranges(inet_address from, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     _range_added = true;
     auto session = _coordinator->get_or_create_session(from);
-    session->add_stream_request(keyspace, ranges, std::move(column_families));
+    session->add_stream_request(keyspace, std::move(ranges), std::move(column_families));
     return *this;
 }
 
 stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges) {
-    return transfer_ranges(to, keyspace, ranges, {});
+    return transfer_ranges(to, keyspace, std::move(ranges), {});
 }
 
 stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
