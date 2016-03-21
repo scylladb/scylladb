@@ -1800,16 +1800,23 @@ fsync_directory(sstring fname) {
 future<>
 remove_by_toc_name(sstring sstable_toc_name) {
     return seastar::async([sstable_toc_name] {
-        auto dir = dirname(sstable_toc_name);
-        auto toc_file = open_checked_file_dma(sstable_read_error, sstable_toc_name, open_flags::ro).get0();
+        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
+        auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
+        sstring dir;
+
+        if (sstable_write_io_check(file_exists, sstable_toc_name).get0()) {
+            dir = dirname(sstable_toc_name);
+            sstable_write_io_check(rename_file, sstable_toc_name, new_toc_name).get();
+            sstable_write_io_check(fsync_directory, dir).get();
+        } else {
+            dir = dirname(new_toc_name);
+        }
+
+        auto toc_file = open_checked_file_dma(sstable_read_error, new_toc_name, open_flags::ro).get0();
         auto in = make_file_input_stream(toc_file);
         auto size = toc_file.size().get0();
         auto text = in.read_exactly(size).get0();
         in.close().get();
-        sstring prefix = sstable_toc_name.substr(0, sstable_toc_name.size() - TOC_SUFFIX.size());
-        auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
-        sstable_write_io_check(rename_file, sstable_toc_name, new_toc_name).get();
-        sstable_write_io_check(fsync_directory, dir).get();
         std::vector<sstring> components;
         sstring all(text.begin(), text.end());
         boost::split(components, all, boost::is_any_of("\n"));
@@ -1826,6 +1833,39 @@ remove_by_toc_name(sstring sstable_toc_name) {
         }).get();
         sstable_write_io_check(fsync_directory, dir).get();
         sstable_write_io_check(remove_file, new_toc_name).get();
+    });
+}
+
+future<>
+sstable::mark_for_deletion_on_disk() {
+    mark_for_deletion();
+
+    auto toc_name = filename(component_type::TOC);
+    auto shard = std::hash<sstring>()(toc_name) % smp::count;
+
+    return smp::submit_to(shard, [toc_name] {
+        static thread_local std::unordered_set<sstring> renaming;
+
+        if (renaming.count(toc_name) > 0) {
+            return make_ready_future<>();
+        }
+
+        renaming.emplace(toc_name);
+
+        return seastar::async([toc_name] {
+            if (!sstable_write_io_check(file_exists, toc_name).get0()) {
+                return; // already gone
+            }
+
+            auto dir = dirname(toc_name);
+            auto toc_file = open_checked_file_dma(sstable_read_error, toc_name, open_flags::ro).get0();
+            sstring prefix = toc_name.substr(0, toc_name.size() - TOC_SUFFIX.size());
+            auto new_toc_name = prefix + TEMPORARY_TOC_SUFFIX;
+            sstable_write_io_check(rename_file, toc_name, new_toc_name).get();
+            sstable_write_io_check(fsync_directory, dir).get();
+        }).finally([toc_name] {
+            renaming.erase(toc_name);
+        });
     });
 }
 
