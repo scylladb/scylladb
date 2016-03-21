@@ -62,7 +62,12 @@ static const std::map<application_state, sstring> application_state_names = {
 };
 
 std::ostream& operator<<(std::ostream& os, const application_state& m) {
-    os << application_state_names.at(m);
+    auto it = application_state_names.find(m);
+    if (it != application_state_names.end()) {
+        os << application_state_names.at(m);
+    } else {
+        os << "UNKNOWN";
+    }
     return os;
 }
 
