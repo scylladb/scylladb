@@ -193,9 +193,10 @@ public:
     class set_element : public raw_update {
         const shared_ptr<term::raw> _selector;
         const shared_ptr<term::raw> _value;
+        const bool _by_uuid;
     public:
-        set_element(shared_ptr<term::raw> selector, shared_ptr<term::raw> value)
-            : _selector(std::move(selector)), _value(std::move(value)) {
+        set_element(shared_ptr<term::raw> selector, shared_ptr<term::raw> value, bool by_uuid = false)
+            : _selector(std::move(selector)), _value(std::move(value)), _by_uuid(by_uuid) {
         }
 
         virtual shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver);

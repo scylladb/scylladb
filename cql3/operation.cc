@@ -57,9 +57,14 @@ operation::set_element::prepare(database& db, const sstring& keyspace, const col
     }
 
     if (&rtype->_kind == &collection_type_impl::kind::list) {
-        auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
         auto&& lval = _value->prepare(db, keyspace, lists::value_spec_of(receiver.column_specification));
-        return make_shared<lists::setter_by_index>(receiver, idx, lval);
+        if (_by_uuid) {
+            auto&& idx = _selector->prepare(db, keyspace, lists::uuid_index_spec_of(receiver.column_specification));
+            return make_shared<lists::setter_by_uuid>(receiver, idx, lval);
+        } else {
+            auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
+            return make_shared<lists::setter_by_index>(receiver, idx, lval);
+        }
     } else if (&rtype->_kind == &collection_type_impl::kind::set) {
         throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", receiver, receiver.name()));
     } else if (&rtype->_kind == &collection_type_impl::kind::map) {
