@@ -147,7 +147,7 @@ protected:
     ByteContainer _data;
 protected:
     atomic_cell_base(ByteContainer&& data) : _data(std::forward<ByteContainer>(data)) { }
-    atomic_cell_base(const ByteContainer& data) : _data(data) { }
+    friend class atomic_cell_or_collection;
 public:
     bool is_revert_set() const {
         return atomic_cell_type::is_revert_set(_data);
@@ -203,12 +203,17 @@ public:
 };
 
 class atomic_cell_view final : public atomic_cell_base<bytes_view> {
-    atomic_cell_view(bytes_view data) : atomic_cell_base(data) {}
+    atomic_cell_view(bytes_view data) : atomic_cell_base(std::move(data)) {}
 public:
     static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
 
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
+};
+
+class atomic_cell_ref final : public atomic_cell_base<managed_bytes&> {
+public:
+    atomic_cell_ref(managed_bytes& buf) : atomic_cell_base(buf) {}
 };
 
 class atomic_cell final : public atomic_cell_base<managed_bytes> {
