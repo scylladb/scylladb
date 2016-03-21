@@ -2499,21 +2499,26 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
         auto gc_trunc = to_gc_clock(truncated_at);
 
         auto pruned = make_lw_shared<sstable_list>();
+        std::vector<sstables::shared_sstable> remove;
 
         for (auto&p : *_sstables) {
             if (p.second->max_data_age() <= gc_trunc) {
                 rp = std::max(p.second->get_stats_metadata().position, rp);
-                p.second->mark_for_deletion();
+                remove.emplace_back(p.second);
                 continue;
             }
             pruned->emplace(p.first, p.second);
         }
 
         _sstables = std::move(pruned);
-
         dblog.debug("cleaning out row cache");
         _cache.clear();
-        return make_ready_future<db::replay_position>(rp);
+
+        return parallel_for_each(remove, [](sstables::shared_sstable s) {
+            return s->mark_for_deletion_on_disk();
+        }).then([rp] {
+            return make_ready_future<db::replay_position>(rp);
+        }).finally([remove] {}); // keep the objects alive until here.
     });
 }
 
