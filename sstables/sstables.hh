@@ -245,6 +245,8 @@ public:
         _marked_for_deletion = true;
     }
 
+    future<> mark_for_deletion_on_disk();
+
     bool marked_for_deletion() const {
         return _marked_for_deletion;
     }
