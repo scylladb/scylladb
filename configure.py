@@ -845,8 +845,8 @@ with open(buildfile, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
-            gen_headers += ['seastar/build/{}/http/request_parser.hh'.format(mode)]
-            gen_headers += ['seastar/build/{}/http/http_response_parser.hh'.format(mode)]
+            gen_headers += ['seastar/build/{}/gen/http/request_parser.hh'.format(mode)]
+            gen_headers += ['seastar/build/{}/gen/http/http_response_parser.hh'.format(mode)]
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
@@ -878,10 +878,10 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {} || {}\n'.format(obj, mode, cc, ' '.join(serializers)))
-        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune: ninja {seastar_deps}\n'
+        f.write('build seastar/build/{mode}/libseastar.a seastar/build/{mode}/apps/iotune/iotune seastar/build/{mode}/gen/http/request_parser.hh seastar/build/{mode}/gen/http/http_response_parser.hh: ninja {seastar_deps}\n'
                 .format(**locals()))
         f.write('  subdir = seastar\n')
-        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune\n'.format(**locals()))
+        f.write('  target = build/{mode}/libseastar.a build/{mode}/apps/iotune/iotune build/{mode}/gen/http/request_parser.hh build/{mode}/gen/http/http_response_parser.hh\n'.format(**locals()))
         f.write(textwrap.dedent('''\
             build build/{mode}/iotune: copy seastar/build/{mode}/apps/iotune/iotune
             ''').format(**locals()))
@@ -895,14 +895,6 @@ with open(buildfile, 'w') as f:
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
         build cscope: cscope
-        rule request_parser_hh
-           command = {ninja} -C seastar build/release/gen/http/request_parser.hh build/debug/gen/http/request_parser.hh
-           description = GEN seastar/http/request_parser.hh
-        build seastar/build/release/http/request_parser.hh seastar/build/debug/http/request_parser.hh: request_parser_hh
-        rule http_response_parser_hh
-           command = {ninja} -C seastar build/release/gen/http/http_response_parser.hh build/debug/gen/http/http_response_parser.hh
-           description = GEN seastar/http/http_response_parser.hh
-        build seastar/build/release/http/http_response_parser.hh seastar/build/debug/http/http_response_parser.hh: http_response_parser_hh
         rule clean
             command = rm -rf build
             description = CLEAN
