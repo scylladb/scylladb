@@ -20,7 +20,8 @@
  */
 
 namespace gms {
-enum class application_state:int {STATUS = 0,
+enum class application_state:int {
+        STATUS = 0,
         LOAD,
         SCHEMA,
         DC,
@@ -29,6 +30,7 @@ enum class application_state:int {STATUS = 0,
         REMOVAL_COORDINATOR,
         INTERNAL_IP,
         RPC_ADDRESS,
+        X_11_PADDING,
         SEVERITY,
         NET_VERSION,
         HOST_ID,
