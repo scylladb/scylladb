@@ -87,7 +87,7 @@ public:
     size_t compact_and_evict(size_t bytes);
     void full_compaction();
     void reclaim_all_free_segments();
-    occupancy_stats occupancy();
+    occupancy_stats region_occupancy();
 };
 
 class tracker_reclaimer_lock {
@@ -112,8 +112,8 @@ size_t tracker::reclaim(size_t bytes) {
     return _impl->reclaim(bytes);
 }
 
-occupancy_stats tracker::occupancy() {
-    return _impl->occupancy();
+occupancy_stats tracker::region_occupancy() {
+    return _impl->region_occupancy();
 }
 
 void tracker::full_compaction() {
@@ -1528,7 +1528,7 @@ std::ostream& operator<<(std::ostream& out, const occupancy_stats& stats) {
         stats.used_fraction() * 100, stats.used_space(), stats.total_space());
 }
 
-occupancy_stats tracker::impl::occupancy() {
+occupancy_stats tracker::impl::region_occupancy() {
     reclaiming_lock _(*this);
     occupancy_stats total{};
     for (auto&& r: _regions) {
@@ -1548,7 +1548,7 @@ void tracker::impl::reclaim_all_free_segments()
 void tracker::impl::full_compaction() {
     reclaiming_lock _(*this);
 
-    logger.debug("Full compaction on all regions, {}", occupancy());
+    logger.debug("Full compaction on all regions, {}", region_occupancy());
 
     for (region_impl* r : _regions) {
         if (r->is_compactible()) {
@@ -1556,7 +1556,7 @@ void tracker::impl::full_compaction() {
         }
     }
 
-    logger.debug("Compaction done, {}", occupancy());
+    logger.debug("Compaction done, {}", region_occupancy());
 }
 
 static void reclaim_from_evictable(region::impl& r, size_t target_mem_in_use) {
@@ -1806,19 +1806,19 @@ void tracker::impl::register_collectd_metrics() {
     _collectd_registrations = scollectd::registrations({
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "total_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().total_space(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().total_space(); })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_space(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_space(); })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_total_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().total_space() - shard_segment_pool.non_lsa_memory_in_use(); })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "small_objects_used_space"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_space() - shard_segment_pool.non_lsa_memory_in_use(); })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "large_objects_total_space"),
@@ -1828,7 +1828,7 @@ void tracker::impl::register_collectd_metrics() {
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "non_lsa_used_space"),
             scollectd::make_typed(scollectd::data_type::GAUGE, [this] {
                 auto free_space_in_zones = shard_segment_pool.free_segments_in_zones() * segment_size;
-                return memory::stats().allocated_memory() - occupancy().total_space() - free_space_in_zones; })
+                return memory::stats().allocated_memory() - region_occupancy().total_space() - free_space_in_zones; })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "bytes", "free_space_in_zones"),
@@ -1836,7 +1836,7 @@ void tracker::impl::register_collectd_metrics() {
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "percent", "occupancy"),
-            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return occupancy().used_fraction() * 100; })
+            scollectd::make_typed(scollectd::data_type::GAUGE, [this] { return region_occupancy().used_fraction() * 100; })
         ),
         scollectd::add_polled_metric(
             scollectd::type_instance_id("lsa", scollectd::per_cpu_plugin_instance, "objects", "zones"),

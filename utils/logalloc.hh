@@ -116,7 +116,7 @@ public:
     void reclaim_all_free_segments();
 
     // Returns aggregate statistics for all pools.
-    occupancy_stats occupancy();
+    occupancy_stats region_occupancy();
 
     impl& get_impl() { return *_impl; }
 };
