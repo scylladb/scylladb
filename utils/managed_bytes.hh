@@ -130,6 +130,17 @@ private:
             return do_linearize();
         }
     }
+    bytes_view::value_type& value_at_index(blob_storage::size_type index) {
+        if (!external()) {
+            return _u.small.data[index];
+        }
+        blob_storage* a = _u.ptr;
+        while (index >= a->frag_size) {
+            index -= a->frag_size;
+            a = a->next;
+        }
+        return a->data[index];
+    }
     const bytes_view::value_type* do_linearize() const;
 public:
     using size_type = blob_storage::size_type;
@@ -309,11 +320,12 @@ public:
     }
 
     bytes_view::value_type& operator[](size_type index) {
-        return data()[index];
+        return value_at_index(index);
     }
 
     const bytes_view::value_type& operator[](size_type index) const {
-        return data()[index];
+        return const_cast<const bytes_view::value_type&>(
+                const_cast<managed_bytes*>(this)->value_at_index(index));
     }
 
     size_type size() const {
