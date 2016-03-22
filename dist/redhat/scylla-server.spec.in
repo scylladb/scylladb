@@ -31,7 +31,7 @@ Conflicts:      abrt
 %if 0%{?rhel}
 python3.4 ./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=/opt/scylladb/bin/g++ --python python3.4
 %endif
-ninja-build -j2 build/release/scylla build/release/iotune
+ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 
 %install
 rm -rf $RPM_BUILD_ROOT
