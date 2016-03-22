@@ -149,7 +149,6 @@ void stream_session::init_messaging_service_handler() {
         const auto& from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
         return smp::submit_to(dst_cpu_id, [ranges = std::move(ranges), plan_id, cf_id, from] () mutable {
             auto session = get_session(plan_id, from, "STREAM_MUTATION_DONE", cf_id);
-            session->receive_task_completed(cf_id);
             return session->get_db().invoke_on_all([ranges = std::move(ranges), plan_id, from, cf_id] (database& db) {
                 if (!db.column_family_exists(cf_id)) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
@@ -171,6 +170,8 @@ void stream_session::init_messaging_service_handler() {
                 } catch (...) {
                     throw;
                 }
+            }).then([session, cf_id] {
+                session->receive_task_completed(cf_id);
             });
         });
     });
