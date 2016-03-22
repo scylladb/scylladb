@@ -35,7 +35,7 @@ override_dh_auto_install:
 	cp $(CURDIR)/dist/common/collectd.d/scylla.conf $(COLLECTD)
 
 	mkdir -p $(SCYLLAD) && \
-	cp $(CURDIR)/dist/common/scylla.d/io.conf $(SCYLLAD)
+	cp $(CURDIR)/dist/common/scylla.d/*.conf $(SCYLLAD)
 
 	mkdir -p $(CONF) && \
 	cp $(CURDIR)/conf/scylla.yaml $(CONF)

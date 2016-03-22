@@ -8,11 +8,12 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --developer-mode --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
     echo "  --ami				setup AMI instance"
+    echo "  --developer-mode			enable developer mode"
     echo "  --no-enable-service		skip enabling service"
     echo "  --no-selinux-setup		skip selinux setup"
     echo "  --no-bootparam-setup		skip bootparam setup"
@@ -40,6 +41,7 @@ interactive_ask_service() {
 }
 
 AMI=0
+DEV_MODE=0
 ENABLE_SERVICE=1
 SELINUX_SETUP=1
 BOOTPARAM_SETUP=1
@@ -70,6 +72,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--ami")
             AMI=1
+            shift 1
+            ;;
+        "--developer-mode")
+            DEV_MODE=1
             shift 1
             ;;
         "--no-enable-service")
@@ -215,4 +221,7 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $SYSCONFIG_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
+fi
+if [ $DEV_MODE -eq 1 ]; then
+    /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
 fi
