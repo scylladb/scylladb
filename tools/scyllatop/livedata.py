@@ -2,6 +2,7 @@ import logging
 import fnmatch
 import time
 import metric
+import defaults
 
 
 class LiveData(object):
@@ -25,9 +26,8 @@ class LiveData(object):
     def _initializeMetrics(self, metricPatterns):
         if len(metricPatterns) > 0:
             self._setupUserSpecifiedMetrics(metricPatterns)
-            return
-
-        self._measurements = metric.Metric.discover(self._collectd)
+        else:
+            self._setupUserSpecifiedMetrics(defaults.DEFAULT_METRIC_PATTERNS)
 
     def _setupUserSpecifiedMetrics(self, metricPatterns):
         availableSymbols = [m.symbol for m in metric.Metric.discover(self._collectd)]
