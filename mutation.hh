@@ -60,9 +60,9 @@ public:
     mutation(const mutation& m)
         : _ptr(std::make_unique<data>(schema_ptr(m.schema()), dht::decorated_key(m.decorated_key()), m.partition()))
     { }
-
     mutation(mutation&&) = default;
     mutation& operator=(mutation&& x) = default;
+    mutation& operator=(const mutation& m);
 
     void set_static_cell(const column_definition& def, atomic_cell_or_collection&& value);
     void set_static_cell(const bytes& name, const data_value& value, api::timestamp_type timestamp, ttl_opt ttl = {});

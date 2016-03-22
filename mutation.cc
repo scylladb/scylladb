@@ -186,3 +186,7 @@ void mutation::apply(mutation&& m) {
 void mutation::apply(const mutation& m) {
     partition().apply(*schema(), m.partition(), *m.schema());
 }
+
+mutation& mutation::operator=(const mutation& m) {
+    return *this = mutation(m);
+}

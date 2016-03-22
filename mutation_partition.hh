@@ -28,6 +28,8 @@
 #include <boost/range/adaptor/indexed.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 
+#include <seastar/core/bitset-iter.hh>
+
 #include "schema.hh"
 #include "tombstone.hh"
 #include "keys.hh"
@@ -58,8 +60,11 @@ class row {
             : _id(id)
             , _cell(std::move(cell))
         { }
+        cell_entry(column_id id)
+            : _id(id)
+        { }
         cell_entry(cell_entry&&) noexcept;
-        cell_entry(const cell_entry&) noexcept;
+        cell_entry(const cell_entry&);
 
         column_id id() const { return _id; }
         const atomic_cell_or_collection& cell() const { return _cell; }
@@ -96,11 +101,16 @@ public:
 private:
     using vector_type = managed_vector<atomic_cell_or_collection, internal_count, size_type>;
 
+    struct vector_storage {
+        std::bitset<max_vector_size> present;
+        vector_type v;
+    };
+
     union storage {
         storage() { }
         ~storage() { }
         map_type set;
-        vector_type vector;
+        vector_storage vector;
     } _storage;
 public:
     row();
@@ -109,6 +119,7 @@ public:
     row(row&& other);
     row& operator=(row&& other);
     size_t size() const { return _size; }
+    bool empty() const { return _size == 0; }
 
     void reserve(column_id);
 
@@ -120,13 +131,14 @@ private:
     template<typename Func>
     void remove_if(Func&& func) {
         if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& c = _storage.vector[i];
-                if (!bool(c)) {
+            for (unsigned i = 0; i < _storage.vector.v.size(); i++) {
+                if (!_storage.vector.present.test(i)) {
                     continue;
                 }
+                auto& c = _storage.vector.v[i];
                 if (func(i, c)) {
                     c = atomic_cell_or_collection();
+                    _storage.vector.present.reset(i);
                     _size--;
                 }
             }
@@ -146,11 +158,12 @@ private:
 
 private:
     auto get_range_vector() const {
-        auto range = boost::make_iterator_range(_storage.vector.begin(), _storage.vector.end());
-        return range | boost::adaptors::filtered([] (const atomic_cell_or_collection& c) { return bool(c); })
-               | boost::adaptors::transformed([this] (const atomic_cell_or_collection& c) {
-            auto id = &c - _storage.vector.data();
-            return std::pair<column_id, const atomic_cell_or_collection&>(id, std::cref(c));
+        auto id_range = boost::irange<column_id>(0, _storage.vector.v.size());
+        return boost::combine(id_range, _storage.vector.v)
+        | boost::adaptors::filtered([this] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
+            return _storage.vector.present.test(t.get<0>());
+        }) | boost::adaptors::transformed([] (const boost::tuple<const column_id&, const atomic_cell_or_collection&>& t) {
+            return std::pair<column_id, const atomic_cell_or_collection&>(t.get<0>(), t.get<1>());
         });
     }
     auto get_range_set() const {
@@ -163,7 +176,23 @@ private:
     auto with_both_ranges(const row& other, Func&& func) const;
 
     void vector_to_set();
+
+    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    //
+    // Func() is allowed to modify the cell. Emptying a cell makes it still
+    // visible to for_each().
+    //
+    // In case of exception, calls Rollback(column_id, atomic_cell_or_collection&) on
+    // all cells on which Func() was successfully invoked in reverse order.
+    //
+    template<typename Func, typename Rollback>
+    void for_each_cell(Func&&, Rollback&&);
 public:
+    // Calls Func(column_id, atomic_cell_or_collection&) for each cell in this row.
+    // noexcept if Func doesn't throw.
+    template<typename Func>
+    void for_each_cell(Func&&);
+
     template<typename Func>
     void for_each_cell(Func&& func) const {
         for_each_cell_until([func = std::forward<Func>(func)] (column_id id, const atomic_cell_or_collection& c) {
@@ -175,11 +204,8 @@ public:
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
         if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& cell = _storage.vector[i];
-                if (!bool(cell)) {
-                    continue;
-                }
+            for (auto i : bitsets::for_each_set(_storage.vector.present)) {
+                auto& cell = _storage.vector.v[i];
                 if (func(i, cell) == stop_iteration::yes) {
                     break;
                 }
@@ -187,29 +213,7 @@ public:
         } else {
             for (auto& cell : _storage.set) {
                 const auto& c = cell.cell();
-                if (c && func(cell.id(), c) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        }
-    }
-
-    template<typename Func>
-    void for_each_cell_until(Func&& func) {
-        if (_type == storage_type::vector) {
-            for (unsigned i = 0; i < _storage.vector.size(); i++) {
-                auto& cell = _storage.vector[i];
-                if (!bool(cell)) {
-                    continue;
-                }
-                if (func(i, cell) == stop_iteration::yes) {
-                    break;
-                }
-            }
-        } else {
-            for (auto& cell : _storage.set) {
-                auto& c = cell.cell();
-                if (c && func(cell.id(), c) == stop_iteration::yes) {
+                if (func(cell.id(), c) == stop_iteration::yes) {
                     break;
                 }
             }
@@ -222,21 +226,26 @@ public:
     //
     // Merges cell's value into the row.
     //
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
+    // In case of exception the current object is left with a value equivalent to the original state.
+    //
+    // The external cell is left in a valid state, such that it will commute with
+    // current object to the same value should the exception had not occurred.
     //
     void apply(const column_definition& column, atomic_cell_or_collection&& cell);
+
+    // Equivalent to calling apply_reversibly() with a row containing only given cell.
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const column_definition& column, atomic_cell_or_collection& cell);
+    // See reversibly_mergeable.hh
+    void revert(const column_definition& column, atomic_cell_or_collection& cell) noexcept;
 
     // Adds cell to the row. The column must not be already set.
     void append_cell(column_id id, atomic_cell_or_collection cell);
 
-    void merge(const schema& s, column_kind kind, const row& other);
-
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
-    void merge(const schema& s, column_kind kind, row&& other);
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema&, column_kind, row& src);
+    // See reversibly_mergeable.hh
+    void revert(const schema&, column_kind, row& src) noexcept;
 
     // Expires cells based on query_time. Expires tombstones based on gc_before
     // and max_purgeable. Removes cells covered by tomb.
@@ -258,7 +267,7 @@ public:
 std::ostream& operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection&>& c);
 
 class row_marker;
-int compare_row_marker_for_merge(const row_marker& left, const row_marker& right);
+int compare_row_marker_for_merge(const row_marker& left, const row_marker& right) noexcept;
 
 class row_marker {
     static constexpr gc_clock::duration no_ttl { 0 };
@@ -321,6 +330,10 @@ public:
             *this = rm;
         }
     }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_marker& rm) noexcept;
+    // See reversibly_mergeable.hh
+    void revert(row_marker& rm) noexcept;
     // Expires cells and tombstones. Removes items covered by higher level
     // tombstones.
     // Returns true if row marker is live.
@@ -398,6 +411,11 @@ public:
     void remove_tombstone() {
         _deleted_at = tombstone();
     }
+
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema& s, deletable_row& src);
+    // See reversibly_mergeable.hh
+    void revert(const schema& s, deletable_row& src);
 public:
     tombstone deleted_at() const { return _deleted_at; }
     api::timestamp_type created_at() const { return _marker.timestamp(); }
@@ -422,12 +440,18 @@ public:
         : _prefix(std::move(prefix))
         , _t(std::move(t))
     { }
+    row_tombstones_entry(const clustering_key_prefix& prefix)
+        : _prefix(prefix)
+    { }
     row_tombstones_entry(row_tombstones_entry&& o) noexcept;
     row_tombstones_entry(const row_tombstones_entry&) = default;
     clustering_key_prefix& prefix() {
         return _prefix;
     }
     const clustering_key_prefix& prefix() const {
+        return _prefix;
+    }
+    const clustering_key_prefix& key() const {
         return _prefix;
     }
     tombstone& t() {
@@ -438,6 +462,14 @@ public:
     }
     void apply(tombstone t) {
         _t.apply(t);
+    }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(row_tombstones_entry& e) {
+        _t.apply_reversibly(e._t);
+    }
+    // See reversibly_mergeable.hh
+    void revert(row_tombstones_entry& e) noexcept {
+        _t.revert(e._t);
     }
     struct compare {
         clustering_key_prefix::less_compare _c;
@@ -472,6 +504,9 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
     bool equal(const schema& s, const row_tombstones_entry& other) const;
+    bool empty() const {
+        return !_t;
+    }
 };
 
 class rows_entry {
@@ -511,6 +546,14 @@ public:
     }
     void apply(tombstone t) {
         _row.apply(t);
+    }
+    // See reversibly_mergeable.hh
+    void apply_reversibly(const schema& s, rows_entry& e) {
+        _row.apply_reversibly(s, e._row);
+    }
+    // See reversibly_mergeable.hh
+    void revert(const schema& s, rows_entry& e) noexcept {
+        _row.revert(s, e._row);
     }
     bool empty() const {
         return _row.empty();
@@ -570,8 +613,8 @@ class mutation_partition final {
     using row_tombstones_type = boost::intrusive::set<row_tombstones_entry,
         boost::intrusive::member_hook<row_tombstones_entry, boost::intrusive::set_member_hook<>, &row_tombstones_entry::_link>,
         boost::intrusive::compare<row_tombstones_entry::compare>>;
-    friend rows_entry;
-    friend row_tombstones_entry;
+    friend class rows_entry;
+    friend class row_tombstones_entry;
     friend class size_calculator;
 private:
     tombstone _tombstone;
@@ -626,19 +669,21 @@ public:
     // Commutative when this_schema == p_schema. If schemas differ, data in p which
     // is not representable in this_schema is dropped, thus apply() loses commutativity.
     //
-    // Basic exception guarantees. If apply() throws after being called in
-    // some entry state p0, the object is left in some consistent state p1 and
-    // it's possible that p1 != p0 + p. It holds though that p1 + p = p0 + p.
-    //
-    // FIXME: make stronger exception guarantees (p1 = p0).
+    // Strong exception guarantees.
     void apply(const schema& this_schema, const mutation_partition& p, const schema& p_schema);
     //
-    // Same guarantees as for apply(const schema&, const mutation_partition&).
+    // Applies p to current object.
     //
-    // In case of exception the current object and external object (moved-from)
-    // are both left in some valid states, such that they still will commute to
-    // a state the current object would have should the exception had not occurred.
+    // Commutative when this_schema == p_schema. If schemas differ, data in p which
+    // is not representable in this_schema is dropped, thus apply() loses commutativity.
+    //
+    // If exception is thrown, this object will be left in a state equivalent to the entry state
+    // and p will be left in a state which will commute with current object to the same value
+    // should the exception had not occurred.
     void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema);
+    // Use in case this instance and p share the same schema.
+    // Same guarantees as apply(const schema&, mutation_partition&&, const schema&);
+    void apply(const schema& s, mutation_partition&& p);
     // Same guarantees and constraints as for apply(const schema&, const mutation_partition&, const schema&).
     void apply(const schema& this_schema, mutation_partition_view p, const schema& p_schema);
 

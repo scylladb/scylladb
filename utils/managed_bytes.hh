@@ -80,7 +80,7 @@ class managed_bytes {
                 _state.clear();
             }
         }
-        void forget(const blob_storage* p);
+        void forget(const blob_storage* p) noexcept;
     };
     static thread_local linearization_context _linearization_context;
 public:
@@ -110,7 +110,7 @@ private:
     size_t max_seg(allocation_strategy& alctr) {
         return alctr.preferred_max_contiguous_allocation() - sizeof(blob_storage);
     }
-    void free_chain(blob_storage* p) {
+    void free_chain(blob_storage* p) noexcept {
         if (p->next && _linearization_context._nesting) {
             _linearization_context.forget(p);
         }
@@ -191,7 +191,7 @@ public:
 
     managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
 
-    ~managed_bytes() {
+    ~managed_bytes() noexcept {
         if (external()) {
             free_chain(_u.ptr);
         }
@@ -244,7 +244,7 @@ public:
         o._u.small.size = 0;
     }
 
-    managed_bytes& operator=(managed_bytes&& o) {
+    managed_bytes& operator=(managed_bytes&& o) noexcept {
         if (this != &o) {
             this->~managed_bytes();
             new (this) managed_bytes(std::move(o));
@@ -254,9 +254,9 @@ public:
 
     managed_bytes& operator=(const managed_bytes& o) {
         if (this != &o) {
-            // FIXME: not exception safe
+            managed_bytes tmp(o);
             this->~managed_bytes();
-            new (this) managed_bytes(o);
+            new (this) managed_bytes(std::move(tmp));
         }
         return *this;
     }

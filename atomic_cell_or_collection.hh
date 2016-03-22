@@ -27,6 +27,8 @@
 
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determined by the schema.
+// Has an "empty" state.
+// Objects moved-from are left in an empty state.
 class atomic_cell_or_collection final {
     managed_bytes _data;
 private:
@@ -36,6 +38,7 @@ public:
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
     atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
+    atomic_cell_ref as_atomic_cell_ref() { return { _data }; }
     atomic_cell_or_collection(collection_mutation cm) : _data(std::move(cm.data)) {}
     explicit operator bool() const {
         return !_data.empty();

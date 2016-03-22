@@ -54,9 +54,9 @@ class atomic_cell_or_collection;
  */
 class atomic_cell_type final {
 private:
-    static constexpr int8_t DEAD_FLAGS = 0;
     static constexpr int8_t LIVE_FLAG = 0x01;
     static constexpr int8_t EXPIRY_FLAG = 0x02; // When present, expiry field is present. Set only for live cells
+    static constexpr int8_t REVERT_FLAG = 0x04; // transient flag used to efficiently implement ReversiblyMergeable for atomic cells.
     static constexpr unsigned flags_size = 1;
     static constexpr unsigned timestamp_offset = flags_size;
     static constexpr unsigned timestamp_size = 8;
@@ -67,14 +67,21 @@ private:
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
 private:
+    static bool is_revert_set(bytes_view cell) {
+        return cell[0] & REVERT_FLAG;
+    }
+    template<typename BytesContainer>
+    static void set_revert(BytesContainer& cell, bool revert) {
+        cell[0] = (cell[0] & ~REVERT_FLAG) | (revert * REVERT_FLAG);
+    }
     static bool is_live(const bytes_view& cell) {
-        return cell[0] != DEAD_FLAGS;
+        return cell[0] & LIVE_FLAG;
     }
     static bool is_live_and_has_ttl(const bytes_view& cell) {
         return cell[0] & EXPIRY_FLAG;
     }
     static bool is_dead(const bytes_view& cell) {
-        return cell[0] == DEAD_FLAGS;
+        return !is_live(cell);
     }
     // Can be called on live and dead cells
     static api::timestamp_type timestamp(const bytes_view& cell) {
@@ -106,7 +113,7 @@ private:
     }
     static managed_bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
         managed_bytes b(managed_bytes::initialized_later(), flags_size + timestamp_size + deletion_time_size);
-        b[0] = DEAD_FLAGS;
+        b[0] = 0;
         set_field(b, timestamp_offset, timestamp);
         set_field(b, deletion_time_offset, deletion_time.time_since_epoch().count());
         return b;
@@ -140,8 +147,11 @@ protected:
     ByteContainer _data;
 protected:
     atomic_cell_base(ByteContainer&& data) : _data(std::forward<ByteContainer>(data)) { }
-    atomic_cell_base(const ByteContainer& data) : _data(data) { }
+    friend class atomic_cell_or_collection;
 public:
+    bool is_revert_set() const {
+        return atomic_cell_type::is_revert_set(_data);
+    }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
     }
@@ -187,15 +197,23 @@ public:
     bytes_view serialize() const {
         return _data;
     }
+    void set_revert(bool revert) {
+        atomic_cell_type::set_revert(_data, revert);
+    }
 };
 
 class atomic_cell_view final : public atomic_cell_base<bytes_view> {
-    atomic_cell_view(bytes_view data) : atomic_cell_base(data) {}
+    atomic_cell_view(bytes_view data) : atomic_cell_base(std::move(data)) {}
 public:
     static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
 
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
+};
+
+class atomic_cell_ref final : public atomic_cell_base<managed_bytes&> {
+public:
+    atomic_cell_ref(managed_bytes& buf) : atomic_cell_base(buf) {}
 };
 
 class atomic_cell final : public atomic_cell_base<managed_bytes> {

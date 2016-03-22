@@ -26,7 +26,7 @@
 thread_local managed_bytes::linearization_context managed_bytes::_linearization_context;
 
 void
-managed_bytes::linearization_context::forget(const blob_storage* p) {
+managed_bytes::linearization_context::forget(const blob_storage* p) noexcept {
     _state.erase(p);
 }
 

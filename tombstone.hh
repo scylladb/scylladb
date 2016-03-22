@@ -84,10 +84,21 @@ struct tombstone final {
         return timestamp != api::missing_timestamp;
     }
 
-    void apply(const tombstone& t) {
+    void apply(const tombstone& t) noexcept {
         if (*this < t) {
             *this = t;
         }
+    }
+
+    // See reversibly_mergeable.hh
+    void apply_reversibly(tombstone& t) noexcept {
+        std::swap(*this, t);
+        apply(t);
+    }
+
+    // See reversibly_mergeable.hh
+    void revert(tombstone& t) noexcept {
+        std::swap(*this, t);
     }
 
     friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
