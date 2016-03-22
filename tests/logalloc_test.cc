@@ -113,7 +113,7 @@ SEASTAR_TEST_CASE(test_compaction_with_multiple_regions) {
             }
         });
 
-        size_t quarter = shard_tracker().occupancy().total_space() / 4;
+        size_t quarter = shard_tracker().region_occupancy().total_space() / 4;
 
         shard_tracker().reclaim_all_free_segments();
 
