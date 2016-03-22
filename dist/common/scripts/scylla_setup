@@ -21,6 +21,7 @@ print_usage() {
     echo "  --no-raid-setup		skip raid setup"
     echo "  --no-coredump-setup		skip coredump setup"
     echo "  --no-sysconfig-setup		skip sysconfig setup"
+    echo "  --no-io-setup		skip IO configuration setup"
     exit 1
 }
 
@@ -49,6 +50,7 @@ NTP_SETUP=1
 RAID_SETUP=1
 COREDUMP_SETUP=1
 SYSCONFIG_SETUP=1
+IO_SETUP=1
 
 if [ $# -ne 0 ]; then
     INTERACTIVE=0
@@ -106,6 +108,10 @@ while [ $# -gt 0 ]; do
             SYSCONFIG_SETUP=0
             shift 1
             ;;
+        "--no-io-setup")
+            IO_SETUP=0
+            shift 1
+            ;;
         "-h" | "--help")
             print_usage
             shift 1
@@ -128,7 +134,6 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
-        systemctl enable scylla-io-setup.service
         systemctl enable scylla-server.service
         systemctl enable scylla-jmx.service
         systemctl enable collectd.service
@@ -219,6 +224,15 @@ if [ $INTERACTIVE -eq 1 ]; then
         done
     fi
 fi
+
+if [ $INTERACTIVE -eq 1 ]; then
+    interactive_ask_service "Do you want to setup IO configuration?" &&:
+    IO_SETUP=$?
+fi
+if [ $IO_SETUP -eq 1 ]; then
+    /usr/lib/scylla/scylla_io_setup
+fi
+
 if [ $SYSCONFIG_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
 fi

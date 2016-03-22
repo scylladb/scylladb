@@ -113,11 +113,9 @@ if [ -f /etc/systemd/coredump.conf ];then
     /usr/lib/scylla/scylla_coredump_setup
 fi
 %systemd_post scylla-server.service
-%systemd_post scylla-io-setup.service
 
 %preun
 %systemd_preun scylla-server.service
-%systemd_preun scylla-io-setup.service
 
 %postun
 %systemd_postun
@@ -151,7 +149,6 @@ rm -rf $RPM_BUILD_ROOT
 %{_docdir}/scylla/ORIGIN
 %{_docdir}/scylla/licenses/
 %{_unitdir}/scylla-server.service
-%{_unitdir}/scylla-io-setup.service
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop

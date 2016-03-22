@@ -1,7 +1,5 @@
 [Unit]
 Description=Scylla Server
-After=scylla-io-setup.service
-Requires=scylla-io-setup.service
 
 [Service]
 Type=notify

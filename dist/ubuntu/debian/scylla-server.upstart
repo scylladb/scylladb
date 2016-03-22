@@ -31,7 +31,6 @@ pre-start script
         sudo /usr/lib/scylla/scylla-ami/scylla_ami_setup
     fi
     sudo /usr/lib/scylla/scylla_prepare
-    sudo /usr/lib/scylla/scylla_io_setup
 end script
 
 script
