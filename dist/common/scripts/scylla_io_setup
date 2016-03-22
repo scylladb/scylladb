@@ -32,8 +32,8 @@ output_to_user()
 
 if [ `is_developer_mode` -eq 0 ]; then
     if [ $AMI -eq 1 ]; then
-        SMP=`echo $SCYLLA_ARGS|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
-        CPUSET=`echo $SCYLLA_ARGS|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
+        SMP=`echo $SCYLLA_ARGS|grep smp|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
+        CPUSET=`echo $SCYLLA_ARGS|grep cpuset|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
         TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
