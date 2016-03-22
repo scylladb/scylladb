@@ -1157,7 +1157,8 @@ columnOperation[operations_type& operations]
 
 columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
-    | '[' k=term ']' specializedColumnOperation[operations, key, k]
+    | '[' k=term ']' specializedColumnOperation[operations, key, k, false]
+    | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' specializedColumnOperation[operations, key, k, true]
     ;
 
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
@@ -1199,11 +1200,12 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
 specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
                                                  shared_ptr<cql3::operation::raw_update>>>& operations,
                            shared_ptr<cql3::column_identifier::raw> key,
-                           shared_ptr<cql3::term::raw> k]
+                           shared_ptr<cql3::term::raw> k,
+                           bool by_uuid]
 
     : '=' t=term
       {
-          add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t));
+          add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t, by_uuid));
       }
     ;
 
@@ -1566,6 +1568,8 @@ K_NON:         N O N;
 K_OR:          O R;
 K_REPLACE:     R E P L A C E;
 K_DETERMINISTIC: D E T E R M I N I S T I C;
+
+K_SCYLLA_TIMEUUID_LIST_INDEX: S C Y L L A '_' T I M E U U I D '_' L I S T '_' I N D E X;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');

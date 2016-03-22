@@ -42,6 +42,13 @@ lists::value_spec_of(shared_ptr<column_specification> column) {
                 dynamic_pointer_cast<const list_type_impl>(column->type)->get_elements_type());
 }
 
+shared_ptr<column_specification>
+lists::uuid_index_spec_of(shared_ptr<column_specification> column) {
+    return make_shared<column_specification>(column->ks_name, column->cf_name,
+            ::make_shared<column_identifier>(sprint("uuid_idx(%s)", *column->name), true), uuid_type);
+}
+
+
 shared_ptr<term>
 lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     validate_assignable_to(db, keyspace, receiver);
@@ -299,6 +306,34 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     }
     auto smut = ltype->serialize_mutation_form(mut);
     m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
+}
+
+void
+lists::setter_by_uuid::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    // we should not get here for frozen lists
+    assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
+
+    std::experimental::optional<clustering_key> row_key;
+    if (!column.is_static()) {
+        row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    }
+
+    auto index = _idx->bind_and_get(params._options);
+    auto value = _t->bind_and_get(params._options);
+
+    if (!index) {
+        throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+
+    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
+
+    list_type_impl::mutation mut;
+    mut.cells.reserve(1);
+    mut.cells.emplace_back(to_bytes(*index), params.make_cell(*value));
+    auto smut = ltype->serialize_mutation_form(mut);
+    m.set_cell(prefix, column,
+                    atomic_cell_or_collection::from_collection_mutation(
+                                    std::move(smut)));
 }
 
 void
