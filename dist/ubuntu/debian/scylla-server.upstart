@@ -28,7 +28,6 @@ pre-start script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
     eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
     sudo /usr/lib/scylla/scylla_prepare
-    sudo /usr/lib/scylla/scylla_io_setup
 end script
 
 script

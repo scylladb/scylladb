@@ -1,21 +1,24 @@
 #!/bin/sh
 
-is_ami() {
-    if [ "`dmidecode --string system-version | grep \.amazon`" != "" ] && \
-       [ "`curl http://169.254.169.254/latest/meta-data/ami-id | grep ami-`" != "" ]; then
-         echo 1
-    else
-         echo 0
-    fi
+print_usage() {
+    echo "scylla_io_setup --ami"
+    echo "  --ami				setup AMI instance"
+    exit 1
 }
 
-is_supported_instance_type() {
-    TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
-    case $TYPE in
-        "m3"|"c3"|"i2") echo 1;;
-        *) echo 0;;
+AMI=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--ami")
+            AMI=1
+            shift 1
+            ;;
+        *)
+            print_usage
+            ;;
     esac
-}
+done
+
 
 is_developer_mode() {
     cat /etc/scylla.d/dev-mode.conf|egrep -c "\-\-developer-mode(\s+|=)(1|true)"
@@ -27,12 +30,10 @@ output_to_user()
     logger -p user.err "$1"
 }
 
-if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
-    if [ `is_ami` -eq 1 ]; then
+if [ `is_developer_mode` -eq 0 ]; then
+    if [ $AMI -eq 1 ]; then
         SMP=`echo $SCYLLA_ARGS|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
         CPUSET=`echo $SCYLLA_ARGS|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
-    fi
-    if [ `is_ami` -eq 1 ] && [ `is_supported_instance_type` -eq 1 ]; then
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`curl http://169.254.169.254/latest/meta-data/block-device-mapping/|grep ephemeral|wc -l`
 
@@ -64,5 +65,4 @@ if [ ! -f /etc/scylla/io_configured ] && [ `is_developer_mode` -eq 0 ]; then
             output_to_user " To override this error, see the developer_mode configuration option."
         fi
     fi
-    touch /etc/scylla/io_configured
 fi
