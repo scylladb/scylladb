@@ -106,13 +106,17 @@ int main(int argc, char** argv) {
                 keys.push_back(key);
             }
 
+            auto reclaimable_memory = [] {
+                return memory::stats().free_memory() + logalloc::shard_tracker().occupancy().free_space();
+            };
+
             std::cout << "memtable occupancy: " << mt->occupancy() << "\n";
             std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
-            std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
+            std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
 
             // We need to have enough Free memory to copy memtable into cache
             // When this assertion fails, increase amount of memory
-            assert(mt->occupancy().used_space() < memory::stats().free_memory());
+            assert(mt->occupancy().used_space() < reclaimable_memory());
 
             auto checker = [](const partition_key& key) {
                 return partition_presence_checker_result::maybe_exists;
@@ -146,13 +150,14 @@ int main(int argc, char** argv) {
                 for (auto&& key : keys) {
                     cache.touch(key);
                 }
-                std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
+                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
                 std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
             };
 
             std::deque<std::unique_ptr<char[]>> stuffing;
             auto fragment_free_space = [&] {
                 stuffing.clear();
+                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
                 std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
                 std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
 
@@ -165,6 +170,7 @@ int main(int argc, char** argv) {
                 }
 
                 std::cout << "After fragmenting:\n";
+                std::cout << "Reclaimable memory: " << reclaimable_memory() << "\n";
                 std::cout << "Free memory: " << memory::stats().free_memory() << "\n";
                 std::cout << "Cache occupancy: " << tracker.region().occupancy() << "\n";
             };
