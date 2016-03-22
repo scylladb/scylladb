@@ -169,26 +169,21 @@ public:
     }
 private:
     future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now) {
-        struct collector {
-            std::vector<mutation> _result;
-            std::vector<mutation> get() && { return std::move(_result); }
-            void operator()(std::vector<mutation> more) {
-                std::move(more.begin(), more.end(), std::back_inserter(_result));
-            }
-        };
-        auto get_mutations_for_statement = [this, &storage, &options, now, local] (size_t i) {
-            auto&& statement = _statements[i];
-            auto&& statement_options = options.for_statement(i);
-            auto timestamp = _attrs->get_timestamp(now, statement_options);
-            return statement->get_mutations(storage, statement_options, local, timestamp);
-        };
-        // FIXME: origin tries hard to merge mutations to same keyspace, for
-        //        some reason.
-        return map_reduce(
-                boost::make_counting_iterator<size_t>(0),
-                boost::make_counting_iterator<size_t>(_statements.size()),
-                get_mutations_for_statement,
-                collector());
+        // Do not process in parallel because operations like list append/prepend depend on execution order.
+        return do_with(std::vector<mutation>(), [this, &storage, &options, now, local] (auto&& result) {
+            return do_for_each(boost::make_counting_iterator<size_t>(0),
+                               boost::make_counting_iterator<size_t>(_statements.size()),
+                               [this, &storage, &options, now, local, &result] (size_t i) {
+                auto&& statement = _statements[i];
+                auto&& statement_options = options.for_statement(i);
+                auto timestamp = _attrs->get_timestamp(now, statement_options);
+                return statement->get_mutations(storage, statement_options, local, timestamp).then([&result] (auto&& more) {
+                    std::move(more.begin(), more.end(), std::back_inserter(result));
+                });
+            }).then([&result] {
+                return std::move(result);
+            });
+        });
     }
 
 public:
