@@ -88,6 +88,7 @@ public:
     void full_compaction();
     void reclaim_all_free_segments();
     occupancy_stats region_occupancy();
+    occupancy_stats occupancy();
 };
 
 class tracker_reclaimer_lock {
@@ -114,6 +115,10 @@ size_t tracker::reclaim(size_t bytes) {
 
 occupancy_stats tracker::region_occupancy() {
     return _impl->region_occupancy();
+}
+
+occupancy_stats tracker::occupancy() {
+    return _impl->occupancy();
 }
 
 void tracker::full_compaction() {
@@ -551,6 +556,7 @@ public:
     void on_segment_migration() { _stats.segments_migrated++; }
     void on_segment_compaction() { _stats.segments_compacted++; }
     size_t free_segments_in_zones() const { return _free_segments_in_zones; }
+    size_t free_segments() const { return _free_segments_in_zones + _emergency_reserve.size(); }
 };
 
 size_t segment_pool::reclaim_segments(size_t target) {
@@ -861,6 +867,7 @@ public:
     void on_segment_migration() { _stats.segments_migrated++; }
     void on_segment_compaction() { _stats.segments_compacted++; }
     size_t free_segments_in_zones() const { return 0; }
+    size_t free_segments() const { return 0; }
 public:
     class reservation_goal;
 };
@@ -1535,6 +1542,16 @@ occupancy_stats tracker::impl::region_occupancy() {
         total += r->occupancy();
     }
     return total;
+}
+
+occupancy_stats tracker::impl::occupancy() {
+    reclaiming_lock _(*this);
+    auto occ = region_occupancy();
+    {
+        auto s = shard_segment_pool.free_segments() * segment::size;
+        occ += occupancy_stats(s, s);
+    }
+    return occ;
 }
 
 void tracker::impl::reclaim_all_free_segments()
