@@ -360,6 +360,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
 }
 
 shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::get_rpc_client(messaging_verb verb, msg_addr id) {
+    assert(!_stopping);
     auto idx = get_rpc_client_idx(verb);
     auto it = _clients[idx].find(id);
 
@@ -449,8 +450,12 @@ std::unique_ptr<messaging_service::rpc_protocol_wrapper>& messaging_service::rpc
 // Send a message for verb
 template <typename MsgIn, typename... MsgOut>
 auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {
-    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
+    if (ms->is_stopping()) {
+        using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+        return futurator::make_exception_future(rpc::closed_error());
+    }
+    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
@@ -474,8 +479,12 @@ auto send_message(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOu
 // TODO: Remove duplicated code in send_message
 template <typename MsgIn, typename Timeout, typename... MsgOut>
 auto send_message_timeout(messaging_service* ms, messaging_verb verb, msg_addr id, Timeout timeout, MsgOut&&... msg) {
-    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
+    if (ms->is_stopping()) {
+        using futurator = futurize<std::result_of_t<decltype(rpc_handler)(rpc_protocol::client&, MsgOut...)>>;
+        return futurator::make_exception_future(rpc::closed_error());
+    }
+    auto rpc_client_ptr = ms->get_rpc_client(verb, id);
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).then_wrapped([ms = ms->shared_from_this(), id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (auto&& f) {
         try {
