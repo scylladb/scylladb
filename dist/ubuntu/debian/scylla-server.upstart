@@ -26,7 +26,10 @@ env HOME=/var/lib/scylla
 
 pre-start script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
-    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
+    . /etc/scylla.d/dev-mode.conf
+    . /etc/scylla.d/io.conf
+    export DEV_MODE
+    export SEASTAR_IO
     if [ "$AMI" = "yes" ]; then
         sudo /usr/lib/scylla/scylla-ami/scylla_ami_setup
     fi
@@ -35,12 +38,18 @@ end script
 
 script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
-    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
+    . /etc/scylla.d/dev-mode.conf
+    . /etc/scylla.d/io.conf
+    export DEV_MODE
+    export SEASTAR_IO
     exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE
 end script
 
 post-stop script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
-    eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
+    . /etc/scylla.d/dev-mode.conf
+    . /etc/scylla.d/io.conf
+    export DEV_MODE
+    export SEASTAR_IO
     sudo /usr/lib/scylla/scylla_stop
 end script
