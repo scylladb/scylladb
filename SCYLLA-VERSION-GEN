@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=1.0-prerelease
+VERSION=666.development
 
 if test -f version
 then
