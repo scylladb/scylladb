@@ -98,7 +98,8 @@ future<> init_ms_fd_gossiper(sstring listen_address
             size_t next = 0;
             sstring seeds_str = seed_provider.parameters.find("seeds")->second;
             while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+                auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
+                seeds.emplace(gms::inet_address(std::move(seed)));
                 begin = next+1;
             }
         }
