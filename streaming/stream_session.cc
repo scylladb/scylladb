@@ -224,6 +224,7 @@ future<> stream_session::on_initialization_complete() {
                 this->prepare_receiving(summary);
             }
             _stream_result->handle_session_prepared(this->shared_from_this());
+            this->start_streaming_files();
         } catch (...) {
             sslog.error("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
             throw;
@@ -238,9 +239,6 @@ future<> stream_session::on_initialization_complete() {
             sslog.error("[Stream #{}] Fail to send PREPARE_DONE_MESSAGE to {}, {}", plan_id, id, ep);
             std::rethrow_exception(ep);
         });
-    }).then([this] {
-        sslog.debug("[Stream #{}] Initiator starts to sent", this->plan_id());
-        this->start_streaming_files();
     });
 }
 
