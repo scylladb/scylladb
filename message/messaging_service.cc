@@ -550,7 +550,7 @@ auto send_message_timeout_and_retry(messaging_service* ms, messaging_verb verb, 
                     throw;
                 }
             });
-        }).then([] (MsgInTuple result) {
+        }).then([ms = ms->shared_from_this()] (MsgInTuple result) {
             return futurize<MsgIn>::from_tuple(std::move(result));
         });
     });
