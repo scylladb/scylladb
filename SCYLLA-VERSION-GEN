@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=666.development
+VERSION=1.0.rc1
 
 if test -f version
 then
