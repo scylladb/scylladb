@@ -1,0 +1,31 @@
+#!/bin/sh -e
+#
+#  Copyright (C) 2015 ScyllaDB
+
+print_usage() {
+    echo "scylla_developer_mode_setup --developer-mode=[0|1]"
+    echo "  --developer-mode   enable/disable developer mode"
+    exit 1
+}
+
+DEV_MODE=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--developer-mode")
+            DEV_MODE=$2
+            shift 2
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+
+if [ "$DEV_MODE" = "" ]; then
+    print_usage
+fi
+if [ "$DEV_MODE" != "0" ] && [ "$DEV_MODE" != "1" ]; then
+    print_usage
+fi
+
+echo "DEV_MODE=--developer-mode=$DEV_MODE" > /etc/scylla.d/dev-mode.conf
