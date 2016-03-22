@@ -31,13 +31,12 @@ pre-start script
         sudo /usr/lib/scylla/scylla-ami/scylla_ami_setup
     fi
     sudo /usr/lib/scylla/scylla_prepare
-    sudo /usr/lib/scylla/scylla_io_setup
 end script
 
 script
     eval "`grep -v -e "^\s*#" -e "^$" /etc/default/scylla-server|sed -e 's/^/export /'`"
     eval "`grep -v -e "^\s*#" -e "^$" /etc/scylla.d/*.conf|sed -e 's/^/export /'`"
-    exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO
+    exec /usr/bin/scylla $SCYLLA_ARGS $SEASTAR_IO $DEV_MODE
 end script
 
 post-stop script
