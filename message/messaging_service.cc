@@ -409,6 +409,13 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 }
 
 void messaging_service::remove_rpc_client_one(clients_map& clients, msg_addr id, bool dead_only) {
+    if (_stopping) {
+        // if messaging service is in a processed of been stopped no need to
+        // stop and remove connection here since they are being stopped already
+        // and we'll just interfere
+        return;
+    }
+
     auto it = clients.find(id);
     if (it != clients.end() && (!dead_only || it->second.rpc_client->error())) {
         auto client = std::move(it->second.rpc_client);
