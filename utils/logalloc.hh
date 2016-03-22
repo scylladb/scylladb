@@ -118,6 +118,9 @@ public:
     // Returns aggregate statistics for all pools.
     occupancy_stats region_occupancy();
 
+    // Returns statistics for all segments allocated by LSA on this shard.
+    occupancy_stats occupancy();
+
     impl& get_impl() { return *_impl; }
 };
 
