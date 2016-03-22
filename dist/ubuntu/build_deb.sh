@@ -35,7 +35,7 @@ if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
 fi
 
 VERSION=$(./SCYLLA-VERSION-GEN)
-SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
+SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/')
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION > version
 ./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server ../scylla-server_$SCYLLA_VERSION-$SCYLLA_RELEASE.orig.tar.gz 
