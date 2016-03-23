@@ -1,4 +1,5 @@
 import logging
+import parseexception
 import fnmatch
 import time
 import metric
@@ -46,11 +47,17 @@ class LiveData(object):
     def go(self):
         while not self._stop:
             for metric in self._measurements:
-                metric.update()
+                self._update(metric)
 
             for view in self._views:
                 view.update(self)
             time.sleep(self._interval)
+
+    def _update(self, metric):
+        try:
+            metric.update()
+        except parseexception.ParseException:
+            logging.exception('exception while updating metric {0}'.format(metric))
 
     def stop(self):
         self._stop = True

@@ -2,6 +2,7 @@ import socket
 import re
 import atexit
 import os
+import parseexception
 import logging
 
 COLLECTD_EXAMPLE_CONFIGURATION = '\n'.join(['LoadPlugin unixsock',
@@ -43,6 +44,8 @@ class Collectd(object):
     def _readLines(self):
         line = self._lineReader.readline()
         match = self._FIRST_LINE_PATTERN.search(line)
+        if match is None:
+            raise parseexception.ParseException('could not parse first line of response from collectd: {0}'.format(line))
         howManyLines = int(match.groupdict()['lines'])
         return [self._lineReader.readline() for _ in range(howManyLines)]
 

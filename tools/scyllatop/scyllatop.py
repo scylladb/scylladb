@@ -18,6 +18,14 @@ def halt(* args):
 signal.signal(signal.SIGINT, halt)
 
 
+def shell():
+    try:
+        import IPython
+        IPython.embed()
+    except ImportError:
+        logging.error('shell mode requires IPython to be installed')
+
+
 def main(screen, metricPatterns, interval, collectd):
     curses.curs_set(0)
     liveData = livedata.LiveData(metricPatterns, interval, collectd)
@@ -52,6 +60,7 @@ if __name__ == '__main__':
                         help="print out a list of all metrics exposed by collectd and exit")
     parser.add_argument('-L', '--logfile', default='scyllatop.log',
                         help="specify path for log file")
+    parser.add_argument('-S', '--shell', action='store_true', help="uses IPython to enter a debug shell, usefull for development")
     arguments = parser.parse_args()
     stream_log = logging.StreamHandler()
     stream_log.setLevel(logging.ERROR)
@@ -69,6 +78,9 @@ if __name__ == '__main__':
         print(collectd.COLLECTD_EXAMPLE_CONFIGURATION.format(socket=arguments.socket))
         quit()
     collectd = collectd.Collectd(arguments.socket)
+    if arguments.shell:
+        shell()
+        quit()
     if arguments.list:
         pprint.pprint([m.symbol for m in metric.Metric.discover(collectd)])
         quit()

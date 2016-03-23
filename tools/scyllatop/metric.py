@@ -1,5 +1,6 @@
 import logging
 import re
+import parseexception
 
 
 class Metric(object):
@@ -29,6 +30,8 @@ class Metric(object):
         response = self._collectd.query('GETVAL "{metric}"'.format(metric=self._symbol))
         for line in response:
             match = self._METRIC_INFO_PATTERN.search(line)
+            if match is None:
+                raise parseexception.ParseException('could not parse metric pattern from line: {0}'.format(line))
             key = match.groupdict()['key']
             value = match.groupdict()['value']
             self._status[key] = value
@@ -46,3 +49,6 @@ class Metric(object):
 
         logging.info('found {0} metrics'.format(len(results)))
         return results
+
+    def __repr__(self):
+        return '{0}:{1}'.format(self.name, self.status)
