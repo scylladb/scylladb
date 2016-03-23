@@ -487,7 +487,7 @@ public:
     val(cas_contention_timeout_in_ms, uint32_t, 5000, Unused,     \
             "The time that the coordinator continues to retry a CAS (compare and set) operation that contends with other proposals for the same row."  \
     )   \
-    val(truncate_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+    val(truncate_request_timeout_in_ms, uint32_t, 10000, Used,     \
             "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time."  \
     )   \
     val(write_request_timeout_in_ms, uint32_t, 2000, Used,     \
