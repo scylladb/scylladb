@@ -41,6 +41,7 @@
 #include <set>
 #include <iostream>
 #include <boost/functional/hash.hpp>
+#include <boost/range/algorithm/find.hpp>
 #include <experimental/optional>
 #include <string.h>
 #include "types.hh"
@@ -70,6 +71,7 @@
 #include "sstables/compaction.hh"
 #include "key_reader.hh"
 #include <seastar/core/rwlock.hh>
+#include <seastar/core/shared_future.hh>
 
 class frozen_mutation;
 class reconcilable_result;
@@ -98,7 +100,96 @@ void make(database& db, bool durable, bool volatile_testing_only);
 
 class replay_position_reordered_exception : public std::exception {};
 
-using memtable_list = std::vector<lw_shared_ptr<memtable>>;
+// We could just add all memtables, regardless of types, to a single list, and
+// then filter them out when we read them. Here's why I have chosen not to do
+// it:
+//
+// First, some of the methods in which a memtable is involved (like seal) are
+// assume a commitlog, and go through great care of updating the replay
+// position, flushing the log, etc.  We want to bypass those, and that has to
+// be done either by sprikling the seal code with conditionals, or having a
+// separate method for each seal.
+//
+// Also, if we ever want to put some of the memtables in as separate allocator
+// region group to provide for extra QoS, having the classes properly wrapped
+// will make that trivial: just pass a version of new_memtable() that puts it
+// in a different region, while the list approach would require a lot of
+// conditionals as well.
+//
+// If we are going to have different methods, better have different instances
+// of a common class.
+class memtable_list {
+    using shared_memtable = lw_shared_ptr<memtable>;
+    std::vector<shared_memtable> _memtables;
+    std::function<future<> ()> _seal_fn;
+    std::function<shared_memtable ()> _new_memtable;
+    size_t _max_memtable_size;
+public:
+    memtable_list(std::function<future<> ()> seal_fn, std::function<shared_memtable()> new_mt, size_t max_memtable_size)
+        : _memtables({})
+        , _seal_fn(seal_fn)
+        , _new_memtable(new_mt)
+        , _max_memtable_size(max_memtable_size) {
+        add_memtable();
+    }
+
+    shared_memtable back() {
+        return _memtables.back();
+    }
+
+    // The caller has to make sure the element exist before calling this.
+    void erase(const shared_memtable& element) {
+        _memtables.erase(boost::range::find(_memtables, element));
+    }
+    void clear() {
+        _memtables.clear();
+    }
+
+    size_t size() const {
+        return _memtables.size();
+    }
+
+    future<> seal_active_memtable() {
+        return _seal_fn();
+    }
+
+    auto begin() noexcept {
+        return _memtables.begin();
+    }
+
+    auto begin() const noexcept {
+        return _memtables.begin();
+    }
+
+    auto end() noexcept {
+        return _memtables.end();
+    }
+
+    auto end() const noexcept {
+        return _memtables.end();
+    }
+
+    memtable& active_memtable() {
+        return *_memtables.back();
+    }
+
+    void add_memtable() {
+        _memtables.emplace_back(_new_memtable());
+    }
+
+    bool should_flush() {
+        return active_memtable().occupancy().total_space() >= _max_memtable_size;
+    }
+
+    void seal_on_overflow() {
+        if (should_flush()) {
+            // FIXME: if sparse, do some in-memory compaction first
+            // FIXME: maybe merge with other in-memory memtables
+            _seal_fn();
+        }
+    }
+};
+
 using sstable_list = sstables::sstable_list;
 
 // The CF has a "stats" structure. But we don't want all fields here,
@@ -122,6 +213,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
     struct no_commitlog {};
@@ -153,6 +245,26 @@ private:
     config _config;
     stats _stats;
     lw_shared_ptr<memtable_list> _memtables;
+
+    // In older incarnations, we simply commited the mutations to memtables.
+    // However, doing that makes it harder for us to provide QoS within the
+    // disk subsystem. Keeping them in separate memtables allow us to properly
+    // classify those streams into its own I/O class
+    //
+    // We could write those directly to disk, but we still want the mutations
+    // coming through the wire to go to a memtable staging area.  This has two
+    // major advantages:
+    //
+    // first, it will allow us to properly order the partitions. They are
+    // hopefuly sent in order but we can't really guarantee that without
+    // sacrificing sender-side parallelism.
+    //
+    // second, we will be able to coalesce writes from multiple plan_id's and
+    // even multiple senders, as well as automatically tapping into the dirty
+    // memory throttling mechanism, guaranteeing we will not overload the
+    // server.
+    lw_shared_ptr<memtable_list> _streaming_memtables;
+
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
     // There are situations in which we need to stop writing sstables. Flushers will take
@@ -171,11 +283,20 @@ private:
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
+    // Because streaming mutations bypass the commitlog, there is
+    // no need for the complications of the flush queue. Besides, it
+    // is easier to just use a common gate than it is to modify the flush_queue
+    // to work both with and without a replay position.
+    //
+    // Last but not least, we seldom need to guarantee any ordering here: as long
+    // as all data is waited for, we're good.
+    seastar::gate _streaming_flush_gate;
 private:
     void update_stats_for_new_sstable(uint64_t disk_space_used_by_sstable);
     void add_sstable(sstables::sstable&& sstable);
     void add_sstable(lw_shared_ptr<sstables::sstable> sstable);
-    void add_memtable();
+    lw_shared_ptr<memtable> new_memtable();
+    lw_shared_ptr<memtable> new_streaming_memtable();
     future<stop_iteration> try_flush_memtable_to_sstable(lw_shared_ptr<memtable> memt);
     future<> update_cache(memtable&, lw_shared_ptr<sstable_list> old_sstables);
     struct merge_comparator;
@@ -251,7 +372,7 @@ public:
     // FIXME: in case a query is satisfied from a single memtable, avoid a copy
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
-    memtable& active_memtable() { return *_memtables->back(); }
+    memtable& active_memtable() { return _memtables->active_memtable(); }
     const row_cache& get_row_cache() const {
         return _cache;
     }
@@ -276,6 +397,7 @@ public:
     // The mutation is always upgraded to current schema.
     void apply(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position& = db::replay_position());
     void apply(const mutation& m, const db::replay_position& = db::replay_position());
+    void apply_streaming_mutation(schema_ptr, const frozen_mutation&);
 
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(schema_ptr,
@@ -288,6 +410,7 @@ public:
     future<> stop();
     future<> flush();
     future<> flush(const db::replay_position&);
+    future<> flush_streaming_mutations(std::vector<query::partition_range> ranges = std::vector<query::partition_range>{});
     void clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);
 
@@ -413,6 +536,31 @@ private:
     // synchronously flush data to disk.
     future<> seal_active_memtable();
 
+    // I am assuming here that the repair process will potentially send ranges containing
+    // few mutations, definitely not enough to fill a memtable. It wants to know whether or
+    // not each of those ranges individually succeeded or failed, so we need a future for
+    // each.
+    //
+    // One of the ways to fix that, is changing the repair itself to send more mutations at
+    // a single batch. But relying on that is a bad idea for two reasons:
+    //
+    // First, the goals of the SSTable writer and the repair sender are at odds. The SSTable
+    // writer wants to write as few SSTables as possible, while the repair sender wants to
+    // break down the range in pieces as small as it can and checksum them individually, so
+    // it doesn't have to send a lot of mutations for no reason.
+    //
+    // Second, even if the repair process wants to process larger ranges at once, some ranges
+    // themselves may be small. So while most ranges would be large, we would still have
+    // potentially some fairly small SSTables lying around.
+    //
+    // The best course of action in this case is to coalesce the incoming streams write-side.
+    // repair can now choose whatever strategy - small or big ranges - it wants, resting assure
+    // that the incoming memtables will be coalesced together.
+    shared_promise<> _waiting_streaming_flushes;
+    timer<> _delayed_streaming_flush{[this] { seal_active_streaming_memtable(); }};
+    future<> seal_active_streaming_memtable();
+    future<> seal_active_streaming_memtable_delayed();
+
     // filter manifest.json files out
     static bool manifest_json_filter(const sstring& fname);
 
@@ -422,7 +570,6 @@ private:
     template <typename Func>
     future<bool> for_all_partitions(schema_ptr, Func&& func) const;
     future<sstables::entry_descriptor> probe_file(sstring sstdir, sstring fname);
-    void seal_on_overflow();
     void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
@@ -526,6 +673,7 @@ public:
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
+        logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
     };
 private:
@@ -587,6 +735,7 @@ public:
 class database {
     ::cf_stats _cf_stats;
     logalloc::region_group _dirty_memory_region_group;
+    logalloc::region_group _streaming_dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
@@ -597,8 +746,6 @@ class database {
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
     std::vector<scollectd::registration> _collectd;
-    timer<> _throttling_timer{[this] { unthrottle(); }};
-    circular_buffer<promise<>> _throttled_requests;
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
@@ -613,9 +760,34 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-    future<> throttle();
+
+    class throttle_state {
+        size_t _max_space;
+        logalloc::region_group& _region_group;
+        throttle_state* _parent;
+
+        circular_buffer<promise<>> _throttled_requests;
+        timer<> _throttling_timer{[this] { unthrottle(); }};
+        void unthrottle();
+        bool should_throttle() const {
+            if (_region_group.memory_used() > _max_space) {
+                return true;
+            }
+            if (_parent) {
+                return _parent->should_throttle();
+            }
+            return false;
+        }
+    public:
+        throttle_state(size_t max_space, logalloc::region_group& region);
+        throttle_state(size_t max_space, logalloc::region_group& region, throttle_state& parent);
+        future<> throttle();
+    };
+
+    throttle_state _memtables_throttler;
+    throttle_state _streaming_throttler;
+
     future<> do_apply(schema_ptr, const frozen_mutation&);
-    void unthrottle();
 public:
     static utils::UUID empty_version;
 
@@ -683,6 +855,7 @@ public:
     future<lw_shared_ptr<query::result>> query(schema_ptr, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges);
     future<reconcilable_result> query_mutations(schema_ptr, const query::read_command& cmd, const query::partition_range& range);
     future<> apply(schema_ptr, const frozen_mutation&);
+    future<> apply_streaming_mutation(schema_ptr, const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names);

@@ -26,7 +26,8 @@ namespace service {
 class priority_manager {
     ::io_priority_class _commitlog_priority;
     ::io_priority_class _mt_flush_priority;
-    ::io_priority_class _mut_stream_priority;
+    ::io_priority_class _stream_read_priority;
+    ::io_priority_class _stream_write_priority;
     ::io_priority_class _sstable_query_read;
     ::io_priority_class _compaction_priority;
 
@@ -42,8 +43,13 @@ public:
     }
 
     const ::io_priority_class&
-    mutation_stream_priority() {
-        return _mut_stream_priority;
+    streaming_read_priority() {
+        return _stream_read_priority;
+    }
+
+    const ::io_priority_class&
+    streaming_write_priority() {
+        return _stream_write_priority;
     }
 
     const ::io_priority_class&
@@ -59,7 +65,8 @@ public:
     priority_manager()
         : _commitlog_priority(engine().register_one_priority_class("commitlog", 100))
         , _mt_flush_priority(engine().register_one_priority_class("memtable_flush", 100))
-        , _mut_stream_priority(engine().register_one_priority_class("streaming", 100))
+        , _stream_read_priority(engine().register_one_priority_class("streaming_read", 20))
+        , _stream_write_priority(engine().register_one_priority_class("streaming_write", 20))
         , _sstable_query_read(engine().register_one_priority_class("query", 100))
         , _compaction_priority(engine().register_one_priority_class("compaction", 100))
 
@@ -78,8 +85,13 @@ get_local_memtable_flush_priority() {
 }
 
 const inline ::io_priority_class&
-get_local_mutation_stream_priority() {
-    return get_local_priority_manager().mutation_stream_priority();
+get_local_streaming_read_priority() {
+    return get_local_priority_manager().streaming_read_priority();
+}
+
+const inline ::io_priority_class&
+get_local_streaming_write_priority() {
+    return get_local_priority_manager().streaming_write_priority();
 }
 
 const inline ::io_priority_class&

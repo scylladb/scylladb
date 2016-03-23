@@ -181,6 +181,8 @@ public:
     future<> mutate_locally(const schema_ptr&, const frozen_mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
+    future<> mutate_streaming_mutation(const schema_ptr&, const frozen_mutation& m);
+
     /**
     * Use this method to have these Mutations applied
     * across all replicas. This method will take care
