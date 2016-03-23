@@ -4,7 +4,7 @@ import base
 import helpers
 
 
-class Means(base.Base):
+class Aggregate(base.Base):
     def update(self, liveData):
         self.clearScreen()
         self.writeStatusLine(liveData.measurements)
@@ -17,9 +17,13 @@ class Means(base.Base):
         self.refresh()
 
     def _prepareTable(self, groups):
+        mean = lambda vector: sum(float(x) for x in vector) / len(vector)
+        _sum = lambda vector: sum(float(x) for x in vector)
         result = table.Table('lr')
         for group in groups:
-            formatted = helpers.formatValues(group.means)
+            formatted = 'avg[{0}] tot[{1}]'.format(
+                helpers.formatValues(group.aggregate(mean)), 
+                helpers.formatValues(group.aggregate(_sum)))
             result.add(self._label(group), formatted)
         return result
 

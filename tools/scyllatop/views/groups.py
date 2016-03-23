@@ -16,10 +16,8 @@ class Group(object):
     def metrics(self):
         return self._metrics
 
-    @property
-    def means(self):
-        mean = lambda vector: sum(float(x) for x in vector) / len(vector)
-        merger = mergeable.Mergeable(mean)
+    def aggregate(self, mergeMethod):
+        merger = mergeable.Mergeable(mergeMethod)
         for metric in self._metrics:
             merger.add(metric.status)
 

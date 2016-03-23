@@ -3,11 +3,11 @@ import logging
 
 
 class UserInput(threading.Thread):
-    def __init__(self, liveData, screen, simpleView, meansView):
+    def __init__(self, liveData, screen, simpleView, aggregateView):
         self._liveData = liveData
         self._screen = screen
         self._simpleView = simpleView
-        self._meansView = meansView
+        self._aggregateView = aggregateView
         threading.Thread.__init__(self)
         self.daemon = True
         self.start()
@@ -17,7 +17,7 @@ class UserInput(threading.Thread):
             keypress = self._screen.getch()
             logging.debug('key pressed {0}'.format(keypress))
             if keypress == ord('m'):
-                self._meansView.onTop()
+                self._aggregateView.onTop()
             if keypress == ord('s'):
                 self._simpleView.onTop()
             if keypress == ord('q'):

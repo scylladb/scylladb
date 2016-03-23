@@ -7,7 +7,7 @@ import collectd
 import metric
 import livedata
 import views.simple
-import views.means
+import views.aggregate
 import userinput
 import signal
 
@@ -30,16 +30,16 @@ def main(screen, metricPatterns, interval, collectd):
     curses.curs_set(0)
     liveData = livedata.LiveData(metricPatterns, interval, collectd)
     simpleView = views.simple.Simple(screen)
-    meansView = views.means.Means(screen)
+    aggregateView = views.aggregate.Aggregate(screen)
     liveData.addView(simpleView)
-    liveData.addView(meansView)
-    meansView.onTop()
-    userinput.UserInput(liveData, screen, simpleView, meansView)
+    liveData.addView(aggregateView)
+    aggregateView.onTop()
+    userinput.UserInput(liveData, screen, simpleView, aggregateView)
     liveData.go()
 
 if __name__ == '__main__':
     description = '\n'.join(['A top-like tool for scylladb collectd metrics.',
-                            'Keyborad shortcuts: S - simple view, M - avergages over multiple cores, Q -quits',
+                            'Keyborad shortcuts: S - simple view, M - aggregate over multiple cores, Q -quits',
                             '',
                             'You need to configure the unix-sock plugin for collectd'
                             'before you can use this, use the --print-config option to give you a configuration example',
