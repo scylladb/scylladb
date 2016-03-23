@@ -667,21 +667,26 @@ column_family::stop() {
 
 
 future<std::vector<sstables::entry_descriptor>>
-column_family::reshuffle_sstables(int64_t start) {
+column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t start) {
     struct work {
         int64_t current_gen;
+        std::set<int64_t> all_generations; // Stores generation of all live sstables in the system.
         sstable_list sstables;
         std::unordered_map<int64_t, sstables::entry_descriptor> descriptors;
         std::vector<sstables::entry_descriptor> reshuffled;
-        work(int64_t start) : current_gen(start ? start : 1) {}
+        work(int64_t start, std::set<int64_t> gens)
+            : current_gen(start ? start : 1)
+            , all_generations(gens) {}
     };
 
-    return do_with(work(start), [this] (work& work) {
+    return do_with(work(start, std::move(all_generations)), [this] (work& work) {
         return lister::scan_dir(_config.datadir, { directory_entry_type::regular }, [this, &work] (directory_entry de) {
             auto comps = sstables::entry_descriptor::make_descriptor(de.name);
             if (comps.component != sstables::sstable::component_type::TOC) {
                 return make_ready_future<>();
-            } else if (comps.generation < work.current_gen) {
+            }
+            // Skip generations that were already loaded by Scylla at a previous stage.
+            if (work.all_generations.count(comps.generation) != 0) {
                 return make_ready_future<>();
             }
             auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(),
