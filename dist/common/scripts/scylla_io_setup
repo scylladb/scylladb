@@ -30,10 +30,17 @@ output_to_user()
     logger -p user.err "$1"
 }
 
+. /etc/os-release
+if [ "$NAME" = "Ubuntu" ]; then
+   . /etc/default/scylla-server
+else
+   . /etc/sysconfig/scylla-server
+fi
+
 if [ `is_developer_mode` -eq 0 ]; then
+    SMP=`echo $SCYLLA_ARGS|grep smp|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
+    CPUSET=`echo $SCYLLA_ARGS|grep cpuset|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
     if [ $AMI -eq 1 ]; then
-        SMP=`echo $SCYLLA_ARGS|grep smp|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
-        CPUSET=`echo $SCYLLA_ARGS|grep cpuset|sed -e "s/^.*\(--cpuset\(\s\+\|=\)[0-9\-]*\).*$/\1/"`
         NR_CPU=`cat /proc/cpuinfo |grep processor|wc -l`
         NR_DISKS=`lsblk --list --nodeps --noheadings | grep -v xvda | grep xvd | wc -l`
         TYPE=`curl http://169.254.169.254/latest/meta-data/instance-type|cut -d . -f 1`
