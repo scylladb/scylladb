@@ -32,14 +32,13 @@
 // duplicated in cql_test_env.cc
 // until proper shutdown is done.
 
-future<> init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db).then([] {
-        // #293 - do not stop anything
-        //engine().at_exit([] { return service::deinit_storage_service(); });
-    });
+void init_storage_service(distributed<database>& db) {
+    service::init_storage_service(db).get();
+    // #293 - do not stop anything
+    //engine().at_exit([] { return service::deinit_storage_service(); });
 }
 
-future<> init_ms_fd_gossiper(sstring listen_address
+void init_ms_fd_gossiper(sstring listen_address
                 , uint16_t storage_port
                 , uint16_t ssl_storage_port
                 , sstring ms_encrypt_what
@@ -70,57 +69,46 @@ future<> init_ms_fd_gossiper(sstring listen_address
     if (ew != encrypt_what::none) {
         // note: credentials are immutable after this, and ok to share across shards
         creds = ::make_shared<server_credentials>(::make_shared<dh_params>(dh_params::level::MEDIUM));
-        f = creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).then([creds, ms_trust_store] {
-            return ms_trust_store.empty()
-                            ? creds->set_system_trust()
-                                            : creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM)
-                                              ;
-
-        });
+        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
+        ms_trust_store.empty() ? creds->set_system_trust().get() :
+                                 creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
     }
 
     // Init messaging_service
-    return f.then([listen, storage_port, creds, ssl_storage_port, ew] {
-        return net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds);
-        // #293 - do not stop anything
-        //engine().at_exit([] { return net::get_messaging_service().stop(); });
-    }).then([phi] {
-        // Init failure_detector
-        return gms::get_failure_detector().start(std::move(phi)).then([] {
-            // #293 - do not stop anything
-            //engine().at_exit([]{ return gms::get_failure_detector().stop(); });
-        });
-    }).then([listen_address, seed_provider, cluster_name] {
-        // Init gossiper
-        std::set<gms::inet_address> seeds;
-        if (seed_provider.parameters.count("seeds") > 0) {
-            size_t begin = 0;
-            size_t next = 0;
-            sstring seeds_str = seed_provider.parameters.find("seeds")->second;
-            while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-                auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
-                seeds.emplace(gms::inet_address(std::move(seed)));
-                begin = next+1;
-            }
+    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds).get();
+    // #293 - do not stop anything
+    //engine().at_exit([] { return net::get_messaging_service().stop(); });
+    // Init failure_detector
+    gms::get_failure_detector().start(std::move(phi)).get();
+    // #293 - do not stop anything
+    //engine().at_exit([]{ return gms::get_failure_detector().stop(); });
+    // Init gossiper
+    std::set<gms::inet_address> seeds;
+    if (seed_provider.parameters.count("seeds") > 0) {
+        size_t begin = 0;
+        size_t next = 0;
+        sstring seeds_str = seed_provider.parameters.find("seeds")->second;
+        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
+            auto seed = boost::trim_copy(seeds_str.substr(begin,next-begin));
+            seeds.emplace(gms::inet_address(std::move(seed)));
+            begin = next+1;
         }
-        if (seeds.empty()) {
-            seeds.emplace(gms::inet_address("127.0.0.1"));
-        }
-        auto broadcast_address = utils::fb_utilities::get_broadcast_address();
-        if (broadcast_address != listen_address && seeds.count(listen_address)) {
-            print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
-                  to_string(seeds), listen_address, broadcast_address);
-            throw std::runtime_error("Use broadcast_address for seeds list");
-        }
-        return gms::get_gossiper().start().then([seeds, cluster_name] {
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.set_seeds(seeds);
-            // #293 - do not stop anything
-            //engine().at_exit([]{ return gms::get_gossiper().stop(); });
-        }).then([cluster_name] {
-            return gms::get_gossiper().invoke_on_all([cluster_name](gms::gossiper& g) {
-                g.set_cluster_name(cluster_name);
-            });
-        });
+    }
+    if (seeds.empty()) {
+        seeds.emplace(gms::inet_address("127.0.0.1"));
+    }
+    auto broadcast_address = utils::fb_utilities::get_broadcast_address();
+    if (broadcast_address != listen_address && seeds.count(listen_address)) {
+        print("Use broadcast_address instead of listen_address for seeds list: seeds=%s, listen_address=%s, broadcast_address=%s\n",
+                to_string(seeds), listen_address, broadcast_address);
+        throw std::runtime_error("Use broadcast_address for seeds list");
+    }
+    gms::get_gossiper().start().get();
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.set_seeds(seeds);
+    // #293 - do not stop anything
+    //engine().at_exit([]{ return gms::get_gossiper().stop(); });
+    gms::get_gossiper().invoke_on_all([cluster_name](gms::gossiper& g) {
+        g.set_cluster_name(cluster_name);
     });
 }

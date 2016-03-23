@@ -363,7 +363,7 @@ int main(int ac, char** av) {
             ctx.http_server.listen(ipv4_addr{ip, api_port}).get();
             print("Scylla API server listening on %s:%s ...\n", api_address, api_port);
             supervisor_notify("initializing storage service");
-            init_storage_service(db).get();
+            init_storage_service(db);
             supervisor_notify("starting per-shard database core");
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();
@@ -432,7 +432,7 @@ int main(int ac, char** av) {
                     , key
                     , seed_provider
                     , cluster_name
-                    , phi).get();
+                    , phi);
             supervisor_notify("starting messaging service");
             supervisor_notify("starting storage proxy");
             proxy.start(std::ref(db)).get();
