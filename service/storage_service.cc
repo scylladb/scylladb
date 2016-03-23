@@ -2515,18 +2515,37 @@ future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
         auto& cf = db.find_column_family(ks_name, cf_name);
         return cf.disable_sstable_write();
     }).then([this, cf_name, ks_name] (int64_t max_seen_sstable) {
-        logger.debug("Loading new sstables with generation numbers larger or equal than {}", max_seen_sstable);
         // Then, we will reshuffle the tables to make sure that the generation numbers don't go too high.
         // We will do all of it the same CPU, to make sure that we won't have two parallel shufflers stepping
         // onto each other.
-        //
-        // Note that this will reshuffle all tables, including existing ones. Figuring out which of the tables
-        // are new would require coordination between all shards, so it is simpler this way. Renaming an existing
-        // SSTable shouldn't be that bad, and we are assuming empty directory for normal operation anyway.
-        auto shard = std::hash<sstring>()(cf_name) % smp::count;
-        return _db.invoke_on(shard, [ks_name, cf_name, max_seen_sstable] (database& db) {
+
+        class all_generations {
+            std::set<int64_t> _result;
+        public:
+            future<> operator()(std::set<int64_t> value) {
+                _result.insert(value.begin(), value.end());
+                return make_ready_future<>();
+            }
+            std::set<int64_t> get() && {
+                return _result;
+            }
+        };
+
+        // We provide to reshuffle_sstables() the generation of all existing sstables, such that it will
+        // easily know which sstables are new.
+        return _db.map_reduce(all_generations(), [ks_name, cf_name] (database& db) {
             auto& cf = db.find_column_family(ks_name, cf_name);
-            return cf.reshuffle_sstables(max_seen_sstable);
+            std::set<int64_t> generations;
+            for (auto& p : *(cf.get_sstables())) {
+                generations.insert(p.second->generation());
+            }
+            return make_ready_future<std::set<int64_t>>(std::move(generations));
+        }).then([this, max_seen_sstable, ks_name, cf_name] (std::set<int64_t> all_generations) {
+            auto shard = std::hash<sstring>()(cf_name) % smp::count;
+            return _db.invoke_on(shard, [ks_name, cf_name, max_seen_sstable, all_generations = std::move(all_generations)] (database& db) {
+                auto& cf = db.find_column_family(ks_name, cf_name);
+                return cf.reshuffle_sstables(std::move(all_generations), max_seen_sstable + 1);
+            });
         });
     }).then_wrapped([this, ks_name, cf_name] (future<std::vector<sstables::entry_descriptor>> f) {
         std::vector<sstables::entry_descriptor> new_tables;

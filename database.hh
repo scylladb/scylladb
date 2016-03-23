@@ -298,7 +298,10 @@ public:
     future<int64_t> disable_sstable_write() {
         _sstable_writes_disabled_at = std::chrono::steady_clock::now();
         return _sstables_lock.write_lock().then([this] {
-            return make_ready_future<int64_t>((*_sstables->end()).first);
+            if (_sstables->empty()) {
+                return make_ready_future<int64_t>(1);
+            }
+            return make_ready_future<int64_t>((*_sstables->rbegin()).first);
         });
     }
 
@@ -321,9 +324,11 @@ public:
     // very dangerous to do that with live SSTables. This is meant to be used with SSTables
     // that are not yet managed by the system.
     //
+    // Parameter all_generations stores the generation of all SSTables in the system, so it
+    // will be easy to determine which SSTable is new.
     // An example usage would query all shards asking what is the highest SSTable number known
     // to them, and then pass that + 1 as "start".
-    future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(int64_t start);
+    future<std::vector<sstables::entry_descriptor>> reshuffle_sstables(std::set<int64_t> all_generations, int64_t start);
 
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.

@@ -869,16 +869,17 @@ SEASTAR_TEST_CASE(reshuffle) {
             auto cf = make_lw_shared<column_family>(uncompressed_schema(), cfg, column_family::no_commitlog(), *cm);
             cf->start();
             cf->mark_ready_for_writes();
-            return cf->reshuffle_sstables(3).then([cm, cf] (std::vector<sstables::entry_descriptor> reshuffled) {
-                BOOST_REQUIRE(reshuffled.size() == 2);
-                BOOST_REQUIRE(reshuffled[0].generation  == 3);
-                BOOST_REQUIRE(reshuffled[1].generation  == 4);
+            std::set<int64_t> existing_sstables = { 1, 5 };
+            return cf->reshuffle_sstables(existing_sstables, 6).then([cm, cf] (std::vector<sstables::entry_descriptor> reshuffled) {
+                BOOST_REQUIRE(reshuffled.size() == 1);
+                BOOST_REQUIRE(reshuffled[0].generation  == 6);
                 return when_all(
                     test_sstable_exists("tests/sstables/generation", 1, true),
                     test_sstable_exists("tests/sstables/generation", 2, false),
-                    test_sstable_exists("tests/sstables/generation", 3, true),
-                    test_sstable_exists("tests/sstables/generation", 4, true),
-                    test_sstable_exists("tests/sstables/generation", 5, false),
+                    test_sstable_exists("tests/sstables/generation", 3, false),
+                    test_sstable_exists("tests/sstables/generation", 4, false),
+                    test_sstable_exists("tests/sstables/generation", 5, true),
+                    test_sstable_exists("tests/sstables/generation", 6, true),
                     test_sstable_exists("tests/sstables/generation", 10, false)
                 ).discard_result().then([cm] {
                     return cm->stop();
