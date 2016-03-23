@@ -20,6 +20,7 @@
  */
 
 #include <seastar/core/thread.hh>
+#include <seastar/util/defer.hh>
 #include "core/do_with.hh"
 #include "cql_test_env.hh"
 #include "cql3/query_processor.hh"
@@ -43,27 +44,8 @@
 #include "service/storage_service.hh"
 #include "auth/auth.hh"
 
-// TODO : remove once shutdown is ok.
-// Broke these test when doing horror patch for #293
-// Simpler to copy the code from init.cc than trying to do clever parameterization
-// and whatnot.
-static future<> tst_init_storage_service(distributed<database>& db) {
-    return service::init_storage_service(db).then([] {
-        engine().at_exit([] { return service::deinit_storage_service(); });
-    });
-}
-
-static future<> tst_init_ms_fd_gossiper(sstring listen_address, uint16_t port, db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
-    const gms::inet_address listen(listen_address);
-    // Init messaging_service
-    return net::get_messaging_service().start(listen, std::move(port)).then([]{
-        engine().at_exit([] { return net::get_messaging_service().stop(); });
-    }).then([] {
-        // Init failure_detector
-        return gms::get_failure_detector().start().then([] {
-            engine().at_exit([]{ return gms::get_failure_detector().stop(); });
-        });
-    }).then([listen_address, seed_provider, cluster_name] {
+static future<> tst_init_ms_fd_gossiper(db::seed_provider_type seed_provider, sstring cluster_name = "Test Cluster") {
+    return gms::get_failure_detector().start().then([seed_provider, cluster_name] {
         // Init gossiper
         std::set<gms::inet_address> seeds;
         if (seed_provider.parameters.count("seeds") > 0) {
@@ -82,7 +64,6 @@ static future<> tst_init_ms_fd_gossiper(sstring listen_address, uint16_t port, d
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_seeds(seeds);
             gossiper.set_cluster_name(cluster_name);
-            engine().at_exit([]{ return gms::get_gossiper().stop(); });
         });
     });
 }
@@ -116,7 +97,7 @@ private:
         return ::make_shared<service::query_state>(_core_local.local().client_state);
     }
 public:
-    single_node_cql_env()
+    single_node_cql_env(::shared_ptr<distributed<database>> db) : _db(db)
     { }
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_cql(const sstring& text) override {
@@ -251,46 +232,82 @@ public:
         return cql3::get_query_processor();
     }
 
-    future<> start(const db::config& cfg_in) {
-        bool old_active = false;
-        if (!active.compare_exchange_strong(old_active, true)) {
-            throw std::runtime_error("Starting more than one cql_test_env at a time not supported "
-                                     "due to singletons.");
-        }
-        return seastar::async([this, cfg_in] {
+    future<> start() {
+        return _core_local.start();
+    }
+
+    future<> stop() {
+        return _core_local.stop();
+    }
+
+    static future<> do_with(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
+        return seastar::async([cfg_in, func] {
+            bool old_active = false;
+            if (!active.compare_exchange_strong(old_active, true)) {
+                throw std::runtime_error("Starting more than one cql_test_env at a time not supported due to singletons.");
+            }
+            auto deactivate = defer([] {
+                bool old_active = true;
+                auto success = active.compare_exchange_strong(old_active, false);
+                assert(success);
+            });
+
             utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
             utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
             locator::i_endpoint_snitch::create_snitch("SimpleSnitch").get();
+            auto stop_snitch = defer([] { locator::i_endpoint_snitch::stop_snitch().get(); });
+
+            auto wait_for_background_jobs = defer([] { sstables::await_background_jobs_on_all_shards().get(); });
+
             auto db = ::make_shared<distributed<database>>();
             auto cfg = make_lw_shared<db::config>(std::move(cfg_in));
-            _data_dir = make_lw_shared<tmpdir>();
-            cfg->data_file_directories() = { _data_dir->path };
-            cfg->commitlog_directory() = _data_dir->path + "/commitlog.dir";
+            tmpdir data_dir;
+            cfg->data_file_directories() = { data_dir.path };
+            cfg->commitlog_directory() = data_dir.path + "/commitlog.dir";
             cfg->num_tokens() = 256;
             cfg->ring_delay_ms() = 500;
             cfg->experimental() = true;
             cfg->shutdown_announce_in_ms() = 0;
-            boost::filesystem::create_directories((_data_dir->path + "/system").c_str());
+            boost::filesystem::create_directories((data_dir.path + "/system").c_str());
             boost::filesystem::create_directories(cfg->commitlog_directory().c_str());
-            tst_init_storage_service(*db).get();
+
+            const gms::inet_address listen("127.0.0.1");
+            auto& ms = net::get_messaging_service();
+            ms.start(listen, std::move(7000)).get();
+            auto stop_ms = defer([&ms] { ms.stop().get(); });
+
+            auto& ss = service::get_storage_service();
+            ss.start(std::ref(*db));
+            auto stop_storage_service = defer([&ss] { ss.stop().get(); });
 
             db->start(std::move(*cfg)).get();
+            auto stop_db = defer([db] { db->stop().get(); });
 
-            tst_init_ms_fd_gossiper("127.0.0.1", 7000, db::config::seed_provider_type()).get();
+            // FIXME: split
+            tst_init_ms_fd_gossiper(db::config::seed_provider_type()).get();
+            auto stop_ms_fd_gossiper = defer([] {
+                gms::get_gossiper().stop().get();
+                gms::get_failure_detector().stop().get();
+            });
 
             distributed<service::storage_proxy>& proxy = service::get_storage_proxy();
             distributed<service::migration_manager>& mm = service::get_migration_manager();
             distributed<db::batchlog_manager>& bm = db::get_batchlog_manager();
 
             proxy.start(std::ref(*db)).get();
+            auto stop_proxy = defer([&proxy] { proxy.stop().get(); });
+
             mm.start().get();
+            auto stop_mm = defer([&mm] { mm.stop().get(); });
 
             auto& qp = cql3::get_query_processor();
             qp.start(std::ref(proxy), std::ref(*db)).get();
+            auto stop_qp = defer([&qp] { qp.stop().get(); });
 
             bm.start(std::ref(qp)).get();
+            auto stop_bm = defer([&bm] { bm.stop().get(); });
 
-            db->invoke_on_all([this] (database& db) {
+            db->invoke_on_all([] (database& db) {
                 return db.init_system_keyspace();
             }).get();
 
@@ -303,75 +320,33 @@ public:
             // In main.cc we call db::system_keyspace::setup which calls
             // minimal_setup and init_local_cache
             db::system_keyspace::minimal_setup(*db, qp);
+            auto stop_system_keyspace = defer([] { db::qctx = {}; });
+
             db::system_keyspace::init_local_cache().get();
+            auto stop_local_cache = defer([] { db::system_keyspace::deinit_local_cache().get(); });
 
             service::get_local_storage_service().init_server().get();
+            auto deinit_storage_service_server = defer([] {
+                gms::get_local_gossiper().stop_gossiping().get();
+                auth::auth::shutdown().get();
+            });
 
-            _core_local.start().get();
-            _db = std::move(db);
+            single_node_cql_env env(db);
+            env.start().get();
+            auto stop_env = defer([&env] { env.stop().get(); });
 
             auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
-            execute_cql(query).get();
-        });
-    }
+            env.execute_cql(query).get();
 
-    virtual future<> stop() override {
-        return seastar::async([this] {
-            // Started by storage_service::init_server()
-            gms::get_local_gossiper().stop_gossiping().get();
-            // started by storag-service::join_token_ring()
-            auth::auth::shutdown().get();
-
-            _core_local.stop().get();
-            db::system_keyspace::deinit_local_cache().get();
-
-            db::get_batchlog_manager().stop().get();
-            cql3::get_query_processor().stop().get();
-            db::qctx = {};
-            service::get_migration_manager().stop().get();
-            service::get_storage_proxy().stop().get();
-
-            gms::get_gossiper().stop().get();
-            gms::get_failure_detector().stop().get();
-
-            _db->stop().get();
-
-            service::get_storage_service().stop().get();
-
-            locator::i_endpoint_snitch::stop_snitch().get();
-
-            sstables::await_background_jobs_on_all_shards().get();
-
-            net::get_messaging_service().stop().get();
-
-            bool old_active = true;
-            assert(active.compare_exchange_strong(old_active, false));
+            func(env).get();
         });
     }
 };
 
 std::atomic<bool> single_node_cql_env::active = { false };
 
-future<::shared_ptr<cql_test_env>> make_env_for_test(const db::config& cfg_in) {
-    return seastar::async([cfg_in] {
-        auto env = ::make_shared<single_node_cql_env>();
-        env->start(cfg_in).get();
-        return dynamic_pointer_cast<cql_test_env>(env);
-    });
-}
-
-future<::shared_ptr<cql_test_env>> make_env_for_test() {
-    return make_env_for_test(db::config{});
-}
-
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config& cfg_in) {
-    return make_env_for_test(cfg_in).then([func = std::move(func)] (auto e) mutable {
-        return do_with(std::move(func), [e] (auto& f) {
-            return f(*e);
-        }).finally([e] {
-            return e->stop().finally([e] {});
-        });
-    });
+    return single_node_cql_env::do_with(func, cfg_in);
 }
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func) {

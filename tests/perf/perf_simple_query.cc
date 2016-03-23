@@ -135,19 +135,15 @@ int main(int argc, char** argv) {
         ("query-single-key", "test write path instead of read path")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core");
 
-    return app.run_deprecated(argc, argv, [&app] {
-        make_env_for_test().then([&app] (auto env) {
+    return app.run(argc, argv, [&app] {
+        return do_with_cql_env([&app] (auto&& env) {
             auto cfg = make_lw_shared<test_config>();
             cfg->partitions = app.configuration()["partitions"].as<unsigned>();
             cfg->duration_in_seconds = app.configuration()["duration"].as<unsigned>();
             cfg->concurrency = app.configuration()["concurrency"].as<unsigned>();
             cfg->mode = app.configuration().count("write") ? test_config::run_mode::write : test_config::run_mode::read;
             cfg->query_single_key = app.configuration().count("query-single-key");
-            return do_test(*env, *cfg).finally([env, cfg] {
-                return env->stop().finally([env] {});
-            });
-        }).then([] {
-            return engine().exit(0);
-        }).or_terminate();
+            return do_test(env, *cfg).finally([cfg] {});
+        });
     });
 }

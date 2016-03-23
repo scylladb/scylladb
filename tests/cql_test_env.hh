@@ -87,8 +87,5 @@ public:
     virtual distributed<cql3::query_processor> & qp() = 0;
 };
 
-future<::shared_ptr<cql_test_env>> make_env_for_test();
-future<::shared_ptr<cql_test_env>> make_env_for_test(const db::config&);
-
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func);
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, const db::config&);
