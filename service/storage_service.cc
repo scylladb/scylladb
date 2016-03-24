@@ -750,14 +750,14 @@ void storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state ep
         on_change(endpoint, e.first, e.second);
     }
     get_local_migration_manager().schedule_schema_pull(endpoint, ep_state).handle_exception([endpoint] (auto ep) {
-        logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+        logger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
 }
 
 void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state state) {
     logger.debug("endpoint={} on_alive", endpoint);
     get_local_migration_manager().schedule_schema_pull(endpoint, state).handle_exception([endpoint] (auto ep) {
-        logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+        logger.warn("Fail to pull schema from {}: {}", endpoint, ep);
     });
     if (_token_metadata.is_member(endpoint)) {
 #if 0
@@ -814,7 +814,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             do_update_system_peers_table(endpoint, state, value);
             if (state == application_state::SCHEMA) {
                 get_local_migration_manager().schedule_schema_pull(endpoint, *ep_state).handle_exception([endpoint] (auto ep) {
-                    logger.warn("Fail to pull schmea from {}: {}", endpoint, ep);
+                    logger.warn("Failed to pull schema from {}: {}", endpoint, ep);
                 });
             }
         }
