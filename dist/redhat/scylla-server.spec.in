@@ -36,6 +36,7 @@ ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 %install
 rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT%{_bindir}
+mkdir -p $RPM_BUILD_ROOT%{_sbindir}
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
@@ -55,9 +56,10 @@ install -d -m755 $RPM_BUILD_ROOT%{_sysconfdir}/scylla
 install -m644 conf/scylla.yaml $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 conf/cassandra-rackdc.properties $RPM_BUILD_ROOT%{_sysconfdir}/scylla/
 install -m644 dist/redhat/systemd/*.service $RPM_BUILD_ROOT%{_unitdir}/
-install -m755 dist/common/scripts/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+install -m755 dist/common/lib/* $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/scripts/posix_net_conf.sh  $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
 install -m755 seastar/dpdk/tools/dpdk_nic_bind.py $RPM_BUILD_ROOT%{_prefix}/lib/scylla/
+install -m755 dist/common/sbin/* $RPM_BUILD_ROOT%{_sbindir}
 install -m755 build/release/scylla $RPM_BUILD_ROOT%{_bindir}
 install -m755 build/release/iotune $RPM_BUILD_ROOT%{_bindir}
 install -m755 dist/common/bin/scyllatop $RPM_BUILD_ROOT%{_bindir}
@@ -154,15 +156,15 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/scyllatop
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
-%{_prefix}/lib/scylla/scylla_setup
-%{_prefix}/lib/scylla/scylla_coredump_setup
-%{_prefix}/lib/scylla/scylla_raid_setup
-%{_prefix}/lib/scylla/scylla_sysconfig_setup
-%{_prefix}/lib/scylla/scylla_bootparam_setup
-%{_prefix}/lib/scylla/scylla_ntp_setup
-%{_prefix}/lib/scylla/scylla_selinux_setup
-%{_prefix}/lib/scylla/scylla_io_setup
-%{_prefix}/lib/scylla/scylla_dev_mode_setup
+%{_sbindir}/scylla_setup
+%{_sbindir}/scylla_coredump_setup
+%{_sbindir}/scylla_raid_setup
+%{_sbindir}/scylla_sysconfig_setup
+%{_sbindir}/scylla_bootparam_setup
+%{_sbindir}/scylla_ntp_setup
+%{_sbindir}/scylla_selinux_setup
+%{_sbindir}/scylla_io_setup
+%{_sbindir}/scylla_dev_mode_setup
 %{_prefix}/lib/scylla/posix_net_conf.sh
 %{_prefix}/lib/scylla/dpdk_nic_bind.py
 %{_prefix}/lib/scylla/dpdk_nic_bind.pyc
