@@ -15,7 +15,7 @@ expect stop
 respawn
 # allow ample time to flush the commit log on large memory / slow disk systems
 kill timeout 3600
-normal exit 0 1
+normal exit 0 1 2
 setuid scylla
 setgid scylla
 limit core unlimited unlimited
