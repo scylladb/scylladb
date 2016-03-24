@@ -663,7 +663,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     });
 }
 
-static void update_column_family(database& db, schema_ptr new_schema) {
+static future<> update_column_family(database& db, schema_ptr new_schema) {
     column_family& cfm = db.find_column_family(new_schema->id());
 
     bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
@@ -672,7 +672,7 @@ static void update_column_family(database& db, schema_ptr new_schema) {
     s->registry_entry()->mark_synced();
     cfm.set_schema(std::move(s));
 
-    service::get_local_migration_manager().notify_update_column_family(cfm.schema(), columns_changed);
+    return service::get_local_migration_manager().notify_update_column_family(cfm.schema(), columns_changed);
 }
 
 // see the comments for merge_keyspaces()
@@ -713,15 +713,15 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
                     auto& cf = db.find_column_family(s);
                     cf.mark_ready_for_writes();
                     ks.make_directory_for_column_family(s->cf_name(), s->id()).get();
-                    service::get_local_migration_manager().notify_create_column_family(s);
+                    service::get_local_migration_manager().notify_create_column_family(s).get();
                 }
                 for (auto&& gs : altered) {
-                    update_column_family(db, gs.get());
+                    update_column_family(db, gs.get()).get();
                 }
                 parallel_for_each(dropped.begin(), dropped.end(), [&db, &tsf](auto&& gs) {
                     schema_ptr s = gs.get();
                     return db.drop_column_family(s->ks_name(), s->cf_name(), [&tsf] { return tsf.value(); }).then([s] {
-                        service::get_local_migration_manager().notify_drop_column_family(s);
+                        return service::get_local_migration_manager().notify_drop_column_family(s);
                     });
                 }).get();
             });
