@@ -2221,21 +2221,11 @@ void storage_service::unbootstrap() {
 
     set_mode(mode::LEAVING, "replaying batch log and streaming data to other nodes", true);
 
-    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
-    // FIXME: Future<?> batchlogReplay = BatchlogManager.instance.startBatchlogReplay();
     auto stream_success = stream_ranges(ranges_to_stream);
-#if 0
     // Wait for batch log to complete before streaming hints.
     logger.debug("waiting for batch log processing.");
-    try
-    {
-        batchlogReplay.get();
-    }
-    catch (ExecutionException | InterruptedException e)
-    {
-        throw new RuntimeException(e);
-    }
-#endif
+    // Start with BatchLog replay, which may create hints but no writes since this is no longer a valid endpoint.
+    db::get_local_batchlog_manager().do_batch_log_replay().get();
 
     set_mode(mode::LEAVING, "streaming hints to other nodes", true);
 
