@@ -422,7 +422,7 @@ public:
         _sstable_writes_disabled_at = std::chrono::steady_clock::now();
         return _sstables_lock.write_lock().then([this] {
             if (_sstables->empty()) {
-                return make_ready_future<int64_t>(1);
+                return make_ready_future<int64_t>(0);
             }
             return make_ready_future<int64_t>((*_sstables->rbegin()).first);
         });

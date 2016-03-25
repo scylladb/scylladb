@@ -2481,7 +2481,7 @@ void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t ex
 // in there.
 future<> storage_service::load_new_sstables(sstring ks_name, sstring cf_name) {
     class max_element {
-        int64_t _result = 1;
+        int64_t _result = 0;
     public:
         future<> operator()(int64_t value) {
             _result = std::max(value, _result);
