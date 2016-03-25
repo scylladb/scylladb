@@ -47,6 +47,7 @@ case "$ID" in
         ;;
 esac
 
+
 if [ $LOCALRPM -eq 1 ]; then
     if [ "$ID" = "centos" ]; then
         rm -rf build/*
@@ -74,11 +75,11 @@ if [ $LOCALRPM -eq 1 ]; then
     else
         sudo apt-get install -y git
         if [ ! -f dist/ami/files/scylla-server_amd64.deb ]; then
-            if [ ! -f ../scylla-server_`cat version`-ubuntu1_amd64.deb ]; then
+            if [ ! -f ../scylla-server_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb ]; then
                 echo "Build .deb before running build_ami.sh"
                 exit 1
             fi
-            cp ../scylla-server_`cat version`-ubuntu1_amd64.deb dist/ami/files/scylla-server_amd64.deb
+            cp ../scylla-server_`cat build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/SCYLLA-RELEASE-FILE`-ubuntu1_amd64.deb dist/ami/files/scylla-server_amd64.deb
         fi
         if [ ! -f dist/ami/files/scylla-jmx_all.deb ]; then
             cd build
@@ -86,7 +87,7 @@ if [ $LOCALRPM -eq 1 ]; then
             cd scylla-jmx
             sh -x -e dist/ubuntu/build_deb.sh $*
             cd ../..
-            cp build/scylla-jmx_`cat build/scylla-jmx/version`-ubuntu1_all.deb dist/ami/files/scylla-jmx_all.deb
+            cp build/scylla-jmx_`cat build/scylla-jmx/build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/scylla-jmx/build/SCYLLA-RELEASE-FILE`-ubuntu1_all.deb dist/ami/files/scylla-jmx_all.deb
         fi
         if [ ! -f dist/ami/files/scylla-tools_all.deb ]; then
             cd build
@@ -94,7 +95,7 @@ if [ $LOCALRPM -eq 1 ]; then
             cd scylla-tools-java
             sh -x -e dist/ubuntu/build_deb.sh $*
             cd ../..
-            cp build/scylla-tools_`cat build/scylla-tools-java/version`-ubuntu1_all.deb dist/ami/files/scylla-tools_all.deb
+            cp build/scylla-tools_`cat build/scylla-tools-java/build/SCYLLA-VERSION-FILE | sed 's/\.rc/~rc/'`-`cat build/scylla-tools-java/build/SCYLLA-RELEASE-FILE`-ubuntu1_all.deb dist/ami/files/scylla-tools_all.deb
         fi
     fi
 fi
