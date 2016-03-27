@@ -1616,20 +1616,17 @@ STRING_LITERAL
         setText(txt);
     }
     :
-// FIXME:
-#if 0
       /* pg-style string literal */
       (
-        '\$' '\$'
-        ( /* collect all input until '$$' is reached again */
-          {  (input.size() - input.index() > 1)
-               && !"$$".equals(input.substring(input.index(), input.index() + 1)) }?
-             => c=. { txt.appendCodePoint(c); }
+        '$' '$'
+        (
+          (c=~('$') { txt.push_back(c); })
+          |
+          ('$' (c=~('$') { txt.push_back('$'); txt.push_back(c); }))
         )*
-        '\$' '\$'
+        '$' '$'
       )
       |
-#endif
       /* conventional quoted string literal */
       (
         '\'' (c=~('\'') { txt.push_back(c);} | '\'' '\'' { txt.push_back('\''); })* '\''

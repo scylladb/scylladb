@@ -2166,3 +2166,35 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_pg_style_string_literal) {
+    return do_with_cql_env([] (auto& e) {
+        return e.execute_cql("create table test (p1 text, PRIMARY KEY (p1));").discard_result().then([&e] {
+            return e.execute_cql("insert into test (p1) values ($$Apostrophe's$ $ not$ $ '' escaped$$);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into test (p1) values ($$$''valid$_$key$$);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into test (p1) values ('$normal$valid$$$$key$');").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into test (p1) values ($ $invalid$$);").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("insert into test (p1) values ($$invalid$ $);").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("insert into test (p1) values ($ $invalid$$$);").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("insert into test (p1) values ($$ \n\n$invalid);").discard_result();
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("select * from test;");
+        }).then([&e] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                { utf8_type->decompose(sstring("Apostrophe's$ $ not$ $ '' escaped")) },
+                { utf8_type->decompose(sstring("$''valid$_$key")) },
+                { utf8_type->decompose(sstring("$normal$valid$$$$key$")) },
+            });
+        });
+    });
+}
