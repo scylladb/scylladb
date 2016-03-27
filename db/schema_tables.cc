@@ -68,6 +68,7 @@
 #include "utils/joinpoint.hh"
 
 using namespace db::system_keyspace;
+using namespace std::chrono_literals;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
@@ -492,7 +493,33 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, cons
 static semaphore the_merge_lock;
 
 future<> merge_lock() {
-    return smp::submit_to(0, [] { return the_merge_lock.wait(); });
+    // ref:  #1088
+    // to avoid deadlocks, we don't want long-standing calls to the shard 0
+    // as they can cause a deadlock:
+    //
+    //   fiber1                fiber2
+    //   merge_lock()                         (succeeds)
+    //                         merge_lock()   (waits)
+    //   invoke_on_all()                      (waits on merge_lock to relinquish smp::submit_to slot)
+    //
+    // so we issue the lock calls with a timeout; the slot will be relinquished, and invoke_on_all()
+    // can complete
+    return repeat([] () mutable {
+        return smp::submit_to(0, [] {
+            return the_merge_lock.try_wait();
+        }).then([] (bool result) {
+            if (result) {
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            } else {
+                static thread_local auto rand_engine = std::default_random_engine();
+                auto dist = std::uniform_int_distribution<int>(0, 100);
+                auto to = std::chrono::microseconds(dist(rand_engine));
+                return sleep(to).then([] {
+                    return make_ready_future<stop_iteration>(stop_iteration::no);
+                });
+            }
+        });
+    });
 }
 
 future<> merge_unlock() {
