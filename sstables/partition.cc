@@ -375,9 +375,9 @@ public:
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-        check_marker(end_col, composite_marker::end_range);
         // Some versions of Cassandra will write a 0 to mark the start of the range.
         // CASSANDRA-7593 discusses that.
+        check_marker(end_col, composite_marker::end_range, composite_marker::none);
         check_marker(start_col, composite_marker::start_range, composite_marker::none);
 
         // FIXME: CASSANDRA-6237 says support will be added to things like this.
