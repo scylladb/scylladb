@@ -88,22 +88,6 @@ sed -e "s/Defaults    requiretty/#Defaults    requiretty/" /etc/sudoers > /tmp/s
 cp /tmp/sudoers /etc/sudoers
 rm /tmp/sudoers
 %endif
-TMP=""
-# This is for existing users who already installed scylla.yaml on /var/lib/scylla/conf
-if [ -d /var/lib/scylla/conf ] && [ ! -L /var/lib/scylla/conf ]; then
-    cp -a /var/lib/scylla/conf /tmp/%{name}-%{version}-%{release}
-fi
-# Adding IFNAME for previous version of sysconfig
-if [ -f /etc/sysconfig/scylla-server ] && [ `grep IFNAME -r /etc/sysconfig/scylla-server|wc -l` -eq 0 ]; then
-    echo "# ethernet device name" >> /etc/sysconfig/scylla-server
-    echo "IFNAME=eth0" >> /etc/sysconfig/scylla-server
-fi
-if [ -d /usr/lib/scylla/scylla-ami ]; then
-    echo "# setup as AMI instance" >> /etc/sysconfig/scylla-server
-    echo "AMI=no" >> /etc/sysconfig/scylla-server
-    echo "# do not upgrade Scylla packages on AMI startup" >> /etc/sysconfig/scylla-server
-    echo "AMI_KEEP_VERSION=no" >> /etc/sysconfig/scylla-server
-fi
 
 %post
 grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
