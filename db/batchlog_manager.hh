@@ -63,7 +63,9 @@ private:
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
     timer<clock_type> _timer;
+    semaphore _sem{1};
     seastar::gate _gate;
+    unsigned _cpu = 0;
     bool _stop = false;
 
     std::random_device _rd;
@@ -82,10 +84,8 @@ public:
     future<> start();
     future<> stop();
 
-    // for testing.
-    future<> do_batch_log_replay() {
-        return replay_all_failed_batches();
-    }
+    future<> do_batch_log_replay();
+
     future<size_t> count_all_batches() const;
     size_t get_total_batches_replayed() const {
         return _total_batches_replayed;
