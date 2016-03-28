@@ -1807,7 +1807,19 @@ remove_by_toc_name(sstring sstable_toc_name) {
                 // already deleted
                 return make_ready_future<>();
             }
-            return remove_file(prefix + component);
+            auto fname = prefix + component;
+            return remove_file(prefix + component).then_wrapped([fname = std::move(fname)] (future<> f) {
+                // forgive ENOENT, since the component may not have been written;
+                try {
+                    f.get();
+                } catch (std::system_error& e) {
+                    if (e.code() != std::error_code(ENOENT, std::system_category())) {
+                        throw;
+                    }
+                    sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
+                }
+                return make_ready_future<>();
+            });
         }).get();
         fsync_directory(dir).get();
         remove_file(new_toc_name).get();
