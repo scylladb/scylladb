@@ -477,7 +477,7 @@ void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
         auto peer = this->peer;
         get_local_stream_manager().get_progress_on_all_shards(plan_id, peer).then([this, peer, plan_id] (stream_bytes sbytes) {
             if (this->_is_aborted) {
-                sslog.info("[Stream #{}] The session {} is closed, keep alive timer will do nothing", this, plan_id);
+                sslog.info("[Stream #{}] The session {} is closed, keep alive timer will do nothing", plan_id, this);
                 return;
             }
             auto now = lowres_clock::now();
