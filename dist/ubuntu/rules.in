@@ -76,7 +76,7 @@ override_dh_auto_install:
 	cp $(CURDIR)/scylla-gdb.py $(CURDIR)/debian/scylla-server-dbg/usr/lib/scylla
 
 override_dh_installinit:
-	dh_installinit --no-start
+	dh_installinit --no-start --upstart-only
 
 override_dh_strip:
 	dh_strip --dbg-package=scylla-server-dbg
