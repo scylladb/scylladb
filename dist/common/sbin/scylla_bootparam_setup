@@ -2,6 +2,25 @@
 #
 #  Copyright (C) 2015 ScyllaDB
 
+print_usage() {
+    echo "scylla_bootparam_setup --ami"
+    echo "  --ami				setup AMI instance"
+    exit 1
+}
+
+AMI_OPT=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--ami")
+            AMI_OPT=1
+            shift 1
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+
 . /etc/os-release
 
 if [ ! -f /etc/default/grub ]; then
@@ -14,7 +33,11 @@ if [ "`grep hugepagesz /etc/default/grub`" != "" ] || [ "`grep hugepages /etc/de
     sed -e "s#hugepages=[0-9]* ##" /etc/default/grub > /tmp/grub
     mv /tmp/grub /etc/default/grub
 fi
-sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+if [ $AMI_OPT -eq 1 ]; then
+    sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"clocksource=tsc tsc=reliable hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+else
+    sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
+fi
 mv /tmp/grub /etc/default/grub
 if [ "$ID" = "ubuntu" ]; then
     grub-mkconfig -o /boot/grub/grub.cfg
