@@ -1,10 +1,9 @@
 #!/usr/bin/make -f
 
 DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
-LIB = $(CURDIR)/debian/scylla-server/usr/lib/scylla
-SBIN = $(CURDIR)/debian/scylla-server/usr/sbin
-SWAGGER = $(LIB)/swagger-ui
-API = $(LIB)/api
+SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
+SWAGGER = $(SCRIPTS)/swagger-ui
+API = $(SCRIPTS)/api
 SYSCTL = $(CURDIR)/debian/scylla-server/etc/sysctl.d
 SUDOERS =  $(CURDIR)/debian/scylla-server/etc/sudoers.d
 LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
@@ -48,15 +47,12 @@ override_dh_auto_install:
 	cp $(CURDIR)/ORIGIN $(DOC)
 	cp -r $(CURDIR)/licenses $(DOC)
 
-	mkdir -p $(LIB) && \
-	cp $(CURDIR)/seastar/scripts/dpdk_nic_bind.py $(LIB)
-	cp $(CURDIR)/seastar/scripts/posix_net_conf.sh $(LIB)
-	cp $(CURDIR)/dist/common/lib/* $(LIB)
-	cp $(CURDIR)/dist/ubuntu/scripts/* $(LIB)
-	cp -r $(CURDIR)/tools/scyllatop $(LIB)
-
-	mkdir -p $(SBIN) && \
-	cp $(CURDIR)/dist/common/sbin/* $(SBIN)
+	mkdir -p $(SCRIPTS) && \
+	cp $(CURDIR)/seastar/scripts/dpdk_nic_bind.py $(SCRIPTS)
+	cp $(CURDIR)/seastar/scripts/posix_net_conf.sh $(SCRIPTS)
+	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
+	cp $(CURDIR)/dist/ubuntu/scripts/* $(SCRIPTS)
+	cp -r $(CURDIR)/tools/scyllatop $(SCRIPTS)
 
 	mkdir -p $(SWAGGER) && \
 	cp -r $(CURDIR)/swagger-ui/dist $(SWAGGER)

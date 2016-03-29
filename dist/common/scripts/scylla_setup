@@ -145,7 +145,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     SELINUX_SETUP=$?
 fi
 if [ $SELINUX_SETUP -eq 1 ]; then
-    /usr/sbin/scylla_selinux_setup
+    /usr/lib/scylla/scylla_selinux_setup
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -153,7 +153,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     BOOTPARAM_SETUP=$?
 fi
 if [ $BOOTPARAM_SETUP -eq 1 ]; then
-    /usr/sbin/scylla_bootparam_setup
+    /usr/lib/scylla/scylla_bootparam_setup
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -162,9 +162,9 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $NTP_SETUP -eq 1 ]; then
     if [ "$NTP_DOMAIN" != "" ]; then
-        /usr/sbin/scylla_ntp_setup --subdomain $NTP_DOMAIN
+        /usr/lib/scylla/scylla_ntp_setup --subdomain $NTP_DOMAIN
     else
-        /usr/sbin/scylla_ntp_setup
+        /usr/lib/scylla/scylla_ntp_setup
     fi
 fi
 
@@ -194,7 +194,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     fi
 fi
 if [ $RAID_SETUP -eq 1 ]; then
-    /usr/sbin/scylla_raid_setup --disks $DISKS --update-fstab
+    /usr/lib/scylla/scylla_raid_setup --disks $DISKS --update-fstab
 fi
 
 if [ $INTERACTIVE -eq 1 ]; then
@@ -203,9 +203,9 @@ if [ $INTERACTIVE -eq 1 ]; then
 fi
 if [ $COREDUMP_SETUP -eq 1 ]; then
     if [ "$DISKS" != "" ]; then
-        /usr/sbin/scylla_coredump_setup --dump-to-raiddir
+        /usr/lib/scylla/scylla_coredump_setup --dump-to-raiddir
     else
-        /usr/sbin/scylla_coredump_setup
+        /usr/lib/scylla/scylla_coredump_setup
     fi
 fi
 
@@ -230,12 +230,12 @@ if [ $INTERACTIVE -eq 1 ]; then
     IO_SETUP=$?
 fi
 if [ $IO_SETUP -eq 1 ]; then
-    /usr/sbin/scylla_io_setup
+    /usr/lib/scylla/scylla_io_setup
 fi
 
 if [ $SYSCONFIG_SETUP -eq 1 ]; then
-    /usr/sbin/scylla_sysconfig_setup --nic $NIC
+    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
 fi
 if [ $DEV_MODE -eq 1 ]; then
-    /usr/sbin/scylla_dev_mode_setup --developer-mode 1
+    /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
 fi
