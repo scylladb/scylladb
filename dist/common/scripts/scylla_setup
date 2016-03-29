@@ -181,7 +181,10 @@ if [ $INTERACTIVE -eq 1 ]; then
             if [ "$dsk" = "done" ]; then
                 break
             fi
-            if [ -e /dev/$dsk ]; then
+            if [ "$dsk" = "" ]; then
+                continue
+            fi
+            if [ -b /dev/$dsk ]; then
                 if [ "$DISKS" = "" ]; then
                     DISKS=/dev/$dsk
                 else

@@ -37,6 +37,13 @@ if [ "$DISKS" = "" ]; then
     print_usage
 fi
 
+for dsk in $DISKS; do
+    if [ ! -b $dsk ]; then
+        echo "$dsk is not found"
+        exit 1
+    fi
+done
+
 echo Creating RAID0 for scylla using $NR_DISK disk\(s\): $DISKS
 if [ -e $RAID ]; then
     echo "$RAID is already using"
