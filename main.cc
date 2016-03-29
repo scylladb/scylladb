@@ -229,34 +229,6 @@ static bool cpu_sanity() {
     return true;
 }
 
-static future<>
-verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
-    auto note_bad_conf = [developer_mode] (sstring cause) {
-        sstring msg = "I/O Scheduler is not properly configured! This is a non-supported setup, and performance is expected to be unpredictably bad.\n Reason found: "
-                    + cause + "\n"
-                    + "To properly configure the I/O Scheduler, run the scylla_io_setup utility shipped with Scylla.\n";
-
-        sstring devmode_msg = msg + "To ignore this, see the developer_mode configuration option.";
-        if (developer_mode) {
-            startlog.warn(msg.c_str());
-        } else {
-            startlog.error(devmode_msg.c_str());
-            throw std::runtime_error("Bad I/O Scheduler configuration");
-        }
-    };
-
-    if (!has_max_io_requests) {
-        note_bad_conf("--max-io-requests is not set.");
-    }
-    return smp::invoke_on_all([developer_mode, note_bad_conf] {
-        auto capacity = engine().get_io_queue().capacity();
-        if (capacity < 4) {
-            auto cause = sprint("I/O Queue capacity for this shard is too low (%ld, minimum 4 expected).", capacity);
-            note_bad_conf(cause);
-        }
-    });
-}
-
 int main(int ac, char** av) {
     // early check to avoid triggering
     if (!cpu_sanity()) {
@@ -405,7 +377,6 @@ int main(int ac, char** av) {
                         ::_exit(0);
                 });
             });
-            verify_seastar_io_scheduler(opts.count("max-io-requests"), db.local().get_config().developer_mode()).get();
             supervisor_notify("creating data directories");
             dirs.touch_and_lock(db.local().get_config().data_file_directories()).get();
             supervisor_notify("creating commitlog directory");
