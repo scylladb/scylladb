@@ -77,7 +77,11 @@ public:
             , _reader(_sst->read_rows(schema, service::get_local_compaction_priority()))
             {}
     virtual future<mutation_opt> operator()() override {
-        return _reader.read();
+        return _reader.read().handle_exception([sst = _sst] (auto ep) {
+            logger.error("Compaction found an exception when reading sstable {} : {}",
+                    sst->get_filename(), ep);
+            return make_exception_future<mutation_opt>(ep);
+        });
     }
 };
 
@@ -299,6 +303,10 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
                     info->end_size += newtab->data_size();
                     return make_ready_future<stop_iteration>(stop_iteration::no);
                 });
+            }).handle_exception([sst = newtab] (auto ep) {
+                logger.error("Compaction found an exception when writing sstable {} : {}",
+                        sst->get_filename(), ep);
+                return make_exception_future<stop_iteration>(ep);
             });
         });
     }).then([output_reader] {});
