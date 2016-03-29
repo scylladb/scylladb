@@ -57,10 +57,17 @@ enum class composite_marker : bytes::value_type {
     end_range = 1,
 };
 
+// sprint will print uint8_t as characters, so we need to conver the markers
+// to uint16_6, not uint8_t. However, because bytes' value_type is signed, we still
+// need to convert it to uint8_t to avoid sign-extending the value.
+inline uint16_t as_digit(composite_marker m) {
+    return uint16_t(uint8_t(m));
+}
+
 inline void check_marker(bytes_view component, composite_marker expected) {
     auto found = composite_marker(component.back());
     if (found != expected) {
-        throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d\n", uint8_t(found), uint8_t(expected)));
+        throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d\n", as_digit(found), as_digit(expected)));
     }
 }
 
@@ -69,7 +76,7 @@ inline void check_marker(bytes_view component, composite_marker expected, compos
     if ((found == expected) || (found == alternative)) {
         return;
     }
-    throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d or %d\n", uint8_t(found), uint8_t(expected)));
+    throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d or %d\n", as_digit(found), as_digit(expected), as_digit(alternative)));
 }
 
 // Our internal representation differs slightly (in the way it serializes) from Origin.
