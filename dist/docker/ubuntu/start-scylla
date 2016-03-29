@@ -1,7 +1,8 @@
 #!/bin/sh
 
 IP=$(hostname -i)
-sed -i "s/LOCALHOST/$IP/g" /etc/scylla/scylla.yaml
+sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$IP\"/g" /etc/scylla/scylla.yaml
+sed -i "s/listen_address: localhost/listen_address: $IP/g" /etc/scylla/scylla.yaml
 /usr/bin/scylla --log-to-syslog 1 --log-to-stdout 0 --developer-mode true --default-log-level info --options-file /etc/scylla/scylla.yaml --listen-address $IP --rpc-address $IP --network-stack posix &
 
 source /etc/default/scylla-jmx
