@@ -1869,6 +1869,12 @@ future<> storage_service::decommission() {
 
             ss.shutdown_client_servers().get();
             logger.info("DECOMMISSIONING: shutdown rpc and cql server done");
+
+            db::get_batchlog_manager().invoke_on_all([] (auto& bm) {
+                return bm.stop();
+            }).get();
+            logger.info("DECOMMISSIONING: stop batchlog_manager done");
+
             gms::get_local_gossiper().stop_gossiping().get();
             logger.info("DECOMMISSIONING: stop_gossiping done");
             ss.do_stop_ms().get();
