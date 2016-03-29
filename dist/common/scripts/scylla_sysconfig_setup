@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         "--setup-nic")
-            SETUP_NIC=1
+            SET_NIC=yes
             shift 1
             ;;
         "--ami")
