@@ -250,84 +250,135 @@ class mp_row_consumer : public row_consumer {
         }
     }
 
-    // Handling of range tombstones:
-    //
-    // Scylla does not (yet) have general support for range tombstones with
-    // general ranges - only tombstone covering a full clustering-key prefix
-    // are currently supported.
-    //
-    // We hoped this should have been enough because in Cassandra 2.x there is
-    // no way to delete ranges through CQL (see CASSANDRA-6237).
-    //
-    // However, in some situations (still not clear which), Cassandra can
-    // split a full clustering key tombstone into multiple ranges.
-    // Running sstable2json in those files, we'll find something along those lines:
-    //
-    // {"key": <key>,
-    //  "cells": [["CL1","CL1:CL2.1:!",<marked_for_delete>,"t",<local_deletion>],
-    //            ["CL1:CL2.1:!","CL1:CL2.2:!",<marked_for_delete>,"t",<local_deletion>],
-    //            ["CL1:CL2.2:!","CL1:!",<marked_for_delete>,"t",<local_deletion>],
-    //
-    // Looking at this output, we can see that this is pretty much just CL1:_ -> CL1:!, but split.
-    // The key difference between that and a true range tombstone, is the fact that the end of the
-    // last range is CL1:!, and not a different clustering key.
-    //
-    // In cases like that, instead of failing to read the imported SSTables we can just try to merge
-    // the ranges. We must be extra careful so that we'll not falsely merge things that are real range
-    // tombstones.
-    //
-    // When we gain support for proper range tombstones, we will have the option of keeping this code
-    // or ditching it altogether.
+    class range_merger {
+        bytes _data;
+        bytes _end;
+        sstables::deletion_time _deletion_time;
+    public:
+        bytes&& data() {
+            return std::move(_data);
+        }
+        explicit operator bool() const noexcept {
+            return !_data.empty();
+        }
+        explicit operator sstring() const {
+            if (*this) {
+                return to_hex(_data) + sprint(" deletion (%x,%lx)", _deletion_time.local_deletion_time, _deletion_time.marked_for_delete_at);
+            } else {
+                return sstring("(null)");
+            }
+        }
+        explicit operator bytes_view() const {
+            return _data;
+        }
 
-    // tombstone_merge_start/current_end are a serialized composite without
-    // the last byte (EOC)
-    bytes tombstone_merge_start;
-    bytes tombstone_merge_current_end;
-    bool tombstone_merging() {
-        return tombstone_merge_start.size() != 0;
-    }
+        bool operator==(const range_merger& candidate) {
+            if (!candidate) {
+                return false;
+            }
+            bytes_view a(_data);
+            bytes_view b(candidate._data);
+            a.remove_suffix(1);
+            b.remove_suffix(1);
+            return ((a == b) && (_deletion_time == candidate._deletion_time));
+        }
+
+        bool operator!=(const range_merger& candidate) {
+            return !(*this == candidate);
+        }
+
+        bool is_prefix_of(const range_merger& candidate) {
+            bytes_view a(_data);
+            bytes_view b(candidate._data);
+            a.remove_suffix(1);
+            b.remove_suffix(1);
+            return b.compare(0, a.size(), a) == 0;
+        }
+
+        bool end_matches(bytes_view candidate, sstables::deletion_time deltime) {
+            if (_deletion_time != deltime) {
+                return false;
+            }
+            bytes_view my_end(_end);
+            my_end.remove_suffix(1);
+            candidate.remove_suffix(1);
+            return my_end == candidate;
+        }
+
+        void set_end(bytes_view end) {
+            _end = to_bytes(end);
+        }
+
+        range_merger(bytes_view start, bytes_view end, sstables::deletion_time d)
+            : _data(to_bytes(start))
+            , _end(to_bytes(end))
+            , _deletion_time(d)
+        {}
+        range_merger() : _data(), _end(), _deletion_time() {}
+    };
+
+    // Variables for tracking tombstone merging in consume_range_tombstone().
+    // All of these hold serialized composites.
+    std::stack<range_merger> _starts;
 
     void reset_range_tombstone_merger() {
         // Will throw if there is a current merger that hasn't finished.
         // This will be called at the start and end of any row.
         // This check is crucial to our goal of not falsely reporting a real range tombstone as a
         // merger.
-        if (tombstone_merging()) {
-            throw malformed_sstable_exception(
-                sstring("RANGE DELETE not implemented. Tried to merge, but row finished before we could finish the merge. Current start is: ")
-                + to_hex(tombstone_merge_start)
-                + sstring(" and end: ")
-                + to_hex(tombstone_merge_current_end)
-            );
+        if (!_starts.empty()) {
+            auto msg = sstring("RANGE DELETE not implemented. Tried to merge, but row finished before we could finish the merge. Starts found: (");
+            while (!_starts.empty()) {
+                msg += sstring(_starts.top());
+                _starts.pop();
+                if (!_starts.empty()) {
+                    msg += sstring(" , ");
+                }
+            }
+            msg += sstring(")");
+            throw malformed_sstable_exception(msg);
         }
     }
 
-    bytes update_range_tombstone_merger(bytes_view start, bytes_view end) {
-        // We need to store the ranges without their suffixes so that the comparisons
-        // make any sense. We'll add it back in the end.
-        start.remove_suffix(1);
-        end.remove_suffix(1);
+    bytes close_merger_range() {
+        // We closed a larger enclosing row.
+        auto ret = _starts.top().data();
+        _starts.pop();
+        return ret;
+    }
 
-        if (tombstone_merging()) {
-            if (tombstone_merge_current_end != start) {
-                throw malformed_sstable_exception(
-                    sstring("RANGE DELETE not implemented. Tried to merge, but failed. Expected start = ")
-                    + to_hex(tombstone_merge_current_end)
-                    + sstring(" but found ")
-                    + to_hex(tombstone_merge_start)
-                );
-            }
-            tombstone_merge_current_end = to_bytes(end);
-            if (tombstone_merge_start == tombstone_merge_current_end) {
-                auto marker = bytes::value_type(composite_marker::start_range);
-                bytes ret = tombstone_merge_start + bytes(&marker, 1);
-                tombstone_merge_start.reset();
-                tombstone_merge_current_end.reset();
-                return ret;
-            }
-        } else {
-            tombstone_merge_start = to_bytes(start);
-            tombstone_merge_current_end = to_bytes(end);
+    bytes update_range_tombstone_merger(bytes_view _start, bytes_view end,
+                                        sstables::deletion_time deltime) {
+        range_merger start(_start, end, deltime);
+        range_merger empty;
+
+        // If we're processing a range (_starts is not empty, it's fine to start
+        // processing another, but only so long as we're nesting. We then check
+        // to make sure that the current range being processed is a prefix of the new one.
+        if (!_starts.empty() && !_starts.top().is_prefix_of(start)) {
+            auto msg = sstring("RANGE DELETE not implemented. Tried to merge, but existing range not a prefix of new one. Current range: ");
+            msg += sstring(_starts.top());
+            msg += ". new range: " + sstring(start);
+            throw malformed_sstable_exception(msg);
+        }
+
+        range_merger& prev = empty;
+        if (!_starts.empty()) {
+            prev = _starts.top();
+        }
+        _starts.push(start);
+
+        if (prev.end_matches(bytes_view(start), deltime)) {
+            // If _contig_deletion_end, we're in the middle of trying to merge
+            // several contiguous range tombstones. If there's a gap, we cannot
+            // represent this range in Scylla.
+            prev.set_end(end);
+            // We pop what we have just inserted, because that's not starting the
+            // processing of any new range.
+            _starts.pop();
+        }
+        if (_starts.top().end_matches(end, deltime)) {
+            return close_merger_range();
         }
         return {};
     }
@@ -455,60 +506,68 @@ public:
         return proceed::no;
     }
 
+    // Partial support for range tombstones read from sstables:
+    //
+    // Currently, Scylla does not support generic range tombstones: Only
+    // ranges which are a complete clustering-key prefix are supported because
+    // our in-memory data structure only allows deleted rows (prefixes).
+    // In principle, this is good enough because in Cassandra 2 (whose
+    // sstables we support) and using only CQL, there is no way to delete a
+    // generic range, because the DELETE and UPDATE statement's "WHERE" only
+    // takes the "=" operator, leading to a deletion of entire rows.
+    //
+    // However, in one important case the sstable written by Cassandra does
+    // have a generic range tombstone, which we can and must handle:
+    // Consider two tombstones, one deleting a bigger prefix than the other:
+    //
+    //     create table tab (pk text, ck1 text, ck2 text, data text, primary key(pk, ck1, ck2));
+    //     delete from tab where pk = 'pk' and ck1 = 'aaa';
+    //     delete from tab where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
+    //
+    // The first deletion covers the second, but nevertheless we cannot drop the
+    // smaller one because the two deletions have different timestamps.
+    // Currently in Scylla, we simply keep both tombstones separately.
+    // But Cassandra does something different: Cassandra does not want to have
+    // overlapping range tombstones, so it converts them into non-overlapping
+    // range tombstones (see RangeTombstoneList.java). In the above example,
+    // the resulting sstable is (sstable2json format)
+    //
+    //     {"key": "pk",
+    //      "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
+    //                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
+    //                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
+    //               ]
+    //
+    // In this sstable, the first and third tombstones look like "generic" ranges,
+    // not covering an entire prefix, so we cannot represent these three
+    // tombstones in our in-memory data structure. Instead, we need to convert the
+    // three non-overlapping tombstones to two overlapping whole-prefix tombstones,
+    // the two we started with in the "delete" commands above.
+    // This is what the code below does. If after trying to recombine split
+    // tombstones we are still left with a generic range we cannot represent,
+    // we fail the read.
+
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-        // Some versions of Cassandra will write a 0 to mark the start of the range.
-        // CASSANDRA-7593 discusses that.
-        check_marker(end_col, composite_marker::end_range, composite_marker::none);
-
-        // start_col would normally have the start_range marker, but in some
-        // cases we saw it as none. In the tombstone_merging case it can even be
-        // end_range, so it is pointless to check anything.
-        if (!tombstone_merging()) {
-            check_marker(start_col, composite_marker::start_range, composite_marker::none);
-        }
-
-        // FIXME: CASSANDRA-6237 says support will be added to things like this.
-        //
-        // The check below represents a range with a different start and end
-        // clustering key.  Cassandra-generated files (to the moment) will
-        // generate multi-row deletes, but they always have the same clustering
-        // key. This is basically because one can't (yet) write delete
-        // statements in which the WHERE clause looks like WHERE clustering_key >= x.
-        //
-        // There are cases in which we'll see range tombstones, but they are in reality
-        // just the simple case that is split. We'll try to see if this is the case, but
-        // bail if it is not. See the range_tombstone_merger for details.
-        // Note that remove the marker from end_col to ease the comparison, but will leave
-        // start_col untouched to make sure explode() still works.
-        //
-        // If we are dealing with range_tombstone_merger, we'll see cases in which we'll have
-        // things like:
-        //    start = CL1:_
-        //    end   = CL1:CL2.1:!
-        //
-        // or conversely:
-        //
-        //    start = CL1:CL2.x:!
-        //    end   = CL1:!
-        //
-        // Because of that, the test for equality must not be bounded by start and end's sizes.
-        // If the sizes differ, we should treat it as a range delete.
-        auto is_range_delete = [] (bytes_view start, bytes_view end) {
-            start.remove_suffix(1);
-            end.remove_suffix(1);
-            return start.compare(end) != 0;
-        };
+        // We used to check that start_col has composite_marker:start_range
+        // and end_col has composite_marker::end_range. But this check is
+        // incorrect. start_col may have composite_marker::none in sstables
+        // from older versions of Cassandra (see CASSANDRA-7593) and we also
+        // saw composite_marker::none in end_col. Also, when a larger range
+        // tombstone was split (see explanation above), we can have a
+        // start_range in end_col or end_range in start_col.
+        // So we don't check the markers' content at all here, only if they
+        // are sane.
+        check_marker(start_col);
+        check_marker(end_col);
 
         bytes new_start = {};
-        if (is_range_delete(start_col, end_col)) {
-            new_start = update_range_tombstone_merger(start_col, end_col);
-            if (new_start.empty()) {
-                return;
-            }
-            start_col = bytes_view(new_start);
+        new_start = update_range_tombstone_merger(start_col, end_col, deltime);
+        if (new_start.empty()) {
+            return;
         }
+        start_col = bytes_view(new_start);
         auto start = composite_view(column::fix_static_name(start_col)).explode();
 
         // Note how this is slightly different from the check in is_collection. Collection tombstones
