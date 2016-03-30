@@ -120,6 +120,9 @@ future<> db::batchlog_manager::start() {
 }
 
 future<> db::batchlog_manager::stop() {
+    if (_stop) {
+        return make_ready_future<>();
+    }
     _stop = true;
     _timer.cancel();
     return _gate.close();
