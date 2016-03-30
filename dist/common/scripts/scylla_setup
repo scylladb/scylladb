@@ -279,3 +279,9 @@ fi
 if [ $DEV_MODE -eq 1 ]; then
     /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
 fi
+
+echo "ScyllaDB setup finished."
+if [ $BOOTPARAM_SETUP -eq 1 ]; then
+    echo "Please restart machine before using ScyllaDB, since you have changed "
+    echo "boot parameters."
+fi
