@@ -308,6 +308,11 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
     m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
 }
 
+bool
+lists::setter_by_uuid::requires_read() {
+    return false;
+}
+
 void
 lists::setter_by_uuid::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     // we should not get here for frozen lists

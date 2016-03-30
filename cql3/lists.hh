@@ -166,6 +166,7 @@ public:
         setter_by_uuid(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
             : setter_by_index(column, std::move(idx), std::move(t)) {
         }
+        virtual bool requires_read() override;
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
     };
 
