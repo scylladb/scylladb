@@ -479,3 +479,109 @@ SEASTAR_TEST_CASE(broken_ranges_collection) {
         });
     });
 }
+
+// Scylla does not currently support generic range-tombstone - only ranges
+// which are a complete clustering-key prefix are supported because our
+// row_tombstone only works on whole rows. This is good enough because
+// in Cassandra 2 (whose sstables we support) there is no way using CQL to
+// create a generic range, because the DELETE and UPDATE statement's "WHERE"
+// only takes the "=" operator, leading to a deletion of entire rows.
+//
+// However, in one imporant case the sstable written by Cassandra might look
+// like it has generic range tombstone: consider two overlapping tombstones,
+// one deleting a bigger prefix than the other:
+//
+//     create COLUMNFAMILY tab (pk text, ck1 text, ck2 text, data text, primary key(pk, ck1, ck2));
+//     delete from tab where pk = 'pk' and ck1 = 'aaa';
+//     delete from tab where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
+//
+// The first deletion covers the second, but nevertheless we cannot drop the
+// smaller one because the two deletions have different timestamps. But while
+// it is not allowed to drop the smaller deletion, it is possible to split the
+// the larger range to three ranges where one of them is the the smaller range
+// and then we have two range tombstones with identical ranges - and can keep
+// only the newer one. This splitting is what Cassandra does: Cassandra does
+// not want to have overlapping range tombstones, so it converts them (see
+// RangeTombstoneList.java) into non-overlapping range-tombstones, as describe
+// above. In the above example, the resulting sstable is (sstable2json format)
+//
+//     {"key": "pk",
+//      "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
+//                ["aaa:bbb:_","aaa:bbb:!",1459334681244989,"t",1459334681],
+//                ["aaa:bbb:!","aaa:!",1459334681228103,"t",1459334681]]}
+//               ]
+//
+// Note that the middle tombstone has a different timestamp than the other.
+//
+// In this sstable, the first and third tombstones look like "generic" ranges,
+// not covering an entire prefix, so we cannot represent these three
+// tombstones in our in-memory data structure. Instead, we need to convert the
+// three non-overlapping tombstones to two overlapping whole-prefix tombstones,
+// the two we started with.
+// That is what this test tests - we read an sstable as above and verify that
+// our sstable reading code converted it to two overlapping tombstones.
+
+static schema_ptr tombstone_overlap_schema() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
+        // partition key
+        {{"pk", utf8_type}},
+        // clustering key
+        {{"ck1", utf8_type}, {"ck2", utf8_type}},
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        ""
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
+
+
+static future<sstable_ptr> ka_sst(sstring ks, sstring cf, sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstable>(ks, cf, dir, generation, sstables::sstable::version_types::ka, big);
+    auto fut = sst->load();
+    return std::move(fut).then([sst = std::move(sst)] {
+        return make_ready_future<sstable_ptr>(std::move(sst));
+    });
+}
+
+SEASTAR_TEST_CASE(tombstone_in_tombstone) {
+    return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 1).then([] (auto sstp) {
+        auto s = tombstone_overlap_schema();
+        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+            return repeat([sstp, s, &reader] {
+                return reader.read().then([s] (mutation_opt mut) {
+                    if (!mut) {
+                        return stop_iteration::yes;
+                    }
+                    BOOST_REQUIRE((bytes_view(mut->key()) == bytes{'\x00','\x02','p','k'}));
+                    // We expect to see two overlapping deletions, as explained
+                    // above. Somewhat counterintuitively, scylla represents
+                    // deleting a small row with all clustering keys set - not
+                    // as a "row tombstone" but rather as a deleted clustering row.
+                    // So we expect to see one row tombstone and one deleted row.
+                    auto& rts = mut->partition().row_tombstones();
+                    BOOST_REQUIRE(rts.size() == 1);
+                    for (auto e : rts) {
+                        BOOST_REQUIRE((bytes_view(e.prefix()) == bytes{'\x00','\x03','a','a','a'}));
+                        BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
+                    }
+                    auto& rows = mut->partition().clustered_rows();
+                    BOOST_REQUIRE(rows.size() == 1);
+                    for (auto e : rows) {
+                        BOOST_REQUIRE((bytes_view(e.key()) == bytes{'\x00','\x03','a','a','a', '\x00', '\x03', 'b', 'b', 'b'}));
+                        BOOST_REQUIRE(e.row().deleted_at().timestamp == 1459334681244989LL);
+                    }
+
+                    return stop_iteration::no;
+                });
+            });
+        });
+    });
+}

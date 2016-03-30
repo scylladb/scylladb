@@ -262,6 +262,13 @@ struct deletion_time {
                (marked_for_delete_at == std::numeric_limits<int64_t>::min());
     }
 
+    bool operator==(const deletion_time& d) {
+        return local_deletion_time == d.local_deletion_time &&
+               marked_for_delete_at == d.marked_for_delete_at;
+    }
+    bool operator!=(const deletion_time& d) {
+        return !(*this == d);
+    }
     explicit operator tombstone() {
         return tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time)));
     }
