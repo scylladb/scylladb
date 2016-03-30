@@ -2167,7 +2167,6 @@ SEASTAR_TEST_CASE(test_alter_table_validation) {
     });
 }
 
-#if 0 // Disabled due to #1147
 SEASTAR_TEST_CASE(test_pg_style_string_literal) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table test (p1 text, PRIMARY KEY (p1));").discard_result().then([&e] {
@@ -2199,4 +2198,3 @@ SEASTAR_TEST_CASE(test_pg_style_string_literal) {
         });
     });
 }
-#endif

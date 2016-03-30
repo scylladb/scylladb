@@ -112,6 +112,7 @@ struct uninitialized {
     listener_type* listener;
 
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
+    std::vector<std::unique_ptr<TokenType>> _missing_tokens;
 
     // Can't use static variable, since it needs to be defined out-of-line
     static const std::unordered_set<sstring>& _reserved_type_names() {
@@ -215,6 +216,13 @@ struct uninitialized {
             }
         }
         operations.emplace_back(std::move(key), std::move(update));
+    }
+
+    TokenType* getMissingSymbol(IntStreamType* istream, ExceptionBaseType* e,
+                                ANTLR_UINT32 expectedTokenType, BitsetListType* follow) {
+        auto token = BaseType::getMissingSymbol(istream, e, expectedTokenType, follow);
+        _missing_tokens.emplace_back(token);
+        return token;
     }
 }
 
