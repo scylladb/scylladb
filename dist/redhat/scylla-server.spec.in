@@ -36,6 +36,7 @@ ninja-build %{?_smp_mflags} build/release/scylla build/release/iotune
 %install
 rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT%{_bindir}
+mkdir -p $RPM_BUILD_ROOT%{_sbindir}
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/security/limits.d/
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/sudoers.d/
@@ -77,6 +78,7 @@ cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
+install -m755 dist/common/sbin/* $RPM_BUILD_ROOT%{_sbindir}/
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :
@@ -152,6 +154,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/scylla
 %{_bindir}/iotune
 %{_bindir}/scyllatop
+%{_sbindir}/scylla*
 %{_prefix}/lib/scylla/scylla_prepare
 %{_prefix}/lib/scylla/scylla_stop
 %{_prefix}/lib/scylla/scylla_setup
