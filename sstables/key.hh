@@ -57,18 +57,6 @@ enum class composite_marker : bytes::value_type {
     end_range = 1,
 };
 
-inline void check_marker(bytes_view component) {
-    auto found = composite_marker(component.back());
-    switch (found) {
-    case composite_marker::none:
-    case composite_marker::start_range:
-    case composite_marker::end_range:
-        break;
-    default:
-        throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d\n", uint16_t(uint8_t(found))));
-    }
-}
-
 // Our internal representation differs slightly (in the way it serializes) from Origin.
 // In order to be able to achieve read and write compatibility for sstables - so they can
 // be imported and exported - we need to always convert a key to this representation.

@@ -506,6 +506,18 @@ public:
         return proceed::no;
     }
 
+    static void check_marker(bytes_view component) {
+        auto found = composite_marker(component.back());
+        switch (found) {
+        case composite_marker::none:
+        case composite_marker::start_range:
+        case composite_marker::end_range:
+            break;
+        default:
+            throw malformed_sstable_exception(sprint("Unexpected composite marker %d\n", uint16_t(uint8_t(found))));
+        }
+    }
+
     // Partial support for range tombstones read from sstables:
     //
     // Currently, Scylla does not support generic range tombstones: Only
