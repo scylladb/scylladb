@@ -341,3 +341,145 @@ void for_each_mutation(std::function<void(const mutation&)> callback) {
         }
     }
 }
+
+bytes make_blob(size_t blob_size) {
+    static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
+    bytes big_blob(bytes::initialized_later(), blob_size);
+    for (auto&& b : big_blob) {
+        b = random_bytes();
+    }
+    return big_blob;
+};
+
+class random_mutation_generator::impl {
+    friend class random_mutation_generator;
+    const size_t _external_blob_size = 128; // Should be enough to force use of external bytes storage
+    const column_id column_count = row::max_vector_size * 2;
+    std::mt19937 _gen;
+    schema_ptr _schema;
+    std::vector<bytes> _blobs;
+
+    static gc_clock::time_point expiry_dist(auto& gen) {
+        static thread_local std::uniform_int_distribution<int> dist(0, 2);
+        return gc_clock::time_point() + std::chrono::seconds(dist(gen));
+    }
+
+public:
+    schema_ptr make_schema() {
+        auto builder = schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck1", bytes_type, column_kind::clustering_key)
+                .with_column("ck2", bytes_type, column_kind::clustering_key);
+
+        // Create enough columns so that row can overflow its vector storage
+        for (column_id i = 0; i < column_count; ++i) {
+            {
+                auto column_name = sprint("v%d", i);
+                builder.with_column(to_bytes(column_name), bytes_type, column_kind::regular_column);
+            }
+            {
+                auto column_name = sprint("s%d", i);
+                builder.with_column(to_bytes(column_name), bytes_type, column_kind::static_column);
+            }
+        }
+
+        return builder.build();
+    }
+
+    impl() {
+        _schema = make_schema();
+
+        for (int i = 0; i < 1024; ++i) {
+            _blobs.emplace_back(make_blob(_external_blob_size));
+        }
+
+        std::random_device rd;
+        // In case of errors, replace the seed with a fixed value to get a deterministic run.
+        auto seed = rd();
+        BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
+        _gen = std::mt19937(seed);
+    }
+
+    mutation operator()() {
+        std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
+        std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
+        std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
+        std::normal_distribution<> ck_index_dist(_blobs.size() / 2, 1.5);
+        std::uniform_int_distribution<int> bool_dist(0, 1);
+
+        std::uniform_int_distribution<api::timestamp_type> timestamp_dist(api::min_timestamp, api::min_timestamp + 2); // 3 values
+
+        auto pkey = partition_key::from_single_value(*_schema, _blobs[0]);
+        mutation m(pkey, _schema);
+
+        auto set_random_cells = [&] (row& r, column_kind kind) {
+            auto columns_to_set = column_count_dist(_gen);
+            for (column_id i = 0; i < columns_to_set; ++i) {
+                // FIXME: generate expiring cells
+                auto cell = bool_dist(_gen)
+                            ? atomic_cell::make_live(timestamp_dist(_gen), _blobs[value_blob_index_dist(_gen)])
+                            : atomic_cell::make_dead(timestamp_dist(_gen), expiry_dist(_gen));
+                r.apply(_schema->column_at(kind, column_id_dist(_gen)), std::move(cell));
+            }
+        };
+
+        auto random_tombstone = [&] {
+            return tombstone(timestamp_dist(_gen), expiry_dist(_gen));
+        };
+
+        auto random_row_marker = [&] {
+            static thread_local std::uniform_int_distribution<int> dist(0, 3);
+            switch (dist(_gen)) {
+                case 0: return row_marker();
+                case 1: return row_marker(random_tombstone());
+                case 2: return row_marker(timestamp_dist(_gen));
+                case 3: return row_marker(timestamp_dist(_gen), std::chrono::seconds(1), expiry_dist(_gen));
+                default: assert(0);
+            }
+        };
+
+        if (bool_dist(_gen)) {
+            m.partition().apply(random_tombstone());
+        }
+
+        set_random_cells(m.partition().static_row(), column_kind::static_column);
+
+        auto random_blob = [&] {
+            return _blobs[std::min(_blobs.size() - 1, static_cast<size_t>(std::max(0.0, ck_index_dist(_gen))))];
+        };
+
+        auto row_count_dist = [&] (auto& gen) {
+            static thread_local std::normal_distribution<> dist(32, 1.5);
+            return static_cast<size_t>(std::min(100.0, std::max(0.0, dist(gen))));
+        };
+
+        size_t row_count = row_count_dist(_gen);
+        for (size_t i = 0; i < row_count; ++i) {
+            auto ckey = clustering_key::from_exploded(*_schema, {random_blob(), random_blob()});
+            deletable_row& row = m.partition().clustered_row(ckey);
+            set_random_cells(row.cells(), column_kind::regular_column);
+            row.marker() = random_row_marker();
+        }
+
+        size_t range_tombstone_count = row_count_dist(_gen);
+        for (size_t i = 0; i < range_tombstone_count; ++i) {
+            auto key = clustering_key::from_exploded(*_schema, {random_blob()});
+            m.partition().apply_row_tombstone(*_schema, key, random_tombstone());
+        }
+        return m;
+    }
+};
+
+random_mutation_generator::~random_mutation_generator() {}
+
+random_mutation_generator::random_mutation_generator()
+    : _impl(std::make_unique<random_mutation_generator::impl>())
+{ }
+
+mutation random_mutation_generator::operator()() {
+    return (*_impl)();
+}
+
+schema_ptr random_mutation_generator::schema() const {
+    return _impl->_schema;
+}
