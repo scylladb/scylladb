@@ -36,3 +36,15 @@ void for_each_mutation_pair(std::function<void(const mutation&, const mutation&,
 
 // Calls the provided function on mutations. Is supposed to exercise as many differences as possible.
 void for_each_mutation(std::function<void(const mutation&)>);
+
+class random_mutation_generator {
+    class impl;
+    std::unique_ptr<impl> _impl;
+public:
+    random_mutation_generator();
+    ~random_mutation_generator();
+    mutation operator()();
+    schema_ptr schema() const;
+};
+
+bytes make_blob(size_t blob_size);
