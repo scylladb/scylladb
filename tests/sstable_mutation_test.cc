@@ -585,3 +585,42 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
         });
     });
 }
+
+// This is another test for the necessary merging of sstable range tombstones
+// into Scylla's internal representation of row tombstones.
+//  Same schema as above, the sstable looks like:
+//    {"key": "pk",
+//     "cells": [["aaa:_","aaa:bbb:_",1459334681228103,"t",1459334681],
+//               ["aaa:bbb:_","aaa:ccc:!",1459334681228103,"t",1459334681],
+//               ["aaa:ccc:!","aaa:ddd:!",1459334681228103,"t",1459334681],
+//               ["aaa:ddd:!","aaa:!",1459334681228103,"t",1459334681]]}
+//
+// We're not sure how this sort of sstable can be generated with Cassandra 2's
+// CQL, but we saw a similar thing is a real use case. In this example, all
+// the different ranges can be merged into one deletion of the prefix "aaa"
+// (note that all the timestamps are identical), so this is what Scylla should
+// do when reading this sstable - rather than fail.
+SEASTAR_TEST_CASE(tombstone_merging) {
+    return ka_sst("try1", "tab", "tests/sstables/tombstone_overlap", 4).then([] (auto sstp) {
+        auto s = tombstone_overlap_schema();
+        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+            return repeat([sstp, s, &reader] {
+                return reader.read().then([s] (mutation_opt mut) {
+                    if (!mut) {
+                        return stop_iteration::yes;
+                    }
+                    BOOST_REQUIRE((bytes_view(mut->key()) == bytes{'\x00','\x02','p','k'}));
+                    // We expect to see that all 4 tombstones have been
+                    // merged into one.
+                    auto& rts = mut->partition().row_tombstones();
+                    BOOST_REQUIRE(rts.size() == 1);
+                    for (auto e : rts) {
+                        BOOST_REQUIRE((bytes_view(e.prefix()) == bytes{'\x00','\x03','a','a','a'}));
+                        BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
+                    }
+                    return stop_iteration::no;
+                });
+            });
+        });
+    });
+}
