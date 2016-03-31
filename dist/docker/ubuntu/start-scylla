@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 IP=$(hostname -i)
 sed -i "s/seeds: \"127.0.0.1\"/seeds: \"$IP\"/g" /etc/scylla/scylla.yaml
