@@ -298,6 +298,15 @@ static mutation_sets generate_mutation_sets() {
         }
     }
 
+    {
+        random_mutation_generator gen;
+        for (int i = 0; i < 10; ++i) {
+            auto m = gen();
+            result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
+            result.equal.emplace_back(mutations{m, m});
+        }
+    }
+
     return result;
 }
 
