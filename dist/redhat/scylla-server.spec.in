@@ -78,7 +78,7 @@ cp -r swagger-ui/dist $RPM_BUILD_ROOT%{_prefix}/lib/scylla/swagger-ui
 install -d -m755 $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
-install -m755 dist/common/sbin/* $RPM_BUILD_ROOT%{_sbindir}/
+cp -P dist/common/sbin/*  $RPM_BUILD_ROOT%{_sbindir}/
 
 %pre
 /usr/sbin/groupadd scylla 2> /dev/null || :

@@ -69,7 +69,7 @@ override_dh_auto_install:
 		$(CURDIR)/debian/scylla-server/usr/bin/
 
 	mkdir -p $(CURDIR)/debian/scylla-server/usr/sbin/ && \
-	cp $(CURDIR)/dist/common/sbin/* \
+	cp -P $(CURDIR)/dist/common/sbin/* \
 		$(CURDIR)/debian/scylla-server/usr/sbin/
 
 
