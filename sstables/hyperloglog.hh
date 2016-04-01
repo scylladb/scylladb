@@ -111,7 +111,7 @@ public:
      *
      * @exception std::invalid_argument the argument is out of range.
      */
-    HyperLogLog(uint8_t b = 4) throw (std::invalid_argument) :
+    HyperLogLog(uint8_t b = 4) :
             b_(b), m_(1 << b), M_(m_, 0) {
 
         if (b < 4 || 16 < b) {

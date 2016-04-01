@@ -94,7 +94,9 @@ public:
     template <typename... Args>
     void log(log_level level, const char* fmt, Args&&... args) {
         if (is_enabled(level)) {
-            do_log(level, fmt, std::forward<Args>(args)...);
+            try {
+                do_log(level, fmt, std::forward<Args>(args)...);
+            } catch (...) { }
         }
     }
     template <typename... Args>

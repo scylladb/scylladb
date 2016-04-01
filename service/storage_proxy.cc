@@ -1931,8 +1931,8 @@ protected:
                     _retry_cmd->row_limit = data_resolver->total_live_count() == 0 ? cmd->row_limit + 1 : ((cmd->row_limit * cmd->row_limit) / data_resolver->total_live_count()) + 1;
                     reconcile(cl, timeout, _retry_cmd);
                 }
-            } catch(read_timeout_exception& ex) {
-                _result_promise.set_exception(ex);
+            } catch (...) {
+                _result_promise.set_exception(std::current_exception());
             }
         });
     }

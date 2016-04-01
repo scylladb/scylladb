@@ -384,6 +384,7 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
 
     descriptor _desc;
     file _file;
+    sstring _file_name;
 
     uint64_t _file_pos = 0;
     uint64_t _flush_pos = 0;
@@ -453,7 +454,8 @@ public:
     static constexpr size_t default_size = align_up<size_t>(128 * 1024, alignment);
 
     segment(::shared_ptr<segment_manager> m, const descriptor& d, file && f, bool active)
-            : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)), _sync_time(
+            : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
+        _file_name(_segment_manager->cfg.commit_log_location + "/" + _desc.filename()), _sync_time(
                     clock_type::now()), _queue(0)
     {
         ++_segment_manager->totals.segments_created;
@@ -465,8 +467,11 @@ public:
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.total_size_on_disk -= size_on_disk();
             _segment_manager->totals.total_size -= (size_on_disk() + _buffer.size());
-            commit_io_check(::unlink,
-                    (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
+            try {
+                commit_io_check(::unlink, _file_name.c_str());
+            } catch (...) {
+                logger.error("Could not delete segment {}: {}", *this, std::current_exception());
+            }
         } else {
             logger.warn("Segment {} is dirty and is left on disk.", *this);
         }
