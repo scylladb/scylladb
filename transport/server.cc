@@ -282,9 +282,14 @@ cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials
 
     listen_options lo;
     lo.reuse_address = true;
-    server_socket ss = creds
-                    ? seastar::tls::listen(creds, make_ipv4_address(addr), lo)
-                    : engine().listen(make_ipv4_address(addr), lo);
+    server_socket ss;
+    try {
+        ss = creds
+          ? seastar::tls::listen(creds, make_ipv4_address(addr), lo)
+          : engine().listen(make_ipv4_address(addr), lo);
+    } catch (...) {
+        throw std::runtime_error(sprint("CQLServer error while listening on %s -> %s", make_ipv4_address(addr), std::current_exception()));
+    }
     _listeners.emplace_back(std::move(ss));
     _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1, keepalive)).discard_result();
     return make_ready_future<>();
