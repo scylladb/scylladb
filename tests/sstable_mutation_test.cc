@@ -637,3 +637,101 @@ SEASTAR_TEST_CASE(tombstone_merging) {
         });
     });
 }
+
+// This is yet another test for merging of sstable range tombstones into
+// Scylla's internal representation of row tombstones. In this test case
+// we have *three* levels of of tombstones:
+//     create COLUMNFAMILY tab2 (pk text, ck1 text, ck2 text, ck3 text, data text, primary key(pk, ck1, ck2, ck3));
+//     delete from tab2 where pk = 'pk' and ck1 = 'aaa';
+//     delete from tab2 where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb';
+//     delete from tab2 where pk = 'pk' and ck1 = 'aaa' and ck2 = 'bbb' and ck3 = 'ccc';
+// And then, to have more fun, I edited the resulting sstable manually (using
+// Cassandra's json2sstable and sstable2json tools) to further split the
+// resulting tombstones into even more tombstones:
+//  {"key": "pk",
+//   "cells":
+//       [["aaa:_","aaa:bba:_",1459438519943668,"t",1459438519],
+//        ["aaa:bba:_","aaa:bbb:_",1459438519943668,"t",1459438519],
+//        ["aaa:bbb:_","aaa:bbb:ccb:_",1459438519950348,"t",1459438519],
+//        ["aaa:bbb:ccb:_","aaa:bbb:ccc:_",1459438519950348,"t",1459438519],
+//        ["aaa:bbb:ccc:_","aaa:bbb:ccc:!",1459438519958850,"t",1459438519],
+//        ["aaa:bbb:ccc:!","aaa:bbb:ddd:!",1459438519950348,"t",1459438519],
+//        ["aaa:bbb:ddd:!","aaa:bbb:!",1459438519950348,"t",1459438519],
+//        ["aaa:bbb:!","aaa:!",1459438519943668,"t",1459438519]]}
+// We expect our sstable code to recover the three original row tombstones.
+static schema_ptr tombstone_overlap_schema2() {
+    static thread_local auto s = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id("try1", "tab"), "try1", "tab",
+        // partition key
+        {{"pk", utf8_type}},
+        // clustering key
+        {{"ck1", utf8_type}, {"ck2", utf8_type}, {"ck3", utf8_type}},
+        // regular columns
+        {{"data", utf8_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        ""
+       )));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return s;
+}
+SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
+    return ka_sst("try1", "tab2", "tests/sstables/tombstone_overlap", 3).then([] (auto sstp) {
+        auto s = tombstone_overlap_schema2();
+        return do_with(sstp->read_rows(s), [sstp, s] (auto& reader) {
+            return repeat([sstp, s, &reader] {
+                return reader.read().then([s] (mutation_opt mut) {
+                    if (!mut) {
+                        return stop_iteration::yes;
+                    }
+                    auto make_pkey = [s] (sstring b) {
+                        return partition_key::from_deeply_exploded(*s, { data_value(b) });
+                    };
+                    auto make_ckey = [s] (sstring c1, sstring c2 = {}, sstring c3 = {}) {
+                        std::vector<data_value> v;
+                        v.push_back(data_value(c1));
+                        if (!c2.empty()) {
+                            v.push_back(data_value(c2));
+                        }
+                        if (!c3.empty()) {
+                            v.push_back(data_value(c3));
+                        }
+                        return clustering_key::from_deeply_exploded(*s, std::move(v));
+                    };
+                    BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
+                    // We expect to see three overlapping deletions, as explained
+                    // above.
+                    auto& rows = mut->partition().clustered_rows();
+                    auto& rts = mut->partition().row_tombstones();
+
+                    BOOST_REQUIRE(rts.size() == 2);
+                    bool found1 = false, found2 = false;
+                    for (auto e : rts) {
+                        if (e.t().timestamp == 1459438519943668LL) {
+                            BOOST_REQUIRE(e.prefix().equal(*s, make_ckey("aaa")));
+                            found1 = true;
+                        } else if (e.t().timestamp == 1459438519950348LL) {
+                            BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb")));
+                            found2 = true;
+                        } else {
+                            BOOST_FAIL("unexpected timestamp");
+                        }
+                    }
+                    BOOST_REQUIRE(found1 && found2);
+
+                    BOOST_REQUIRE(rows.size() == 1);
+                    for (auto e : rows) {
+                        BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb", "ccc")));
+                        BOOST_REQUIRE(e.row().deleted_at().timestamp == 1459438519958850LL);
+                    }
+
+                    return stop_iteration::no;
+                });
+            });
+        });
+    });
+}
