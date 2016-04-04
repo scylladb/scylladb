@@ -452,13 +452,24 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
     }
 }
 
-#if 0
-public static void announceNewType(UserType newType, boolean announceLocally)
-{
-    KSMetaData ksm = Schema.instance.getKSMetaData(newType.keyspace);
-    announce(LegacySchemaTables.makeCreateTypeMutation(ksm, newType, FBUtilities.timestampMicros()), announceLocally);
+static future<> do_announce_new_type(user_type new_type, bool announce_locally) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(new_type->_keyspace);
+    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
+    return migration_manager::announce(std::move(mutations), announce_locally);
 }
 
+future<> migration_manager::announce_new_type(user_type new_type, bool announce_locally) {
+    logger.info("Create new User Type: {}", new_type->get_name_as_string());
+    return do_announce_new_type(new_type, announce_locally);
+}
+
+future<> migration_manager::announce_type_update(user_type updated_type, bool announce_locally) {
+    logger.info("Update User Type: {}", updated_type->get_name_as_string());
+    return do_announce_new_type(updated_type, announce_locally);
+}
+
+#if 0
 public static void announceNewFunction(UDFunction udf, boolean announceLocally)
 {
     logger.info(String.format("Create scalar function '%s'", udf.name()));
@@ -509,11 +520,6 @@ public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift
     logger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
     announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
 }
-
-public static void announceTypeUpdate(UserType updatedType, boolean announceLocally)
-{
-    announceNewType(updatedType, announceLocally);
-}
 #endif
 
 future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool announce_locally)
@@ -547,18 +553,16 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
     }
 }
 
+future<> migration_manager::announce_type_drop(user_type dropped_type, bool announce_locally)
+{
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
+    logger.info("Drop User Type: {}", dropped_type->get_name_as_string());
+    auto mutations = db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
+    return announce(std::move(mutations), announce_locally);
+}
+
 #if 0
-public static void announceTypeDrop(UserType droppedType)
-{
-    announceTypeDrop(droppedType, false);
-}
-
-public static void announceTypeDrop(UserType droppedType, boolean announceLocally)
-{
-    KSMetaData ksm = Schema.instance.getKSMetaData(droppedType.keyspace);
-    announce(LegacySchemaTables.dropTypeFromSchemaMutation(ksm, droppedType, FBUtilities.timestampMicros()), announceLocally);
-}
-
 public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
 {
     logger.info(String.format("Drop scalar function overload '%s' args '%s'", udf.name(), udf.argTypes()));
