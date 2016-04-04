@@ -59,6 +59,13 @@ future<file> new_sstable_component_file(sstring name, open_flags flags) {
     });
 }
 
+future<file> new_sstable_component_file(sstring name, open_flags flags, file_open_options options) {
+    return open_file_dma(name, flags, options).handle_exception([name] (auto ep) {
+        sstlog.error("Could not create SSTable component {}. Found exception: {}", name, ep);
+        return make_exception_future<file>(ep);
+    });
+}
+
 thread_local std::unordered_map<sstring, std::unordered_set<unsigned>> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
@@ -964,8 +971,10 @@ future<> sstable::open_data() {
 
 future<> sstable::create_data() {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+    file_open_options opt;
+    opt.extent_allocation_size_hint = 32 << 20;
     return when_all(new_sstable_component_file(filename(component_type::Index), oflags),
-                    new_sstable_component_file(filename(component_type::Data), oflags)).then([this] (auto files) {
+                    new_sstable_component_file(filename(component_type::Data), oflags, opt)).then([this] (auto files) {
         // FIXME: If both files could not be created, the first get below will
         // throw an exception, and second get() will not be attempted, and
         // we'll get a warning about the second future being destructed
