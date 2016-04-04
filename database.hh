@@ -820,8 +820,8 @@ public:
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
     /* throws std::out_of_range if missing */
-    const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
-    const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
+    const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const;
+    const utils::UUID& find_uuid(const schema_ptr&) const;
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
@@ -830,22 +830,22 @@ public:
      */
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&);
     /* below, find_keyspace throws no_such_<type> on fail */
-    keyspace& find_keyspace(const sstring& name) throw (no_such_keyspace);
-    const keyspace& find_keyspace(const sstring& name) const throw (no_such_keyspace);
+    keyspace& find_keyspace(const sstring& name);
+    const keyspace& find_keyspace(const sstring& name) const;
     bool has_keyspace(const sstring& name) const;
     void update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
     std::vector<sstring> get_non_system_keyspaces() const;
-    column_family& find_column_family(const sstring& ks, const sstring& name) throw (no_such_column_family);
-    const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
-    column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);
-    const column_family& find_column_family(const utils::UUID&) const throw (no_such_column_family);
-    column_family& find_column_family(const schema_ptr&) throw (no_such_column_family);
-    const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
+    column_family& find_column_family(const sstring& ks, const sstring& name);
+    const column_family& find_column_family(const sstring& ks, const sstring& name) const;
+    column_family& find_column_family(const utils::UUID&);
+    const column_family& find_column_family(const utils::UUID&) const;
+    column_family& find_column_family(const schema_ptr&);
+    const column_family& find_column_family(const schema_ptr&) const;
     bool column_family_exists(const utils::UUID& uuid) const;
-    schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
-    schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
+    schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const;
+    schema_ptr find_schema(const utils::UUID&) const;
     bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
     std::set<sstring> existing_index_names(const sstring& cf_to_exclude = sstring()) const;
     future<> stop();

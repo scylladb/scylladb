@@ -1447,15 +1447,19 @@ future<> database::drop_column_family(const sstring& ks_name, const sstring& cf_
     });
 }
 
-const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
-    return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
+const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const {
+    try {
+        return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
+    } catch (...) {
+        throw std::out_of_range("");
+    }
 }
 
-const utils::UUID& database::find_uuid(const schema_ptr& schema) const throw (std::out_of_range) {
+const utils::UUID& database::find_uuid(const schema_ptr& schema) const {
     return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
-keyspace& database::find_keyspace(const sstring& name) throw (no_such_keyspace) {
+keyspace& database::find_keyspace(const sstring& name) {
     try {
         return _keyspaces.at(name);
     } catch (...) {
@@ -1463,7 +1467,7 @@ keyspace& database::find_keyspace(const sstring& name) throw (no_such_keyspace) 
     }
 }
 
-const keyspace& database::find_keyspace(const sstring& name) const throw (no_such_keyspace) {
+const keyspace& database::find_keyspace(const sstring& name) const {
     try {
         return _keyspaces.at(name);
     } catch (...) {
@@ -1485,7 +1489,7 @@ std::vector<sstring>  database::get_non_system_keyspaces() const {
     return res;
 }
 
-column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) throw (no_such_column_family) {
+column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -1493,7 +1497,7 @@ column_family& database::find_column_family(const sstring& ks_name, const sstrin
     }
 }
 
-const column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
+const column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) const {
     try {
         return find_column_family(find_uuid(ks_name, cf_name));
     } catch (...) {
@@ -1501,7 +1505,7 @@ const column_family& database::find_column_family(const sstring& ks_name, const 
     }
 }
 
-column_family& database::find_column_family(const utils::UUID& uuid) throw (no_such_column_family) {
+column_family& database::find_column_family(const utils::UUID& uuid) {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1509,7 +1513,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) throw (no_s
     }
 }
 
-const column_family& database::find_column_family(const utils::UUID& uuid) const throw (no_such_column_family) {
+const column_family& database::find_column_family(const utils::UUID& uuid) const {
     try {
         return *_column_families.at(uuid);
     } catch (...) {
@@ -1592,11 +1596,11 @@ no_such_column_family::no_such_column_family(const sstring& ks_name, const sstri
 {
 }
 
-column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
+column_family& database::find_column_family(const schema_ptr& schema) {
     return find_column_family(schema->id());
 }
 
-const column_family& database::find_column_family(const schema_ptr& schema) const throw (no_such_column_family) {
+const column_family& database::find_column_family(const schema_ptr& schema) const {
     return find_column_family(schema->id());
 }
 
@@ -1607,7 +1611,7 @@ void keyspace_metadata::validate() const {
     abstract_replication_strategy::validate_replication_strategy(name(), strategy_name(), ss.get_token_metadata(), strategy_options());
 }
 
-schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
+schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const {
     try {
         return find_schema(find_uuid(ks_name, cf_name));
     } catch (std::out_of_range&) {
@@ -1615,7 +1619,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
     }
 }
 
-schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_column_family) {
+schema_ptr database::find_schema(const utils::UUID& uuid) const {
     return find_column_family(uuid).schema();
 }
 
