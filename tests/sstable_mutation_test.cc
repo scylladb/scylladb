@@ -529,7 +529,7 @@ static schema_ptr tombstone_overlap_schema() {
         // clustering key
         {{"ck1", utf8_type}, {"ck2", utf8_type}},
         // regular columns
-        {},
+        {{"data", utf8_type}},
         // static columns
         {},
         // regular column name type
@@ -620,13 +620,24 @@ SEASTAR_TEST_CASE(tombstone_merging) {
                     if (!mut) {
                         return stop_iteration::yes;
                     }
-                    BOOST_REQUIRE((bytes_view(mut->key()) == bytes{'\x00','\x02','p','k'}));
+                    auto make_pkey = [s] (sstring b) {
+                        return partition_key::from_deeply_exploded(*s, { data_value(b) });
+                    };
+                    auto make_ckey = [s] (sstring c1, sstring c2 = {}) {
+                        std::vector<data_value> v;
+                        v.push_back(data_value(c1));
+                        if (!c2.empty()) {
+                            v.push_back(data_value(c2));
+                        }
+                        return clustering_key::from_deeply_exploded(*s, std::move(v));
+                    };
+                    BOOST_REQUIRE(mut->key().equal(*s, make_pkey("pk")));
                     // We expect to see that all 4 tombstones have been
                     // merged into one.
                     auto& rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 1);
                     for (auto e : rts) {
-                        BOOST_REQUIRE((bytes_view(e.prefix()) == bytes{'\x00','\x03','a','a','a'}));
+                        BOOST_REQUIRE(e.prefix().equal(*s, make_ckey("aaa")));
                         BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
                     }
                     auto& rows = mut->partition().clustered_rows();
