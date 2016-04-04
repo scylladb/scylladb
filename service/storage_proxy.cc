@@ -1967,8 +1967,8 @@ public:
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->_stats.read_repair_repaired_blocking++;
                 }
-            } catch (read_timeout_exception& ex) {
-                exec->_result_promise.set_exception(ex);
+            } catch (...) {
+                exec->_result_promise.set_exception(std::current_exception());
             }
 
             exec->_proxy->_stats.background_reads++;
