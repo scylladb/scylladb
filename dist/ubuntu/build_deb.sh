@@ -55,7 +55,8 @@ else
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/control
 fi
-
+cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
+sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 
 ./dist/ubuntu/dep/build_dependency.sh
 
