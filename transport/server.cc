@@ -322,9 +322,12 @@ cql_server::do_accepts(int which, bool keepalive) {
             }
         });
         do_accepts(which, keepalive);
-    }).then_wrapped([] (future<> f) {
+    }).then_wrapped([this, which, keepalive] (future<> f) {
         try {
             f.get();
+        } catch (const std::bad_alloc&) {
+            logger.debug("accept failed: {}, retrying", std::current_exception());
+            do_accepts(which, keepalive);
         } catch (...) {
             logger.debug("accept failed: {}", std::current_exception());
         }
