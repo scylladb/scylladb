@@ -61,10 +61,10 @@ future<> set_server_init(http_context& ctx) {
                 new content_replace("html")));
         r.add(GET, url("/ui").remainder("path"), new httpd::directory_handler(ctx.api_dir,
                 new content_replace("html")));
+        rb->set_api_doc(r);
         rb->register_function(r, "system",
                 "The system related API");
         set_system(ctx, r);
-        rb->set_api_doc(r);
     });
 }
 
