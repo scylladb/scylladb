@@ -1060,7 +1060,9 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
     descriptor d(next_id());
-    return open_checked_file_dma(commit_error, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create).then([this, d, active](file f) {
+    file_open_options opt;
+    opt.extent_allocation_size_hint = max_size;
+    return open_checked_file_dma(commit_error, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
         // xfs doesn't like files extended betond eof, so enlarge the file
         return f.truncate(max_size).then([this, d, active, f] () mutable {
             auto s = make_lw_shared<segment>(this->shared_from_this(), d, std::move(f), active);
