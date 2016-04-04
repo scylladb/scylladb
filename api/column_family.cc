@@ -173,6 +173,35 @@ static ratio_holder mean_row_size(column_family& cf) {
     return res;
 }
 
+template <typename T>
+class sum_ratio {
+    uint64_t _n = 0;
+    T _total = 0;
+public:
+    future<> operator()(T value) {
+        if (value > 0) {
+            _total += value;
+            _n++;
+        }
+        return make_ready_future<>();
+    }
+    // Returns average value of all registered ratios.
+    T get() && {
+        return _n ? (_total / _n) : T(0);
+    }
+};
+
+static double get_compression_ratio(column_family& cf) {
+    sum_ratio<double> result;
+    for (auto i : *cf.get_sstables()) {
+        auto compression_ratio = i.second->get_compression_ratio();
+        if (compression_ratio != sstables::metadata_collector::NO_COMPRESSION_RATIO) {
+            result(compression_ratio);
+        }
+    }
+    return std::move(result).get();
+}
+
 void set_column_family(http_context& ctx, routes& r) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         vector<sstring> res;
@@ -719,11 +748,15 @@ void set_column_family(http_context& ctx, routes& r) {
         return std::vector<sstring>();
     });
 
-    cf::get_compression_ratio.set(r, [](const_req) {
-        // FIXME
-        // Currently there are no compression information
-        // so we return 0 as the ratio
-        return 0;
+    cf::get_compression_ratio.set(r, [&ctx](std::unique_ptr<request> req) {
+        auto uuid = get_uuid(req->param["name"], ctx.db.local());
+
+        return ctx.db.map_reduce(sum_ratio<double>(), [uuid](database& db) {
+            column_family& cf = db.find_column_family(uuid);
+            return make_ready_future<double>(get_compression_ratio(cf));
+        }).then([] (const double& result) {
+            return make_ready_future<json::json_return_type>(result);
+        });
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<request> req) {

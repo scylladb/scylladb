@@ -528,6 +528,8 @@ public:
         return get_stats_metadata().sstable_level;
     }
 
+    double get_compression_ratio() const;
+
     future<> mutate_sstable_level(uint32_t);
 
     const summary& get_summary() const {

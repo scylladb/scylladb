@@ -1698,6 +1698,14 @@ int sstable::compare_by_first_key(const schema& s, const sstable& other) const {
     return get_first_decorated_key(s).tri_compare(s, other.get_first_decorated_key(s));
 }
 
+double sstable::get_compression_ratio() const {
+    if (this->has_component(sstable::component_type::CompressionInfo)) {
+        return (double) _compression.compressed_file_length() / _compression.uncompressed_file_length();
+    } else {
+        return metadata_collector::NO_COMPRESSION_RATIO;
+    }
+}
+
 future<> sstable::mutate_sstable_level(uint32_t new_level) {
     if (!has_component(component_type::Statistics)) {
         return make_ready_future<>();
