@@ -629,6 +629,8 @@ SEASTAR_TEST_CASE(tombstone_merging) {
                         BOOST_REQUIRE((bytes_view(e.prefix()) == bytes{'\x00','\x03','a','a','a'}));
                         BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
                     }
+                    auto& rows = mut->partition().clustered_rows();
+                    BOOST_REQUIRE(rows.size() == 0);
                     return stop_iteration::no;
                 });
             });
