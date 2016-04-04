@@ -250,88 +250,52 @@ class mp_row_consumer : public row_consumer {
         }
     }
 
-    class range_merger {
-        bytes _data;
-        bytes _end;
+    class open_tombstone {
+        bytes _prefix;
         sstables::deletion_time _deletion_time;
     public:
-        bytes&& data() {
-            return std::move(_data);
+        bytes&& get() {
+            return std::move(_prefix);
         }
-        explicit operator bool() const noexcept {
-            return !_data.empty();
+        sstables::deletion_time deltime() const {
+            return _deletion_time;
         }
-        explicit operator sstring() const {
-            if (*this) {
-                return to_hex(_data) + sprint(" deletion (%x,%lx)", _deletion_time.local_deletion_time, _deletion_time.marked_for_delete_at);
-            } else {
-                return sstring("(null)");
-            }
-        }
-        explicit operator bytes_view() const {
-            return _data;
-        }
-
-        bool operator==(const range_merger& candidate) {
-            if (!candidate) {
-                return false;
-            }
-            bytes_view a(_data);
-            bytes_view b(candidate._data);
-            a.remove_suffix(1);
-            b.remove_suffix(1);
-            return ((a == b) && (_deletion_time == candidate._deletion_time));
-        }
-
-        bool operator!=(const range_merger& candidate) {
-            return !(*this == candidate);
-        }
-
-        bool is_prefix_of(const range_merger& candidate) {
-            bytes_view a(_data);
-            bytes_view b(candidate._data);
-            a.remove_suffix(1);
-            b.remove_suffix(1);
-            return b.compare(0, a.size(), a) == 0;
-        }
-
-        bool end_matches(bytes_view candidate, sstables::deletion_time deltime) {
-            if (_deletion_time != deltime) {
-                return false;
-            }
-            bytes_view my_end(_end);
-            my_end.remove_suffix(1);
+        bool ends_with(bytes_view candidate) {
+            bytes_view my_start(_prefix);
+            // TODO: Maybe check that the suffixes are as expected (_prefix
+            // has the null or start EOC, candidate has end EOC)?
+            my_start.remove_suffix(1);
             candidate.remove_suffix(1);
-            return my_end == candidate;
+            return my_start == candidate;
+        }
+        open_tombstone(bytes_view start, sstables::deletion_time d)
+            : _prefix(to_bytes(start))
+            , _deletion_time(d) {}
+        explicit operator sstring() const {
+            return sprint("%s deletion (%x,%lx)", _prefix,
+                    _deletion_time.local_deletion_time,
+                    _deletion_time.marked_for_delete_at);
+        }
+        friend std::ostream& operator<<(std::ostream& out, const open_tombstone& o) {
+            return out << sstring(o);
         }
 
-        void set_end(bytes_view end) {
-            _end = to_bytes(end);
-        }
-
-        range_merger(bytes_view start, bytes_view end, sstables::deletion_time d)
-            : _data(to_bytes(start))
-            , _end(to_bytes(end))
-            , _deletion_time(d)
-        {}
-        range_merger() : _data(), _end(), _deletion_time() {}
     };
 
     // Variables for tracking tombstone merging in consume_range_tombstone().
-    // All of these hold serialized composites.
-    std::stack<range_merger> _starts;
+    std::stack<open_tombstone> _open_tombstones;
+    bytes _end_contiguous_delete;
 
-    void reset_range_tombstone_merger() {
-        // Will throw if there is a current merger that hasn't finished.
-        // This will be called at the start and end of any row.
-        // This check is crucial to our goal of not falsely reporting a real range tombstone as a
-        // merger.
-        if (!_starts.empty()) {
+    void verify_no_open_tombstones() {
+        // Verify that we have no range tombstone was left "open" (waiting to
+        // be merged into deletion of entire rows, which scylla supports).
+        // Should be called at the end of a row.
+        if (!_open_tombstones.empty()) {
             auto msg = sstring("RANGE DELETE not implemented. Tried to merge, but row finished before we could finish the merge. Starts found: (");
-            while (!_starts.empty()) {
-                msg += sstring(_starts.top());
-                _starts.pop();
-                if (!_starts.empty()) {
+            while (!_open_tombstones.empty()) {
+                msg += sstring(_open_tombstones.top());
+                _open_tombstones.pop();
+                if (!_open_tombstones.empty()) {
                     msg += sstring(" , ");
                 }
             }
@@ -340,47 +304,52 @@ class mp_row_consumer : public row_consumer {
         }
     }
 
-    bytes close_merger_range() {
-        // We closed a larger enclosing row.
-        auto ret = _starts.top().data();
-        _starts.pop();
-        return ret;
-    }
-
-    bytes update_range_tombstone_merger(bytes_view _start, bytes_view end,
+    bytes update_open_tombstones(bytes_view _start, bytes_view end,
                                         sstables::deletion_time deltime) {
-        range_merger start(_start, end, deltime);
-        range_merger empty;
-
-        // If we're processing a range (_starts is not empty, it's fine to start
-        // processing another, but only so long as we're nesting. We then check
-        // to make sure that the current range being processed is a prefix of the new one.
-        if (!_starts.empty() && !_starts.top().is_prefix_of(start)) {
-            auto msg = sstring("RANGE DELETE not implemented. Tried to merge, but existing range not a prefix of new one. Current range: ");
-            msg += sstring(_starts.top());
-            msg += ". new range: " + sstring(start);
-            throw malformed_sstable_exception(msg);
+        if (!_open_tombstones.empty()) {
+            // If the range tombstones are the result of Cassandra's splitting
+            // overlapping tombstones into disjoint tombstones, they cannot
+            // have a gap. If there is a gap while we're merging, it is
+            // probably a bona-fide range delete, which we don't support.
+            if (_end_contiguous_delete != _start) {
+                throw malformed_sstable_exception(sprint(
+                        "RANGE DELETE not implemented. Tried to merge but "
+                        "found gap between %s and %s.",
+                        _end_contiguous_delete, _start));
+            }
         }
-
-        range_merger& prev = empty;
-        if (!_starts.empty()) {
-            prev = _starts.top();
+        if (_open_tombstones.empty() ||
+                deltime.marked_for_delete_at > _open_tombstones.top().deltime().marked_for_delete_at) {
+            _open_tombstones.push(open_tombstone(_start, deltime));
+        } else if (deltime.marked_for_delete_at < _open_tombstones.top().deltime().marked_for_delete_at) {
+            // If the new range has an *earlier* timestamp than the open
+            // tombstone it is supposedly covering, then our representation
+            // as two overlapping tombstones would not be identical to the
+            // two disjoint tombstones.
+            throw malformed_sstable_exception(sprint(
+                    "RANGE DELETE not implemented. Tried to merge but "
+                    "found range starting at %s which cannot close a "
+                    " row because of decreasing timestamp %d.",
+                    _open_tombstones.top(), deltime.marked_for_delete_at));
+        } else if (deltime.local_deletion_time != _open_tombstones.top().deltime().local_deletion_time) {
+            // marked_for_delete_at is equal, but local_delection_time not
+            throw malformed_sstable_exception(sprint(
+                    "RANGE DELETE not implemented. Couldn't merge range "
+                    "%s,%s into row %s. Both had same timestamp %s but "
+                    "different local_deletion_time %s.",
+                    _start, end, _open_tombstones.top(),
+                    deltime.marked_for_delete_at,
+                    deltime.local_deletion_time));
         }
-        _starts.push(start);
-
-        if (prev.end_matches(bytes_view(start), deltime)) {
-            // If _contig_deletion_end, we're in the middle of trying to merge
-            // several contiguous range tombstones. If there's a gap, we cannot
-            // represent this range in Scylla.
-            prev.set_end(end);
-            // We pop what we have just inserted, because that's not starting the
-            // processing of any new range.
-            _starts.pop();
+        bytes ret;
+        if (_open_tombstones.top().ends_with(end)) {
+            ret = _open_tombstones.top().get();
+            _open_tombstones.pop();
         }
-        if (_starts.top().end_matches(end, deltime)) {
-            return close_merger_range();
+        if (!_open_tombstones.empty()) {
+            _end_contiguous_delete = to_bytes(end);
         }
-        return {};
+        return ret;
     }
 public:
     mutation_opt mut;
@@ -499,7 +468,7 @@ public:
         }
     }
     virtual proceed consume_row_end() override {
-        reset_range_tombstone_merger();
+        verify_no_open_tombstones();
         if (mut) {
             flush_pending_collection(*_schema, *mut);
         }
@@ -575,7 +544,7 @@ public:
         check_marker(end_col);
 
         bytes new_start = {};
-        new_start = update_range_tombstone_merger(start_col, end_col, deltime);
+        new_start = update_open_tombstones(start_col, end_col, deltime);
         if (new_start.empty()) {
             return;
         }
