@@ -2470,9 +2470,83 @@ tuple_type_impl::split(bytes_view v) const {
     return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
 }
 
+// Count number of ':' which are not preceded by '\'.
+static std::size_t count_segments(sstring_view v) {
+    std::size_t segment_count = 1;
+    char prev_ch = '.';
+    for (char ch : v) {
+        if (ch == ':' && prev_ch != '\\') {
+            ++segment_count;
+        }
+        prev_ch = ch;
+    }
+    return segment_count;
+}
+
+// Split on ':', unless it's preceded by '\'.
+static std::vector<sstring_view> split_field_strings(sstring_view v) {
+    if (v.empty()) {
+        return std::vector<sstring_view>();
+    }
+    std::vector<sstring_view> result;
+    result.reserve(count_segments(v));
+    std::size_t prev = 0;
+    char prev_ch = '.';
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (v[i] == ':' && prev_ch != '\\') {
+            result.push_back(v.substr(prev, i - prev));
+            prev = i + 1;
+        }
+        prev_ch = v[i];
+    }
+    result.push_back(v.substr(prev, v.size() - prev));
+    return std::move(result);
+}
+
+// Replace "\:" with ":" and "\@" with "@".
+static std::string unescape(sstring_view s) {
+    static thread_local std::regex escaped_colon_re("\\\\:");
+    static thread_local std::regex escaped_at_re("\\\\@");
+    std::string result = s.to_string();
+    result = std::regex_replace(result, escaped_colon_re, ":");
+    result = std::regex_replace(result, escaped_at_re, "@");
+    return std::move(result);
+}
+
+// Concat list of bytes into a single bytes.
+static bytes concat_fields(const std::vector<bytes>& fields, const std::vector<int32_t> field_len) {
+    std::size_t result_size = 4 * fields.size();
+    for (int32_t len : field_len) {
+        result_size += len > 0 ? len : 0;
+    }
+    bytes result{bytes::initialized_later(), result_size};
+    bytes::iterator it = result.begin();
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        *unaligned_cast<int32_t*>(it) = net::hton(field_len[i]);
+        it += 4;
+        if (field_len[i] > 0) {
+            it = std::copy(std::begin(fields[i]), std::end(fields[i]), it);
+        }
+    }
+    return std::move(result);
+}
+
 bytes
 tuple_type_impl::from_string(sstring_view s) const {
-    throw std::runtime_error(sprint("%s not implemented", __PRETTY_FUNCTION__));
+    std::vector<sstring_view> field_strings = split_field_strings(s);
+    if (field_strings.size() > size()) {
+        throw marshal_exception(sprint("Invalid tuple literal: too many elements. Type %s expects %d but got %d", as_cql3_type(), size(), field_strings.size()));
+    }
+    std::vector<bytes> fields(field_strings.size());
+    std::vector<int32_t> field_len(field_strings.size(), -1);
+    for (std::size_t i = 0; i < field_strings.size(); ++i) {
+        if (field_strings[i] != "@") {
+            std::string field_string = unescape(field_strings[i]);
+            fields[i] = type(i)->from_string(field_string);
+            field_len[i] = fields[i].size();
+        }
+    }
+    return std::move(concat_fields(fields, field_len));
 }
 
 sstring
