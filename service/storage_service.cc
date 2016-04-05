@@ -91,6 +91,13 @@ bool storage_service::is_auto_bootstrap() {
     return _db.local().get_config().auto_bootstrap();
 }
 
+sstring storage_service::get_config_supported_features() {
+    // Add features supported by this local node. When a new feature is
+    // introduced in scylla, update it here, e.g.,
+    // return sstring("FEATURE1,FEATURE2")
+    return sstring("");
+}
+
 std::set<inet_address> get_seeds() {
     // FIXME: DatabaseDescriptor.getSeeds()
     auto& gossiper = gms::get_local_gossiper();
