@@ -238,6 +238,10 @@ public:
         versioned_value severity(double value) {
             return versioned_value(to_sstring(value));
         }
+
+        versioned_value supported_features(const sstring& features) {
+            return versioned_value(features);
+        }
     };
 }; // class versioned_value
 
