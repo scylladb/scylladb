@@ -106,6 +106,19 @@ write_request_timeout_in_ms: 2000
 # most users should never need to adjust this.
 # phi_convict_threshold: 8
 
+# IEndpointSnitch.  The snitch has two functions:
+# - it teaches Scylla enough about your network topology to route
+#   requests efficiently
+# - it allows Scylla to spread replicas around your cluster to avoid
+#   correlated failures. It does this by grouping machines into
+#   "datacenters" and "racks."  Scylla will do its best not to have
+#   more than one replica on the same "rack" (which may not actually
+#   be a physical location)
+#
+# IF YOU CHANGE THE SNITCH AFTER DATA IS INSERTED INTO THE CLUSTER,
+# YOU MUST RUN A FULL REPAIR, SINCE THE SNITCH AFFECTS WHERE REPLICAS
+# ARE PLACED.
+#
 # Out of the box, Scylla provides
 #  - SimpleSnitch:
 #    Treats Strategy order as proximity. This can improve cache
