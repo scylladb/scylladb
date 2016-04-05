@@ -194,12 +194,14 @@ void storage_service::prepare_to_join() {
     // (we won't be part of the storage ring though until we add a counterId to our state, below.)
     // Seed the host ID-to-endpoint map with our own ID.
     auto local_host_id = db::system_keyspace::get_local_host_id().get0();
+    auto features = get_config_supported_features();
     _token_metadata.update_host_id(local_host_id, get_broadcast_address());
     auto broadcast_rpc_address = utils::fb_utilities::get_broadcast_rpc_address();
     app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
     app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
     app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
     app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+    app_states.emplace(gms::application_state::SUPPORTED_FEATURES, value_factory.supported_features(features));
     logger.info("Starting up server gossip");
 
     auto& gossiper = gms::get_local_gossiper();
