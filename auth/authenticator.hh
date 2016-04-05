@@ -79,6 +79,9 @@ public:
         PASSWORD
     };
 
+    static option string_to_option(const sstring&);
+    static sstring option_to_string(option);
+
     using option_set = enum_set<super_enum<option, option::PASSWORD>>;
     using option_map = std::unordered_map<option, boost::any, enum_hash<option>>;
     using credentials_map = std::unordered_map<sstring, sstring>;
@@ -193,6 +196,10 @@ public:
      */
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 };
+
+inline std::ostream& operator<<(std::ostream& os, authenticator::option opt) {
+    return os << authenticator::option_to_string(opt);
+}
 
 }
 

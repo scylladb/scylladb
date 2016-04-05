@@ -49,6 +49,22 @@ const sstring auth::authenticator::USERNAME_KEY("username");
 const sstring auth::authenticator::PASSWORD_KEY("password");
 const sstring auth::authenticator::ALLOW_ALL_AUTHENTICATOR_NAME("org.apache.cassandra.auth.AllowAllAuthenticator");
 
+auth::authenticator::option auth::authenticator::string_to_option(const sstring& name) {
+    if (strcasecmp(name.c_str(), "password") == 0) {
+        return option::PASSWORD;
+    }
+    throw std::invalid_argument(name);
+}
+
+sstring auth::authenticator::option_to_string(option opt) {
+    switch (opt) {
+    case option::PASSWORD:
+        return "PASSWORD";
+    default:
+        throw std::invalid_argument(sprint("Unknown option {}", opt));
+    }
+}
+
 /**
  * Authenticator is assumed to be a fully state-less immutable object (note all the const).
  * We thus store a single instance globally, since it should be safe/ok.
