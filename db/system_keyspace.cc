@@ -229,6 +229,7 @@ schema_ptr built_indexes() {
                 {"rpc_address", inet_addr_type},
                 {"broadcast_address", inet_addr_type},
                 {"listen_address", inet_addr_type},
+                {"supported_features", utf8_type},
 
         },
         // static columns
@@ -261,6 +262,7 @@ schema_ptr built_indexes() {
                 {"rpc_address", inet_addr_type},
                 {"schema_version", uuid_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, true)},
+                {"supported_features", utf8_type},
         },
         // static columns
         {},
