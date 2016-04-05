@@ -894,6 +894,8 @@ void storage_service::do_update_system_peers_table(gms::inet_address endpoint, c
         update_table(endpoint, "schema_version", utils::UUID(value.value));
     } else if (state == application_state::HOST_ID) {
         update_table(endpoint, "host_id", utils::UUID(value.value));
+    } else if (state == application_state::SUPPORTED_FEATURES) {
+        update_table(endpoint, "supported_features", value.value);
     }
 }
 
