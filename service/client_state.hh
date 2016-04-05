@@ -259,15 +259,9 @@ public:
 
 public:
     void validate_login() const;
+    void ensure_not_anonymous() const throw(exceptions::unauthorized_exception);
 
 #if 0
-    public void ensureNotAnonymous() throws UnauthorizedException
-    {
-        validateLogin();
-        if (user.isAnonymous())
-            throw new UnauthorizedException("You have to be logged in and not anonymous to perform this request");
-    }
-
     public void ensureIsSuper(String message) throws UnauthorizedException
     {
         if (DatabaseDescriptor.getAuthenticator().requireAuthentication() && (user == null || !user.isSuper()))

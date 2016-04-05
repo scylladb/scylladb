@@ -68,3 +68,10 @@ void service::client_state::validate_login() const {
         throw exceptions::unauthorized_exception("You have not logged in");
     }
 }
+
+void service::client_state::ensure_not_anonymous() const throw(exceptions::unauthorized_exception) {
+    validate_login();
+    if (_user->is_anonymous()) {
+        throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
+    }
+}
