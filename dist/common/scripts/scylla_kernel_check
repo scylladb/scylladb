@@ -1,0 +1,34 @@
+#!/bin/bash -e
+#
+#  Copyright (C) 2016 ScyllaDB
+
+. /etc/os-release
+
+if [ ! -f /sbin/mkfs.xfs ]; then
+    if [ "$ID" = "ubuntu" ]; then
+        apt-get install -y xfsprogs
+    else
+        yum install -y xfsprogs
+    fi
+fi
+
+mkdir -p /var/tmp/mnt
+dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=128 > /dev/null 2>&1
+mkfs.xfs /var/tmp/kernel-check.img > /dev/null
+mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop
+iotune --fs-check --evaluation-directory /var/tmp/mnt > /dev/null 2>&1 &&:
+RET=$?
+umount /var/tmp/mnt
+rm -rf /var/tmp/mnt
+rm /var/tmp/kernel-check.img
+if [ $RET -eq 0 ]; then
+    echo "This is supported kernel."
+else
+    echo "This is unsupported kernel."
+    if [ "$ID" = "ubuntu" && "$VERSION_ID" = "14.04" ]; then
+        echo "Please upgrade to newer kernel by 'apt-get install linux-image-generic-lts-vivid && reboot'."
+    else
+        echo "Please upgrade to newer kernel."
+    fi
+fi
+exit $RET

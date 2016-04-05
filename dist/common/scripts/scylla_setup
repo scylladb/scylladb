@@ -8,12 +8,13 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --developer-mode --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
+    echo "scylla_setup --disks /dev/hda,/dev/hdb... --nic eth0 --ntp-domain centos --ami --developer-mode --no-kernel-check --no-enable-service --no-selinux-setup --no-bootparam-setup --no-ntp-setup --no-raid-setup --no-coredump-setup --no-sysconfig-setup"
     echo "  --disks			specify disks for RAID"
     echo "  --nic				specify NIC"
     echo "  --ntp-domain			specify NTP domain"
     echo "  --ami				setup AMI instance"
     echo "  --developer-mode			enable developer mode"
+    echo "  --no-kernel-check           skip kernel version check"
     echo "  --no-enable-service		skip enabling service"
     echo "  --no-selinux-setup		skip selinux setup"
     echo "  --no-bootparam-setup		skip bootparam setup"
@@ -43,6 +44,7 @@ interactive_ask_service() {
 
 AMI=0
 DEV_MODE=0
+KERNEL_CHECK=1
 ENABLE_SERVICE=1
 SELINUX_SETUP=1
 BOOTPARAM_SETUP=1
@@ -78,6 +80,10 @@ while [ $# -gt 0 ]; do
             ;;
         "--developer-mode")
             DEV_MODE=1
+            shift 1
+            ;;
+        "--no-kernel-check")
+            KERNEL_CHECK=0
             shift 1
             ;;
         "--no-enable-service")
@@ -127,6 +133,14 @@ if [ $INTERACTIVE -eq 0 ] && [ $SYSCONFIG_SETUP -eq 1 ] && [ "$NIC" = "" ]; then
 fi
 
 . /etc/os-release
+
+if [ $INTERACTIVE -eq 1 ]; then
+    interactive_ask_service "Do you want to run kernel version check?" &&:
+    KERNEL_CHECK=$?
+fi
+if [ $KERNEL_CHECK -eq 1 ]; then
+    /usr/lib/scylla/scylla_kernel_check
+fi
 
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to enable ScyllaDB services?" &&:
