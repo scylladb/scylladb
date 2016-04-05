@@ -937,10 +937,9 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     mutations.emplace_back(std::move(m));
 
     if (with_tables_and_types_and_functions) {
-#if 0
-        for (UserType type : keyspace.userTypes.getAllTypes().values())
-            addTypeToSchemaMutation(type, timestamp, mutation);
-#endif
+        for (auto&& kv : keyspace->user_types()->get_all_types()) {
+            add_type_to_schema_mutation(kv.second, timestamp, mutations);
+        }
         for (auto&& kv : keyspace->cf_meta_data()) {
             add_table_to_schema_mutation(kv.second, timestamp, true, mutations);
         }
@@ -1007,51 +1006,79 @@ std::vector<user_type> create_types_from_schema_partition(const schema_result_va
     return user_types;
 }
 
-#if 0
-    /*
-     * User type metadata serialization/deserialization.
-     */
+/*
+ * User type metadata serialization/deserialization
+ */
 
-    public static Mutation makeCreateTypeMutation(KSMetaData keyspace, UserType type, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-        addTypeToSchemaMutation(type, timestamp, mutation);
-        return mutation;
+template <typename T>
+static atomic_cell_or_collection
+make_list_mutation(const std::vector<T>& values,
+    const column_definition* column,
+    api::timestamp_type timestamp,
+    std::function<data_value(typename std::vector<T>::value_type)> to_data_value)
+{
+    assert(column);
+    list_type_impl::mutation m;
+    m.cells.reserve(values.size());
+    m.tomb.timestamp = timestamp - 1;
+    m.tomb.deletion_time = gc_clock::now();
+
+    auto values_type = static_pointer_cast<const list_type_impl>(column->type);
+    for (auto&& value : values) {
+        auto dv = to_data_value(value);
+        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+        m.cells.emplace_back(
+            bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
+            atomic_cell::make_live(timestamp, values_type->get_elements_type()->decompose(std::move(dv))));
     }
 
-    private static void addTypeToSchemaMutation(UserType type, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Usertypes);
+    return atomic_cell_or_collection::from_collection_mutation(values_type->serialize_mutation_form(std::move(m)));
+}
 
-        Composite prefix = Usertypes.comparator.make(type.name);
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
+void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, std::vector<mutation>& mutations)
+{
+    schema_ptr s = usertypes();
+    auto pkey = partition_key::from_singular(*s, type->_keyspace);
+    auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
+    mutation m{pkey, s};
 
-        adder.resetCollection("field_names");
-        adder.resetCollection("field_types");
+    auto field_names_column = s->get_column_definition("field_names");
+    auto field_names = make_list_mutation(type->field_names(), field_names_column, timestamp, [](auto&& name) {
+        return utf8_type->deserialize(name);
+    });
+    m.set_clustered_cell(ckey, *field_names_column, std::move(field_names));
 
-        for (int i = 0; i < type.size(); i++)
-        {
-            adder.addListEntry("field_names", type.fieldName(i));
-            adder.addListEntry("field_types", type.fieldType(i).toString());
-        }
-    }
+    auto field_types_column = s->get_column_definition("field_types");
+    auto field_types = make_list_mutation(type->field_types(), field_types_column, timestamp, [](auto&& type) {
+        return data_value(type->name());
+    });
+    m.set_clustered_cell(ckey, *field_types_column, std::move(field_types));
 
-    public static Mutation dropTypeFromSchemaMutation(KSMetaData keyspace, UserType type, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
+    mutations.emplace_back(std::move(m));
+}
 
-        ColumnFamily cells = mutation.addOrGet(Usertypes);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
+std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    add_type_to_schema_mutation(type, timestamp, mutations);
+    return mutations;
+}
 
-        Composite prefix = Usertypes.comparator.make(type.name);
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
+std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
 
-        return mutation;
-    }
+    schema_ptr s = usertypes();
+    auto pkey = partition_key::from_singular(*s, type->_keyspace);
+    auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
+    mutation m{pkey, s};
+    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    mutations.emplace_back(std::move(m));
 
-#endif
+    return mutations;
+}
 
 /*
  * Table metadata serialization/deserialization.
