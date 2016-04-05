@@ -985,6 +985,28 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes);
 }
 
+std::vector<user_type> create_types_from_schema_partition(const schema_result_value_type& result)
+{
+    std::vector<user_type> user_types;
+    user_types.reserve(result.second->rows().size());
+    for (auto&& row : result.second->rows()) {
+        auto name = to_bytes(row.get_nonnull<sstring>("type_name"));
+        auto columns = row.get_nonnull<list_type_impl::native_type>("field_names");
+        std::vector<bytes> field_names;
+        for (auto&& value : columns) {
+            field_names.emplace_back(to_bytes(value_cast<sstring>(value)));
+        }
+        auto types = row.get_nonnull<list_type_impl::native_type>("field_types");
+        std::vector<data_type> field_types;
+        for (auto&& value : types) {
+            field_types.emplace_back(parse_type(value_cast<sstring>(value)));
+        }
+
+        user_types.emplace_back(user_type_impl::get_instance(result.first, name, field_names, field_types));
+    }
+    return user_types;
+}
+
 #if 0
     /*
      * User type metadata serialization/deserialization.
@@ -1029,35 +1051,6 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
         return mutation;
     }
 
-    private static Map<ByteBuffer, UserType> createTypesFromPartition(Row partition)
-    {
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, USERTYPES);
-        Map<ByteBuffer, UserType> types = new HashMap<>();
-        for (UntypedResultSet.Row row : QueryProcessor.resultify(query, partition))
-        {
-            UserType type = createTypeFromRow(row);
-            types.put(type.name, type);
-        }
-        return types;
-    }
-
-    private static UserType createTypeFromRow(UntypedResultSet.Row row)
-    {
-        String keyspace = row.getString("keyspace_name");
-        ByteBuffer name = ByteBufferUtil.bytes(row.getString("type_name"));
-        List<String> rawColumns = row.getList("field_names", UTF8Type.instance);
-        List<String> rawTypes = row.getList("field_types", UTF8Type.instance);
-
-        List<ByteBuffer> columns = new ArrayList<>(rawColumns.size());
-        for (String rawColumn : rawColumns)
-            columns.add(ByteBufferUtil.bytes(rawColumn));
-
-        List<AbstractType<?>> types = new ArrayList<>(rawTypes.size());
-        for (String rawType : rawTypes)
-            types.add(parseType(rawType));
-
-        return new UserType(keyspace, name, columns, types);
-    }
 #endif
 
 /*
