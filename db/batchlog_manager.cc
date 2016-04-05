@@ -41,6 +41,7 @@
 #include <chrono>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
+#include <seastar/core/semaphore.hh>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/adaptor/sliced.hpp>
 
@@ -76,26 +77,42 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
         , _e1(_rd())
 {}
 
+future<> db::batchlog_manager::do_batch_log_replay() {
+    // Use with_semaphore is much simpler, but nested invoke_on can
+    // cause deadlock.
+    return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
+        return bm._sem.wait().then([&bm] {
+            return bm._cpu++ % smp::count;
+        });
+    }).then([] (auto dest) {
+        logger.debug("Batchlog replay on shard {}: starts", dest);
+        return get_batchlog_manager().invoke_on(dest, [] (auto& bm) {
+            return bm.replay_all_failed_batches();
+        }).then([dest] {
+            logger.debug("Batchlog replay on shard {}: done", dest);
+        });
+    }).finally([] {
+        return get_batchlog_manager().invoke_on(0, [] (auto& bm) {
+            return bm._sem.signal();
+        });
+    });
+}
+
 future<> db::batchlog_manager::start() {
-    // Since replay is a "node global" operation, we should not attempt to
-    // do it in parallel on each shard. It will just overlap/interfere.
-    // Could just run this on cpu 0 or so, but since this _could_ be a
-    // lengty operation, we'll round-robin it between shards just in case...
-    if (smp::main_thread()) {
-        auto cpu = engine().cpu_id();
-        _timer.set_callback(
-                [this, cpu]() mutable {
-                    auto dest = (cpu++ % smp::count);
-                    return smp::submit_to(dest, [] {
-                                return get_local_batchlog_manager().replay_all_failed_batches();
-                            }).handle_exception([](auto ep) {
-                                logger.error("Exception in batch replay: {}", ep);
-                            }).finally([this] {
-                                _timer.arm(lowres_clock::now()
-                                        + std::chrono::milliseconds(replay_interval)
-                                );
-                            });
-                });
+    // Since replay is a "node global" operation, we should not attempt to do
+    // it in parallel on each shard. It will just overlap/interfere.  To
+    // simplify syncing between the timer and user initiated replay operations,
+    // we use the _timer and _sem on shard zero only. Replaying batchlog can
+    // generate a lot of work, so we distrute the real work on all cpus with
+    // round-robin scheduling.
+    if (engine().cpu_id() == 0) {
+        _timer.set_callback([this] {
+            return do_batch_log_replay().handle_exception([] (auto ep) {
+                logger.error("Exception in batch replay: {}", ep);
+            }).finally([this] {
+                _timer.arm(lowres_clock::now() + std::chrono::milliseconds(replay_interval));
+            });
+        });
         auto ring_delay = service::get_local_storage_service().get_ring_delay();
         _timer.arm(lowres_clock::now() + ring_delay);
     }
@@ -103,6 +120,9 @@ future<> db::batchlog_manager::start() {
 }
 
 future<> db::batchlog_manager::stop() {
+    if (_stop) {
+        return make_ready_future<>();
+    }
     _stop = true;
     _timer.cancel();
     return _gate.close();
