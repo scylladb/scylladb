@@ -43,22 +43,24 @@
 #include "auth/auth.hh"
 #include "exceptions/exceptions.hh"
 
-future<> service::client_state::login(::shared_ptr<auth::authenticated_user> user) {
+void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
         throw std::invalid_argument("Must provide user");
     }
-    if (user->is_anonymous()) {
-        _user = std::move(user);
+    _user = std::move(user);
+}
+
+future<> service::client_state::check_user_exists() {
+    if (_user->is_anonymous()) {
         return make_ready_future();
     }
-    auto f = auth::auth::is_existing_user(user->name());
-    return f.then([this, user = std::move(user)](bool exists) mutable {
+
+    return auth::auth::is_existing_user(_user->name()).then([user = _user](bool exists) mutable {
         if (!exists) {
             throw exceptions::authentication_exception(
                             sprint("User %s doesn't exist - create it with CREATE USER query first",
                                             user->name()));
         }
-        _user = std::move(user);
         return make_ready_future();
     });
 }

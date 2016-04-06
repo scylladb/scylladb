@@ -182,9 +182,14 @@ public:
     }
 
     /**
-     * Attempts to login the given user.
+     * Sets active user. Does _not_ validate anything
      */
-    future<> login(::shared_ptr<auth::authenticated_user>);
+    void set_login(::shared_ptr<auth::authenticated_user>);
+
+    /**
+     * Attempts to validate login for the set user.
+     */
+    future<> check_user_exists();
 
 #if 0
     public void hasAllKeyspacesAccess(Permission perm) throws UnauthorizedException
