@@ -658,9 +658,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
      *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
      *   to this node
      */
-    auto diff = difference(before, after, [](const auto& x, const auto& y) -> bool {
-        return *x == *y;
-    });
+    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     for (auto&& key : diff.entries_only_on_left) {
         dropped.emplace(key);
