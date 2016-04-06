@@ -75,3 +75,13 @@ void service::client_state::ensure_not_anonymous() const throw(exceptions::unaut
         throw exceptions::unauthorized_exception("You have to be logged in and not anonymous to perform this request");
     }
 }
+
+void service::client_state::merge(const client_state& other) {
+    if (other._dirty) {
+        _keyspace = other._keyspace;
+    }
+    if (_user == nullptr) {
+        _user = other._user;
+    }
+    _last_timestamp_micros = std::max(_last_timestamp_micros, other._last_timestamp_micros);
+}

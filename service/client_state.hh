@@ -104,12 +104,7 @@ public:
 
     client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
 
-    void merge(const client_state& other) {
-        if (other._dirty) {
-            _keyspace = other._keyspace;
-        }
-        _last_timestamp_micros = std::max(_last_timestamp_micros, other._last_timestamp_micros);
-    }
+    void merge(const client_state& other);
 
     bool is_thrift() const {
         return _thrift;
