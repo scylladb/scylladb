@@ -42,6 +42,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <seastar/core/future.hh>
 
 namespace auth {
 
@@ -60,7 +61,7 @@ public:
      * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
      * (depends on IAuthorizer implementation).
      */
-    bool is_super() const;
+    future<bool> is_super() const;
 
     /**
      * If IAuthenticator doesn't require authentication, this method may return true.
