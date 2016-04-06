@@ -2629,6 +2629,16 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
     return os.str();
 }
 
+bool
+user_type_impl::equals(const abstract_type& other) const {
+    auto x = dynamic_cast<const user_type_impl*>(&other);
+    return x
+        && _keyspace == x->_keyspace
+        && _name == x->_name
+        && std::equal(_field_names.begin(), _field_names.end(), x->_field_names.begin(), x->_field_names.end())
+        && tuple_type_impl::equals(other);
+}
+
 size_t
 reversed_type_impl::native_value_size() const {
     return _underlying_type->native_value_size();

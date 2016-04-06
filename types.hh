@@ -1430,6 +1430,7 @@ public:
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual bool equals(const abstract_type& other) const override;
 private:
     static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
 };
