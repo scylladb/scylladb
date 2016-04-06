@@ -106,6 +106,10 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after);
 
+static void merge_types(distributed<service::storage_proxy>& proxy,
+    schema_result&& before,
+    schema_result&& after);
+
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -599,7 +603,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
        // current state of the schema
        auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
        auto&& old_column_families = read_tables_for_keyspaces(proxy, keyspaces);
-       /*auto& old_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& old_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
 #if 0 // not in 2.1.8
        /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -616,10 +620,10 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
            }).get();
        }
 
-      // with new data applied
+       // with new data applied
        auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
        auto&& new_column_families = read_tables_for_keyspaces(proxy, keyspaces);
-       /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& new_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
 #if 0 // not in 2.1.8
        /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -627,8 +631,8 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 
        std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
        merge_tables(proxy, std::move(old_column_families), std::move(new_column_families));
+       merge_types(proxy, std::move(old_types), std::move(new_types));
 #if 0
-       mergeTypes(oldTypes, newTypes);
        mergeFunctions(oldFunctions, newFunctions);
        mergeAggregates(oldAggregates, newAggregates);
 #endif
@@ -754,62 +758,70 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     }).get();
 }
 
-#if 0
-    // see the comments for mergeKeyspaces()
-    private static void mergeTypes(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
-    {
-        List<UserType> created = new ArrayList<>();
-        List<UserType> altered = new ArrayList<>();
-        List<UserType> dropped = new ArrayList<>();
+static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<user_type>& to)
+{
+    for (auto&& key : keys) {
+        auto&& value = result[key];
+        auto types = create_types_from_schema_partition(schema_result_value_type{key, std::move(value)});
+        std::move(types.begin(), types.end(), std::back_inserter(to));
+    }
+}
 
-        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(before, after);
+ // see the comments for merge_keyspaces()
+static void merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
+{
+    std::vector<user_type> created, altered, dropped;
 
-        // New keyspace with types
-        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
-            if (entry.getValue().hasColumns())
-                created.addAll(createTypesFromPartition(new Row(entry.getKey(), entry.getValue())).values());
+    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
-        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : diff.entriesDiffering().entrySet())
-        {
-            String keyspaceName = AsciiType.instance.compose(entry.getKey().getKey());
+    collect_types(diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
+    collect_types(diff.entries_only_on_right, after, created); // New keyspaces with types
 
-            ColumnFamily pre  = entry.getValue().leftValue();
-            ColumnFamily post = entry.getValue().rightValue();
-
-            if (pre.hasColumns() && post.hasColumns())
-            {
-                MapDifference<ByteBuffer, UserType> delta =
-                    Maps.difference(Schema.instance.getKSMetaData(keyspaceName).userTypes.getAllTypes(),
-                                    createTypesFromPartition(new Row(entry.getKey(), post)));
-
-                dropped.addAll(delta.entriesOnlyOnLeft().values());
-                created.addAll(delta.entriesOnlyOnRight().values());
-                Iterables.addAll(altered, Iterables.transform(delta.entriesDiffering().values(), new Function<MapDifference.ValueDifference<UserType>, UserType>()
-                {
-                    public UserType apply(MapDifference.ValueDifference<UserType> pair)
-                    {
-                        return pair.rightValue();
-                    }
-                }));
-            }
-            else if (pre.hasColumns())
-            {
-                dropped.addAll(Schema.instance.getKSMetaData(keyspaceName).userTypes.getAllTypes().values());
-            }
-            else if (post.hasColumns())
-            {
-                created.addAll(createTypesFromPartition(new Row(entry.getKey(), post)).values());
-            }
+    for (auto&& key : diff.entries_differing) {
+        // The user types of this keyspace differ, so diff the current types with the updated ones
+        auto current_types = proxy.local().get_db().local().find_keyspace(key).metadata()->user_types()->get_all_types();
+        decltype(current_types) updated_types;
+        auto ts = create_types_from_schema_partition(schema_result_value_type{key, std::move(after[key])});
+        updated_types.reserve(ts.size());
+        for (auto&& type : ts) {
+            updated_types[type->_name] = std::move(type);
         }
 
-        for (UserType type : created)
-            Schema.instance.addType(type);
-        for (UserType type : altered)
-            Schema.instance.updateType(type);
-        for (UserType type : dropped)
-            Schema.instance.dropType(type);
+        auto delta = difference(current_types, updated_types, indirect_equal_to<user_type>());
+
+        for (auto&& key : delta.entries_only_on_left) {
+            dropped.emplace_back(current_types[key]);
+        }
+        for (auto&& key : delta.entries_only_on_right) {
+            created.emplace_back(std::move(updated_types[key]));
+        }
+        for (auto&& key : delta.entries_differing) {
+            altered.emplace_back(std::move(updated_types[key]));
+        }
     }
 
+    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
+        return seastar::async([&] {
+            for (auto&& type : created) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+                service::get_local_migration_manager().notify_create_user_type(user_type).get();
+            }
+            for (auto&& type : dropped) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+                service::get_local_migration_manager().notify_drop_user_type(user_type).get();
+            }
+            for (auto&& type : altered) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+                service::get_local_migration_manager().notify_update_user_type(user_type).get();
+            }
+        });
+    }).get();
+}
+
+#if 0
     // see the comments for mergeKeyspaces()
     private static void mergeFunctions(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
     {
