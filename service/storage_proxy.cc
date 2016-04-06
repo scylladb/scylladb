@@ -410,6 +410,21 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                 , "total_operations", "range slice unavailable")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables)
         ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "received mutations")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.received_mutations)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "forwarded mutations")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarded_mutations)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "forwarding errors")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarding_errors)
+        ),
     }));
 }
 
@@ -2848,6 +2863,8 @@ void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
     ms.register_mutation([] (const rpc::client_info& cinfo, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         return do_with(std::move(in), get_local_shared_storage_proxy(), [&cinfo, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
+            ++p->_stats.received_mutations;
+            p->_stats.forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
                 futurize<void>::apply([&p, &m, reply_to, &cinfo] {
@@ -2870,7 +2887,10 @@ void storage_proxy::init_messaging_service() {
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
                     auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
-                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([&p] (future<> f) {
+                        if (f.failed()) {
+                            ++p->_stats.forwarding_errors;
+                        };
                         f.ignore_ready_future();
                     });
                 })

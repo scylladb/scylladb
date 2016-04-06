@@ -87,6 +87,14 @@ public:
         uint64_t read_repair_attempts = 0;
         uint64_t read_repair_repaired_blocking = 0;
         uint64_t read_repair_repaired_background = 0;
+
+        // number of mutations received as a coordinator
+        uint64_t received_mutations = 0;
+
+        // number of forwarded mutations
+        uint64_t forwarded_mutations = 0;
+        uint64_t forwarding_errors = 0;
+
         utils::ihistogram read;
         utils::ihistogram write;
         utils::ihistogram range;
