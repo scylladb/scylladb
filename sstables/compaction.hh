@@ -108,7 +108,9 @@ namespace sstables {
             uint64_t max_sstable_size, uint32_t sstable_level, bool cleanup = false);
 
     // Return the most interesting bucket applying the size-tiered strategy.
-    // NOTE: currently used for purposes of testing. May also be used by leveled compaction strategy.
     std::vector<sstables::shared_sstable>
     size_tiered_most_interesting_bucket(lw_shared_ptr<sstable_list> candidates);
+
+    std::vector<sstables::shared_sstable>
+    size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>& candidates);
 }

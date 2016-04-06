@@ -369,18 +369,15 @@ public:
             logger.debug("Compaction score for level {} is {}", i, score);
 
             if (score > 1.001) {
-#if 0
                 // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
-                if (!DatabaseDescriptor.getDisableSTCSInL0() && getLevel(0).size() > MAX_COMPACTING_L0)
-                {
-                    List<SSTableReader> mostInteresting = getSSTablesForSTCS(getLevel(0));
-                    if (!mostInteresting.isEmpty())
-                    {
+                // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
+                if (get_level_size(0) > MAX_COMPACTING_L0) {
+                    auto most_interesting = size_tiered_most_interesting_bucket(get_level(0));
+                    if (!most_interesting.empty()) {
                         logger.debug("L0 is too far behind, performing size-tiering there first");
-                        return new CompactionCandidate(mostInteresting, 0, Long.MAX_VALUE);
+                        return sstables::compaction_descriptor(std::move(most_interesting));
                     }
                 }
-#endif
                 // L0 is fine, proceed with this level
                 auto candidates = get_candidates_for(i);
                 if (!candidates.empty()) {
