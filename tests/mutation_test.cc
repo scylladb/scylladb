@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include "mutation_query.hh"
 #include "md5_hasher.hh"
 
 #include "core/sstring.hh"
@@ -1034,6 +1035,55 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
                 if (h1 == h2) {
                     BOOST_FAIL(sprint("Hash should be different for %s and %s", m1, m2));
                 }
+            }
+        });
+    });
+}
+
+static mutation compacted(const mutation& m) {
+    auto result = m;
+    result.partition().compact_for_compaction(*result.schema(), api::max_timestamp, gc_clock::now());
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_query_digest) {
+    return seastar::async([] {
+        auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
+            auto ps1 = partition_slice_builder(*m1.schema()).build();
+            auto ps2 = partition_slice_builder(*m2.schema()).build();
+            auto digest1 = *m1.query(ps1, query::result_request::only_digest).digest();
+            auto digest2 = *m2.query(ps2, query::result_request::only_digest).digest();
+            if (digest1 != digest2) {
+                BOOST_FAIL(sprint("Digest should be the same for %s and %s", m1, m2));
+            }
+        };
+
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq) {
+            if (m1.schema()->version() != m2.schema()->version()) {
+                return;
+            }
+
+            if (eq) {
+                check_digests_equal(compacted(m1), m2);
+                check_digests_equal(m1, compacted(m2));
+            } else {
+                BOOST_TEST_MESSAGE("If not equal, they should become so after applying diffs mutually");
+
+                schema_ptr s = m1.schema();
+
+                auto m3 = m2;
+                {
+                    auto diff = m1.partition().difference(s, m2.partition());
+                    m3.partition().apply(*m3.schema(), std::move(diff));
+                }
+
+                auto m4 = m1;
+                {
+                    auto diff = m2.partition().difference(s, m1.partition());
+                    m4.partition().apply(*m4.schema(), std::move(diff));
+                }
+
+                check_digests_equal(m3, m4);
             }
         });
     });
