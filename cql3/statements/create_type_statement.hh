@@ -68,6 +68,11 @@ public:
     virtual const sstring& keyspace() const override;
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+
+    static void check_for_duplicate_names(user_type type);
+private:
+    bool type_exists_in(::keyspace& ks);
+    user_type create_type(database& db);
 };
 
 }
