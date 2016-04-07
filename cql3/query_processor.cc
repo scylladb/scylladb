@@ -271,8 +271,8 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 query_processor::parse_statement(const sstring_view& query)
 {
     try {
-        error_collector<cql3_parser::CqlLexer::RecognizerType> lexer_error_collector(query);
-        error_collector<cql3_parser::CqlParser::RecognizerType> parser_error_collector(query);
+        cql3_parser::CqlLexer::collector_type lexer_error_collector(query);
+        cql3_parser::CqlParser::collector_type parser_error_collector(query);
         cql3_parser::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
         cql3_parser::CqlLexer lexer{&input};
         lexer.set_error_listener(lexer_error_collector);

@@ -41,17 +41,18 @@
 
 #pragma once
 
-#include <vector>
-#include "core/sstring.hh"
+#include <seastar/core/sstring.hh>
+#include <antlr3.hpp>
 
 namespace cql3 {
 
 /**
  * Listener used to collect the syntax errors emitted by the Lexer and Parser.
  */
-template<typename RecognizerType>
+template<typename RecognizerType, typename ExceptionBaseType>
 class error_listener {
 public:
+
     /**
      * Invoked when a syntax error occurs.
      *
@@ -59,7 +60,7 @@ public:
      * @param tokenNames the token names
      * @param e the exception
      */
-    virtual void syntax_error(RecognizerType& recognizer, const std::vector<sstring>& token_names) = 0;
+    virtual void syntax_error(RecognizerType& recognizer, ANTLR_UINT8** token_names, ExceptionBaseType* ex) = 0;
 
     /**
      * Invoked when a syntax error with a specified message occurs.

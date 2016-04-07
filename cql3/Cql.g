@@ -26,6 +26,7 @@ options {
 @parser::namespace{cql3_parser}
 
 @lexer::includes {
+#include "cql3/error_collector.hh"
 #include "cql3/error_listener.hh"
 }
 
@@ -108,7 +109,9 @@ struct uninitialized {
 }
 
 @context {
-    using listener_type = cql3::error_listener<RecognizerType>;
+    using collector_type = cql3::error_collector<ComponentType, ExceptionBaseType::TokenType, ExceptionBaseType>;
+    using listener_type = cql3::error_listener<ComponentType, ExceptionBaseType>;
+
     listener_type* listener;
 
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
@@ -162,13 +165,24 @@ struct uninitialized {
 
     void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex)
     {
-        std::stringstream msg;
-        ex->displayRecognitionError(token_names, msg);
-        listener->syntax_error(*this, msg.str());
+        listener->syntax_error(*this, token_names, ex);
     }
 
     void add_recognition_error(const sstring& msg) {
         listener->syntax_error(*this, msg);
+    }
+
+    bool is_eof_token(CommonTokenType token) const
+    {
+        return token == CommonTokenType::TOKEN_EOF;
+    }
+
+    std::string token_text(const TokenType* token)
+    {
+        if (!token) {
+            return "";
+        }
+        return token->getText();
     }
 
     std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
@@ -241,7 +255,8 @@ struct uninitialized {
 }
 
 @lexer::context {
-    using listener_type = cql3::error_listener<RecognizerType>;
+    using collector_type = cql3::error_collector<ComponentType, ExceptionBaseType::TokenType, ExceptionBaseType>;
+    using listener_type = cql3::error_listener<ComponentType, ExceptionBaseType>;
 
     listener_type* listener;
 
@@ -251,9 +266,20 @@ struct uninitialized {
 
     void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex)
     {
-        std::stringstream msg;
-        ex->displayRecognitionError(token_names, msg);
-        listener->syntax_error(*this, msg.str());
+        listener->syntax_error(*this, token_names, ex);
+    }
+
+    bool is_eof_token(CommonTokenType token) const
+    {
+        return token == CommonTokenType::TOKEN_EOF;
+    }
+
+    std::string token_text(const TokenType* token) const
+    {
+        if (!token) {
+            return "";
+        }
+        return std::to_string(int(*token));
     }
 }
 
