@@ -149,6 +149,21 @@ public:
         uint64_t background_reads = 0; // client no longer waits for the read
         uint64_t read_retries = 0; // read is retried with new limit
 
+        // Data read attempts
+        split_stats data_read_attempts;
+        split_stats data_read_completed;
+        split_stats data_read_errors;
+
+        // Digest read attempts
+        split_stats digest_read_attempts;
+        split_stats digest_read_completed;
+        split_stats digest_read_errors;
+
+        // Mutation data read attempts
+        split_stats mutation_data_read_attempts;
+        split_stats mutation_data_read_completed;
+        split_stats mutation_data_read_errors;
+
     public:
         stats();
     };

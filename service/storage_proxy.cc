@@ -360,7 +360,16 @@ storage_proxy::split_stats::split_stats(const sstring& description_prefix)
 storage_proxy::stats::stats()
         : writes_attempts("total write attempts")
         , writes_errors("write errors")
-        , read_repair_write_attempts("read repair write attempts") {}
+        , read_repair_write_attempts("read repair write attempts")
+        , data_read_attempts("data reads")
+        , data_read_completed("completed data reads")
+        , data_read_errors("data read errors")
+        , digest_read_attempts("digest reads")
+        , digest_read_completed("completed digest reads")
+        , digest_read_errors("digest read errors")
+        , mutation_data_read_attempts("mutation data reads")
+        , mutation_data_read_completed("completed mutation data reads")
+        , mutation_data_read_errors("mutation data read errors") {}
 
 inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
     if (is_me(ep)) {
@@ -1876,6 +1885,7 @@ public:
 
 protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range);
         } else {
@@ -1886,6 +1896,7 @@ protected:
         }
     }
     future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_singular_local(_schema, _cmd, _partition_range);
         } else {
@@ -1896,6 +1907,7 @@ protected:
         }
     }
     future<query::result_digest> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
         } else {
@@ -1905,10 +1917,12 @@ protected:
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
                 try {
                     resolver->add_mutate_data(ep, f.get0());
+                    ++_proxy->_stats.mutation_data_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.mutation_data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -1916,10 +1930,12 @@ protected:
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_data_request(ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+            return make_data_request(ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
                 try {
                     resolver->add_data(ep, f.get0());
+                    ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -1927,10 +1943,12 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([resolver, ep] (future<query::result_digest> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest> f) {
                 try {
                     resolver->add_digest(ep, f.get0());
+                    ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.digest_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
