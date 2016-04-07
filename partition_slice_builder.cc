@@ -127,3 +127,15 @@ partition_slice_builder::reversed() {
     _options.set<query::partition_slice::option::reversed>();
     return *this;
 }
+
+partition_slice_builder&
+partition_slice_builder::without_partition_key_columns() {
+    _options.remove<query::partition_slice::option::send_partition_key>();
+    return *this;
+}
+
+partition_slice_builder&
+partition_slice_builder::without_clustering_key_columns() {
+    _options.remove<query::partition_slice::option::send_clustering_key>();
+    return *this;
+}
