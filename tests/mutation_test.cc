@@ -1269,6 +1269,95 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
     });
 }
 
+SEASTAR_TEST_CASE(test_querying_expired_cells) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck", bytes_type, column_kind::clustering_key)
+                .with_column("s1", bytes_type, column_kind::static_column)
+                .with_column("s2", bytes_type, column_kind::static_column)
+                .with_column("s3", bytes_type, column_kind::static_column)
+                .with_column("v1", bytes_type)
+                .with_column("v2", bytes_type)
+                .with_column("v3", bytes_type)
+                .build();
+
+        auto pk = partition_key::from_singular(*s, data_value(bytes("key1")));
+        auto ckey1 = clustering_key::from_singular(*s, data_value(bytes("A")));
+
+        auto ttl = std::chrono::seconds(1);
+        auto t1 = gc_clock::now();
+        auto t2 = t1 + std::chrono::seconds(1);
+        auto t3 = t2 + std::chrono::seconds(1);
+        auto t4 = t3 + std::chrono::seconds(1);
+
+        auto v1 = data_value(bytes("1"));
+        auto v2 = data_value(bytes("2"));
+        auto v3 = data_value(bytes("3"));
+
+        auto results_at_time = [s] (const mutation& m, gc_clock::time_point t) {
+            auto slice = partition_slice_builder(*s)
+                    .with_regular_column("v1")
+                    .with_regular_column("v2")
+                    .with_regular_column("v3")
+                    .with_static_column("s1")
+                    .with_static_column("s2")
+                    .with_static_column("s3")
+                    .without_clustering_key_columns()
+                    .without_partition_key_columns()
+                    .build();
+            return query::result_set::from_raw_result(s, slice, m.query(slice, query::result_request::result_and_digest, t));
+        };
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
+
+            assert_that(results_at_time(m, t1))
+                    .has_only(a_row()
+                         .with_column("s1", v1)
+                         .with_column("s2", v2)
+                         .with_column("s3", v3)
+                         .with_column("v1", v1)
+                         .with_column("v2", v2)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t2))
+                    .has_only(a_row()
+                         .with_column("s2", v2)
+                         .with_column("s3", v3)
+                         .with_column("v2", v2)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t3))
+                    .has_only(a_row()
+                         .with_column("s3", v3)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t4)).is_empty();
+        }
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t3, ttl));
+
+            assert_that(results_at_time(m, t2))
+                    .has_only(a_row().with_column("s1", v1).and_only_that());
+
+            assert_that(results_at_time(m, t4)).is_empty();
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(test_tombstone_purge) {
     auto builder = schema_builder("tests", "tombstone_purge")
         .with_column("id", utf8_type, column_kind::partition_key)
