@@ -1734,21 +1734,12 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
     {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto&& range = *qs.current_partition_range++;
-            qs.reader = make_reader(qs.schema, range, service::get_local_sstable_query_read_priority());
-            qs.range_empty = false;
-            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [&qs] {
-                return qs.reader().then([&qs](mutation_opt mo) {
-                    if (mo) {
-                        auto p_builder = qs.builder.add_partition(*mo->schema(), mo->key());
-                        auto is_distinct = qs.cmd.slice.options.contains(query::partition_slice::option::distinct);
-                        auto limit = !is_distinct ? qs.limit : 1;
-                        auto rows_added = mo->partition().query(p_builder, *qs.schema, qs.cmd.timestamp, limit);
-                        qs.limit -= rows_added;
-                    } else {
-                        qs.range_empty = true;
-                    }
-                });
-            });
+            auto add_partition = [&qs] (uint32_t live_rows, mutation&& m) {
+                auto pb = qs.builder.add_partition(*qs.schema, m.key());
+                m.partition().query_compacted(pb, *qs.schema, live_rows);
+            };
+            return do_with(querying_reader(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.limit, qs.cmd.timestamp, add_partition),
+                           [] (auto&& rd) { return rd.read(); });
         }).then([qs_ptr = std::move(qs_ptr), &qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
