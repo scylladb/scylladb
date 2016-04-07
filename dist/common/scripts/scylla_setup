@@ -132,6 +132,20 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to enable ScyllaDB services?" &&:
     ENABLE_SERVICE=$?
 fi
+
+if [ "$ID" = "ubuntu" ]; then
+    dpkg -s scylla-jmx > /dev/null 2>&1 &&:
+    NO_SCYLLA_JMX=$?
+else
+    rpm -q scylla-jmx > /dev/null 2>&1 &&:
+    NO_SCYLLA_JMX=$?
+fi
+
+if [ $NO_SCYLLA_JMX -eq 1 ]; then
+    echo "scylla-jmx package is not installed."
+    exit 1
+fi
+
 if [ $ENABLE_SERVICE -eq 1 ]; then
     if [ "$ID" = "fedora" ] || [ "$ID" = "centos" ]; then
         systemctl enable scylla-server.service
