@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Cloudius Systems, Ltd.
+ * Copyright (C) 2014 ScyllaDB
  */
 
 /*

@@ -17,9 +17,9 @@
  */
 
 /*
- * Copyright 2016 Cloudius Systems
+ * Copyright (C) 2016 ScyllaDB
  *
- * Modified by Cloudius Systems
+ * Modified by ScyllaDB
  */
 
 /*

@@ -17,9 +17,9 @@
  */
 
 /*
- * Copyright 2015 Cloudius Systems
+ * Copyright (C) 2015 ScyllaDB
  *
- * Modified by Cloudius Systems
+ * Modified by ScyllaDB
  *
  * This file contains code from a variety of .java files from the
  * Cassandra project, adapted to our needs.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Copyright 2015 Cloudius Systems
+# Copyright (C) 2015 ScyllaDB
 #
 
 #
