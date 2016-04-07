@@ -104,8 +104,23 @@ public:
     bool operator!=(const mutation&) const;
 public:
     // The supplied partition_slice must be governed by this mutation's schema
-    query::result query(const query::partition_slice&, query::result_request request = query::result_request::only_result,
-        gc_clock::time_point now = gc_clock::now(), uint32_t row_limit = query::max_rows) const;
+    query::result query(const query::partition_slice&,
+        query::result_request request = query::result_request::only_result,
+        gc_clock::time_point now = gc_clock::now(),
+        uint32_t row_limit = query::max_rows) &&;
+
+    // The supplied partition_slice must be governed by this mutation's schema
+    // FIXME: Slower than the r-value version
+    query::result query(const query::partition_slice&,
+        query::result_request request = query::result_request::only_result,
+        gc_clock::time_point now = gc_clock::now(),
+        uint32_t row_limit = query::max_rows) const&;
+
+    // The supplied partition_slice must be governed by this mutation's schema
+    void query(query::result::builder& builder,
+        const query::partition_slice& slice,
+        gc_clock::time_point now = gc_clock::now(),
+        uint32_t row_limit = query::max_rows) &&;
 
     // See mutation_partition::live_row_count()
     size_t live_row_count(gc_clock::time_point query_time = gc_clock::time_point::min()) const;

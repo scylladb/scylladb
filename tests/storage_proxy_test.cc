@@ -40,8 +40,7 @@ static query::result to_data_query_result(mutation_reader& reader, const query::
         if (!mo) {
             break;
         }
-        auto pb = builder.add_partition(*mo->schema(), mo->key());
-        mo->partition().query(pb, *mo->schema(), now);
+        std::move(*mo).query(builder, slice, now);
     }
     return builder.build();
 }
