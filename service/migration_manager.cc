@@ -259,13 +259,21 @@ future<> migration_manager::notify_create_column_family(const schema_ptr& cfm) {
     });
 }
 
-#if 0
-public void notifyCreateUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onCreateUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_create_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_create_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Create user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyCreateFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)
@@ -306,13 +314,21 @@ future<> migration_manager::notify_update_column_family(const schema_ptr& cfm, b
     });
 }
 
-#if 0
-public void notifyUpdateUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onUpdateUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_update_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_update_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Update user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)
@@ -352,13 +368,21 @@ future<> migration_manager::notify_drop_column_family(const schema_ptr& cfm) {
     });
 }
 
-#if 0
-public void notifyDropUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onDropUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_drop_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_drop_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Drop user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyDropFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)

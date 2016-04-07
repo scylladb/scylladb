@@ -81,10 +81,13 @@ public:
 
     future<> notify_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     future<> notify_create_column_family(const schema_ptr& cfm);
+    future<> notify_create_user_type(const user_type& type);
     future<> notify_update_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     future<> notify_update_column_family(const schema_ptr& cfm, bool columns_changed);
+    future<> notify_update_user_type(const user_type& type);
     future<> notify_drop_keyspace(const sstring& ks_name);
     future<> notify_drop_column_family(const schema_ptr& cfm);
+    future<> notify_drop_user_type(const user_type& type);
 
     bool should_pull_schema_from(const gms::inet_address& endpoint);
 
