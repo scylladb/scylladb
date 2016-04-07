@@ -85,13 +85,25 @@ public:
     }
 };
 
+lw_shared_ptr<memtable_list>
+column_family::make_memtable_list() {
+    auto seal = [this] { return seal_active_memtable(); };
+    auto get_schema = [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group);
+}
+
+lw_shared_ptr<memtable_list>
+column_family::make_streaming_memtable_list() {
+    auto seal = [this] { return seal_active_streaming_memtable_delayed(); };
+    auto get_schema =  [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.streaming_dirty_memory_region_group);
+}
+
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
-    , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
-        make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
+    , _memtables(make_memtable_list())
+    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memtable_list())
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
@@ -106,10 +118,8 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
-    , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
-        make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
+    , _memtables(make_memtable_list())
+    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memtable_list())
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
@@ -542,15 +552,6 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     update_stats_for_new_sstable(sstable->bytes_on_disk());
     _sstables->emplace(generation, std::move(sstable));
 }
-
-lw_shared_ptr<memtable> column_family::new_memtable() {
-    return make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group);
-}
-
-lw_shared_ptr<memtable> column_family::new_streaming_memtable() {
-    return make_lw_shared<memtable>(_schema, _config.streaming_dirty_memory_region_group);
-}
-
 
 future<>
 column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstables) {
