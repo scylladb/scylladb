@@ -83,6 +83,7 @@ public:
         }
         throw null_column_value(column_name);
     }
+    const std::unordered_map<sstring, data_value>& cells() const { return _cells; }
     friend inline bool operator==(const result_set_row& x, const result_set_row& y);
     friend inline bool operator!=(const result_set_row& x, const result_set_row& y);
     friend std::ostream& operator<<(std::ostream& out, const result_set_row& row);
