@@ -122,14 +122,16 @@ class memtable_list {
     using shared_memtable = lw_shared_ptr<memtable>;
     std::vector<shared_memtable> _memtables;
     std::function<future<> ()> _seal_fn;
-    std::function<shared_memtable ()> _new_memtable;
+    std::function<schema_ptr()> _current_schema;
     size_t _max_memtable_size;
+    logalloc::region_group* _dirty_memory_region_group;
 public:
-    memtable_list(std::function<future<> ()> seal_fn, std::function<shared_memtable()> new_mt, size_t max_memtable_size)
+    memtable_list(std::function<future<> ()> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, logalloc::region_group* region_group)
         : _memtables({})
         , _seal_fn(seal_fn)
-        , _new_memtable(new_mt)
-        , _max_memtable_size(max_memtable_size) {
+        , _current_schema(cs)
+        , _max_memtable_size(max_memtable_size)
+        , _dirty_memory_region_group(region_group) {
         add_memtable();
     }
 
@@ -174,7 +176,7 @@ public:
     }
 
     void add_memtable() {
-        _memtables.emplace_back(_new_memtable());
+        _memtables.emplace_back(new_memtable());
     }
 
     bool should_flush() {
@@ -187,6 +189,10 @@ public:
             // FIXME: maybe merge with other in-memory memtables
             _seal_fn();
         }
+    }
+private:
+    lw_shared_ptr<memtable> new_memtable() {
+        return make_lw_shared<memtable>(_current_schema(), _dirty_memory_region_group);
     }
 };
 
@@ -264,6 +270,9 @@ private:
     // memory throttling mechanism, guaranteeing we will not overload the
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
+
+    lw_shared_ptr<memtable_list> make_memtable_list();
+    lw_shared_ptr<memtable_list> make_streaming_memtable_list();
 
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
