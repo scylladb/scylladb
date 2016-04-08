@@ -762,6 +762,10 @@ public:
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::const_iterator lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::const_iterator upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    rows_type::iterator lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r);
+    rows_type::iterator upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r);
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
     // Writes this partition using supplied query result writer.
     // The partition should be first compacted with compact_for_query(), otherwise
