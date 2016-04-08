@@ -534,8 +534,8 @@ public:
     }
 
     // Return sstable key range as range<partition_key> reading only the summary component.
-    static future<range<partition_key>>
-    get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f);
+    future<range<partition_key>>
+    get_sstable_key_range(const schema& s);
 
     // Used to mark a sstable for deletion that is not relevant to the current shard.
     // It doesn't mean that the sstable will be deleted, but that the sstable is not

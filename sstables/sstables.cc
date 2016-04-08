@@ -1917,12 +1917,11 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
 }
 
 future<range<partition_key>>
-sstable::get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
-    auto sst = std::make_unique<sstable>(ks, cf, dir, generation, v, f);
-    auto fut = sst->read_summary(default_priority_class());
-    return std::move(fut).then([sst = std::move(sst), &s] () mutable {
-        auto first = sst->get_first_partition_key(s);
-        auto last = sst->get_last_partition_key(s);
+sstable::get_sstable_key_range(const schema& s) {
+    auto fut = read_summary(default_priority_class());
+    return std::move(fut).then([this, &s] () mutable {
+        auto first = get_first_partition_key(s);
+        auto last = get_last_partition_key(s);
         return make_ready_future<range<partition_key>>(range<partition_key>::make(first, last));
     });
 }
