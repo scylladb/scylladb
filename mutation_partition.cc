@@ -538,13 +538,11 @@ static void hash_row_slice(md5_hasher& hasher,
 }
 
 template<typename RowWriter>
-static void get_row_slice(const schema& s,
+static void get_compacted_row_slice(const schema& s,
     const query::partition_slice& slice,
     column_kind kind,
     const row& cells,
     const std::vector<column_id>& columns,
-    tombstone tomb,
-    gc_clock::time_point now,
     RowWriter& writer)
 {
     for (auto id : columns) {
@@ -555,7 +553,7 @@ static void get_row_slice(const schema& s,
             auto&& def = s.column_at(kind, id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
-                if (!c.is_live(tomb, now)) {
+                if (!c.is_live()) {
                     writer.add().skip();
                 } else {
                     write_cell(writer, slice, cell->as_atomic_cell());
@@ -563,21 +561,18 @@ static void get_row_slice(const schema& s,
             } else {
                 auto&& mut = cell->as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                auto m_view = ctype->deserialize_mutation_form(mut);
-                m_view.tomb.apply(tomb);
-                // FIXME: Instead of this, write optimistically and retract if empty
-                auto m_ser = ctype->serialize_mutation_form_only_live(m_view, now);
-                if (ctype->is_empty(m_ser)) {
+                if (ctype->is_empty(mut)) {
                     writer.add().skip();
                 } else {
-                    write_cell(writer, slice, def.type, m_ser);
+                    write_cell(writer, slice, def.type, mut);
                 }
             }
         }
     }
 }
 
-bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb, gc_clock::time_point now) {
+bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tombstone tomb = tombstone(),
+                       gc_clock::time_point now = gc_clock::time_point::min()) {
     bool any_live = false;
     cells.for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& cell_or_collection) {
         const column_definition& def = s.column_at(kind, id);
@@ -600,25 +595,20 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     return any_live;
 }
 
-uint32_t
-mutation_partition::query(query::result::partition_writer& pw,
-    const schema& s,
-    gc_clock::time_point now,
-    uint32_t limit) const
-{
+void
+mutation_partition::query_compacted(query::result::partition_writer& pw, const schema& s, uint32_t limit) const {
     const query::partition_slice& slice = pw.slice();
 
     if (limit == 0) {
         pw.retract();
-        return 0;
+        return;
     }
 
     auto static_cells_wr = pw.start().start_static_row().start_cells();
 
     if (!slice.static_columns.empty()) {
         if (pw.requested_result()) {
-            get_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, partition_tombstone(),
-                          now, static_cells_wr);
+            get_compacted_row_slice(s, slice, column_kind::static_column, static_row(), slice.static_columns, static_cells_wr);
         }
         if (pw.requested_digest()) {
             ::feed_hash(pw.digest(), partition_tombstone());
@@ -637,47 +627,35 @@ mutation_partition::query(query::result::partition_writer& pw,
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
-    for (auto&& row_range : pw.ranges()) {
-        if (limit == 0) {
-            break;
+    for_each_row(s, query::clustering_range::make_open_ended_both_sides(), is_reversed, [&] (const rows_entry& e) {
+        auto& row = e.row();
+        auto row_tombstone = tombstone_for_row(s, e);
+
+        if (pw.requested_digest()) {
+            e.key().feed_hash(pw.digest(), s);
+            ::feed_hash(pw.digest(), row_tombstone);
+            hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
         }
 
-        has_ck_selector |= !row_range.is_full();
-
-        // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
-        // does two lookups to form a range, even for singular range. We need
-        // only one lookup for a full-tuple singular range though.
-        for_each_row(s, row_range, is_reversed, [&] (const rows_entry& e) {
-            auto& row = e.row();
-            auto row_tombstone = tombstone_for_row(s, e);
-
-            if (pw.requested_digest()) {
-                e.key().feed_hash(pw.digest(), s);
-                ::feed_hash(pw.digest(), row_tombstone);
-                hash_row_slice(pw.digest(), s, column_kind::regular_column, row.cells(), slice.regular_columns);
+        if (row.is_live(s)) {
+            if (pw.requested_result()) {
+                auto cells_wr = [&] {
+                    if (send_ck) {
+                        return rows_wr.add().write_key(e.key()).start_cells().start_cells();
+                    } else {
+                        return rows_wr.add().skip_key().start_cells().start_cells();
+                    }
+                }();
+                get_compacted_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, cells_wr);
+                std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
             }
-
-            if (row.is_live(s, row_tombstone, now)) {
-                if (pw.requested_result()) {
-                    auto cells_wr = [&] {
-                        if (send_ck) {
-                            return rows_wr.add().write_key(e.key()).start_cells().start_cells();
-                        } else {
-                            return rows_wr.add().skip_key().start_cells().start_cells();
-                        }
-                    }();
-                    get_row_slice(s, slice, column_kind::regular_column, row.cells(), slice.regular_columns, row_tombstone,
-                                  now, cells_wr);
-                    std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
-                }
-                ++row_count;
-                if (--limit == 0) {
-                    return stop_iteration::yes;
-                }
+            ++row_count;
+            if (--limit == 0) {
+                return stop_iteration::yes;
             }
-            return stop_iteration::no;
-        });
-    }
+        }
+        return stop_iteration::no;
+    });
 
     // If we got no rows, but have live static columns, we should only
     // give them back IFF we did not have any CK restrictions.
@@ -686,16 +664,10 @@ mutation_partition::query(query::result::partition_writer& pw,
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
 			&& (has_ck_selector
-					|| !has_any_live_data(s, column_kind::static_column,
-							static_row(), _tombstone, now))) {
+					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
 		pw.retract();
-        return 0;
 	} else {
         std::move(rows_wr).end_rows().end_qr_partition();
-
-        // The partition is live. If there are no clustered rows, there
-        // must be something live in the static row, which counts as one row.
-        return std::max<uint32_t>(row_count, 1);
 	}
 }
 
@@ -1185,7 +1157,7 @@ bool mutation_partition::empty() const
 }
 
 bool
-deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time = gc_clock::time_point::min()) const {
+deletable_row::is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const {
     // _created_at corresponds to the row marker cell, present for rows
     // created with the 'insert' statement. If row marker is live, we know the
     // row is live. Otherwise, a row is considered live if it has any cell

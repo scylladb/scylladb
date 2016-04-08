@@ -36,9 +36,14 @@
 
 class row_assertion {
     std::map<bytes, data_value> _expected_values;
+    bool _only_that = false;
 public:
     row_assertion& with_column(bytes name, data_value value) {
         _expected_values.emplace(name, value);
+        return *this;
+    }
+    row_assertion& and_only_that() {
+        _only_that = true;
         return *this;
     }
 private:

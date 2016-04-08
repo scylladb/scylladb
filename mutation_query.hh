@@ -114,3 +114,26 @@ future<reconcilable_result> mutation_query(
     const query::partition_slice& slice,
     uint32_t row_limit,
     gc_clock::time_point query_time);
+
+
+class querying_reader {
+    schema_ptr _schema;
+    const query::partition_range& _range;
+    const query::partition_slice& _slice;
+    uint32_t _requested_limit;
+    gc_clock::time_point _query_time;
+    uint32_t _limit;
+    const mutation_source& _source;
+    std::function<void(uint32_t, mutation&&)> _consumer;
+    std::experimental::optional<mutation_reader> _reader;
+public:
+    querying_reader(schema_ptr s,
+                    const mutation_source& source,
+                    const query::partition_range& range,
+                    const query::partition_slice& slice,
+                    uint32_t row_limit,
+                    gc_clock::time_point query_time,
+                    std::function<void(uint32_t, mutation&&)> consumer);
+
+    future<> read();
+};

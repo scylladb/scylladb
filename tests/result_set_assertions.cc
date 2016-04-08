@@ -49,6 +49,14 @@ row_assertion::matches(const query::result_set_row& row) const {
             }
         }
     }
+    if (_only_that) {
+        for (auto&& e : row.cells()) {
+            auto name = to_bytes(e.first);
+            if (!_expected_values.count(name)) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 

@@ -126,14 +126,35 @@ bool mutation::operator!=(const mutation& m) const {
     return !(*this == m);
 }
 
+void
+mutation::query(query::result::builder& builder,
+    const query::partition_slice& slice,
+    gc_clock::time_point now,
+    uint32_t row_limit) &&
+{
+    auto pb = builder.add_partition(*schema(), key());
+    auto is_reversed = slice.options.contains<query::partition_slice::option::reversed>();
+    mutation_partition& p = partition();
+    p.compact_for_query(*schema(), now, slice.row_ranges(*schema(), key()), is_reversed, row_limit);
+    p.query_compacted(pb, *schema(), row_limit);
+}
+
 query::result
-mutation::query(const query::partition_slice& slice, query::result_request request,
-    gc_clock::time_point now, uint32_t row_limit) const
+mutation::query(const query::partition_slice& slice,
+    query::result_request request,
+    gc_clock::time_point now, uint32_t row_limit) &&
 {
     query::result::builder builder(slice, request);
-    auto pb = builder.add_partition(*schema(), key());
-    partition().query(pb, *schema(), now, row_limit);
+    std::move(*this).query(builder, slice, now, row_limit);
     return builder.build();
+}
+
+query::result
+mutation::query(const query::partition_slice& slice,
+    query::result_request request,
+    gc_clock::time_point now, uint32_t row_limit) const&
+{
+    return mutation(*this).query(slice, request, now, row_limit);
 }
 
 size_t

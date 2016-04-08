@@ -25,6 +25,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include "mutation_query.hh"
 #include "md5_hasher.hh"
 
 #include "core/sstring.hh"
@@ -67,15 +68,6 @@ static mutation_partition get_partition(memtable& mt, const partition_key& key) 
     BOOST_REQUIRE(bool(mo));
     return std::move(mo->partition());
 }
-
-bytes make_blob(size_t blob_size) {
-    static thread_local std::independent_bits_engine<std::default_random_engine, 8, uint8_t> random_bytes;
-    bytes big_blob(bytes::initialized_later(), blob_size);
-    for (auto&& b : big_blob) {
-        b = random_bytes();
-    }
-    return big_blob;
-};
 
 template <typename Func>
 future<>
@@ -802,126 +794,16 @@ public:
 };
 
 SEASTAR_TEST_CASE(test_apply_is_atomic_in_case_of_allocation_failures) {
-    auto builder = schema_builder("ks", "cf")
-            .with_column("pk", bytes_type, column_kind::partition_key)
-            .with_column("ck1", bytes_type, column_kind::clustering_key)
-            .with_column("ck2", bytes_type, column_kind::clustering_key);
-
-    // Create enough columns so that row can overflow its vector storage
-    std::vector<sstring> regular_column_names;
-    std::vector<sstring> static_column_names;
-    column_id column_count = row::max_vector_size * 2;
-    for (column_id i = 0; i < column_count; ++i) {
-        {
-            auto column_name = sprint("v%d", i);
-            regular_column_names.push_back(column_name);
-            builder.with_column(to_bytes(column_name), bytes_type, column_kind::regular_column);
-        }
-        {
-            auto column_name = sprint("s%d", i);
-            static_column_names.push_back(column_name);
-            builder.with_column(to_bytes(column_name), bytes_type, column_kind::static_column);
-        }
-    }
-
-    auto s = builder.build();
-
-    // Should be enough to force use of external bytes storage
-    constexpr size_t external_blob_size = 128;
-
-    std::vector<bytes> blobs;
-    for (int i = 0; i < 1024; ++i) {
-        blobs.emplace_back(make_blob(external_blob_size));
-    }
-
-    std::random_device rd;
-    // In case of errors, replace the seed with a fixed value to get a deterministic run.
-    auto seed = rd();
-    std::mt19937 gen(seed);
-    BOOST_TEST_MESSAGE(sprint("Random seed: %s", seed));
-
-    auto expiry_dist = [] (auto& gen) {
-        static thread_local std::uniform_int_distribution<int> dist(0, 2);
-        return gc_clock::time_point() + std::chrono::seconds(dist(gen));
-    };
-
-    auto make_random_mutation = [&] {
-        std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
-        std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
-        std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
-        std::normal_distribution<> ck_index_dist(blobs.size() / 2, 1.5);
-        std::uniform_int_distribution<int> bool_dist(0, 1);
-
-        std::uniform_int_distribution<api::timestamp_type> timestamp_dist(api::min_timestamp, api::min_timestamp + 2); // 3 values
-
-        auto pkey = partition_key::from_single_value(*s, blobs[0]);
-        mutation m(pkey, s);
-
-        auto set_random_cells = [&] (row& r, column_kind kind) {
-            auto columns_to_set = column_count_dist(gen);
-            for (column_id i = 0; i < columns_to_set; ++i) {
-                // FIXME: generate expiring cells
-                auto cell = bool_dist(gen)
-                    ? atomic_cell::make_live(timestamp_dist(gen), blobs[value_blob_index_dist(gen)])
-                    : atomic_cell::make_dead(timestamp_dist(gen), expiry_dist(gen));
-                r.apply(s->column_at(kind, column_id_dist(gen)), std::move(cell));
-            }
-        };
-
-        auto random_tombstone = [&] {
-            return tombstone(timestamp_dist(gen), expiry_dist(gen));
-        };
-
-        auto random_row_marker = [&] {
-            static thread_local std::uniform_int_distribution<int> dist(0, 3);
-            switch (dist(gen)) {
-                case 0: return row_marker();
-                case 1: return row_marker(random_tombstone());
-                case 2: return row_marker(timestamp_dist(gen));
-                case 3: return row_marker(timestamp_dist(gen), std::chrono::seconds(1), expiry_dist(gen));
-                default: assert(0);
-            }
-        };
-
-        if (bool_dist(gen)) {
-            m.partition().apply(random_tombstone());
-        }
-
-        set_random_cells(m.partition().static_row(), column_kind::static_column);
-
-        auto random_blob = [&] {
-            return blobs[std::min(blobs.size() - 1, static_cast<size_t>(std::max(0.0, ck_index_dist(gen))))];
-        };
-
-        auto row_count_dist = [&] (auto& gen) {
-            static thread_local std::normal_distribution<> dist(32, 1.5);
-            return static_cast<size_t>(std::min(100.0, std::max(0.0, dist(gen))));
-        };
-
-        size_t row_count = row_count_dist(gen);
-        for (size_t i = 0; i < row_count; ++i) {
-            auto ckey = clustering_key::from_exploded(*s, {random_blob(), random_blob()});
-            deletable_row& row = m.partition().clustered_row(ckey);
-            set_random_cells(row.cells(), column_kind::regular_column);
-            row.marker() = random_row_marker();
-        }
-
-        size_t range_tombstone_count = row_count_dist(gen);
-        for (size_t i = 0; i < range_tombstone_count; ++i) {
-            auto key = clustering_key::from_exploded(*s, {random_blob()});
-            m.partition().apply_row_tombstone(*s, key, random_tombstone());
-        }
-        return m;
-    };
+    random_mutation_generator gen;
 
     failure_injecting_allocation_strategy alloc(standard_allocator());
     with_allocator(alloc, [&] {
-        auto target = make_random_mutation();
+        auto target = gen();
 
         BOOST_TEST_MESSAGE(sprint("Target: %s", target));
 
         for (int i = 0; i < 10; ++i) {
-            auto second = make_random_mutation();
+            auto second = gen();
 
             BOOST_TEST_MESSAGE(sprint("Second: %s", second));
 
@@ -1163,6 +1045,55 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
     });
 }
 
+static mutation compacted(const mutation& m) {
+    auto result = m;
+    result.partition().compact_for_compaction(*result.schema(), api::max_timestamp, gc_clock::now());
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_query_digest) {
+    return seastar::async([] {
+        auto check_digests_equal = [] (const mutation& m1, const mutation& m2) {
+            auto ps1 = partition_slice_builder(*m1.schema()).build();
+            auto ps2 = partition_slice_builder(*m2.schema()).build();
+            auto digest1 = *m1.query(ps1, query::result_request::only_digest).digest();
+            auto digest2 = *m2.query(ps2, query::result_request::only_digest).digest();
+            if (digest1 != digest2) {
+                BOOST_FAIL(sprint("Digest should be the same for %s and %s", m1, m2));
+            }
+        };
+
+        for_each_mutation_pair([&] (const mutation& m1, const mutation& m2, are_equal eq) {
+            if (m1.schema()->version() != m2.schema()->version()) {
+                return;
+            }
+
+            if (eq) {
+                check_digests_equal(compacted(m1), m2);
+                check_digests_equal(m1, compacted(m2));
+            } else {
+                BOOST_TEST_MESSAGE("If not equal, they should become so after applying diffs mutually");
+
+                schema_ptr s = m1.schema();
+
+                auto m3 = m2;
+                {
+                    auto diff = m1.partition().difference(s, m2.partition());
+                    m3.partition().apply(*m3.schema(), std::move(diff));
+                }
+
+                auto m4 = m1;
+                {
+                    auto diff = m2.partition().difference(s, m1.partition());
+                    m4.partition().apply(*m4.schema(), std::move(diff));
+                }
+
+                check_digests_equal(m3, m4);
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_mutation_upgrade_of_equal_mutations) {
     return seastar::async([] {
         for_each_mutation_pair([](auto&& m1, auto&& m2, are_equal eq) {
@@ -1270,6 +1201,95 @@ SEASTAR_TEST_CASE(test_mutation_upgrade) {
             m2.set_clustered_cell(ckey1, "v3", data_value(bytes("v3:value")), 1);
 
             assert_that(m).is_equal_to(m2);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_querying_expired_cells) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck", bytes_type, column_kind::clustering_key)
+                .with_column("s1", bytes_type, column_kind::static_column)
+                .with_column("s2", bytes_type, column_kind::static_column)
+                .with_column("s3", bytes_type, column_kind::static_column)
+                .with_column("v1", bytes_type)
+                .with_column("v2", bytes_type)
+                .with_column("v3", bytes_type)
+                .build();
+
+        auto pk = partition_key::from_singular(*s, data_value(bytes("key1")));
+        auto ckey1 = clustering_key::from_singular(*s, data_value(bytes("A")));
+
+        auto ttl = std::chrono::seconds(1);
+        auto t1 = gc_clock::now();
+        auto t2 = t1 + std::chrono::seconds(1);
+        auto t3 = t2 + std::chrono::seconds(1);
+        auto t4 = t3 + std::chrono::seconds(1);
+
+        auto v1 = data_value(bytes("1"));
+        auto v2 = data_value(bytes("2"));
+        auto v3 = data_value(bytes("3"));
+
+        auto results_at_time = [s] (const mutation& m, gc_clock::time_point t) {
+            auto slice = partition_slice_builder(*s)
+                    .with_regular_column("v1")
+                    .with_regular_column("v2")
+                    .with_regular_column("v3")
+                    .with_static_column("s1")
+                    .with_static_column("s2")
+                    .with_static_column("s3")
+                    .without_clustering_key_columns()
+                    .without_partition_key_columns()
+                    .build();
+            return query::result_set::from_raw_result(s, slice, m.query(slice, query::result_request::result_and_digest, t));
+        };
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s2"), atomic_cell::make_live(api::new_timestamp(), v2.serialize(), t2, ttl));
+            m.set_static_cell(*s->get_column_definition("s3"), atomic_cell::make_live(api::new_timestamp(), v3.serialize(), t3, ttl));
+
+            assert_that(results_at_time(m, t1))
+                    .has_only(a_row()
+                         .with_column("s1", v1)
+                         .with_column("s2", v2)
+                         .with_column("s3", v3)
+                         .with_column("v1", v1)
+                         .with_column("v2", v2)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t2))
+                    .has_only(a_row()
+                         .with_column("s2", v2)
+                         .with_column("s3", v3)
+                         .with_column("v2", v2)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t3))
+                    .has_only(a_row()
+                         .with_column("s3", v3)
+                         .with_column("v3", v3)
+                         .and_only_that());
+
+            assert_that(results_at_time(m, t4)).is_empty();
+        }
+
+        {
+            mutation m(pk, s);
+            m.set_clustered_cell(ckey1, *s->get_column_definition("v1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t1, ttl));
+            m.set_static_cell(*s->get_column_definition("s1"), atomic_cell::make_live(api::new_timestamp(), v1.serialize(), t3, ttl));
+
+            assert_that(results_at_time(m, t2))
+                    .has_only(a_row().with_column("s1", v1).and_only_that());
+
+            assert_that(results_at_time(m, t4)).is_empty();
         }
     });
 }

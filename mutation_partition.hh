@@ -425,7 +425,7 @@ public:
     row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(column_kind, const schema& s, const deletable_row& other, const schema& other_schema) const;
-    bool is_live(const schema& s, tombstone base_tombstone, gc_clock::time_point query_time) const;
+    bool is_live(const schema& s, tombstone base_tombstone = tombstone(), gc_clock::time_point query_time = gc_clock::time_point::min()) const;
     bool empty() const { return !_deleted_at && _marker.is_missing() && !_cells.size(); }
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
@@ -763,8 +763,11 @@ public:
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
-    // Returns the number of live CQL rows written. No more than limit.
-    uint32_t query(query::result::partition_writer& pw, const schema& s, gc_clock::time_point now, uint32_t limit = query::max_rows) const;
+    // Writes this partition using supplied query result writer.
+    // The partition should be first compacted with compact_for_query(), otherwise
+    // results may include data which is deleted/expired.
+    // At most row_limit CQL rows will be written and digested.
+    void query_compacted(query::result::partition_writer& pw, const schema& s, uint32_t row_limit) const;
     void accept(const schema&, mutation_partition_visitor&) const;
 
     // Returns the number of live CQL rows in this partition.

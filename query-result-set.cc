@@ -201,7 +201,7 @@ result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const re
 
 result_set::result_set(const mutation& m) : result_set([&m] {
     auto slice = partition_slice_builder(*m.schema()).build();
-    auto qr = m.query(slice, result_request::only_result);
+    auto qr = mutation(m).query(slice, result_request::only_result);
     return result_set::from_raw_result(m.schema(), slice, qr);
 }())
 { }
