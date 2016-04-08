@@ -42,8 +42,7 @@
 
 namespace gms {
 
-enum class application_state
-{
+enum class application_state {
     STATUS = 0,
     LOAD,
     SCHEMA,
@@ -58,8 +57,8 @@ enum class application_state
     NET_VERSION,
     HOST_ID,
     TOKENS,
+    SUPPORTED_FEATURES,
     // pad to allow adding new states to existing cluster
-    X1,
     X2,
     X3,
     X4,

@@ -2380,6 +2380,8 @@ public:
     }
 private:
     void do_isolate_on_error(disk_error type);
+public:
+    static sstring get_config_supported_features();
 };
 
 inline future<> init_storage_service(distributed<database>& db) {

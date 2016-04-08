@@ -229,6 +229,7 @@ schema_ptr built_indexes() {
                 {"rpc_address", inet_addr_type},
                 {"broadcast_address", inet_addr_type},
                 {"listen_address", inet_addr_type},
+                {"supported_features", utf8_type},
 
         },
         // static columns
@@ -261,6 +262,7 @@ schema_ptr built_indexes() {
                 {"rpc_address", inet_addr_type},
                 {"schema_version", uuid_type},
                 {"tokens", set_type_impl::get_instance(utf8_type, true)},
+                {"supported_features", utf8_type},
         },
         // static columns
         {},
@@ -433,7 +435,7 @@ schema_ptr size_estimates() {
 }
 
 static future<> setup_version() {
-    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address, supported_features) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     return execute_cql(req, db::system_keyspace::LOCAL,
@@ -447,7 +449,8 @@ static future<> setup_version() {
                              sstring(dht::global_partitioner().name()),
                              gms::inet_address(qctx->db().get_config().rpc_address()).addr(),
                              utils::fb_utilities::get_broadcast_address().addr(),
-                             net::get_local_messaging_service().listen_address().addr()
+                             net::get_local_messaging_service().listen_address().addr(),
+                             service::storage_service::get_config_supported_features()
     ).discard_result();
 }
 
