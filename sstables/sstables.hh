@@ -405,6 +405,10 @@ private:
         write_simple<component_type::Summary>(_summary, pc);
     }
 
+    // To be called when we try to load an SSTable that lacks a Summary. Could
+    // happen if old tools are being used.
+    future<> generate_summary(const io_priority_class& pc);
+
     future<> read_statistics(const io_priority_class& pc);
     void write_statistics(const io_priority_class& pc);
 
