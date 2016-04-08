@@ -630,6 +630,13 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     return any_live;
 }
 
+static bool has_ck_selector(const query::clustering_row_ranges& ranges) {
+    // Like PK range, an empty row range, should be considered an "exclude all" restriction
+    return ranges.empty() || std::any_of(ranges.begin(), ranges.end(), [](auto& r) {
+        return !r.is_full();
+    });
+}
+
 void
 mutation_partition::query_compacted(query::result::partition_writer& pw, const schema& s, uint32_t limit) const {
     const query::partition_slice& slice = pw.slice();
@@ -656,9 +663,6 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
             .start_rows();
 
     uint32_t row_count = 0;
-
-    // Like PK range, an empty row range, should be considered an "exclude all" restriction
-    bool has_ck_selector = pw.ranges().empty();
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
@@ -698,7 +702,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
-			&& (has_ck_selector
+			&& (has_ck_selector(pw.ranges())
 					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
 		pw.retract();
 	} else {
@@ -1145,10 +1149,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
     // #589 - Do not add extra row for statics unless we did a CK range-less query.
     // See comment in query
-    if (row_count == 0 && static_row_live
-            && std::any_of(row_ranges.begin(), row_ranges.end(), [](auto& r) {
-                return r.is_full();
-            })) {
+    if (row_count == 0 && static_row_live && !has_ck_selector(row_ranges)) {
         ++row_count;
     }
 
