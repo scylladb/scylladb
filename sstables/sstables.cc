@@ -881,7 +881,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority
         auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
         // TODO: it's redundant to constrain the consumer here to stop at
         // index_size()-position, the input stream is already constrained.
-        auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
+        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), this->index_size() - position);
         return ctx->consume_input(*ctx).then([ctx, &ic] {
             return make_ready_future<index_list>(std::move(ic.indexes));
         });
