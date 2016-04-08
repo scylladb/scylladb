@@ -949,7 +949,14 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     if (_summary) {
         return make_ready_future<>();
     }
-    return read_simple<component_type::Summary>(_summary, pc);
+
+    return read_toc().then([this, &pc] {
+        if (has_component(sstable::component_type::Summary)) {
+            return read_simple<component_type::Summary>(_summary, pc);
+        } else {
+           return generate_summary(default_priority_class());
+        }
+    });
 }
 
 future<> sstable::open_data() {
@@ -1480,6 +1487,55 @@ future<> sstable::write_components(::mutation_reader mr,
             touch_directory(dir).get();
             create_links(dir).get();
         }
+    });
+}
+
+future<> sstable::generate_summary(const io_priority_class& pc) {
+    if (_summary) {
+        return make_ready_future<>();
+    }
+
+    sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
+    class summary_generator {
+        summary& _summary;
+    public:
+        std::experimental::optional<key> first_key, last_key;
+
+        summary_generator(summary& s) : _summary(s) {}
+        bool should_continue() {
+            return true;
+        }
+        void consume_entry(index_entry&& ie) {
+            maybe_add_summary_entry(_summary, ie.get_key_bytes(), ie.position());
+            if (!first_key) {
+                first_key = key(to_bytes(ie.get_key_bytes()));
+            } else {
+                last_key = key(to_bytes(ie.get_key_bytes()));
+            }
+        }
+    };
+
+    return open_file_dma(filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
+        return do_with(std::move(index_file), [this, &pc] (file index_file) {
+            return index_file.size().then([this, &pc, index_file] (auto size) {
+                // an upper bound. Surely to be less than this.
+                auto estimated_partitions = size / sizeof(uint64_t);
+                // Since we don't have a summary, use a default min_index_interval, and if needed we'll resample
+                // later.
+                prepare_summary(_summary, estimated_partitions, 0x80);
+
+                file_input_stream_options options;
+                options.buffer_size = sstable_buffer_size;
+                options.io_priority_class = pc;
+                auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
+                return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), size);
+                    return ctx->consume_input(*ctx).then([this, ctx, &s] {
+                        seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
+                    });
+                });
+            });
+        });
     });
 }
 
