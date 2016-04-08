@@ -399,9 +399,8 @@ private:
 
     void write_filter(const io_priority_class& pc);
 
-    future<> read_summary(const io_priority_class& pc) {
-        return read_simple<component_type::Summary>(_summary, pc);
-    }
+    future<> read_summary(const io_priority_class& pc);
+
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_summary, pc);
     }

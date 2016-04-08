@@ -954,6 +954,13 @@ void sstable::write_statistics(const io_priority_class& pc) {
     write_simple<component_type::Statistics>(_statistics, pc);
 }
 
+future<> sstable::read_summary(const io_priority_class& pc) {
+    if (_summary) {
+        return make_ready_future<>();
+    }
+    return read_simple<component_type::Summary>(_summary, pc);
+}
+
 future<> sstable::open_data() {
     return when_all(open_checked_file_dma(sstable_read_error, filename(component_type::Index), open_flags::ro),
                     open_checked_file_dma(sstable_read_error, filename(component_type::Data), open_flags::ro))
