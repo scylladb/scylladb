@@ -1218,10 +1218,9 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
     write(out, key, pos, promoted_index_size);
 }
 
-static void prepare_summary(summary& s, uint64_t expected_partition_count, const schema& schema) {
+static void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     assert(expected_partition_count >= 1);
 
-    auto min_index_interval = schema.min_index_interval();
     s.header.min_index_interval = min_index_interval;
     s.header.sampling_level = downsampling::BASE_SAMPLING_LEVEL;
     uint64_t max_expected_entries =
@@ -1238,8 +1237,7 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count, const
 
 static void seal_summary(summary& s,
         std::experimental::optional<key>&& first_key,
-        std::experimental::optional<key>&& last_key,
-        const schema& schema) {
+        std::experimental::optional<key>&& last_key) {
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = s.header.size;
 
@@ -1328,7 +1326,7 @@ void sstable::do_write_components(::mutation_reader mr,
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
-    prepare_summary(_summary, estimated_partitions, *schema);
+    prepare_summary(_summary, estimated_partitions, schema->min_index_interval());
 
     // FIXME: we may need to set repaired_at stats at this point.
 
@@ -1408,7 +1406,7 @@ void sstable::do_write_components(::mutation_reader mr,
         }
 
     }
-    seal_summary(_summary, std::move(first_key), std::move(last_key), *schema);
+    seal_summary(_summary, std::move(first_key), std::move(last_key));
 
     index->close().get();
     _index_file = file(); // index->close() closed _index_file
