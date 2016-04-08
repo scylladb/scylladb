@@ -696,6 +696,10 @@ inline void write(file_writer& out, estimated_histogram& eh) {
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
+    if (_components.size()) {
+        return make_ready_future<>();
+    }
+
     auto file_path = filename(sstable::component_type::TOC);
 
     sstlog.debug("Reading TOC file {} ", file_path);
