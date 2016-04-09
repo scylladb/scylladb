@@ -98,6 +98,34 @@ void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
+class throttle_state {
+    size_t _max_space;
+    logalloc::region_group& _region_group;
+    throttle_state* _parent;
+
+    circular_buffer<promise<>> _throttled_requests;
+    timer<> _throttling_timer{[this] { unthrottle(); }};
+    void unthrottle();
+    bool should_throttle() const {
+        if (_region_group.memory_used() > _max_space) {
+            return true;
+        }
+        if (_parent) {
+            return _parent->should_throttle();
+        }
+        return false;
+    }
+public:
+    throttle_state(size_t max_space, logalloc::region_group& region, throttle_state* parent = nullptr)
+        : _max_space(max_space)
+        , _region_group(region)
+        , _parent(parent)
+    {}
+
+    future<> throttle();
+};
+
+
 class replay_position_reordered_exception : public std::exception {};
 
 // We could just add all memtables, regardless of types, to a single list, and
@@ -777,29 +805,6 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-
-    class throttle_state {
-        size_t _max_space;
-        logalloc::region_group& _region_group;
-        throttle_state* _parent;
-
-        circular_buffer<promise<>> _throttled_requests;
-        timer<> _throttling_timer{[this] { unthrottle(); }};
-        void unthrottle();
-        bool should_throttle() const {
-            if (_region_group.memory_used() > _max_space) {
-                return true;
-            }
-            if (_parent) {
-                return _parent->should_throttle();
-            }
-            return false;
-        }
-    public:
-        throttle_state(size_t max_space, logalloc::region_group& region);
-        throttle_state(size_t max_space, logalloc::region_group& region, throttle_state& parent);
-        future<> throttle();
-    };
 
     throttle_state _memtables_throttler;
     throttle_state _streaming_throttler;
