@@ -59,6 +59,11 @@ struct reversal_traits<false> {
     {
         return r;
     }
+
+    template <typename Container>
+    static typename Container::iterator maybe_reverse(Container&, typename Container::iterator r) {
+        return r;
+    }
 };
 
 template<>
@@ -90,6 +95,11 @@ struct reversal_traits<true> {
     {
         using reverse_iterator = typename Container::reverse_iterator;
         return boost::make_iterator_range(reverse_iterator(r.end()), reverse_iterator(r.begin()));
+    }
+
+    template <typename Container>
+    static typename Container::reverse_iterator maybe_reverse(Container&, typename Container::iterator r) {
+        return typename Container::reverse_iterator(r);
     }
 };
 
@@ -438,16 +448,25 @@ mutation_partition::clustered_row(const schema& s, const clustering_key_view& ke
     return i->row();
 }
 
-boost::iterator_range<mutation_partition::rows_type::const_iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+mutation_partition::rows_type::const_iterator
+mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
     auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
-    auto i1 = r.start() ? (r.start()->is_inclusive()
+    return r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
             : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();
-    auto i2 = r.end() ? (r.end()->is_inclusive()
-            ? _rows.upper_bound(r.end()->value(), cmp)
-            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.cend();
-    return boost::make_iterator_range(i1, i2);
+}
+
+mutation_partition::rows_type::const_iterator
+mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+    auto cmp = rows_entry::key_comparator(clustering_key_prefix::prefix_equality_less_compare(schema));
+    return r.end() ? (r.end()->is_inclusive()
+                         ? _rows.upper_bound(r.end()->value(), cmp)
+                         : _rows.lower_bound(r.end()->value(), cmp)) : _rows.cend();
+}
+
+boost::iterator_range<mutation_partition::rows_type::const_iterator>
+mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
+    return boost::make_iterator_range(lower_bound(schema, r), upper_bound(schema, r));
 }
 
 template <typename Container>
@@ -459,9 +478,25 @@ unconst(Container& c, boost::iterator_range<typename Container::const_iterator> 
     );
 }
 
+template <typename Container>
+typename Container::iterator
+unconst(Container& c, typename Container::const_iterator i) {
+    return c.erase(i, i);
+}
+
 boost::iterator_range<mutation_partition::rows_type::iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
     return unconst(_rows, static_cast<const mutation_partition*>(this)->range(schema, r));
+}
+
+mutation_partition::rows_type::iterator
+mutation_partition::lower_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+    return unconst(_rows, static_cast<const mutation_partition*>(this)->lower_bound(schema, r));
+}
+
+mutation_partition::rows_type::iterator
+mutation_partition::upper_bound(const schema& schema, const query::range<clustering_key_prefix>& r) {
+    return unconst(_rows, static_cast<const mutation_partition*>(this)->upper_bound(schema, r));
 }
 
 template<typename Func>
@@ -595,6 +630,13 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
     return any_live;
 }
 
+static bool has_ck_selector(const query::clustering_row_ranges& ranges) {
+    // Like PK range, an empty row range, should be considered an "exclude all" restriction
+    return ranges.empty() || std::any_of(ranges.begin(), ranges.end(), [](auto& r) {
+        return !r.is_full();
+    });
+}
+
 void
 mutation_partition::query_compacted(query::result::partition_writer& pw, const schema& s, uint32_t limit) const {
     const query::partition_slice& slice = pw.slice();
@@ -621,9 +663,6 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
             .start_rows();
 
     uint32_t row_count = 0;
-
-    // Like PK range, an empty row range, should be considered an "exclude all" restriction
-    bool has_ck_selector = pw.ranges().empty();
 
     auto is_reversed = slice.options.contains(query::partition_slice::option::reversed);
     auto send_ck = slice.options.contains(query::partition_slice::option::send_clustering_key);
@@ -663,7 +702,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
     // If ck:s exist, and we do a restriction on them, we either have maching
     // rows, or return nothing, since cql does not allow "is null".
     if (row_count == 0
-			&& (has_ck_selector
+			&& (has_ck_selector(pw.ranges())
 					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
 		pw.retract();
 	} else {
@@ -1021,15 +1060,24 @@ void mutation_partition::trim_rows(const schema& s,
     auto last = reversal_traits<reversed>::begin(_rows);
     auto deleter = current_deleter<rows_entry>();
 
+    auto range_begin = [this, &s] (const query::clustering_range& range) {
+        return reversed ? upper_bound(s, range) : lower_bound(s, range);
+    };
+
+    auto range_end = [this, &s] (const query::clustering_range& range) {
+        return reversed ? lower_bound(s, range) : upper_bound(s, range);
+    };
+
     for (auto&& row_range : row_ranges) {
         if (stop) {
             break;
         }
 
-        auto it_range = reversal_traits<reversed>::maybe_reverse(_rows, range(s, row_range));
-        last = reversal_traits<reversed>::erase_and_dispose(_rows, last, it_range.begin(), deleter);
+        last = reversal_traits<reversed>::erase_and_dispose(_rows, last,
+            reversal_traits<reversed>::maybe_reverse(_rows, range_begin(row_range)), deleter);
 
-        while (last != it_range.end()) {
+        auto end = reversal_traits<reversed>::maybe_reverse(_rows, range_end(row_range));
+        while (last != end) {
             rows_entry& e = *last;
             if (func(e) == stop_iteration::yes) {
                 stop = true;
@@ -1101,10 +1149,7 @@ uint32_t mutation_partition::do_compact(const schema& s,
 
     // #589 - Do not add extra row for statics unless we did a CK range-less query.
     // See comment in query
-    if (row_count == 0 && static_row_live
-            && std::any_of(row_ranges.begin(), row_ranges.end(), [](auto& r) {
-                return r.is_full();
-            })) {
+    if (row_count == 0 && static_row_live && !has_ck_selector(row_ranges)) {
         ++row_count;
     }
 
