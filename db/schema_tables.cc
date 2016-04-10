@@ -767,6 +767,39 @@ static inline void collect_types(std::set<sstring>& keys, schema_result& result,
     }
 }
 
+static inline void ensure_type_is_unused(distributed<service::storage_proxy>& proxy, user_type type)
+{
+	// We don't want to drop a type unless it's not used anymore (mainly because
+    // if someone drops a type and recreates one with the same name but different
+    // definition with the previous name still in use, things can get messy).
+    // We have two places to check: 1) other user type that can nest the one
+    // we drop and 2) existing tables referencing the type (maybe in a nested
+    // way).
+
+    auto&& keyspace = type->_keyspace;
+    auto&& name = type->_name;
+    auto&& db = proxy.local().get_db().local();
+    auto&& ks = db.find_keyspace(type->_keyspace);
+
+    for (auto&& ut : ks.metadata()->user_types()->get_all_types() | boost::adaptors::map_values) {
+        if (ut->_keyspace == keyspace && ut->_name == name) {
+            continue;
+        }
+
+        if (ut->references_user_type(keyspace, name)) {
+            throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by user type %s", keyspace, type->get_name_as_string(), ut->get_name_as_string()));
+        }
+    }
+
+    for (auto&& cfm : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& col : cfm->all_columns() | boost::adaptors::map_values) {
+            if (col->type->references_user_type(keyspace, name)) {
+                throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by table %s.%s", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));
+            }
+        }
+    }
+}
+
  // see the comments for merge_keyspaces()
 static void merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
 {
@@ -798,6 +831,10 @@ static void merge_types(distributed<service::storage_proxy>& proxy, schema_resul
         for (auto&& key : delta.entries_differing) {
             altered.emplace_back(std::move(updated_types[key]));
         }
+    }
+
+    for (auto&& ut : dropped) {
+        ensure_type_is_unused(proxy, ut);
     }
 
     proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
