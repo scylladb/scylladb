@@ -425,6 +425,7 @@ public:
     bool equals(const shared_ptr<const abstract_type>& other) const {
         return equals(*other);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
 protected:
     virtual bool equals(const abstract_type& other) const {
         return this == &other;
@@ -596,6 +597,9 @@ protected:
     }
     virtual const std::type_info& native_typeid() const override {
         return typeid(native_type);
+    }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return false;
     }
 protected:
     data_value make_value(std::unique_ptr<native_type> value) const {
@@ -880,6 +884,10 @@ public:
         return _underlying_type->as_cql3_type();
     }
 
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return _underlying_type->references_user_type(keyspace, name);
+    }
+
     static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
         return intern::get_instance(std::move(type));
     }
@@ -934,6 +942,7 @@ public:
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
 };
 
 using map_type = shared_ptr<const map_type_impl>;
@@ -971,6 +980,7 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
 };
 
 using set_type = shared_ptr<const set_type_impl>;
@@ -1006,6 +1016,7 @@ public:
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
 };
 
 using list_type = shared_ptr<const list_type_impl>;
@@ -1407,6 +1418,7 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     virtual bool is_tuple() const override { return true; }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);
@@ -1439,6 +1451,7 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     virtual bool equals(const abstract_type& other) const override;
     virtual bool is_user_type() const override { return true; }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
 private:
     static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
 };

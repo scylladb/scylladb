@@ -113,6 +113,9 @@ struct simple_type_impl : concrete_type<T> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const {
+        return false;
+    }
 };
 
 template<typename T>
@@ -1297,6 +1300,9 @@ public:
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return false;
+    }
 };
 
 struct empty_type_impl : abstract_type {
@@ -1357,6 +1363,10 @@ struct empty_type_impl : abstract_type {
         abort();
     }
     virtual const std::type_info& native_typeid() const {
+        // Can't happen
+        abort();
+    }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
         // Can't happen
         abort();
     }
@@ -1768,6 +1778,11 @@ map_type_impl::serialize_partially_deserialized_form(
 sstring
 map_type_impl::cql3_type_name() const {
     return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
+}
+
+bool
+map_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _keys->references_user_type(keyspace, name) || _values->references_user_type(keyspace, name);
 }
 
 auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
@@ -2201,6 +2216,11 @@ set_type_impl::cql3_type_name() const {
     return sprint("set<%s>", _elements->as_cql3_type());
 }
 
+bool
+set_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _elements->references_user_type(keyspace, name);
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -2367,6 +2387,11 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
 sstring
 list_type_impl::cql3_type_name() const {
     return sprint("list<%s>", _elements->as_cql3_type());
+}
+
+bool
+list_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _elements->references_user_type(keyspace, name);
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
@@ -2605,6 +2630,11 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     return sprint("org.apache.cassandra.db.marshal.TupleType(%s)", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
+bool
+tuple_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return std::any_of(_types.begin(), _types.end(), [&](auto&& dt) { return dt->references_user_type(keyspace, name); });
+}
+
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
@@ -2637,6 +2667,12 @@ user_type_impl::equals(const abstract_type& other) const {
         && _name == x->_name
         && std::equal(_field_names.begin(), _field_names.end(), x->_field_names.begin(), x->_field_names.end())
         && tuple_type_impl::equals(other);
+}
+
+bool
+user_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return (_keyspace == keyspace && _name == name)
+        || tuple_type_impl::references_user_type(keyspace, name);
 }
 
 size_t
