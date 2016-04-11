@@ -1983,7 +1983,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
             gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
-            ss._removing_node = {};
+            ss._removing_node = std::experimental::nullopt;
         });
     });
 }
@@ -2978,6 +2978,21 @@ void storage_service::do_isolate_on_error(disk_error type)
         // isolated protect us against multiple stops
         service::get_storage_service().invoke_on_all([] (service::storage_service& s) { s.stop_native_transport(); });
     }
+}
+
+future<sstring> storage_service::get_removal_status() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        if (!ss._removing_node) {
+            return make_ready_future<sstring>(sstring("No token removals in process."));
+        }
+        auto tokens = ss._token_metadata.get_tokens(*ss._removing_node);
+        if (tokens.empty()) {
+            return make_ready_future<sstring>(sstring("Node has no token"));
+        }
+        auto status = sprint("Removing token (%s). Waiting for replication confirmation from [%s].",
+                tokens.front(), join(",", ss._replicating_nodes));
+        return make_ready_future<sstring>(status);
+    });
 }
 
 } // namespace service

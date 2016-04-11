@@ -212,7 +212,7 @@ private:
 
     std::unordered_set<inet_address> _replicating_nodes;
 
-    inet_address _removing_node;
+    std::experimental::optional<inet_address> _removing_node;
 
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
@@ -1925,20 +1925,12 @@ public:
         }
     };
 
-#if 0
 
     /**
      * Get the status of a token removal.
      */
-    public String getRemovalStatus()
-    {
-        if (removingNode == null) {
-            return "No token removals in process.";
-        }
-        return String.format("Removing token (%s). Waiting for replication confirmation from [%s].",
-                             _token_metadata.getToken(removingNode),
-                             StringUtils.join(replicatingNodes, ","));
-    }
+    future<sstring> get_removal_status();
+#if 0
 
     /**
      * Force a remove operation to complete. This may be necessary if a remove operation
