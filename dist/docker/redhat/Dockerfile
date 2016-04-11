@@ -4,6 +4,7 @@ MAINTAINER Avi Kivity <avi@cloudius-systems.com>
 
 RUN yum -y install epel-release
 ADD scylla.repo /etc/yum.repos.d/
+RUN yum -y clean expire-cache
 RUN yum -y update
 RUN yum -y remove boost-thread boost-system
 RUN yum -y install scylla-server hostname
