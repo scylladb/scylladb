@@ -475,6 +475,7 @@ public:
     virtual bool is_atomic() const { return !is_multi_cell(); }
     virtual bool is_reversed() const { return false; }
     virtual bool is_tuple() const { return false; }
+    virtual bool is_user_type() const { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
@@ -1437,6 +1438,7 @@ public:
     sstring get_name_as_string() const;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     virtual bool equals(const abstract_type& other) const override;
+    virtual bool is_user_type() const override { return true; }
 private:
     static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
 };
