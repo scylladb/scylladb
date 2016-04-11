@@ -41,6 +41,7 @@
 
 
 #include "authenticated_user.hh"
+#include "auth.hh"
 
 const sstring auth::authenticated_user::ANONYMOUS_USERNAME("anonymous");
 
@@ -54,6 +55,13 @@ auth::authenticated_user::authenticated_user(sstring name)
 
 const sstring& auth::authenticated_user::name() const {
     return _anon ? ANONYMOUS_USERNAME : _name;
+}
+
+future<bool> auth::authenticated_user::is_super() const {
+    if (is_anonymous()) {
+        return make_ready_future<bool>(false);
+    }
+    return auth::auth::is_super_user(_name);
 }
 
 bool auth::authenticated_user::operator==(const authenticated_user& v) const {

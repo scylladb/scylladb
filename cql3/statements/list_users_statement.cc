@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -39,42 +39,24 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "list_users_statement.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/query_options.hh"
+#include "auth/auth.hh"
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
-
-namespace auth {
-
-class authenticated_user {
-public:
-    static const sstring ANONYMOUS_USERNAME;
-
-    authenticated_user();
-    authenticated_user(sstring name);
-
-    const sstring& name() const;
-
-    /**
-     * Checks the user's superuser status.
-     * Only a superuser is allowed to perform CREATE USER and DROP USER queries.
-     * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
-     * (depends on IAuthorizer implementation).
-     */
-    future<bool> is_super() const;
-
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
-    bool is_anonymous() const {
-        return _anon;
-    }
-
-    bool operator==(const authenticated_user&) const;
-private:
-    sstring _name;
-    bool _anon;
-};
-
+void cql3::statements::list_users_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
 }
 
+void cql3::statements::list_users_statement::check_access(const service::client_state& state) {
+    state.ensure_not_anonymous();
+}
+
+future<::shared_ptr<transport::messages::result_message>>
+cql3::statements::list_users_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+    auto is = std::make_unique<service::query_state>(service::client_state::for_internal_calls());
+    auto io = std::make_unique<query_options>(db::consistency_level::QUORUM, std::vector<bytes_opt>{});
+    auto f = get_local_query_processor().process(
+                    sprint("SELECT * FROM %s.%s", auth::auth::AUTH_KS,
+                                    auth::auth::USERS_CF), *is, *io);
+    return f.finally([is = std::move(is), io = std::move(io)] {});
+}

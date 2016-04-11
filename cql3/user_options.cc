@@ -15,11 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 /*
- * Copyright (C) 2016 ScyllaDB
- *
  * Modified by ScyllaDB
+ *
+ * Copyright 2016 ScyllaDB
  */
 
 /*
@@ -39,42 +38,26 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include <string.h>
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
+#include <boost/range/adaptor/map.hpp>
 
-namespace auth {
+#include "auth/authenticator.hh"
+#include "user_options.hh"
 
-class authenticated_user {
-public:
-    static const sstring ANONYMOUS_USERNAME;
+void cql3::user_options::put(const sstring& name, const sstring& value) {
+    _options[auth::authenticator::string_to_option(name)] = value;
+}
 
-    authenticated_user();
-    authenticated_user(sstring name);
-
-    const sstring& name() const;
-
-    /**
-     * Checks the user's superuser status.
-     * Only a superuser is allowed to perform CREATE USER and DROP USER queries.
-     * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
-     * (depends on IAuthorizer implementation).
-     */
-    future<bool> is_super() const;
-
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
-    bool is_anonymous() const {
-        return _anon;
+void cql3::user_options::validate() const {
+    auto& a = auth::authenticator::get();
+    for (auto o : _options | boost::adaptors::map_keys) {
+        if (!a.supported_options().contains(o)) {
+            throw exceptions::invalid_request_exception(
+                            sprint("%s doesn't support %s option",
+                                            a.class_name(),
+                                            a.option_to_string(o)));
+        }
     }
-
-    bool operator==(const authenticated_user&) const;
-private:
-    sstring _name;
-    bool _anon;
-};
-
 }
 

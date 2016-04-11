@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,40 +41,22 @@
 
 #pragma once
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
+#include "authentication_statement.hh"
+#include "cql3/user_options.hh"
 
-namespace auth {
+namespace cql3 {
 
-class authenticated_user {
+namespace statements {
+
+class list_users_statement : public authentication_statement {
 public:
-    static const sstring ANONYMOUS_USERNAME;
-
-    authenticated_user();
-    authenticated_user(sstring name);
-
-    const sstring& name() const;
-
-    /**
-     * Checks the user's superuser status.
-     * Only a superuser is allowed to perform CREATE USER and DROP USER queries.
-     * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
-     * (depends on IAuthorizer implementation).
-     */
-    future<bool> is_super() const;
-
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
-    bool is_anonymous() const {
-        return _anon;
-    }
-
-    bool operator==(const authenticated_user&) const;
-private:
-    sstring _name;
-    bool _anon;
+    void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+    void check_access(const service::client_state&) override;
+    future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>&
+                    , service::query_state&
+                    , const query_options&) override;
 };
 
 }
 
+}

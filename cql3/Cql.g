@@ -47,6 +47,10 @@ options {
 #include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/create_user_statement.hh"
+#include "cql3/statements/alter_user_statement.hh"
+#include "cql3/statements/drop_user_statement.hh"
+#include "cql3/statements/list_users_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -312,10 +316,12 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st16=grantStatement              { $stmt = st16; }
     | st17=revokeStatement             { $stmt = st17; }
     | st18=listPermissionsStatement    { $stmt = st18; }
+#endif
     | st19=createUserStatement         { $stmt = st19; }
     | st20=alterUserStatement          { $stmt = st20; }
     | st21=dropUserStatement           { $stmt = st21; }
     | st22=listUsersStatement          { $stmt = st22; }
+#if 0
     | st23=createTriggerStatement      { $stmt = st23; }
     | st24=dropTriggerStatement        { $stmt = st24; }
 #endif
@@ -961,58 +967,59 @@ dataResource returns [DataResource res]
       { $res = DataResource.columnFamily($cf.name.getKeyspace(), $cf.name.getColumnFamily()); }
     ;
 
+#endif
+
 /**
  * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
-createUserStatement returns [CreateUserStatement stmt]
+createUserStatement returns [::shared_ptr<create_user_statement> stmt]
     @init {
-        UserOptions opts = new UserOptions();
-        boolean superuser = false;
-        boolean ifNotExists = false;
+    	auto opts = ::make_shared<cql3::user_options>();
+        bool superuser = false;
+        bool ifNotExists = false;
     }
     : K_CREATE K_USER (K_IF K_NOT K_EXISTS { ifNotExists = true; })? username
       ( K_WITH userOptions[opts] )?
       ( K_SUPERUSER { superuser = true; } | K_NOSUPERUSER { superuser = false; } )?
-      { $stmt = new CreateUserStatement($username.text, opts, superuser, ifNotExists); }
+      { $stmt = ::make_shared<create_user_statement>($username.text, std::move(opts), superuser, ifNotExists); }
     ;
 
 /**
  * ALTER USER <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
  */
-alterUserStatement returns [AlterUserStatement stmt]
+alterUserStatement returns [::shared_ptr<alter_user_statement> stmt]
     @init {
-        UserOptions opts = new UserOptions();
-        Boolean superuser = null;
+    	auto opts = ::make_shared<cql3::user_options>();
+    	std::experimental::optional<bool> superuser;
     }
     : K_ALTER K_USER username
       ( K_WITH userOptions[opts] )?
       ( K_SUPERUSER { superuser = true; } | K_NOSUPERUSER { superuser = false; } )?
-      { $stmt = new AlterUserStatement($username.text, opts, superuser); }
+      { $stmt = ::make_shared<alter_user_statement>($username.text, std::move(opts), std::move(superuser)); }
     ;
 
 /**
  * DROP USER [IF EXISTS] <username>
  */
-dropUserStatement returns [DropUserStatement stmt]
-    @init { boolean ifExists = false; }
-    : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? username { $stmt = new DropUserStatement($username.text, ifExists); }
+dropUserStatement returns [::shared_ptr<drop_user_statement> stmt]
+    @init { bool ifExists = false; }
+    : K_DROP K_USER (K_IF K_EXISTS { ifExists = true; })? username { $stmt = ::make_shared<drop_user_statement>($username.text, ifExists); }
     ;
 
 /**
  * LIST USERS
  */
-listUsersStatement returns [ListUsersStatement stmt]
-    : K_LIST K_USERS { $stmt = new ListUsersStatement(); }
+listUsersStatement returns [::shared_ptr<list_users_statement> stmt]
+    : K_LIST K_USERS { $stmt = ::make_shared<list_users_statement>(); }
     ;
 
-userOptions[UserOptions opts]
+userOptions[::shared_ptr<cql3::user_options> opts]
     : userOption[opts]
     ;
 
-userOption[UserOptions opts]
-    : k=K_PASSWORD v=STRING_LITERAL { opts.put($k.text, $v.text); }
+userOption[::shared_ptr<cql3::user_options> opts]
+    : k=K_PASSWORD v=STRING_LITERAL { opts->put($k.text, $v.text); }
     ;
-#endif
 
 /** DEFINITIONS **/
 
@@ -1419,12 +1426,10 @@ tuple_type returns [shared_ptr<cql3::cql3_type::raw> t]
       '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
-#if 0
 username
     : IDENT
     | STRING_LITERAL
     ;
-#endif
 
 // Basically the same as cident, but we need to exlude existing CQL3 types
 // (which for some reason are not reserved otherwise)

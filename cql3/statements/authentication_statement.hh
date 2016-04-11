@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2016 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,40 +41,34 @@
 
 #pragma once
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
+#include "parsed_statement.hh"
+#include "cql3/cql_statement.hh"
+#include "transport/messages_fwd.hh"
 
-namespace auth {
+namespace cql3 {
 
-class authenticated_user {
+namespace statements {
+
+class authentication_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<authentication_statement> {
 public:
-    static const sstring ANONYMOUS_USERNAME;
+    uint32_t get_bound_terms() override;
 
-    authenticated_user();
-    authenticated_user(sstring name);
+    ::shared_ptr<prepared> prepare(database& db) override;
 
-    const sstring& name() const;
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
-    /**
-     * Checks the user's superuser status.
-     * Only a superuser is allowed to perform CREATE USER and DROP USER queries.
-     * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
-     * (depends on IAuthorizer implementation).
-     */
-    future<bool> is_super() const;
+    bool depends_on_keyspace(const sstring& ks_name) const override;
 
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
-    bool is_anonymous() const {
-        return _anon;
-    }
+    bool depends_on_column_family(const sstring& cf_name) const override;
 
-    bool operator==(const authenticated_user&) const;
-private:
-    sstring _name;
-    bool _anon;
+    void check_access(const service::client_state& state) override;
+
+    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+
+    future<::shared_ptr<transport::messages::result_message>>
+    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 };
 
 }
 
+}

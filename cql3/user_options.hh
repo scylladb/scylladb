@@ -15,11 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 /*
- * Copyright (C) 2016 ScyllaDB
- *
  * Modified by ScyllaDB
+ *
+ * Copyright 2016 ScyllaDB
  */
 
 /*
@@ -41,40 +40,23 @@
 
 #pragma once
 
-#include <seastar/core/sstring.hh>
-#include <seastar/core/future.hh>
+#include "auth/authenticator.hh"
 
-namespace auth {
+namespace cql3 {
 
-class authenticated_user {
-public:
-    static const sstring ANONYMOUS_USERNAME;
-
-    authenticated_user();
-    authenticated_user(sstring name);
-
-    const sstring& name() const;
-
-    /**
-     * Checks the user's superuser status.
-     * Only a superuser is allowed to perform CREATE USER and DROP USER queries.
-     * Im most cased, though not necessarily, a superuser will have Permission.ALL on every resource
-     * (depends on IAuthorizer implementation).
-     */
-    future<bool> is_super() const;
-
-    /**
-     * If IAuthenticator doesn't require authentication, this method may return true.
-     */
-    bool is_anonymous() const {
-        return _anon;
-    }
-
-    bool operator==(const authenticated_user&) const;
+class user_options {
 private:
-    sstring _name;
-    bool _anon;
+    auth::authenticator::option_map _options;
+public:
+    void put(const sstring&, const sstring&);
+
+    bool empty() const {
+        return _options.empty();
+    }
+    const auth::authenticator::option_map& options() const {
+        return _options;
+    }
+    void validate() const;
 };
 
 }
-
