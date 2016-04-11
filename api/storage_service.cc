@@ -388,15 +388,15 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_removal_status.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>("");
+        return service::get_local_storage_service().get_removal_status().then([] (auto status) {
+            return make_ready_future<json::json_return_type>(status);
+        });
     });
 
     ss::force_remove_completion.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        unimplemented();
-        return make_ready_future<json::json_return_type>(json_void());
+        return service::get_local_storage_service().force_remove_completion().then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::set_logging_level.set(r, [](std::unique_ptr<request> req) {
