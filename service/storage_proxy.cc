@@ -1745,6 +1745,7 @@ public:
                 return std::move(m);
             });
             auto live_row_count = m.live_row_count();
+            _total_live_count += live_row_count;
             return mutation_and_live_row_count { std::move(m), live_row_count };
         });
 
@@ -1759,9 +1760,6 @@ public:
             }
         }
 
-        _total_live_count = boost::accumulate(reconciled_partitions, size_t(0), [] (size_t count, const auto& m_a_rc) {
-            return count + m_a_rc.live_row_count;
-        });
         if (!_diffs.empty()) {
             if (_total_live_count >= original_row_limit && got_incomplete_information(schema, cmd, original_row_limit,
                                                                                       reconciled_partitions | boost::adaptors::reversed, last_rows)) {
@@ -1772,17 +1770,12 @@ public:
         // build reconcilable_result from reconciled data
         // traverse backwards since large keys are at the start
         std::vector<partition> vec;
-        using acc_type = std::pair<uint32_t, std::reference_wrapper<std::vector<partition>>>;
-        acc_type acc(0, std::ref(vec));
-        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, acc, [] (acc_type& a, const mutation_and_live_row_count& m_a_rc) {
-            const auto& m = m_a_rc.mut;
-            auto count = m_a_rc.live_row_count;
-            a.first += count;
-            a.second.get().emplace_back(partition(count, freeze(m)));
-            return a;
+        auto r = boost::accumulate(reconciled_partitions | boost::adaptors::reversed, std::ref(vec), [] (std::vector<partition>& a, const mutation_and_live_row_count& m_a_rc) {
+            a.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
+            return std::ref(a);
         });
 
-        return reconcilable_result(r.first, std::move(r.second.get()));
+        return reconcilable_result(_total_live_count, std::move(r.get()));
     }
     auto total_live_count() const {
         return _total_live_count;
