@@ -116,6 +116,9 @@ struct simple_type_impl : concrete_type<T> {
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const {
         return false;
     }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::experimental::nullopt;
+    }
 };
 
 template<typename T>
@@ -1303,6 +1306,9 @@ public:
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
         return false;
     }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::experimental::nullopt;
+    }
 };
 
 struct empty_type_impl : abstract_type {
@@ -1367,6 +1373,10 @@ struct empty_type_impl : abstract_type {
         abort();
     }
     virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        // Can't happen
+        abort();
+    }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
         abort();
     }
@@ -1783,6 +1793,17 @@ map_type_impl::cql3_type_name() const {
 bool
 map_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
     return _keys->references_user_type(keyspace, name) || _values->references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto k = _keys->update_user_type(updated);
+    auto v = _values->update_user_type(updated);
+    if (!k && !v) {
+        return std::experimental::nullopt;
+    }
+    return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
 }
 
 auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
@@ -2221,6 +2242,16 @@ set_type_impl::references_user_type(const sstring& keyspace, const bytes& name) 
     return _elements->references_user_type(keyspace, name);
 }
 
+std::experimental::optional<data_type>
+set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto e = _elements->update_user_type(updated);
+    if (e) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*e), _is_multi_cell)));
+    }
+    return std::experimental::nullopt;
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -2392,6 +2423,16 @@ list_type_impl::cql3_type_name() const {
 bool
 list_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
     return _elements->references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto e = _elements->update_user_type(updated);
+    if (e) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*e), _is_multi_cell)));
+    }
+    return std::experimental::nullopt;
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
@@ -2635,6 +2676,31 @@ tuple_type_impl::references_user_type(const sstring& keyspace, const bytes& name
     return std::any_of(_types.begin(), _types.end(), [&](auto&& dt) { return dt->references_user_type(keyspace, name); });
 }
 
+static std::experimental::optional<std::vector<data_type>>
+update_types(const std::vector<data_type> types, const user_type updated) {
+    std::experimental::optional<std::vector<data_type>> new_types = std::experimental::nullopt;
+    for (uint32_t i = 0; i < types.size(); ++i) {
+        auto&& ut = types[i]->update_user_type(updated);
+        if (ut) {
+            if (!new_types) {
+                new_types = types;
+            }
+            new_types->emplace(new_types->begin() + i, std::move(*ut));
+        }
+    }
+    return new_types;
+}
+
+std::experimental::optional<data_type>
+tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto new_types = update_types(_types, updated);
+    if (new_types) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*new_types))));
+    }
+    return std::experimental::nullopt;
+}
+
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
@@ -2673,6 +2739,19 @@ bool
 user_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
     return (_keyspace == keyspace && _name == name)
         || tuple_type_impl::references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+user_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    if (_keyspace == updated->_keyspace && _name == updated->_name) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(updated));
+    }
+    auto new_types = update_types(_types, updated);
+    if (new_types) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(_keyspace, _name, _field_names, *new_types)));
+    }
+    return std::experimental::nullopt;
 }
 
 size_t
