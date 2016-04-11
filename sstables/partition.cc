@@ -637,6 +637,13 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key, const i
     auto token = partitioner.get_token(key_view(key));
 
     auto& summary = _summary;
+
+    if (token < partitioner.get_token(key_view(summary.first_key.value))
+            || token > partitioner.get_token(key_view(summary.last_key.value))) {
+        _filter_tracker.add_false_positive();
+        return make_ready_future<mutation_opt>();
+    }
+
     auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
     if (summary_idx < 0) {
         _filter_tracker.add_false_positive();
