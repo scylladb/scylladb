@@ -51,5 +51,9 @@ constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
 void validate_cql_key(schema_ptr schema, const partition_key& key);
 schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
+schema_ptr validate_column_family(const sstring& keyspace_name, const sstring& cf_name);
+
+void validate_keyspace(database& db, const sstring& keyspace_name);
+void validate_keyspace(const sstring& keyspace_name);
 
 }
