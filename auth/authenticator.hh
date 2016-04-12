@@ -87,11 +87,6 @@ public:
     using credentials_map = std::unordered_map<sstring, sstring>;
 
     /**
-     * Resource id mappings, i.e. keyspace and/or column families.
-     */
-    using resource_ids = std::set<data_resource>;
-
-    /**
      * Setup is called once upon system startup to initialize the IAuthenticator.
      *
      * For example, use this method to create any required keyspaces/column families.
