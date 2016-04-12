@@ -175,6 +175,33 @@ SEASTAR_TEST_CASE(big_summary_query_32) {
     return summary_query<32, 0xc4000, 182>("tests/sstables/bigsummary", 76);
 }
 
+// The following two files are just a copy of uncompressed's 1. But the Summary
+// is removed (and removed from the TOC as well). We should reconstruct it
+// in this case, so the queries should still go through
+SEASTAR_TEST_CASE(missing_summary_query_ok) {
+    return summary_query<0, 0, 5>("tests/sstables/uncompressed", 2);
+}
+
+SEASTAR_TEST_CASE(missing_summary_query_fail) {
+    return summary_query_fail<2, 0, 5>("tests/sstables/uncompressed", 2);
+}
+
+SEASTAR_TEST_CASE(missing_summary_query_negative_fail) {
+    return summary_query_fail<-2, 0, 5>("tests/sstables/uncompressed", 2);
+}
+
+SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
+    return reusable_sst("tests/sstables/uncompressed", 2).then([] (sstable_ptr ptr) {
+        auto& summary = sstables::test(ptr).get_summary();
+        BOOST_REQUIRE(summary.header.size == 1);
+        BOOST_REQUIRE(summary.positions.size() == 1);
+        BOOST_REQUIRE(summary.entries.size() == 1);
+        BOOST_REQUIRE(bytes_view(summary.first_key) == as_bytes("vinna"));
+        BOOST_REQUIRE(bytes_view(summary.last_key) == as_bytes("finna"));
+        return make_ready_future<>();
+    });
+}
+
 static future<sstable_ptr> do_write_sst(sstring load_dir, sstring write_dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>("ks", "cf", load_dir, generation, la, big);
     return sst->load().then([sst, write_dir, generation] {
