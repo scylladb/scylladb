@@ -41,6 +41,9 @@
 
 #pragma once
 
+#include <unordered_set>
+#include <seastar/core/sstring.hh>
+
 #include "enum_set.hh"
 
 namespace auth {
@@ -74,8 +77,20 @@ typedef enum_set<super_enum<permission,
                 permission::MODIFY,
                 permission::AUTHORIZE>> permission_set;
 
+namespace permissions {
+
 extern const permission_set ALL_DATA;
 extern const permission_set ALL;
 extern const permission_set NONE;
+extern const permission_set ALTERATIONS;
+
+const sstring& to_string(permission);
+permission from_string(const sstring&);
+
+std::unordered_set<sstring> to_strings(const permission_set&);
+permission_set from_strings(const std::unordered_set<sstring>&);
+
+
+}
 
 }
