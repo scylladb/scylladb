@@ -723,6 +723,7 @@ future<> sstable::read_toc() {
                 try {
                    _components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
+                    _components.clear(); // so subsequent read_toc will be forced to fail again
                     throw malformed_sstable_exception("Unrecognized TOC component: " + c);
                 }
             }
