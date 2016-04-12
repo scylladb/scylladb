@@ -41,7 +41,12 @@
 
 #include "client_state.hh"
 #include "auth/auth.hh"
+#include "auth/authorizer.hh"
+#include "auth/authenticator.hh"
 #include "exceptions/exceptions.hh"
+#include "validation.hh"
+#include "db/system_keyspace.hh"
+#include "db/schema_tables.hh"
 
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
@@ -87,3 +92,103 @@ void service::client_state::merge(const client_state& other) {
     }
     _last_timestamp_micros = std::max(_last_timestamp_micros, other._last_timestamp_micros);
 }
+
+future<> service::client_state::has_all_keyspaces_access(
+                auth::permission p) const {
+    if (_is_internal) {
+        return make_ready_future();
+    }
+    validate_login();
+    return ensure_has_permission(p, auth::data_resource());
+}
+
+future<> service::client_state::has_keyspace_access(const sstring& ks,
+                auth::permission p) const {
+    validation::validate_keyspace(ks);
+    return has_access(ks, p, auth::data_resource(ks));
+}
+
+future<> service::client_state::has_column_family_access(const sstring& ks,
+                const sstring& cf, auth::permission p) const {
+    validation::validate_column_family(ks, cf);
+    return has_access(ks, p, auth::data_resource(ks, cf));
+}
+
+future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::data_resource resource) const {
+    if (_is_internal) {
+        return make_ready_future();
+    }
+
+    validate_login();
+
+    // we only care about schema modification.
+    if (auth::permissions::ALTERATIONS.contains(p)) {
+        // prevent system keyspace modification
+        auto name = ks;
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        if (name == db::system_keyspace::NAME) {
+            throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
+        }
+
+        // we want to allow altering AUTH_KS and TRACING_KS.
+        for (auto& n : { auth::auth::AUTH_KS /* TODO: tracing */ }) {
+            if (name == n && !resource.is_keyspace_level() && p != auth::permission::ALTER) {
+                throw exceptions::unauthorized_exception(sprint("Cannot %s %s", auth::permissions::to_string(p), resource));
+            }
+        }
+    }
+
+    if (p == auth::permission::SELECT && resource.is_column_family_level() && resource.keyspace() == db::system_keyspace::NAME) {
+        for (auto& n : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
+            if (resource.column_family() == n) {
+                return make_ready_future();
+            }
+        }
+        for (auto& n : db::schema_tables::ALL) {
+            if (resource.column_family() == n) {
+                return make_ready_future();
+            }
+        }
+    }
+    if (auth::permissions::ALTERATIONS.contains(p)) {
+        for (auto& s : { auth::authorizer::get().protected_resources(),
+                        auth::authenticator::get().protected_resources() }) {
+            if (s.count(resource)) {
+                throw exceptions::unauthorized_exception(
+                                sprint("%s schema is protected",
+                                                resource));
+            }
+        }
+    }
+
+    return ensure_has_permission(p, std::move(resource));
+}
+
+future<bool> service::client_state::check_has_permission(auth::permission p, auth::data_resource resource) const {
+    std::experimental::optional<auth::data_resource> parent;
+    if (resource.has_parent()) {
+        parent = resource.get_parent();
+    }
+
+    return auth::auth::get_permissions(_user, resource).then([this, p, parent = std::move(parent)](auth::permission_set set) {
+        if (set.contains(p)) {
+            return make_ready_future<bool>(true);
+        }
+        if (parent) {
+            return check_has_permission(p, std::move(*parent));
+        }
+        return make_ready_future<bool>(false);
+    });
+}
+
+future<> service::client_state::ensure_has_permission(auth::permission p, auth::data_resource resource) const {
+    return check_has_permission(p, resource).then([this, p, resource](bool ok) {
+        if (!ok) {
+            throw exceptions::unauthorized_exception(sprint("User %s has no %s permission on %s or any of its parents",
+                                            _user->name(),
+                                            auth::permissions::to_string(p),
+                                            resource));
+        }
+    });
+}
+
