@@ -321,6 +321,8 @@ public:
     explicit data_value(std::experimental::optional<bytes>);
     template <typename NativeType>
     data_value(std::experimental::optional<NativeType>);
+    template <typename NativeType>
+    data_value(const std::unordered_set<NativeType>&);
 
     data_value& operator=(const data_value&);
     data_value& operator=(data_value&&);
@@ -1446,6 +1448,11 @@ template <typename NativeType>
 data_value::data_value(std::experimental::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
+
+template <typename NativeType>
+data_value::data_value(const std::unordered_set<NativeType>& v)
+    : data_value(new set_type_impl::native_type(v.begin(), v.end()), set_type_impl::get_instance(data_type_for<NativeType>(), true))
+{}
 
 template<>
 struct appending_hash<data_type> {
