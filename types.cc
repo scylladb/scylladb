@@ -2613,7 +2613,7 @@ user_type_impl::get_name_as_string() const {
 
 shared_ptr<cql3::cql3_type>
 user_type_impl::as_cql3_type() const {
-    throw "not yet";
+    return make_shared<cql3::cql3_type>(get_name_as_string(), shared_from_this(), false);
 }
 
 sstring
