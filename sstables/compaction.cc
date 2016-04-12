@@ -446,7 +446,7 @@ class size_tiered_compaction_strategy_options {
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
     double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
-
+public:
     static std::experimental::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name) {
         auto it = options.find(name);
         if (it == options.end()) {
@@ -454,7 +454,7 @@ class size_tiered_compaction_strategy_options {
         }
         return it->second;
     }
-public:
+
     size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options) {
         using namespace cql3::statements;
 
@@ -722,9 +722,25 @@ size_tiered_most_interesting_bucket(const std::list<sstables::shared_sstable>& c
 }
 
 class leveled_compaction_strategy : public compaction_strategy_impl {
-    // FIXME: User may choose to change this value; add support.
-    static constexpr uint32_t max_sstable_size_in_mb = 160;
+    static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;
+    const sstring SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
+
+    int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
 public:
+    leveled_compaction_strategy(const std::map<sstring, sstring>& options) {
+        using namespace cql3::statements;
+
+        auto tmp_value = size_tiered_compaction_strategy_options::get_value(options, SSTABLE_SIZE_OPTION);
+        _max_sstable_size_in_mb = property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
+        if (_max_sstable_size_in_mb >= 1000) {
+            logger.warn("Max sstable size of {}MB is configured; having a unit of compaction this large is probably a bad idea",
+                _max_sstable_size_in_mb);
+        } else if (_max_sstable_size_in_mb < 50) {
+            logger.warn("Max sstable size of {}MB is configured. Testing done for CASSANDRA-5727 indicates that performance improves up to 160MB",
+                _max_sstable_size_in_mb);
+        }
+    }
+
     virtual compaction_descriptor get_sstables_for_compaction(column_family& cfs, std::vector<sstables::shared_sstable> candidates) override;
 
     virtual compaction_strategy_type type() const {
@@ -738,7 +754,7 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     // lists managed by the manifest may become outdated. For example, one
     // sstable in it may be marked for deletion after compacted.
     // Currently, we create a new manifest whenever it's time for compaction.
-    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, max_sstable_size_in_mb);
+    leveled_manifest manifest = leveled_manifest::create(cfs, candidates, _max_sstable_size_in_mb);
     auto candidate = manifest.get_compaction_candidates();
 
     if (candidate.sstables.empty()) {
@@ -779,7 +795,7 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
         impl = make_shared<size_tiered_compaction_strategy>(size_tiered_compaction_strategy(options));
         break;
     case compaction_strategy_type::leveled:
-        impl = make_shared<leveled_compaction_strategy>(leveled_compaction_strategy());
+        impl = make_shared<leveled_compaction_strategy>(leveled_compaction_strategy(options));
         break;
     default:
         throw std::runtime_error("strategy not supported");
