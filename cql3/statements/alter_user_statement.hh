@@ -60,7 +60,7 @@ public:
     alter_user_statement(sstring, ::shared_ptr<user_options>, std::experimental::optional<bool> superuser = {});
 
     void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
-    void check_access(const service::client_state&) override;
+    future<> check_access(const service::client_state&) override;
 
     future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>&
                     , service::query_state&

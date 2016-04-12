@@ -135,15 +135,14 @@ gc_clock::duration modification_statement::get_time_to_live(const query_options&
     return gc_clock::duration(attrs->get_time_to_live(options));
 }
 
-void modification_statement::check_access(const service::client_state& state) {
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-    state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
-
-    // CAS updates can be used to simulate a SELECT query, so should require Permission.SELECT as well.
-    if (hasConditions())
-        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
-#endif
+future<> modification_statement::check_access(const service::client_state& state) {
+    auto f = state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
+    if (has_conditions()) {
+        f = f.then([this, &state] {
+           return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
+        });
+    }
+    return f;
 }
 
 future<std::vector<mutation>>

@@ -55,11 +55,9 @@ cql3::statements::create_index_statement::create_index_statement(
                 if_not_exists) {
 }
 
-void
+future<>
 cql3::statements::create_index_statement::check_access(const service::client_state& state) {
-    warn(unimplemented::cause::MIGRATIONS);
-    // TODO
-    //state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.ALTER);
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void

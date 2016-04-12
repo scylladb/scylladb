@@ -53,21 +53,18 @@ drop_table_statement::drop_table_statement(::shared_ptr<cf_name> cf_name, bool i
 {
 }
 
-void drop_table_statement::check_access(const service::client_state& state)
+future<> drop_table_statement::check_access(const service::client_state& state)
 {
-    warn(unimplemented::cause::AUTH);
-#if 0
-    try
-    {
-        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.DROP);
-    }
-    catch (InvalidRequestException e)
-    {
-        if (!ifExists)
-            throw e;
-    }
-#endif
-    }
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::DROP).handle_exception([this](auto ep) {
+        try {
+            std::rethrow_exception(ep);
+        } catch (exceptions::invalid_request_exception&) {
+            if (!_if_exists) {
+                throw;
+            }
+        }
+    });
+}
 
 void drop_table_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
 {

@@ -123,7 +123,7 @@ public:
 
     ::shared_ptr<cql3::metadata> get_result_metadata() const;
     virtual uint32_t get_bound_terms() override;
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
     virtual bool depends_on_keyspace(const sstring& ks_name) const;
     virtual bool depends_on_column_family(const sstring& cf_name) const;

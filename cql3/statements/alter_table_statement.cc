@@ -65,12 +65,8 @@ alter_table_statement::alter_table_statement(shared_ptr<cf_name> name,
 {
 }
 
-void alter_table_statement::check_access(const service::client_state& state)
-{
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-    state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.ALTER);
-#endif
+future<> alter_table_statement::check_access(const service::client_state& state) {
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER);
 }
 
 void alter_table_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)

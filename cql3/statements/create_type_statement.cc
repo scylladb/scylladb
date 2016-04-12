@@ -62,12 +62,9 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
     _column_types.emplace_back(type);
 }
 
-void create_type_statement::check_access(const service::client_state& state)
+future<> create_type_statement::check_access(const service::client_state& state)
 {
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-    state.hasKeyspaceAccess(keyspace(), Permission.CREATE);
-#endif
+    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
 void create_type_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)

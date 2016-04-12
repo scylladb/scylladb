@@ -71,7 +71,8 @@ void cql3::statements::authentication_statement::validate(
                 const service::client_state& state) {
 }
 
-void cql3::statements::authentication_statement::check_access(const service::client_state& state) {
+future<> cql3::statements::authentication_statement::check_access(const service::client_state& state) {
+    return make_ready_future<>();
 }
 
 future<::shared_ptr<transport::messages::result_message>> cql3::statements::authentication_statement::execute_internal(

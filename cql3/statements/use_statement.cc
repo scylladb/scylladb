@@ -77,9 +77,10 @@ bool use_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-void use_statement::check_access(const service::client_state& state)
+future<> use_statement::check_access(const service::client_state& state)
 {
     state.validate_login();
+    return make_ready_future<>();
 }
 
 void use_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)

@@ -70,7 +70,7 @@ public:
 
     virtual const sstring& keyspace() const override;
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     /**
      * The <code>CqlParser</code> only goes as far as extracting the keyword arguments

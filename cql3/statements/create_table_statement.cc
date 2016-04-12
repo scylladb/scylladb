@@ -71,11 +71,8 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
     }
 }
 
-void create_table_statement::check_access(const service::client_state& state) {
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-    state.hasKeyspaceAccess(keyspace(), Permission.CREATE);
-#endif
+future<> create_table_statement::check_access(const service::client_state& state) {
+    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
 void create_table_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
