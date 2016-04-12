@@ -781,6 +781,13 @@ public:
 
 class database {
     ::cf_stats _cf_stats;
+    struct db_stats {
+        uint64_t total_writes = 0;
+        uint64_t total_reads = 0;
+    };
+
+    lw_shared_ptr<db_stats> _stats;
+
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
