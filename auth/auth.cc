@@ -40,14 +40,19 @@
  */
 #include <seastar/core/sleep.hh>
 
+#include <seastar/core/distributed.hh>
+
 #include "auth.hh"
 #include "authenticator.hh"
+#include "authorizer.hh"
 #include "database.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "db/config.hh"
 #include "service/migration_manager.hh"
+#include "utils/loading_cache.hh"
+#include "utils/hash.hh"
 
 const sstring auth::auth::DEFAULT_SUPERUSER_NAME("cassandra");
 const sstring auth::auth::AUTH_KS("system_auth");
@@ -76,13 +81,10 @@ class auth_migration_listener : public service::migration_listener {
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {
-        // TODO:
-        //DatabaseDescriptor.getAuthorizer().revokeAll(DataResource.keyspace(ksName));
-
+        auth::authorizer::get().revoke_all(auth::data_resource(ks_name));
     }
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {
-        // TODO:
-        //DatabaseDescriptor.getAuthorizer().revokeAll(DataResource.columnFamily(ksName, cfName));
+        auth::authorizer::get().revoke_all(auth::data_resource(ks_name, cf_name));
     }
     void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_drop_function(const sstring& ks_name, const sstring& function_name) override {}
@@ -90,6 +92,64 @@ class auth_migration_listener : public service::migration_listener {
 };
 
 static auth_migration_listener auth_migration;
+
+namespace std {
+template <>
+struct hash<auth::data_resource> {
+    size_t operator()(const auth::data_resource & v) const {
+        return std::hash<sstring>()(v.name());
+    }
+};
+
+template <>
+struct hash<auth::authenticated_user> {
+    size_t operator()(const auth::authenticated_user & v) const {
+        return utils::tuple_hash()(v.name(), v.is_anonymous());
+    }
+};
+}
+
+class auth::auth::permissions_cache {
+public:
+    typedef utils::loading_cache<std::pair<authenticated_user, data_resource>, permission_set, utils::tuple_hash> cache_type;
+    typedef typename cache_type::key_type key_type;
+
+    permissions_cache()
+                    : permissions_cache(
+                                    cql3::get_local_query_processor().db().local().get_config()) {
+    }
+
+    permissions_cache(const db::config& cfg)
+                    : _cache(cfg.permissions_cache_max_entries(), expiry(cfg),
+                                    std::chrono::milliseconds(
+                                                    cfg.permissions_validity_in_ms()),
+                                    [](const key_type& k) {
+                                        logger.debug("Refreshing permissions for {}", k.first.name());
+                                        return authorizer::get().authorize(::make_shared<authenticated_user>(k.first), k.second);
+                                    }) {
+    }
+
+    static std::chrono::milliseconds expiry(const db::config& cfg) {
+        auto exp = cfg.permissions_update_interval_in_ms();
+        if (exp == 0 || exp == std::numeric_limits<uint32_t>::max()) {
+            exp = cfg.permissions_validity_in_ms();
+        }
+        return std::chrono::milliseconds(exp);
+    }
+
+    future<> stop() {
+        return make_ready_future<>();
+    }
+
+    future<permission_set> get(::shared_ptr<authenticated_user> user, data_resource resource) {
+        return _cache.get(key_type(*user, std::move(resource)));
+    }
+
+private:
+    cache_type _cache;
+};
+
+static distributed<auth::auth::permissions_cache> perm_cache;
 
 /**
  * Poor mans job schedule. For maximum 2 jobs. Sic.
@@ -163,13 +223,21 @@ bool auth::auth::is_class_type(const sstring& type, const sstring& classname) {
 future<> auth::auth::setup() {
     auto& db = cql3::get_local_query_processor().db().local();
     auto& cfg = db.get_config();
-    auto type = cfg.authenticator();
 
-    if (is_class_type(type, authenticator::ALLOW_ALL_AUTHENTICATOR_NAME)) {
-        return authenticator::setup(type).discard_result(); // just create the object
+    future<> f = perm_cache.start();
+
+    if (is_class_type(cfg.authenticator(),
+                    authenticator::ALLOW_ALL_AUTHENTICATOR_NAME)
+                    && is_class_type(cfg.authorizer(),
+                                    authorizer::ALLOW_ALL_AUTHORIZER_NAME)
+                                    ) {
+        // just create the objects
+        return f.then([&cfg] {
+            return authenticator::setup(cfg.authenticator());
+        }).then([&cfg] {
+            return authorizer::setup(cfg.authorizer());
+        });
     }
-
-    future<> f = make_ready_future();
 
     if (!db.has_keyspace(AUTH_KS)) {
         std::map<sstring, sstring> opts;
@@ -182,10 +250,10 @@ future<> auth::auth::setup() {
         return setup_table(USERS_CF, sprint("CREATE TABLE %s.%s (%s text, %s boolean, PRIMARY KEY(%s)) WITH gc_grace_seconds=%d",
                                         AUTH_KS, USERS_CF, USER_NAME, SUPER, USER_NAME,
                                         90 * 24 * 60 * 60)); // 3 months.
-    }).then([type] {
-        return authenticator::setup(type).discard_result();
-    }).then([] {
-        // TODO authorizer
+    }).then([&cfg] {
+        return authenticator::setup(cfg.authenticator());
+    }).then([&cfg] {
+        return authorizer::setup(cfg.authorizer());
     }).then([] {
         service::get_local_migration_manager().register_listener(&auth_migration); // again, only one shard...
         // instead of once-timer, just schedule this later
@@ -216,7 +284,13 @@ future<> auth::auth::shutdown() {
     // db-env-shutdown != process shutdown
     return smp::invoke_on_all([] {
         thread_waiters().clear();
+    }).then([] {
+        return perm_cache.stop();
     });
+}
+
+future<auth::permission_set> auth::auth::get_permissions(::shared_ptr<authenticated_user> user, data_resource resource) {
+    return perm_cache.local().get(std::move(user), std::move(resource));
 }
 
 static db::consistency_level consistency_for_user(const sstring& username) {
