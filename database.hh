@@ -738,7 +738,6 @@ public:
         : _metadata(std::move(metadata))
         , _config(std::move(cfg))
     {}
-    user_types_metadata _user_types;
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
