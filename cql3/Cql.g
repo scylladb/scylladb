@@ -39,6 +39,7 @@ options {
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/statements/drop_type_statement.hh"
+#include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -330,9 +331,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st24=dropTriggerStatement        { $stmt = st24; }
 #endif
     | st25=createTypeStatement         { $stmt = st25; }
+    | st26=alterTypeStatement          { $stmt = st26; }
     | st27=dropTypeStatement           { $stmt = st27; }
 #if 0
-    | st26=alterTypeStatement          { $stmt = st26; }
     | st28=createFunctionStatement     { $stmt = st28; }
     | st29=dropFunctionStatement       { $stmt = st29; }
     | st30=createAggregateStatement    { $stmt = st30; }
@@ -847,25 +848,26 @@ alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     }
     ;
 
-#if 0
 /**
  * ALTER TYPE <name> ALTER <field> TYPE <newtype>;
  * ALTER TYPE <name> ADD <field> <newtype>;
  * ALTER TYPE <name> RENAME <field> TO <newtype> AND ...;
  */
-alterTypeStatement returns [AlterTypeStatement expr]
+alterTypeStatement returns [::shared_ptr<alter_type_statement> expr]
     : K_ALTER K_TYPE name=userTypeName
-          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = AlterTypeStatement.alter(name, f, v); }
-          | K_ADD   f=ident v=comparatorType        { $expr = AlterTypeStatement.addition(name, f, v); }
+          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = ::make_shared<alter_type_statement::add_or_alter>(name, false, f, v); }
+          | K_ADD   f=ident v=comparatorType        { $expr = ::make_shared<alter_type_statement::add_or_alter>(name, true, f, v); }
           | K_RENAME
-               { Map<ColumnIdentifier, ColumnIdentifier> renames = new HashMap<ColumnIdentifier, ColumnIdentifier>(); }
-                 id1=ident K_TO toId1=ident { renames.put(id1, toId1); }
-                 ( K_AND idn=ident K_TO toIdn=ident { renames.put(idn, toIdn); } )*
-               { $expr = AlterTypeStatement.renames(name, renames); }
+               { $expr = ::make_shared<alter_type_statement::renames>(name); }
+               renames[{ static_pointer_cast<alter_type_statement::renames>($expr) }]
           )
     ;
-#endif
 
+
+renames[::shared_ptr<alter_type_statement::renames> expr]
+    : fromId=ident K_TO toId=ident { $expr->add_rename(fromId, toId); }
+      ( K_AND renames[$expr] )?
+    ;
 
 /**
  * DROP KEYSPACE [IF EXISTS] <KSP>;
