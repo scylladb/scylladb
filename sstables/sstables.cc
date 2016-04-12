@@ -965,8 +965,13 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     }
 
     return read_toc().then([this, &pc] {
+        // We'll try to keep the main code path exception free, but if an exception does happen
+        // we can try to regenerate the Summary.
         if (has_component(sstable::component_type::Summary)) {
-            return read_simple<component_type::Summary>(_summary, pc);
+            return read_simple<component_type::Summary>(_summary, pc).handle_exception([this, &pc] (auto ep) {
+                sstlog.warn("Couldn't read summary file %s: %s. Recreating it.", this->filename(component_type::Summary), ep);
+                return this->generate_summary(pc);
+            });
         } else {
             return generate_summary(pc);
         }
