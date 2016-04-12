@@ -134,11 +134,11 @@ private:
     response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
-    size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);
+    size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
     bool cannot_hint(gms::inet_address target);
     size_t get_hints_in_progress_for(gms::inet_address target);
-    bool should_hint(gms::inet_address ep);
+    bool should_hint(gms::inet_address ep) noexcept;
     bool submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);

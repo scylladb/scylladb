@@ -322,9 +322,12 @@ cql_server::do_accepts(int which, bool keepalive) {
             }
         });
         do_accepts(which, keepalive);
-    }).then_wrapped([] (future<> f) {
+    }).then_wrapped([this, which, keepalive] (future<> f) {
         try {
             f.get();
+        } catch (const std::bad_alloc&) {
+            logger.debug("accept failed: {}, retrying", std::current_exception());
+            do_accepts(which, keepalive);
         } catch (...) {
             logger.debug("accept failed: {}", std::current_exception());
         }
@@ -541,9 +544,12 @@ future<> cql_server::connection::process()
 
 future<> cql_server::connection::shutdown()
 {
-    return _fd.shutdown_input().then([this] {
+    return make_ready_future<>().then([this] {
+        return _fd.shutdown_input();
+    }).then_wrapped([this] (auto&& f) {
+        f.ignore_ready_future();
         return _fd.shutdown_output();
-    });
+    }).handle_exception([] (auto) {});
 }
 
 future<> cql_server::connection::process_request() {

@@ -1197,7 +1197,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 
 // returns number of hints stored
 template<typename Range>
-size_t storage_proxy::hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets)
+size_t storage_proxy::hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets) noexcept
 {
     return boost::count_if(targets | boost::adaptors::filtered(std::bind1st(std::mem_fn(&storage_proxy::should_hint), this)),
             std::bind(std::mem_fn(&storage_proxy::submit_hint), this, m, std::placeholders::_1));
@@ -1960,8 +1960,8 @@ public:
                     exec->reconcile(exec->_cl, timeout);
                     exec->_proxy->_stats.read_repair_repaired_blocking++;
                 }
-            } catch (read_timeout_exception& ex) {
-                exec->_result_promise.set_exception(ex);
+            } catch (...) {
+                exec->_result_promise.set_exception(std::current_exception());
             }
 
             exec->_proxy->_stats.background_reads++;
@@ -2589,7 +2589,7 @@ get_restricted_ranges(locator::token_metadata& tm, const schema& s, query::parti
     return ranges;
 }
 
-bool storage_proxy::should_hint(gms::inet_address ep) {
+bool storage_proxy::should_hint(gms::inet_address ep) noexcept {
     if (is_me(ep)) { // do not hint to local address
         return false;
     }

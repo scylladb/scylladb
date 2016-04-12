@@ -147,6 +147,13 @@ logger::really_do_log(log_level level, const char* fmt, stringer** s, size_t n) 
     }
 }
 
+void logger::failed_to_log(std::exception_ptr ex)
+{
+    try {
+        do_log(log_level::error, "failed to log message: {}", ex);
+    } catch (...) { }
+}
+
 void
 logger::set_stdout_enabled(bool enabled) {
     _stdout.store(enabled, std::memory_order_relaxed);

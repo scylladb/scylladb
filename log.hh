@@ -84,6 +84,7 @@ private:
     void do_log_step(log_level level, const char* fmt, stringer** s, size_t n, size_t idx, Arg&& arg, Args&&... args);
     void do_log_step(log_level level, const char* fmt, stringer** s, size_t n, size_t idx);
     void really_do_log(log_level level, const char* fmt, stringer** stringers, size_t n);
+    void failed_to_log(std::exception_ptr ex);
 public:
     explicit logger(sstring name);
     logger(logger&& x);
@@ -96,7 +97,9 @@ public:
         if (is_enabled(level)) {
             try {
                 do_log(level, fmt, std::forward<Args>(args)...);
-            } catch (...) { }
+            } catch (...) {
+                failed_to_log(std::current_exception());
+            }
         }
     }
     template <typename... Args>

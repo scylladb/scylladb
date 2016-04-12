@@ -519,7 +519,7 @@ void gossiper::do_status_check() {
 // - on_remove callbacks, e.g, storage_service -> access token_metadata
 void gossiper::run() {
     timer_callback_lock().then([this, g = this->shared_from_this()] {
-        seastar::async([this, g] {
+        return seastar::async([this, g] {
             logger.trace("=== Gossip round START");
 
             //wait on messaging service to start listening
@@ -624,25 +624,25 @@ void gossiper::run() {
                     }
                 }).get();
             }
-        }).then_wrapped([this] (auto&& f) {
-            try {
-                f.get();
-                _nr_run++;
-                logger.trace("=== Gossip round OK");
-            } catch (...) {
-                logger.trace("=== Gossip round FAIL");
-            }
-
-            if (logger.is_enabled(logging::log_level::trace)) {
-                for (auto& x : endpoint_state_map) {
-                    logger.trace("ep={}, eps={}", x.first, x.second);
-                }
-            }
-            if (_enabled) {
-                _scheduled_gossip_task.arm(INTERVAL);
-            }
-            this->timer_callback_unlock();
         });
+    }).then_wrapped([this] (auto&& f) {
+        try {
+            f.get();
+            _nr_run++;
+            logger.trace("=== Gossip round OK");
+        } catch (...) {
+            logger.trace("=== Gossip round FAIL");
+        }
+
+        if (logger.is_enabled(logging::log_level::trace)) {
+            for (auto& x : endpoint_state_map) {
+                logger.trace("ep={}, eps={}", x.first, x.second);
+            }
+        }
+        if (_enabled) {
+            _scheduled_gossip_task.arm(INTERVAL);
+        }
+        this->timer_callback_unlock();
     });
 }
 
