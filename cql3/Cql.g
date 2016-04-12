@@ -38,6 +38,7 @@ options {
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/statements/drop_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -329,9 +330,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st24=dropTriggerStatement        { $stmt = st24; }
 #endif
     | st25=createTypeStatement         { $stmt = st25; }
+    | st27=dropTypeStatement           { $stmt = st27; }
 #if 0
     | st26=alterTypeStatement          { $stmt = st26; }
-    | st27=dropTypeStatement           { $stmt = st27; }
     | st28=createFunctionStatement     { $stmt = st28; }
     | st29=dropFunctionStatement       { $stmt = st29; }
     | st30=createAggregateStatement    { $stmt = st30; }
@@ -882,15 +883,15 @@ dropTableStatement returns [::shared_ptr<drop_table_statement> stmt]
     : K_DROP K_COLUMNFAMILY (K_IF K_EXISTS { if_exists = true; } )? cf=columnFamilyName { $stmt = ::make_shared<drop_table_statement>(cf, if_exists); }
     ;
 
-#if 0
 /**
  * DROP TYPE <name>;
  */
-dropTypeStatement returns [DropTypeStatement stmt]
-    @init { boolean ifExists = false; }
-    : K_DROP K_TYPE (K_IF K_EXISTS { ifExists = true; } )? name=userTypeName { $stmt = new DropTypeStatement(name, ifExists); }
+dropTypeStatement returns [::shared_ptr<drop_type_statement> stmt]
+    @init { bool if_exists = false; }
+    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = ::make_shared<drop_type_statement>(name, if_exists); }
     ;
 
+#if 0
 /**
  * DROP INDEX [IF EXISTS] <INDEX_NAME>
  */
