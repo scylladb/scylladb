@@ -968,7 +968,7 @@ future<> sstable::read_summary(const io_priority_class& pc) {
         if (has_component(sstable::component_type::Summary)) {
             return read_simple<component_type::Summary>(_summary, pc);
         } else {
-           return generate_summary(default_priority_class());
+            return generate_summary(pc);
         }
     });
 }
@@ -1550,6 +1550,11 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     return ctx->consume_input(*ctx).then([this, ctx, &s] {
                         seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
                     });
+                });
+            }).then([index_file] () mutable {
+                return index_file.close().handle_exception([] (auto ep) {
+                    sstlog.warn("sstable close index_file failed: {}", ep);
+                    general_disk_error();
                 });
             });
         });
