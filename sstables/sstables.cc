@@ -1360,9 +1360,19 @@ void sstable::do_write_components(::mutation_reader mr,
     // Remember first and last keys, which we need for the summary file.
     std::experimental::optional<key> first_key, last_key;
 
+    // Returns offset into data component.
+    auto get_offset = [this, &out] () {
+        if (this->has_component(sstable::component_type::CompressionInfo)) {
+            // Variable returned by compressed_file_length() is constantly updated by compressed output stream.
+            return this->_compression.compressed_file_length();
+        } else {
+            return out.offset();
+        }
+    };
+
     // Iterate through CQL partitions, then CQL rows, then CQL columns.
     // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
-    while (out.offset() < max_sstable_size) {
+    while (get_offset() < max_sstable_size) {
         mutation_opt mut = mr().get0();
         if (!mut) {
             break;

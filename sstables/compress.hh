@@ -121,7 +121,7 @@ private:
     // Return maximum length of data that compressor may output.
     compress_max_size_func *_compress_max_size = nullptr;
     // Variables *not* found in the "Compression Info" file (added by update()):
-    uint64_t _compressed_file_length;
+    uint64_t _compressed_file_length = 0;
     uint32_t _full_checksum;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
