@@ -62,6 +62,10 @@ public:
     size_t operator()(const std::pair<T1, T2>& p) const {
         return hash_combine(hash(p.first), hash(p.second));
     }
+    template<typename T1, typename T2>
+    size_t operator()(const T1& t1, const T2& t2) const {
+        return hash_combine(hash(t1), hash(t2));
+    }
     template<typename... Args>
     size_t operator()(const std::tuple<Args...>& v) const;
 };
