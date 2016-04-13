@@ -76,8 +76,6 @@ future<file> new_sstable_component_file(disk_error_signal_type& signal, sstring 
     });
 }
 
-thread_local std::unordered_map<sstring, std::unordered_set<unsigned>> sstable::_shards_agreeing_to_remove_sstable;
-
 static utils::phased_barrier& background_jobs() {
     static thread_local utils::phased_barrier gate;
     return gate;
@@ -1836,7 +1834,7 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            shared_remove_by_toc_name(filename(component_type::TOC), _shared).handle_exception(
+            delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             sstlog.warn("Exception when deleting sstable file: {}", eptr);
                         });
@@ -1850,26 +1848,6 @@ sstable::~sstable() {
 sstring
 dirname(sstring fname) {
     return boost::filesystem::canonical(std::string(fname)).parent_path().string();
-}
-
-future<>
-sstable::shared_remove_by_toc_name(sstring toc_name, bool shared) {
-    if (!shared) {
-        return remove_by_toc_name(toc_name);
-    } else {
-        auto shard = std::hash<sstring>()(toc_name) % smp::count;
-        return smp::submit_to(shard, [toc_name, src_shard = engine().cpu_id()] {
-            auto& remove_set = _shards_agreeing_to_remove_sstable[toc_name];
-            remove_set.insert(src_shard);
-            auto counter = remove_set.size();
-            if (counter == smp::count) {
-                _shards_agreeing_to_remove_sstable.erase(toc_name);
-                return remove_by_toc_name(toc_name);
-            } else {
-                return make_ready_future<>();
-            }
-        });
-    }
 }
 
 future<>
