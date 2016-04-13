@@ -588,4 +588,31 @@ future<> await_background_jobs();
 // Invokes await_background_jobs() on all shards
 future<> await_background_jobs_on_all_shards();
 
+struct sstable_to_delete {
+    sstable_to_delete(sstring name, bool shared) : name(std::move(name)), shared(shared) {}
+    sstring name;
+    bool shared = false;
+    friend std::ostream& operator<<(std::ostream& os, const sstable_to_delete& std);
+};
+
+
+// When we compact sstables, we have to atomically instantiate the new
+// sstable and delete the old ones.  Otherwise, if we compact A+B into C,
+// and if A contained some data that was tombstoned by B, and if B was
+// deleted but A survived, then data from A will be resurrected.
+//
+// There are two violators of the requirement to atomically delete
+// sstables: first sstable instantiation and deletion on disk is atomic
+// only wrt. itself, not other sstables, and second when an sstable is
+// shared among shard, so actual on-disk deletion of an sstable is deferred
+// until all shards agree it can be deleted.
+//
+// This function only solves the second problem for now.
+future<> delete_atomically(std::vector<shared_sstable> ssts);
+future<> delete_atomically(std::vector<sstable_to_delete> ssts);
+
+// Cancel any deletions scheduled by delete_atomically() and make their
+// futures complete
+void cancel_atomic_deletions();
+
 }
