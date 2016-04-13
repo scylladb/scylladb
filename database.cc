@@ -490,8 +490,9 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
         }
     }
 
-    auto fut = sstable::get_sstable_key_range(*_schema, _schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
-    return std::move(fut).then([this, sstdir = std::move(sstdir), comps] (range<partition_key> r) {
+    auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
+    auto fut = sst->get_sstable_key_range(*_schema);
+    return std::move(fut).then([this, sst = std::move(sst), sstdir = std::move(sstdir), comps] (range<partition_key> r) mutable {
         // Checks whether or not sstable belongs to current shard.
         if (!belongs_to_current_shard(*_schema, std::move(r))) {
             dblog.debug("sstable {} not relevant for this shard, ignoring",
@@ -501,7 +502,6 @@ future<sstables::entry_descriptor> column_family::probe_file(sstring sstdir, sst
             return make_ready_future<>();
         }
 
-        auto sst = std::make_unique<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), sstdir, comps.generation, comps.version, comps.format);
         auto fut = sst->load();
         return std::move(fut).then([this, sst = std::move(sst)] () mutable {
             add_sstable(std::move(*sst));

@@ -399,12 +399,15 @@ private:
 
     void write_filter(const io_priority_class& pc);
 
-    future<> read_summary(const io_priority_class& pc) {
-        return read_simple<component_type::Summary>(_summary, pc);
-    }
+    future<> read_summary(const io_priority_class& pc);
+
     void write_summary(const io_priority_class& pc) {
         write_simple<component_type::Summary>(_summary, pc);
     }
+
+    // To be called when we try to load an SSTable that lacks a Summary. Could
+    // happen if old tools are being used.
+    future<> generate_summary(const io_priority_class& pc);
 
     future<> read_statistics(const io_priority_class& pc);
     void write_statistics(const io_priority_class& pc);
@@ -535,8 +538,8 @@ public:
     }
 
     // Return sstable key range as range<partition_key> reading only the summary component.
-    static future<range<partition_key>>
-    get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f);
+    future<range<partition_key>>
+    get_sstable_key_range(const schema& s);
 
     // Used to mark a sstable for deletion that is not relevant to the current shard.
     // It doesn't mean that the sstable will be deleted, but that the sstable is not

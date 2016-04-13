@@ -144,6 +144,10 @@ struct summary_ka {
     uint64_t memory_footprint() const {
         return sizeof(summary_entry) * entries.size() + sizeof(uint32_t) * positions.size() + sizeof(*this);
     }
+
+    explicit operator bool() const {
+        return entries.size();
+    }
 };
 using summary = summary_ka;
 

@@ -42,10 +42,16 @@ public:
     }
 };
 
-class index_consume_entry_context: public data_consumer::continuous_data_consumer<index_consume_entry_context> {
+// IndexConsumer is a concept that implements:
+//
+// bool should_continue();
+// void consume_entry(index_entry&& ie);
+template <class IndexConsumer>
+class index_consume_entry_context: public data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>> {
     using proceed = data_consumer::proceed;
+    using continuous_data_consumer = data_consumer::continuous_data_consumer<index_consume_entry_context<IndexConsumer>>;
 private:
-    index_consumer& _consumer;
+    IndexConsumer& _consumer;
 
     enum class state {
         START,
@@ -66,7 +72,7 @@ public:
 
     bool non_consuming() const {
         return ((_state == state::CONSUME_ENTRY) || (_state == state::START) ||
-                ((_state == state::PROMOTED_BYTES) && (_prestate == prestate::NONE)));
+                ((_state == state::PROMOTED_BYTES) && (continuous_data_consumer::_prestate == continuous_data_consumer::prestate::NONE)));
     }
 
     proceed process_state(temporary_buffer<char>& data) {
@@ -79,32 +85,32 @@ public:
             _state = state::KEY_SIZE;
             break;
         case state::KEY_SIZE:
-            if (read_16(data) != read_status::ready) {
+            if (this->read_16(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::KEY_BYTES;
                 break;
             }
         case state::KEY_BYTES:
-            if (read_bytes(data, _u16, _key) != read_status::ready) {
+            if (this->read_bytes(data, this->_u16, _key) != continuous_data_consumer::read_status::ready) {
                 _state = state::POSITION;
                 break;
             }
         case state::POSITION:
-            if (read_64(data) != read_status::ready) {
+            if (this->read_64(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PROMOTED_SIZE;
                 break;
             }
         case state::PROMOTED_SIZE:
-            if (read_32(data) != read_status::ready) {
+            if (this->read_32(data) != continuous_data_consumer::read_status::ready) {
                 _state = state::PROMOTED_BYTES;
                 break;
             }
         case state::PROMOTED_BYTES:
-            if (read_bytes(data, _u32, _promoted) != read_status::ready) {
+            if (this->read_bytes(data, this->_u32, _promoted) != continuous_data_consumer::read_status::ready) {
                 _state = state::CONSUME_ENTRY;
                 break;
             }
         case state::CONSUME_ENTRY:
-            _consumer.consume_entry(index_entry(std::move(_key), _u64, std::move(_promoted)));
+            _consumer.consume_entry(index_entry(std::move(_key), this->_u64, std::move(_promoted)));
             _state = state::START;
             break;
         default:
@@ -113,7 +119,7 @@ public:
         return proceed::yes;
     }
 
-    index_consume_entry_context(index_consumer& consumer,
+    index_consume_entry_context(IndexConsumer& consumer,
             input_stream<char>&& input, uint64_t maxlen)
         : continuous_data_consumer(std::move(input), maxlen)
         , _consumer(consumer)

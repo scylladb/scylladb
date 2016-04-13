@@ -689,6 +689,10 @@ inline void write(file_writer& out, estimated_histogram& eh) {
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
+    if (_components.size()) {
+        return make_ready_future<>();
+    }
+
     auto file_path = filename(sstable::component_type::TOC);
 
     sstlog.debug("Reading TOC file {} ", file_path);
@@ -719,6 +723,7 @@ future<> sstable::read_toc() {
                 try {
                    _components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
+                    _components.clear(); // so subsequent read_toc will be forced to fail again
                     throw malformed_sstable_exception("Unrecognized TOC component: " + c);
                 }
             }
@@ -869,7 +874,7 @@ future<index_list> sstable::read_indexes(uint64_t summary_idx, const io_priority
         auto stream = make_file_input_stream(this->_index_file, position, end - position, std::move(options));
         // TODO: it's redundant to constrain the consumer here to stop at
         // index_size()-position, the input stream is already constrained.
-        auto ctx = make_lw_shared<index_consume_entry_context>(ic, std::move(stream), this->index_size() - position);
+        auto ctx = make_lw_shared<index_consume_entry_context<index_consumer>>(ic, std::move(stream), this->index_size() - position);
         return ctx->consume_input(*ctx).then([ctx, &ic] {
             return make_ready_future<index_list>(std::move(ic.indexes));
         });
@@ -939,6 +944,25 @@ future<> sstable::read_statistics(const io_priority_class& pc) {
 
 void sstable::write_statistics(const io_priority_class& pc) {
     write_simple<component_type::Statistics>(_statistics, pc);
+}
+
+future<> sstable::read_summary(const io_priority_class& pc) {
+    if (_summary) {
+        return make_ready_future<>();
+    }
+
+    return read_toc().then([this, &pc] {
+        // We'll try to keep the main code path exception free, but if an exception does happen
+        // we can try to regenerate the Summary.
+        if (has_component(sstable::component_type::Summary)) {
+            return read_simple<component_type::Summary>(_summary, pc).handle_exception([this, &pc] (auto ep) {
+                sstlog.warn("Couldn't read summary file %s: %s. Recreating it.", this->filename(component_type::Summary), ep);
+                return this->generate_summary(pc);
+            });
+        } else {
+            return generate_summary(pc);
+        }
+    });
 }
 
 future<> sstable::open_data() {
@@ -1211,10 +1235,9 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
     write(out, key, pos, promoted_index_size);
 }
 
-static void prepare_summary(summary& s, uint64_t expected_partition_count, const schema& schema) {
+static void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
     assert(expected_partition_count >= 1);
 
-    auto min_index_interval = schema.min_index_interval();
     s.header.min_index_interval = min_index_interval;
     s.header.sampling_level = downsampling::BASE_SAMPLING_LEVEL;
     uint64_t max_expected_entries =
@@ -1231,8 +1254,7 @@ static void prepare_summary(summary& s, uint64_t expected_partition_count, const
 
 static void seal_summary(summary& s,
         std::experimental::optional<key>&& first_key,
-        std::experimental::optional<key>&& last_key,
-        const schema& schema) {
+        std::experimental::optional<key>&& last_key) {
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = s.header.size;
 
@@ -1321,7 +1343,7 @@ void sstable::do_write_components(::mutation_reader mr,
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
-    prepare_summary(_summary, estimated_partitions, *schema);
+    prepare_summary(_summary, estimated_partitions, schema->min_index_interval());
 
     // FIXME: we may need to set repaired_at stats at this point.
 
@@ -1401,7 +1423,7 @@ void sstable::do_write_components(::mutation_reader mr,
         }
 
     }
-    seal_summary(_summary, std::move(first_key), std::move(last_key), *schema);
+    seal_summary(_summary, std::move(first_key), std::move(last_key));
 
     index->close().get();
     _index_file = file(); // index->close() closed _index_file
@@ -1471,6 +1493,60 @@ future<> sstable::write_components(::mutation_reader mr,
             touch_directory(dir).get();
             create_links(dir).get();
         }
+    });
+}
+
+future<> sstable::generate_summary(const io_priority_class& pc) {
+    if (_summary) {
+        return make_ready_future<>();
+    }
+
+    sstlog.info("Summary file {} not found. Generating Summary...", filename(sstable::component_type::Summary));
+    class summary_generator {
+        summary& _summary;
+    public:
+        std::experimental::optional<key> first_key, last_key;
+
+        summary_generator(summary& s) : _summary(s) {}
+        bool should_continue() {
+            return true;
+        }
+        void consume_entry(index_entry&& ie) {
+            maybe_add_summary_entry(_summary, ie.get_key_bytes(), ie.position());
+            if (!first_key) {
+                first_key = key(to_bytes(ie.get_key_bytes()));
+            } else {
+                last_key = key(to_bytes(ie.get_key_bytes()));
+            }
+        }
+    };
+
+    return open_file_dma(filename(component_type::Index), open_flags::ro).then([this, &pc] (file index_file) {
+        return do_with(std::move(index_file), [this, &pc] (file index_file) {
+            return index_file.size().then([this, &pc, index_file] (auto size) {
+                // an upper bound. Surely to be less than this.
+                auto estimated_partitions = size / sizeof(uint64_t);
+                // Since we don't have a summary, use a default min_index_interval, and if needed we'll resample
+                // later.
+                prepare_summary(_summary, estimated_partitions, 0x80);
+
+                file_input_stream_options options;
+                options.buffer_size = sstable_buffer_size;
+                options.io_priority_class = pc;
+                auto stream = make_file_input_stream(index_file, 0, size, std::move(options));
+                return do_with(summary_generator(_summary), [this, &pc, stream = std::move(stream), size] (summary_generator& s) mutable {
+                    auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(s, std::move(stream), size);
+                    return ctx->consume_input(*ctx).then([this, ctx, &s] {
+                        seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
+                    });
+                });
+            }).then([index_file] () mutable {
+                return index_file.close().handle_exception([] (auto ep) {
+                    sstlog.warn("sstable close index_file failed: {}", ep);
+                    return make_exception_future<>(std::move(ep));
+                });
+            });
+        });
     });
 }
 
@@ -1910,12 +1986,11 @@ sstable::remove_sstable_with_temp_toc(sstring ks, sstring cf, sstring dir, int64
 }
 
 future<range<partition_key>>
-sstable::get_sstable_key_range(const schema& s, sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
-    auto sst = std::make_unique<sstable>(ks, cf, dir, generation, v, f);
-    auto fut = sst->read_summary(default_priority_class());
-    return std::move(fut).then([sst = std::move(sst), &s] () mutable {
-        auto first = sst->get_first_partition_key(s);
-        auto last = sst->get_last_partition_key(s);
+sstable::get_sstable_key_range(const schema& s) {
+    auto fut = read_summary(default_priority_class());
+    return std::move(fut).then([this, &s] () mutable {
+        auto first = get_first_partition_key(s);
+        auto last = get_last_partition_key(s);
         return make_ready_future<range<partition_key>>(range<partition_key>::make(first, last));
     });
 }
