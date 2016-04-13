@@ -860,6 +860,8 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::vector<gms::inet_address> pending_endpoints =
         get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
+    logger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
+
     // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
     auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
         return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
@@ -885,6 +887,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
             std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
 
+    logger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
 
     return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints));
