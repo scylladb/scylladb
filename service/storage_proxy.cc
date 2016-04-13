@@ -2076,6 +2076,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
 
+    logger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
+
     // Throw UAE early if we don't have enough replicas.
     db::assure_sufficient_live_nodes(cl, ks, target_replicas);
 
@@ -2113,6 +2115,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         extra_replica = *it;
     }
     target_replicas.push_back(extra_replica);
+
+    logger.trace("creating read executor with extra target {}", extra_replica);
 
     if (retry_type == speculative_retry::type::ALWAYS) {
         return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas));
@@ -2232,6 +2236,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
             filtered_endpoints = std::move(filtered_merged);
             ++i;
         }
+        logger.trace("creating range read executor with targets {}", filtered_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
         exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints)));
     }
