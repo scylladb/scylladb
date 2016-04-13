@@ -366,6 +366,10 @@ int main(int ac, char** av) {
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();
             engine().at_exit([&db] {
+                // A shared sstable must be compacted by all shards before it can be deleted.
+                // Since we're stoping, that's not going to happen.  Cancel those pending
+                // deletions to let anyone waiting on them to continue.
+                sstables::cancel_atomic_deletions();
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.
