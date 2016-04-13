@@ -499,7 +499,13 @@ protected:
     friend class reversed_type_impl;
     template <typename T> friend const T& value_cast(const data_value& value);
     template <typename T> friend T&& value_cast(data_value&& value);
+    friend bool operator==(const abstract_type& x, const abstract_type& y);
 };
+
+inline bool operator==(const abstract_type& x, const abstract_type& y)
+{
+     return x.equals(y);
+}
 
 inline
 size_t
