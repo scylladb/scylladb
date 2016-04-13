@@ -143,7 +143,7 @@ compact_sstables(std::vector<shared_sstable> sstables, column_family& cf, std::f
 
     db::replay_position rp;
 
-    auto all_sstables = cf.get_sstables();
+    auto all_sstables = cf.get_sstables_including_compacted_undeleted();
     std::sort(sstables.begin(), sstables.end(), [] (const shared_sstable& x, const shared_sstable& y) {
         return x->generation() < y->generation();
     });
