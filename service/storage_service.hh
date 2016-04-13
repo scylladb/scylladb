@@ -1949,7 +1949,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> remove_node(sstring host_id_string);
+    future<> removenode(sstring host_id_string);
 
     future<sstring> get_operation_mode();
 

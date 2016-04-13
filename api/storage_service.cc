@@ -382,7 +382,7 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     ss::remove_node.set(r, [](std::unique_ptr<request> req) {
         auto host_id = req->get_query_param("host_id");
-        return service::get_local_storage_service().remove_node(host_id).then([] {
+        return service::get_local_storage_service().removenode(host_id).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

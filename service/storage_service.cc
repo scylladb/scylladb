@@ -1900,10 +1900,10 @@ future<> storage_service::decommission() {
     });
 }
 
-future<> storage_service::remove_node(sstring host_id_string) {
-    return run_with_api_lock(sstring("remove_node"), [host_id_string] (storage_service& ss) mutable {
+future<> storage_service::removenode(sstring host_id_string) {
+    return run_with_api_lock(sstring("removenode"), [host_id_string] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id_string] {
-            logger.debug("remove_node: host_id = {}", host_id_string);
+            logger.debug("removenode: host_id = {}", host_id_string);
             auto my_address = ss.get_broadcast_address();
             auto& tm = ss._token_metadata;
             auto local_host_id = tm.get_host_id(my_address);
@@ -1917,7 +1917,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
 
             auto tokens = tm.get_tokens(endpoint);
 
-            logger.debug("remove_node: endpoint = {}", endpoint);
+            logger.debug("removenode: endpoint = {}", endpoint);
 
             if (endpoint == my_address) {
                 throw std::runtime_error("Cannot remove self");
@@ -1960,7 +1960,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                     }
                 }
             }
-            logger.info("remove_node: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
+            logger.info("removenode: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
             ss._removing_node = endpoint;
             tm.add_leaving_endpoint(endpoint);
             ss.update_pending_ranges().get();
@@ -3010,10 +3010,10 @@ future<> storage_service::force_remove_completion() {
     return run_with_no_api_lock([] (storage_service& ss) {
         return seastar::async([&ss] {
             if (!ss._operation_in_progress.empty()) {
-                if (ss._operation_in_progress != sstring("remove_node")) {
+                if (ss._operation_in_progress != sstring("removenode")) {
                     throw std::runtime_error(sprint("Operation %s is in progress, try again", ss._operation_in_progress));
                 } else {
-                    // This flag will make remove_node stop waiting for the confirmation
+                    // This flag will make removenode stop waiting for the confirmation
                     ss._force_remove_completion = true;
                     while (!ss._operation_in_progress.empty()) {
                         // Wait removenode operation to complete
