@@ -267,6 +267,12 @@ private:
 
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    // sstables that have been compacted (so don't look up in query) but
+    // have not been deleted yet, so must not GC any tombstones in other sstables
+    // that may delete data in these sstables:
+    std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    // Control background fibers waiting for sstables to be deleted
+    seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
@@ -319,6 +325,7 @@ private:
     // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& sstables_to_remove);
+    void rebuild_statistics();
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -485,6 +492,7 @@ public:
     }
 
     lw_shared_ptr<sstable_list> get_sstables();
+    lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted();
     size_t sstables_count();
     int64_t get_unleveled_sstables() const;
 
