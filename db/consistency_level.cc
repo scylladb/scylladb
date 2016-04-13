@@ -191,11 +191,6 @@ filter_for_query(consistency_level cl,
      * replica gets the data read) or not (since we'll take the block_for first
      * ones).
      */
-    // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
-    auto it = boost::range::find(live_endpoints, utils::fb_utilities::get_broadcast_address());
-    if (it != live_endpoints.end() && it != live_endpoints.begin()) {
-        std::iter_swap(it, live_endpoints.begin());
-    }
     if (is_datacenter_local(cl)) {
         boost::range::partition(live_endpoints, is_local);
     }

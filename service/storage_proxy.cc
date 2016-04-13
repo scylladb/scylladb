@@ -2434,6 +2434,11 @@ std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector())));
     eps.erase(itend, eps.end());
     locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+    // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
+    auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
+    if (it != eps.end() && it != eps.begin()) {
+        std::iter_swap(it, eps.begin());
+    }
     return eps;
 }
 
