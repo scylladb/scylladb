@@ -48,13 +48,6 @@ sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" debian/changelog
 sed -i -e "s/@@CODENAME@@/$CODENAME/g" debian/changelog
 cp dist/ubuntu/rules.in debian/rules
 cp dist/ubuntu/control.in debian/control
-if [ "$RELEASE" = "15.10" ]; then
-    sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
-    sed -i -e "s/@@COMPILER@@/g++/g" debian/control
-else
-    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
-    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/control
-fi
 if [ "$RELEASE" = "14.04" ]; then
     sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
