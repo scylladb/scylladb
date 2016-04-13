@@ -48,8 +48,8 @@ fi
 
 if [ "$RELEASE" = "14.04" ]; then
     sudo gdebi -n build/antlr3_*.deb
+    sudo gdebi -n build/thrift-compiler_*.deb
 fi
 sudo gdebi -n build/antlr3-c++-dev_*.deb
 sudo gdebi -n build/libthrift0_*.deb
 sudo gdebi -n build/libthrift-dev_*.deb
-sudo gdebi -n build/thrift-compiler_*.deb
