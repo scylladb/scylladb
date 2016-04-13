@@ -1911,6 +1911,43 @@ SEASTAR_TEST_CASE(leveled_05) {
     });
 }
 
+SEASTAR_TEST_CASE(leveled_06) {
+    // Test that we can compact a single L1 compaction into an empty L2.
+
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    column_family::config cfg;
+    compaction_manager cm;
+    cfg.enable_disk_writes = false;
+    cfg.enable_commitlog = false;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    cf->mark_ready_for_writes();
+
+    auto max_sstable_size_in_mb = 1;
+    auto max_sstable_size_in_bytes = max_sstable_size_in_mb*1024*1024;
+
+    auto max_bytes_for_l1 = leveled_manifest::max_bytes_for_level(1, max_sstable_size_in_bytes);
+    // Create fake sstable that will be compacted into L2.
+    add_sstable_for_leveled_test(cf, /*gen*/1, /*data_size*/max_bytes_for_l1*2, /*level*/1, "a", "a");
+    BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+
+    auto candidates = get_candidates_for_leveled_strategy(*cf);
+    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
+    BOOST_REQUIRE(manifest.get_level_size(0) == 0);
+    BOOST_REQUIRE(manifest.get_level_size(1) == 1);
+    BOOST_REQUIRE(manifest.get_level_size(2) == 0);
+
+    auto candidate = manifest.get_compaction_candidates();
+    BOOST_REQUIRE(candidate.level == 2);
+    BOOST_REQUIRE(candidate.sstables.size() == 1);
+    auto& sst = (candidate.sstables)[0];
+    BOOST_REQUIRE(sst->get_sstable_level() == 1);
+    BOOST_REQUIRE(sst->generation() == 1);
+
+    return make_ready_future<>();
+}
+
 static lw_shared_ptr<key_reader> prepare_key_reader(schema_ptr s,
     const std::vector<shared_sstable>& ssts, const query::partition_range& range)
 {
