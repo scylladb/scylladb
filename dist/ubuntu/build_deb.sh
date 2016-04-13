@@ -55,6 +55,16 @@ else
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
     sed -i -e "s/@@COMPILER@@/g++-5/g" debian/control
 fi
+if [ "$RELEASE" = "14.04" ]; then
+    sed -i -e "s/@@DH_INSTALLINIT@@/--upstart-only/g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++-5/g" debian/rules
+    sed -i -e "s/@@BUILD_DEPENDS@@/g++-5/g" debian/control
+else
+    sed -i -e "s/@@DH_INSTALLINIT@@//g" debian/rules
+    sed -i -e "s/@@COMPILER@@/g++/g" debian/rules
+    sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++/g" debian/control
+fi
+
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 
