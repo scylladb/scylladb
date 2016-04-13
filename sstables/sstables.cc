@@ -730,6 +730,7 @@ future<> sstable::read_toc() {
                 try {
                    _components.insert(reverse_map(c, _component_map));
                 } catch (std::out_of_range& oor) {
+                    _components.clear(); // so subsequent read_toc will be forced to fail again
                     throw malformed_sstable_exception("Unrecognized TOC component: " + c);
                 }
             }
@@ -964,10 +965,15 @@ future<> sstable::read_summary(const io_priority_class& pc) {
     }
 
     return read_toc().then([this, &pc] {
+        // We'll try to keep the main code path exception free, but if an exception does happen
+        // we can try to regenerate the Summary.
         if (has_component(sstable::component_type::Summary)) {
-            return read_simple<component_type::Summary>(_summary, pc);
+            return read_simple<component_type::Summary>(_summary, pc).handle_exception([this, &pc] (auto ep) {
+                sstlog.warn("Couldn't read summary file %s: %s. Recreating it.", this->filename(component_type::Summary), ep);
+                return this->generate_summary(pc);
+            });
         } else {
-           return generate_summary(default_priority_class());
+            return generate_summary(pc);
         }
     });
 }
@@ -1559,6 +1565,11 @@ future<> sstable::generate_summary(const io_priority_class& pc) {
                     return ctx->consume_input(*ctx).then([this, ctx, &s] {
                         seal_summary(_summary, std::move(s.first_key), std::move(s.last_key));
                     });
+                });
+            }).then([index_file] () mutable {
+                return index_file.close().handle_exception([] (auto ep) {
+                    sstlog.warn("sstable close index_file failed: {}", ep);
+                    general_disk_error();
                 });
             });
         });
