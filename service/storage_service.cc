@@ -2358,6 +2358,8 @@ future<> storage_service::send_replication_notification(inet_address remote) {
 
 future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
+        auto removing_node = bool(ss._removing_node) ? sprint("%s", *ss._removing_node) : "NONE";
+        logger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
         // but restarted before all 'replication finished' messages arrived. In that case, we'll
         // still go ahead and acknowledge it.
