@@ -732,11 +732,7 @@ public:
             if (Sets.intersection(candidates, compacting).isEmpty())
                 return candidates;
 #endif
-            if (candidates.size() < 2) {
-                return {};
-            } else {
-                return candidates;
-            }
+            return candidates;
         }
 
         // all the sstables were suspect or overlapped with something suspect
