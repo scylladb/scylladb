@@ -178,20 +178,9 @@ inline void assure_sufficient_live_nodes(
         break;
     case consistency_level::LOCAL_QUORUM: {
         size_t local_live = count_local_endpoints(live_endpoints);
-        if (local_live < need + count_local_endpoints(pending_endpoints)) {
-#if 0
-            if (logger.isDebugEnabled())
-            {
-                StringBuilder builder = new StringBuilder("Local replicas [");
-                for (InetAddress endpoint : liveEndpoints)
-                {
-                    if (isLocal(endpoint))
-                        builder.append(endpoint).append(",");
-                }
-                builder.append("] are insufficient to satisfy LOCAL_QUORUM requirement of ").append(blockFor).append(" live nodes in '").append(DatabaseDescriptor.getLocalDataCenter()).append("'");
-                logger.debug(builder.toString());
-            }
-#endif
+        size_t pending = count_local_endpoints(pending_endpoints);
+        if (local_live < need + pending) {
+            cl_logger.debug("Local replicas {} are insufficient to satisfy LOCAL_QUORUM requirement of needed {} and pending {}", live_endpoints, local_live, pending);
             throw exceptions::unavailable_exception(cl, need, local_live);
         }
         break;
