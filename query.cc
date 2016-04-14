@@ -153,6 +153,16 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     return out.str();
 }
 
+query::result::printer
+result::pretty_printer(schema_ptr s, const query::partition_slice& slice) const {
+    return query::result::printer{s, slice, *this};
+}
+
+std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
+    os << p.res.pretty_print(p.s, p.slice);
+    return os;
+}
+
 result::result()
     : result([] {
         bytes_ostream out;
