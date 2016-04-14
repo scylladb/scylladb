@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 if [ "$AMI" = "yes" ] && [ -f /etc/scylla/ami_disabled ]; then
     rm /etc/scylla/ami_disabled

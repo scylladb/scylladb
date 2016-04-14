@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 export RPMBUILD=`pwd`/build/rpmbuild
 
 do_install()

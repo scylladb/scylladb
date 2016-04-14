@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 if [ ! -e dist/ubuntu/build_deb.sh ]; then
     echo "run build_deb.sh in top of scylla dir"

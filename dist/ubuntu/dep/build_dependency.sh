@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 RELEASE=`lsb_release -r|awk '{print $2}'`
 

@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 if [ ! -e dist/ami/build_ami.sh ]; then
     echo "run build_ami.sh in top of scylla dir"

@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 if [ "$NETWORK_MODE" = "virtio" ]; then
     ip tuntap del mode tap dev $TAP
