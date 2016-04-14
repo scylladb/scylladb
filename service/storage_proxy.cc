@@ -2313,7 +2313,11 @@ storage_proxy::query(schema_ptr s,
 
         logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
         return do_query(s, cmd, std::move(partition_ranges), cl).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
-            logger.trace("query_result id={}, size={}", query_id, res->buf().size());
+            if (res->buf().is_linearized()) {
+                logger.trace("query_result id={}, size={}, rows={}", query_id, res->buf().size(), res->calculate_row_count(cmd->slice));
+            } else {
+                logger.trace("query_result id={}, size={}", query_id, res->buf().size());
+            }
             qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
             return std::move(res);
         });
