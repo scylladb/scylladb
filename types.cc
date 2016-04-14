@@ -2715,7 +2715,7 @@ user_type_impl::as_cql3_type() const {
 sstring
 user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
     std::ostringstream os;
-    os << "(" << keyspace << "," << to_hex(name);
+    os << "org.apache.cassandra.db.marshal.UserType(" << keyspace << "," << to_hex(name);
     for (size_t i = 0; i < field_names.size(); ++i) {
         os << ",";
         os << to_hex(field_names[i]) << ":";
