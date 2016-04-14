@@ -117,6 +117,8 @@ public:
         return _digest;
     }
 
+    uint32_t calculate_row_count(const query::partition_slice&);
+
     struct printer {
         schema_ptr s;
         const query::partition_slice& slice;
