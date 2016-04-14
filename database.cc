@@ -1969,7 +1969,7 @@ void throttle_state::unthrottle() {
     if (should_throttle()) {
         return;
     }
-    size_t avail = (_max_space - _region_group.memory_used()) >> 20;
+    size_t avail = std::max((_max_space - _region_group.memory_used()) >> 20, size_t(1));
     avail = std::min(_throttled_requests.size(), avail);
     for (size_t i = 0; i < avail; ++i) {
         _throttled_requests.front().set_value();
