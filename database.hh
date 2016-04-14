@@ -246,6 +246,7 @@ public:
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
+        size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
@@ -709,6 +710,7 @@ public:
         bool enable_cache = true;
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
+        size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
@@ -779,6 +781,7 @@ class database {
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
+    size_t _streaming_memtable_total_space = 500 << 20;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
