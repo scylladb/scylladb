@@ -1826,7 +1826,7 @@ bool collection_type_impl::is_any_live(collection_mutation_view cm, tombstone to
 template <typename Iterator>
 collection_mutation
 do_serialize_mutation_form(
-        std::experimental::optional<tombstone> tomb,
+        const tombstone& tomb,
         boost::iterator_range<Iterator> cells) {
     auto element_size = [] (size_t c, auto&& e) -> size_t {
         return c + 8 + e.first.size() + e.second.serialize().size();
@@ -1834,14 +1834,14 @@ do_serialize_mutation_form(
     auto size = accumulate(cells, (size_t)4, element_size);
     size += 1;
     if (tomb) {
-        size += sizeof(tomb->timestamp) + sizeof(tomb->deletion_time);
+        size += sizeof(tomb.timestamp) + sizeof(tomb.deletion_time);
     }
     bytes ret(bytes::initialized_later(), size);
     bytes::iterator out = ret.begin();
     *out++ = bool(tomb);
     if (tomb) {
-        write(out, tomb->timestamp);
-        write(out, tomb->deletion_time.time_since_epoch().count());
+        write(out, tomb.timestamp);
+        write(out, tomb.deletion_time.time_since_epoch().count());
     }
     auto writeb = [&out] (bytes_view v) {
         serialize_int32(out, v.size());
