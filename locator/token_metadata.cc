@@ -201,7 +201,9 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
 }
 
 utils::UUID token_metadata::get_host_id(inet_address endpoint) {
-    assert(_endpoint_to_host_id_map.count(endpoint));
+    if (!_endpoint_to_host_id_map.count(endpoint)) {
+        std::runtime_error(sprint("host_id for endpoint %s is not found", endpoint));
+    }
     return _endpoint_to_host_id_map.at(endpoint);
 }
 

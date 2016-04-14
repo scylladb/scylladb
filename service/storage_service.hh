@@ -123,6 +123,7 @@ private:
     shared_ptr<distributed<transport::cql_server>> _cql_server;
     shared_ptr<distributed<thrift_server>> _thrift_server;
     sstring _operation_in_progress;
+    bool _force_remove_completion = false;
     bool _ms_stopped = false;
 public:
     storage_service(distributed<database>& db)
@@ -212,7 +213,7 @@ private:
 
     std::unordered_set<inet_address> _replicating_nodes;
 
-    inet_address _removing_node;
+    std::experimental::optional<inet_address> _removing_node;
 
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
@@ -1925,46 +1926,19 @@ public:
         }
     };
 
-#if 0
 
     /**
      * Get the status of a token removal.
      */
-    public String getRemovalStatus()
-    {
-        if (removingNode == null) {
-            return "No token removals in process.";
-        }
-        return String.format("Removing token (%s). Waiting for replication confirmation from [%s].",
-                             _token_metadata.getToken(removingNode),
-                             StringUtils.join(replicatingNodes, ","));
-    }
+    future<sstring> get_removal_status();
 
     /**
      * Force a remove operation to complete. This may be necessary if a remove operation
      * blocks forever due to node/stream failure. removeToken() must be called
      * first, this is a last resort measure.  No further attempt will be made to restore replicas.
      */
-    public void forceRemoveCompletion()
-    {
-        if (!replicatingNodes.isEmpty()  || !_token_metadata.getLeavingEndpoints().isEmpty())
-        {
-            logger.warn("Removal not confirmed for for {}", StringUtils.join(this.replicatingNodes, ","));
-            for (InetAddress endpoint : _token_metadata.getLeavingEndpoints())
-            {
-                UUID hostId = _token_metadata.getHostId(endpoint);
-                Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
-                excise(_token_metadata.getTokens(endpoint), endpoint);
-            }
-            replicatingNodes.clear();
-            removingNode = null;
-        }
-        else
-        {
-            logger.warn("No tokens to force removal on, call 'removenode' first");
-        }
-    }
-#endif
+    future<> force_remove_completion();
+
 public:
     /**
      * Remove a node that has died, attempting to restore the replica count.
@@ -1975,7 +1949,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> remove_node(sstring host_id_string);
+    future<> removenode(sstring host_id_string);
 
     future<sstring> get_operation_mode();
 
