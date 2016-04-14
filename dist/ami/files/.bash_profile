@@ -32,7 +32,7 @@ echo
 
 . /etc/os-release
 if [ "$ID" = "ubuntu" ]; then
-	if [ "`initctl status ssh|grep "running, process"`" != "" ]; then
+	if [ "`initctl status scylla-server|grep "running, process"`" != "" ]; then
 		STARTED=1
 	else
 		STARTED=0
