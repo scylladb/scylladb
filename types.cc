@@ -2581,7 +2581,7 @@ tuple_type_impl::check_compatibility(const abstract_type& previous, bool (abstra
                 _types.begin(), _types.end(),
                 x->_types.begin(), x->_types.end(),
                 [predicate] (data_type a, data_type b) { return ((*a).*predicate)(*b); });
-    return c.first == _types.end();  // previous allowed to be longer
+    return c.second == x->_types.end();  // this allowed to be longer
 }
 
 size_t
