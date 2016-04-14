@@ -63,7 +63,7 @@ sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 
 ./dist/ubuntu/dep/build_dependency.sh
 
-if [ "$RELEASE" != "15.10" ]; then
+if [ "$RELEASE" = "14.04" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
 fi
