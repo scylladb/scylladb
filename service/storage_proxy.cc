@@ -75,6 +75,7 @@
 namespace service {
 
 static logging::logger logger("storage_proxy");
+static logging::logger qlogger("query_result");
 
 distributed<service::storage_proxy> _the_storage_proxy;
 
@@ -2306,21 +2307,18 @@ storage_proxy::query(schema_ptr s,
     std::vector<query::partition_range>&& partition_ranges,
     db::consistency_level cl)
 {
-    if (logger.is_enabled(logging::log_level::trace)) {
+    if (logger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        try {
-            logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, ::join(", ", partition_ranges), query_id);
-        } catch (...) {
-            logger.trace("{}", std::current_exception());
-        }
+        logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
         return do_query(s, cmd, std::move(partition_ranges), cl).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
-            try {
-                logger.trace("query_result id={}, {}", query_id, res->pretty_print(s, cmd->slice));
-            } catch (...) {
-                logger.trace("{}", std::current_exception());
+            if (res->buf().is_linearized()) {
+                logger.trace("query_result id={}, size={}, rows={}", query_id, res->buf().size(), res->calculate_row_count(cmd->slice));
+            } else {
+                logger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
+            qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
             return std::move(res);
         });
     }

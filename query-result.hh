@@ -116,7 +116,18 @@ public:
     const stdx::optional<result_digest>& digest() const {
         return _digest;
     }
+
+    uint32_t calculate_row_count(const query::partition_slice&);
+
+    struct printer {
+        schema_ptr s;
+        const query::partition_slice& slice;
+        const query::result& res;
+    };
+
     sstring pretty_print(schema_ptr, const query::partition_slice&) const;
+    printer pretty_printer(schema_ptr, const query::partition_slice&) const;
 };
 
+std::ostream& operator<<(std::ostream& os, const query::result::printer&);
 }
