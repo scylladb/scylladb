@@ -630,7 +630,7 @@ public:
 class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
 public:
-    user_type get_type(bytes name) const {
+    user_type get_type(const bytes& name) const {
         return _user_types.at(name);
     }
     const std::unordered_map<bytes, user_type>& get_all_types() const {
