@@ -2098,6 +2098,24 @@ SEASTAR_TEST_CASE(test_alter_table) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_map_query) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE xx (k int PRIMARY KEY, m map<text, int>);").get();
+            e.execute_cql("insert into xx (k, m) values (0, {'v2': 1});").get();
+            auto m_type = map_type_impl::get_instance(utf8_type, int32_type, true);
+            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                    .is_rows().with_rows({
+                        { make_map_value(m_type, map_type_impl::native_type({{sstring("v2"), 1}})).serialize() }
+                    });
+            e.execute_cql("delete m['v2'] from xx where k = 0;").get();
+            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                    .is_rows().with_rows({{{}}});
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_drop_table) {
     return do_with_cql_env([] (auto& e) {
         return seastar::async([&e] {
