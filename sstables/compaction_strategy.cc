@@ -341,9 +341,6 @@ compaction_descriptor size_tiered_compaction_strategy::get_sstables_for_compacti
     auto buckets = get_buckets(candidates, max_threshold);
 
     std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-#ifdef __DEBUG__
-    printf("size-tiered: Compacting %ld out of %ld sstables\n", most_interesting.size(), candidates->size());
-#endif
     if (most_interesting.empty()) {
         // nothing to do
         return sstables::compaction_descriptor();
