@@ -111,7 +111,7 @@ selectable::with_field_selection::new_selector_factory(database& db, schema_ptr 
     if (!ut) {
         throw exceptions::invalid_request_exception(
                 sprint("Invalid field selection: %s of type %s is not a user type",
-                       _selected->to_string(), ut->as_cql3_type()));
+                       _selected->to_string(), factory->new_instance()->get_type()->as_cql3_type()));
     }
     for (size_t i = 0; i < ut->size(); ++i) {
         if (ut->field_name(i) != _field->bytes_) {
