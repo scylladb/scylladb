@@ -52,6 +52,11 @@ selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, s
     return writetime_or_ttl_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), _is_writetime);
 }
 
+sstring
+selectable::writetime_or_ttl::to_string() const {
+    return sprint("%s(%s)", _is_writetime ? "writetime" : "ttl", _id->to_string());
+}
+
 shared_ptr<selectable>
 selectable::writetime_or_ttl::raw::prepare(schema_ptr s) {
     return make_shared<writetime_or_ttl>(_id->prepare_column_identifier(s), _is_writetime);
@@ -78,6 +83,11 @@ selectable::with_function::new_selector_factory(database& db, schema_ptr s, std:
     return abstract_function_selector::new_factory(std::move(fun), std::move(factories));
 }
 
+sstring
+selectable::with_function::to_string() const {
+    return sprint("%s(%s)", _function_name.name, join(", ", _args));
+}
+
 shared_ptr<selectable>
 selectable::with_function::raw::prepare(schema_ptr s) {
         std::vector<shared_ptr<selectable>> prepared_args;
@@ -101,7 +111,7 @@ selectable::with_field_selection::new_selector_factory(database& db, schema_ptr 
     if (!ut) {
         throw exceptions::invalid_request_exception(
                 sprint("Invalid field selection: %s of type %s is not a user type",
-                       "FIXME: selectable" /* FIMXME: _selected */, ut->as_cql3_type()));
+                       _selected->to_string(), ut->as_cql3_type()));
     }
     for (size_t i = 0; i < ut->size(); ++i) {
         if (ut->field_name(i) != _field->bytes_) {
@@ -110,7 +120,12 @@ selectable::with_field_selection::new_selector_factory(database& db, schema_ptr 
         return field_selector::new_factory(std::move(ut), i, std::move(factory));
     }
     throw exceptions::invalid_request_exception(sprint("%s of type %s has no field %s",
-                                                       "FIXME: selectable" /* FIXME: _selected */, ut->as_cql3_type(), _field));
+                                                       _selected->to_string(), ut->as_cql3_type(), _field));
+}
+
+sstring
+selectable::with_field_selection::to_string() const {
+    return sprint("%s.%s", _selected->to_string(), _field->to_string());
 }
 
 shared_ptr<selectable>
@@ -124,6 +139,10 @@ selectable::with_field_selection::raw::prepare(schema_ptr s) {
 bool
 selectable::with_field_selection::raw::processes_selection() const {
     return true;
+}
+
+std::ostream & operator<<(std::ostream &os, const selectable& s) {
+    return os << s.to_string();
 }
 
 }

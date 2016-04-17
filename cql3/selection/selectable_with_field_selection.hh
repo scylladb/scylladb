@@ -59,13 +59,7 @@ public:
             : _selected(std::move(selected)), _field(std::move(field)) {
     }
 
-#if 0
-    @Override
-    public String toString()
-    {
-        return String.format("%s.%s", selected, field);
-    }
-#endif
+    virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 
