@@ -51,6 +51,9 @@ options {
 #include "cql3/statements/alter_user_statement.hh"
 #include "cql3/statements/drop_user_statement.hh"
 #include "cql3/statements/list_users_statement.hh"
+#include "cql3/statements/grant_statement.hh"
+#include "cql3/statements/revoke_statement.hh"
+#include "cql3/statements/list_permissions_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -313,10 +316,10 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st14=alterTableStatement         { $stmt = st14; }
 #if 0
     | st15=alterKeyspaceStatement      { $stmt = st15; }
+#endif
     | st16=grantStatement              { $stmt = st16; }
     | st17=revokeStatement             { $stmt = st17; }
     | st18=listPermissionsStatement    { $stmt = st18; }
-#endif
     | st19=createUserStatement         { $stmt = st19; }
     | st20=alterUserStatement          { $stmt = st20; }
     | st21=dropUserStatement           { $stmt = st21; }
@@ -905,69 +908,66 @@ truncateStatement returns [::shared_ptr<truncate_statement> stmt]
     : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName { $stmt = ::make_shared<truncate_statement>(cf); }
     ;
 
-#if 0
 /**
  * GRANT <permission> ON <resource> TO <username>
  */
-grantStatement returns [GrantStatement stmt]
+grantStatement returns [::shared_ptr<grant_statement> stmt]
     : K_GRANT
           permissionOrAll
       K_ON
           resource
       K_TO
           username
-      { $stmt = new GrantStatement($permissionOrAll.perms, $resource.res, $username.text); }
+      { $stmt = ::make_shared<grant_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
     ;
 
 /**
  * REVOKE <permission> ON <resource> FROM <username>
  */
-revokeStatement returns [RevokeStatement stmt]
+revokeStatement returns [::shared_ptr<revoke_statement> stmt]
     : K_REVOKE
           permissionOrAll
       K_ON
           resource
       K_FROM
           username
-      { $stmt = new RevokeStatement($permissionOrAll.perms, $resource.res, $username.text); }
+      { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
     ;
 
-listPermissionsStatement returns [ListPermissionsStatement stmt]
+listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
-        IResource resource = null;
-        String username = null;
-        boolean recursive = true;
+		std::experimental::optional<auth::data_resource> r;
+		std::experimental::optional<sstring> u;
+		bool recursive = true;
     }
     : K_LIST
           permissionOrAll
-      ( K_ON resource { resource = $resource.res; } )?
-      ( K_OF username { username = $username.text; } )?
+      ( K_ON resource { r = $resource.res; } )?
+      ( K_OF username { u = sstring($username.text); } )?
       ( K_NORECURSIVE { recursive = false; } )?
-      { $stmt = new ListPermissionsStatement($permissionOrAll.perms, resource, username, recursive); }
+      { $stmt = ::make_shared<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(u), recursive); } 
     ;
 
-permission returns [Permission perm]
+permission returns [auth::permission perm]
     : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE)
-    { $perm = Permission.valueOf($p.text.toUpperCase()); }
+    { $perm = auth::permissions::from_string($p.text); }
     ;
 
-permissionOrAll returns [Set<Permission> perms]
-    : K_ALL ( K_PERMISSIONS )?       { $perms = Permission.ALL_DATA; }
-    | p=permission ( K_PERMISSION )? { $perms = EnumSet.of($p.perm); }
+permissionOrAll returns [auth::permission_set perms]
+    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL_DATA; }
+    | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
-resource returns [IResource res]
+resource returns [auth::data_resource res]
     : r=dataResource { $res = $r.res; }
     ;
 
-dataResource returns [DataResource res]
-    : K_ALL K_KEYSPACES { $res = DataResource.root(); }
-    | K_KEYSPACE ks = keyspaceName { $res = DataResource.keyspace($ks.id); }
+dataResource returns [auth::data_resource res]
+    : K_ALL K_KEYSPACES { $res = auth::data_resource(); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = DataResource.columnFamily($cf.name.getKeyspace(), $cf.name.getColumnFamily()); }
+      { $res = auth::data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
-
-#endif
 
 /**
  * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]
