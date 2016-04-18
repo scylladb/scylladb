@@ -3,7 +3,7 @@
 #  Copyright (C) 2015 ScyllaDB
 
 print_usage() {
-    echo "scylla_developer_mode_setup --developer-mode=[0|1]"
+    echo "scylla_developer_mode_setup --developer-mode [0|1]"
     echo "  --developer-mode   enable/disable developer mode"
     exit 1
 }
