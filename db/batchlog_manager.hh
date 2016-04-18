@@ -60,6 +60,12 @@ private:
 
     using clock_type = lowres_clock;
 
+    struct stats {
+        uint64_t write_attempts = 0;
+    } _stats;
+
+    std::vector<scollectd::registration> _collectd_registrations;
+
     size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
     timer<clock_type> _timer;
