@@ -77,6 +77,8 @@ typedef enum_set<super_enum<permission,
                 permission::MODIFY,
                 permission::AUTHORIZE>> permission_set;
 
+bool operator<(const permission_set&, const permission_set&);
+
 namespace permissions {
 
 extern const permission_set ALL_DATA;

@@ -96,3 +96,6 @@ auth::permission_set auth::permissions::from_strings(const std::unordered_set<ss
     return res;
 }
 
+bool auth::operator<(const permission_set& p1, const permission_set& p2) {
+    return p1.mask() < p2.mask();
+}
