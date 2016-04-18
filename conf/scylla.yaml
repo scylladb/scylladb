@@ -192,6 +192,24 @@ api_address: 127.0.0.1
 # Caution should be taken on increasing the size of this threshold as it can lead to node instability.
 batch_size_warn_threshold_in_kb: 5
 
+# Authentication backend, identifying users
+# Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
+# PasswordAuthenticator}.
+#
+# - AllowAllAuthenticator performs no checks - set it to disable authentication.
+# - PasswordAuthenticator relies on username/password pairs to authenticate
+#   users. It keeps usernames and hashed passwords in system_auth.credentials table.
+#   Please increase system_auth keyspace replication factor if you use this authenticator.
+# authenticator: AllowAllAuthenticator
+
+# Authorization backend, implementing IAuthorizer; used to limit access/provide permissions
+# Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthorizer,
+# CassandraAuthorizer}.
+#
+# - AllowAllAuthorizer allows any action to any user - set it to disable authorization.
+# - CassandraAuthorizer stores permissions in system_auth.permissions table. Please
+#   increase system_auth keyspace replication factor if you use this authorizer.
+# authorizer: AllowAllAuthorizer
 
 ###################################################
 ## Not currently supported, reserved for future use
@@ -228,25 +246,6 @@ batch_size_warn_threshold_in_kb: 5
 # Maximum throttle in KBs per second, total. This will be
 # reduced proportionally to the number of nodes in the cluster.
 # batchlog_replay_throttle_in_kb: 1024
-
-# Authentication backend, identifying users
-# Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthenticator,
-# PasswordAuthenticator}.
-#
-# - AllowAllAuthenticator performs no checks - set it to disable authentication.
-# - PasswordAuthenticator relies on username/password pairs to authenticate
-#   users. It keeps usernames and hashed passwords in system_auth.credentials table.
-#   Please increase system_auth keyspace replication factor if you use this authenticator.
-# authenticator: AllowAllAuthenticator
-
-# Authorization backend, implementing IAuthorizer; used to limit access/provide permissions
-# Out of the box, Scylla provides org.apache.cassandra.auth.{AllowAllAuthorizer,
-# CassandraAuthorizer}.
-#
-# - AllowAllAuthorizer allows any action to any user - set it to disable authorization.
-# - CassandraAuthorizer stores permissions in system_auth.permissions table. Please
-#   increase system_auth keyspace replication factor if you use this authorizer.
-# authorizer: AllowAllAuthorizer
 
 # Validity period for permissions cache (fetching permissions can be an
 # expensive operation depending on the authorizer, CassandraAuthorizer is
