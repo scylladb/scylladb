@@ -723,7 +723,7 @@ public:
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, cql_serialization_format sf);
     static mutation_view deserialize_mutation_form(collection_mutation_view in);
     bool is_empty(collection_mutation_view in) const;
-    bool is_any_live(collection_mutation_view in, tombstone tomb, gc_clock::time_point now) const;
+    bool is_any_live(collection_mutation_view in, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const = 0;
     bytes to_value(collection_mutation_view mut, cql_serialization_format sf) const;
     // FIXME: use iterators?
