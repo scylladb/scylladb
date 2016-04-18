@@ -174,7 +174,8 @@ uint32_t result::calculate_row_count(const query::partition_slice& slice) {
             total_count += row_count;
             current_partition_count = row_count;
         }
-        void accept_new_row(...) {}
+        void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row) {}
+        void accept_new_row(const result_row_view& static_row, const result_row_view& row) {}
         void accept_partition_end(const query::result_row_view& static_row) {
             if (current_partition_count == 0) {
                 total_count++;
