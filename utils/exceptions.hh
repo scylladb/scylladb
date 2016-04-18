@@ -22,6 +22,7 @@
 #pragma once
 
 #include <functional>
+#include <system_error>
 
 typedef std::function<bool (const std::system_error &)> system_error_lambda_t;
 
