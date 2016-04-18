@@ -17,7 +17,7 @@ print_usage() {
 }
 
 . /etc/os-release
-if [ "$ID" = "ubuntu" ]; then
+if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     SYSCONFIG=/etc/default
 else
     SYSCONFIG=/etc/sysconfig

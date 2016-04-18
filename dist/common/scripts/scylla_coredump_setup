@@ -27,6 +27,8 @@ done
 if [ "$ID" = "ubuntu" ]; then
     apt-get remove -y apport-noui
     sysctl -p /etc/sysctl.d/99-scylla.conf
+elif [ "$ID" = "debian" ]; then
+    sysctl -p /etc/sysctl.d/99-scylla.conf
 else
     cat << EOS > /etc/systemd/coredump.conf
 [Coredump]

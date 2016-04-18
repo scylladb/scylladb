@@ -26,6 +26,7 @@ if [ ! -f /usr/bin/wget ]; then
     sudo apt-get -y install wget
 fi
 
+DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 RELEASE=`lsb_release -r|awk '{print $2}'`
 CODENAME=`lsb_release -c|awk '{print $2}'`
 if [ `grep -c $RELEASE dist/ubuntu/supported_release` -lt 1 ]; then
@@ -58,6 +59,12 @@ else
     sed -i -e "s/@@BUILD_DEPENDS@@/libsystemd-dev, g++/g" debian/control
 fi
 
+if [ "$DISTRIBUTION" = "Ubuntu" ]; then
+    sed -i -e "s/@@DEPENDS@@/hugepages, /g" debian/control
+else
+    sed -i -e "s/@@DEPENDS@@//g" debian/control
+fi
+
 cp dist/common/systemd/scylla-server.service.in debian/scylla-server.service
 sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 
@@ -66,8 +73,11 @@ sed -i -e "s#@@SYSCONFDIR@@#/etc/default#g" debian/scylla-server.service
 if [ "$RELEASE" = "14.04" ]; then
     sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
     sudo apt-get -y update
+elif [ "$DISTRIBUTION" = "Ubuntu" ]; then
+    sudo apt-get -y install g++-5
+else
+    sudo apt-get install g++
 fi
-sudo apt-get -y install g++-5
-echo Y | sudo mk-build-deps -i -r
 
+echo Y | sudo mk-build-deps -i -r
 debuild -r fakeroot -us -uc

@@ -39,7 +39,7 @@ else
     sed -e "s#^GRUB_CMDLINE_LINUX=\"#GRUB_CMDLINE_LINUX=\"hugepagesz=2M hugepages=$NR_HUGEPAGES #" /etc/default/grub > /tmp/grub
 fi
 mv /tmp/grub /etc/default/grub
-if [ "$ID" = "ubuntu" ]; then
+if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     grub-mkconfig -o /boot/grub/grub.cfg
 else
     grub2-mkconfig -o /boot/grub2/grub.cfg

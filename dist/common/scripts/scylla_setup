@@ -147,7 +147,7 @@ if [ $INTERACTIVE -eq 1 ]; then
     ENABLE_SERVICE=$?
 fi
 
-if [ "$ID" = "ubuntu" ]; then
+if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     dpkg -s scylla-jmx > /dev/null 2>&1 &&:
     NO_SCYLLA_JMX=$?
 else

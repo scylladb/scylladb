@@ -1,9 +1,10 @@
 #!/bin/bash -e
 
+DISTRIBUTION=`lsb_release -i|awk '{print $3}'`
 RELEASE=`lsb_release -r|awk '{print $2}'`
 
 sudo apt-get install -y gdebi-core
-if [ "$RELEASE" = "14.04" ]; then
+if [ "$RELEASE" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
     if [ ! -f build/antlr3_3.5.2-1_all.deb ]; then
         rm -rf build/antlr3-3.5.2
         mkdir -p build/antlr3-3.5.2
@@ -53,6 +54,8 @@ fi
 if [ "$RELEASE" = "14.04" ]; then
     sudo gdebi -n build/antlr3_*.deb
     sudo gdebi -n build/thrift-compiler_*.deb
+elif [ "$DISTRIBUTION" = "Debian" ]; then
+    sudo gdebi -n build/antlr3_*.deb
 fi
 sudo gdebi -n build/antlr3-c++-dev_*.deb
 sudo gdebi -n build/libthrift0_*.deb

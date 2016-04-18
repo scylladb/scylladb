@@ -4,7 +4,7 @@
 
 . /etc/os-release
 
-if [ "$ID" != "ubuntu" ]; then
+if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
     if [ "`sestatus | awk '{print $3}'`" != "disabled" ]; then
         setenforce 0
         sed -e "s/enforcing/disabled/" /etc/sysconfig/selinux > /tmp/selinux
