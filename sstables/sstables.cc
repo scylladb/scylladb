@@ -2074,7 +2074,7 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
              new_atomic_deletion_sets.push_back(old_set);
          } else {
              deletion_logger.debug("merging with {}", old_set->names);
-             boost::insert(merged_set->names, old_set->names);
+             merged_set->names.insert(old_set->names.begin(), old_set->names.end());
              boost::push_back(merged_set->completions, old_set->completions);
          }
     }
