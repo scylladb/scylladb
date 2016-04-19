@@ -104,10 +104,10 @@ public:
         return _bound_terms;
     }
 
-    virtual void check_access(const service::client_state& state) override {
-        for (auto&& s : _statements) {
-            s->check_access(state);
-        }
+    virtual future<> check_access(const service::client_state& state) override {
+        return parallel_for_each(_statements.begin(), _statements.end(), [&state](auto&& s) {
+           return s->check_access(state);
+        });
     }
 
     // Validates a prepared batch statement without validating its nested statements.

@@ -281,8 +281,9 @@ future<> auth::password_authenticator::drop(sstring username)
     }
 }
 
-auth::authenticator::resource_ids auth::password_authenticator::protected_resources() const {
-    return { data_resource(auth::AUTH_KS, CREDENTIALS_CF) };
+const auth::resource_ids& auth::password_authenticator::protected_resources() const {
+    static const resource_ids ids({ data_resource(auth::AUTH_KS, CREDENTIALS_CF) });
+    return ids;
 }
 
 ::shared_ptr<auth::authenticator::sasl_challenge> auth::password_authenticator::new_sasl_challenge() const {

@@ -70,7 +70,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void check_access(const service::client_state& state) = 0;
+    virtual future<> check_access(const service::client_state& state) = 0;
 
     /**
      * Perform additional validation required by the statment.

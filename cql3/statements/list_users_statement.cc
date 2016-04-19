@@ -47,8 +47,9 @@
 void cql3::statements::list_users_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) {
 }
 
-void cql3::statements::list_users_statement::check_access(const service::client_state& state) {
+future<> cql3::statements::list_users_statement::check_access(const service::client_state& state) {
     state.ensure_not_anonymous();
+    return make_ready_future();
 }
 
 future<::shared_ptr<transport::messages::result_message>>

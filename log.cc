@@ -271,4 +271,13 @@ std::ostream& operator<<(std::ostream& out, const std::exception_ptr& eptr) {
     }
     return out;
 }
+
+std::ostream& operator<<(std::ostream& out, const std::exception& e) {
+    return out << logging::pretty_type_name(typeid(e)) << " (" << e.what() << ")";
+}
+
+std::ostream& operator<<(std::ostream& out, const std::system_error& e) {
+    return out << logging::pretty_type_name(typeid(e)) << " (error " << e.code() << ", " << e.code().message() << ")";
+}
+
 }

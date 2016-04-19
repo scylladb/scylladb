@@ -39,45 +39,52 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "authentication_statement.hh"
+#include "authorization_statement.hh"
 #include "transport/messages/result_message.hh"
 
-uint32_t cql3::statements::authentication_statement::get_bound_terms() {
+uint32_t cql3::statements::authorization_statement::get_bound_terms() {
     return 0;
 }
 
-::shared_ptr<cql3::statements::parsed_statement::prepared> cql3::statements::authentication_statement::prepare(
+::shared_ptr<cql3::statements::parsed_statement::prepared> cql3::statements::authorization_statement::prepare(
                 database& db) {
     return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
 }
 
-bool cql3::statements::authentication_statement::uses_function(
+bool cql3::statements::authorization_statement::uses_function(
                 const sstring& ks_name, const sstring& function_name) const {
     return parsed_statement::uses_function(ks_name, function_name);
 }
 
-bool cql3::statements::authentication_statement::depends_on_keyspace(
+bool cql3::statements::authorization_statement::depends_on_keyspace(
                 const sstring& ks_name) const {
     return false;
 }
 
-bool cql3::statements::authentication_statement::depends_on_column_family(
+bool cql3::statements::authorization_statement::depends_on_column_family(
                 const sstring& cf_name) const {
     return false;
 }
 
-void cql3::statements::authentication_statement::validate(
+void cql3::statements::authorization_statement::validate(
                 distributed<service::storage_proxy>&,
                 const service::client_state& state) {
 }
 
-future<> cql3::statements::authentication_statement::check_access(const service::client_state& state) {
+future<> cql3::statements::authorization_statement::check_access(const service::client_state& state) {
     return make_ready_future<>();
 }
 
-future<::shared_ptr<transport::messages::result_message>> cql3::statements::authentication_statement::execute_internal(
+future<::shared_ptr<transport::messages::result_message>> cql3::statements::authorization_statement::execute_internal(
                 distributed<service::storage_proxy>& proxy,
                 service::query_state& state, const query_options& options) {
     // Internal queries are exclusively on the system keyspace and makes no sense here
     throw std::runtime_error("unsupported operation");
 }
+
+void cql3::statements::authorization_statement::mayme_correct_resource(auth::data_resource& resource, const service::client_state& state) {
+    if (resource.is_column_family_level() && resource.keyspace().empty()) {
+        resource = auth::data_resource(state.get_keyspace(), resource.column_family());
+    }
+}
+

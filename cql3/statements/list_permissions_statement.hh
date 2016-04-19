@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,49 +41,31 @@
 
 #pragma once
 
-#include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/ks_prop_defs.hh"
-#include "transport/event.hh"
+#include <experimental/optional>
 
-#include "core/shared_ptr.hh"
+#include "authorization_statement.hh"
+#include "auth/permission.hh"
+#include "auth/data_resource.hh"
 
 namespace cql3 {
 
 namespace statements {
 
-/** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
-class create_keyspace_statement : public schema_altering_statement {
+class list_permissions_statement : public authorization_statement {
 private:
-    sstring _name;
-    shared_ptr<ks_prop_defs> _attrs;
-    bool _if_not_exists;
+    auth::permission_set _permissions;
+    std::experimental::optional<auth::data_resource> _resource;
+    std::experimental::optional<sstring> _username;
+    bool _recursive;
 
 public:
-    /**
-     * Creates a new <code>CreateKeyspaceStatement</code> instance for a given
-     * keyspace name and keyword arguments.
-     *
-     * @param name the name of the keyspace to create
-     * @param attrs map of the raw keyword arguments that followed the <code>WITH</code> keyword.
-     */
-    create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists);
+    list_permissions_statement(auth::permission_set, std::experimental::optional<auth::data_resource>, std::experimental::optional<sstring>, bool);
 
-    virtual const sstring& keyspace() const override;
-
-    virtual future<> check_access(const service::client_state& state) override;
-
-    /**
-     * The <code>CqlParser</code> only goes as far as extracting the keyword arguments
-     * from these statements, so this method is responsible for processing and
-     * validating.
-     *
-     * @throws InvalidRequestException if arguments are missing or unacceptable
-     */
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
-
-    virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
-
-    virtual shared_ptr<transport::event::schema_change> change_event() override;
+    void validate(distributed<service::storage_proxy>&, const service::client_state&) override;
+    future<> check_access(const service::client_state&) override;
+    future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>&
+                    , service::query_state&
+                    , const query_options&) override;
 };
 
 }

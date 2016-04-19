@@ -65,18 +65,14 @@ void cql3::statements::alter_user_statement::validate(distributed<service::stora
     // we need to query -> continuation, and this is not a continuation method
 }
 
-void cql3::statements::alter_user_statement::check_access(const service::client_state& state) {
-    if (_superuser && state.user()->name() == _username) {
+future<> cql3::statements::alter_user_statement::check_access(const service::client_state& state) {
+    auto user = state.user();
+    if (_superuser && user->name() == _username) {
         // using contractions in error messages is the ultimate sign of lowbrowness.
         // however, dtests depend on matching the exception messages. So we keep them despite
         // my disgust.
         throw exceptions::unauthorized_exception("You aren't allowed to alter your own superuser status");
     }
-}
-
-future<::shared_ptr<transport::messages::result_message>>
-cql3::statements::alter_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
-    auto user = state.get_client_state().user();
     return user->is_super().then([this, user](bool is_super) {
         if (_superuser && !is_super) {
             throw exceptions::unauthorized_exception("Only superusers are allowed to alter superuser status");
@@ -93,18 +89,22 @@ cql3::statements::alter_user_statement::execute(distributed<service::storage_pro
                 }
             }
         }
-        return auth::auth::is_existing_user(_username).then([this](bool exists) {
-            if (!exists) {
-                throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
-            }
-            auto f = _opts->options().empty() ? make_ready_future() : auth::authenticator::get().alter(_username, _opts->options());
-            if (_superuser) {
-                f = f.then([this] {
-                    return auth::auth::insert_user(_username, *_superuser);
-                });
-            }
-            return f.then([] { return  make_ready_future<::shared_ptr<transport::messages::result_message>>(); });
-        });
+    });
+}
+
+future<::shared_ptr<transport::messages::result_message>>
+cql3::statements::alter_user_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+    return auth::auth::is_existing_user(_username).then([this](bool exists) {
+        if (!exists) {
+            throw exceptions::invalid_request_exception(sprint("User %s doesn't exist", _username));
+        }
+        auto f = _opts->options().empty() ? make_ready_future() : auth::authenticator::get().alter(_username, _opts->options());
+        if (_superuser) {
+            f = f.then([this] {
+                return auth::auth::insert_user(_username, *_superuser);
+            });
+        }
+        return f.then([] { return  make_ready_future<::shared_ptr<transport::messages::result_message>>(); });
     });
 }
 

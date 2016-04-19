@@ -653,7 +653,7 @@ public:
     val(internode_authenticator, sstring, "enabled", Unused,     \
             "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes."  \
     )   \
-    val(authorizer, sstring, "org.apache.cassandra.auth.AllowAllAuthorizer", Unused,     \
+    val(authorizer, sstring, "org.apache.cassandra.auth.AllowAllAuthorizer", Used,     \
             "The authorization backend. It implements IAuthenticator, which limits access and provides permissions. The available authorizers are:\n"    \
             "\n"    \
             "\tAllowAllAuthorizer : Disables authorization; allows any action to any user.\n"   \
@@ -662,12 +662,15 @@ public:
             , "org.apache.cassandra.auth.AllowAllAuthorizer" \
             , "org.apache.cassandra.auth.CassandraAuthorizer" \
     )   \
-    val(permissions_validity_in_ms, uint32_t, 2000, Unused,     \
+    val(permissions_validity_in_ms, uint32_t, 2000, Used,     \
             "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. This setting disabled when set to 0 or when AllowAllAuthorizer is set.\n"  \
             "Related information: Object permissions"   \
     )   \
-    val(permissions_update_interval_in_ms, uint32_t, 2000, Unused,     \
+    val(permissions_update_interval_in_ms, uint32_t, 2000, Used,     \
             "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. On next access, an async reload is scheduled and the old value is returned until it completes. If permissions_validity_in_ms , then this property must benon-zero."   \
+    )   \
+    val(permissions_cache_max_entries, uint32_t, 1000, Used,    \
+            "Maximum cached permission entries" \
     )   \
     val(server_encryption_options, string_map, /*none*/, Used,     \
             "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \

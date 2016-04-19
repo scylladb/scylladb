@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,49 +41,39 @@
 
 #pragma once
 
-#include "cql3/statements/schema_altering_statement.hh"
-#include "cql3/statements/ks_prop_defs.hh"
-#include "transport/event.hh"
+#include "parsed_statement.hh"
+#include "cql3/cql_statement.hh"
+#include "transport/messages_fwd.hh"
 
-#include "core/shared_ptr.hh"
+namespace auth {
+class data_resource;
+}
 
 namespace cql3 {
 
 namespace statements {
 
-/** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
-class create_keyspace_statement : public schema_altering_statement {
-private:
-    sstring _name;
-    shared_ptr<ks_prop_defs> _attrs;
-    bool _if_not_exists;
-
+class authorization_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<authorization_statement> {
 public:
-    /**
-     * Creates a new <code>CreateKeyspaceStatement</code> instance for a given
-     * keyspace name and keyword arguments.
-     *
-     * @param name the name of the keyspace to create
-     * @param attrs map of the raw keyword arguments that followed the <code>WITH</code> keyword.
-     */
-    create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists);
+    uint32_t get_bound_terms() override;
 
-    virtual const sstring& keyspace() const override;
+    ::shared_ptr<prepared> prepare(database& db) override;
 
-    virtual future<> check_access(const service::client_state& state) override;
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const override;
 
-    /**
-     * The <code>CqlParser</code> only goes as far as extracting the keyword arguments
-     * from these statements, so this method is responsible for processing and
-     * validating.
-     *
-     * @throws InvalidRequestException if arguments are missing or unacceptable
-     */
-    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+    bool depends_on_keyspace(const sstring& ks_name) const override;
 
-    virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+    bool depends_on_column_family(const sstring& cf_name) const override;
 
-    virtual shared_ptr<transport::event::schema_change> change_event() override;
+    future<> check_access(const service::client_state& state) override;
+
+    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
+
+    future<::shared_ptr<transport::messages::result_message>>
+    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
+
+protected:
+    static void mayme_correct_resource(auth::data_resource&, const service::client_state&);
 };
 
 }

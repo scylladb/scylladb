@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -39,21 +39,12 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "revoke_statement.hh"
+#include "auth/authorizer.hh"
 
-#include "database_fwd.hh"
-#include "schema.hh"
-#include "core/sstring.hh"
-
-namespace validation {
-
-constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
-
-void validate_cql_key(schema_ptr schema, const partition_key& key);
-schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
-schema_ptr validate_column_family(const sstring& keyspace_name, const sstring& cf_name);
-
-void validate_keyspace(database& db, const sstring& keyspace_name);
-void validate_keyspace(const sstring& keyspace_name);
-
+future<::shared_ptr<transport::messages::result_message>>
+cql3::statements::revoke_statement::execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+    return auth::authorizer::get().revoke(state.get_client_state().user(), _permissions, _resource, _username).then([] {
+        return make_ready_future<::shared_ptr<transport::messages::result_message>>();
+    });
 }

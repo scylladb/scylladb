@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
+ * Copyright (C) 2016 ScyllaDB
  *
  * Modified by ScyllaDB
  */
@@ -41,19 +41,38 @@
 
 #pragma once
 
-#include "database_fwd.hh"
-#include "schema.hh"
-#include "core/sstring.hh"
+#include "authorizer.hh"
 
-namespace validation {
+namespace auth {
 
-constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
+class default_authorizer : public authorizer {
+public:
+    static const sstring DEFAULT_AUTHORIZER_NAME;
 
-void validate_cql_key(schema_ptr schema, const partition_key& key);
-schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
-schema_ptr validate_column_family(const sstring& keyspace_name, const sstring& cf_name);
+    default_authorizer();
+    ~default_authorizer();
 
-void validate_keyspace(database& db, const sstring& keyspace_name);
-void validate_keyspace(const sstring& keyspace_name);
+    future<> init();
 
-}
+    future<permission_set> authorize(::shared_ptr<authenticated_user>, data_resource) const override;
+
+    future<> grant(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
+
+    future<> revoke(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring) override;
+
+    future<std::vector<permission_details>> list(::shared_ptr<authenticated_user>, permission_set, optional<data_resource>, optional<sstring>) const override;
+
+    future<> revoke_all(sstring) override;
+
+    future<> revoke_all(data_resource) override;
+
+    const resource_ids& protected_resources() override;
+
+    future<> validate_configuration() const override;
+
+private:
+    future<> modify(::shared_ptr<authenticated_user>, permission_set, data_resource, sstring, sstring);
+};
+
+} /* namespace auth */
+

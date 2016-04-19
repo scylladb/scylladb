@@ -52,6 +52,8 @@ public:
 
     authenticated_user();
     authenticated_user(sstring name);
+    authenticated_user(authenticated_user&&);
+    authenticated_user(const authenticated_user&);
 
     const sstring& name() const;
 

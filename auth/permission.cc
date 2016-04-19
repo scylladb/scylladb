@@ -39,11 +39,63 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <unordered_map>
 #include "permission.hh"
 
-const auth::permission_set auth::ALL_DATA = auth::permission_set::of
-                < auth::permission::CREATE, auth::permission::ALTER,
-                auth::permission::DROP, auth::permission::SELECT,
-                auth::permission::MODIFY, auth::permission::AUTHORIZE>();
-const auth::permission_set auth::ALL = auth::ALL_DATA;
-const auth::permission_set auth::NONE;
+const auth::permission_set auth::permissions::ALL_DATA =
+                auth::permission_set::of<auth::permission::CREATE,
+                                auth::permission::ALTER, auth::permission::DROP,
+                                auth::permission::SELECT,
+                                auth::permission::MODIFY,
+                                auth::permission::AUTHORIZE>();
+const auth::permission_set auth::permissions::ALL = auth::permissions::ALL_DATA;
+const auth::permission_set auth::permissions::NONE;
+const auth::permission_set auth::permissions::ALTERATIONS =
+                auth::permission_set::of<auth::permission::CREATE,
+                                auth::permission::ALTER, auth::permission::DROP>();
+
+static const std::unordered_map<sstring, auth::permission> permission_names({
+    { "READ", auth::permission::READ },
+    { "WRITE", auth::permission::WRITE  },
+    { "CREATE", auth::permission::CREATE },
+    { "ALTER", auth::permission::ALTER },
+    { "DROP", auth::permission::DROP },
+    { "SELECT", auth::permission::SELECT  },
+    { "MODIFY", auth::permission::MODIFY   },
+    { "AUTHORIZE", auth::permission::AUTHORIZE },
+});
+
+const sstring& auth::permissions::to_string(permission p) {
+    for (auto& v : permission_names) {
+        if (v.second == p) {
+            return v.first;
+        }
+    }
+    throw std::out_of_range("unknown permission");
+}
+
+auth::permission auth::permissions::from_string(const sstring& s) {
+    return permission_names.at(s);
+}
+
+std::unordered_set<sstring> auth::permissions::to_strings(const permission_set& set) {
+    std::unordered_set<sstring> res;
+    for (auto& v : permission_names) {
+        if (set.contains(v.second)) {
+            res.emplace(v.first);
+        }
+    }
+    return res;
+}
+
+auth::permission_set auth::permissions::from_strings(const std::unordered_set<sstring>& set) {
+    permission_set res = auth::permissions::NONE;
+    for (auto& s : set) {
+        res.set(from_string(s));
+    }
+    return res;
+}
+
+bool auth::operator<(const permission_set& p1, const permission_set& p2) {
+    return p1.mask() < p2.mask();
+}

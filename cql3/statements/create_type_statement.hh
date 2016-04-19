@@ -59,7 +59,7 @@ public:
 
     void add_definition(::shared_ptr<column_identifier> name, ::shared_ptr<cql3_type::raw> type);
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 

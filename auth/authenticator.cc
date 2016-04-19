@@ -100,8 +100,9 @@ auth::authenticator::setup(const sstring& type) throw (exceptions::configuration
             future<> drop(sstring username) throw(exceptions::request_validation_exception, exceptions::request_execution_exception) override {
                 return make_ready_future();
             }
-            resource_ids protected_resources() const override {
-                return resource_ids();
+            const resource_ids& protected_resources() const override {
+                static const resource_ids ids;
+                return ids;
             }
             ::shared_ptr<sasl_challenge> new_sasl_challenge() const override {
                 throw std::runtime_error("Should not reach");

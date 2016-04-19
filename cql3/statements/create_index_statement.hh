@@ -77,7 +77,7 @@ public:
             ::shared_ptr<index_target::raw> raw_target,
             ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
 
-    void check_access(const service::client_state& state) override;
+    future<> check_access(const service::client_state& state) override;
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
     future<bool> announce_migration(distributed<service::storage_proxy>&, bool is_local_only) override;
 

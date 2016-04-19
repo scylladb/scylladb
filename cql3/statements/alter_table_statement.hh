@@ -76,7 +76,7 @@ public:
                           renames_type renames,
                           bool is_static);
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
     virtual void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override;
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
     virtual shared_ptr<transport::event::schema_change> change_event() override;

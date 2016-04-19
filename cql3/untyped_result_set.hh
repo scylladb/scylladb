@@ -91,6 +91,26 @@ public:
             get_map_data<K, V>(name, std::inserter(res, res.end()), keytype, valtype);
             return res;
         }
+        template<typename V, typename Iter>
+        void get_set_data(const sstring& name, Iter out, data_type valtype =
+                        data_type_for<V>()) const {
+            auto vec =
+                            value_cast<set_type_impl::native_type>(
+                                            set_type_impl::get_instance(valtype,
+                                                            false)->deserialize(
+                                                            get_blob(name)));
+            std::transform(vec.begin(), vec.end(), out, [](auto& p) {
+                return value_cast<V>(p);
+            });
+        }
+        template<typename V, typename ... Rest>
+        std::unordered_set<V, Rest...> get_set(const sstring& name,
+                data_type valtype =
+                        data_type_for<V>()) const {
+            std::unordered_set<V, Rest...> res;
+            get_set_data<V>(name, std::inserter(res, res.end()), valtype);
+            return res;
+        }
         const std::vector<::shared_ptr<column_specification>>& get_columns() const {
             return _columns;
         }

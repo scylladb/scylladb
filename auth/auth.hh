@@ -44,13 +44,21 @@
 #include <chrono>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
+
 
 #include "exceptions/exceptions.hh"
+#include "permission.hh"
+#include "data_resource.hh"
 
 namespace auth {
 
+class authenticated_user;
+
 class auth {
 public:
+    class permissions_cache;
+
     static const sstring DEFAULT_SUPERUSER_NAME;
     static const sstring AUTH_KS;
     static const sstring USERS_CF;
@@ -58,12 +66,7 @@ public:
 
     static bool is_class_type(const sstring& type, const sstring& classname);
 
-#if 0
-    public static Set<Permission> getPermissions(AuthenticatedUser user, IResource resource)
-    {
-        return permissionsCache.getPermissions(user, resource);
-    }
-#endif
+    static future<permission_set> get_permissions(::shared_ptr<authenticated_user>, data_resource);
 
     /**
      * Checks if the username is stored in AUTH_KS.USERS_CF.
