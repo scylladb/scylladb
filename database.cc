@@ -844,7 +844,10 @@ void column_family::rebuild_statistics() {
     _stats.live_sstable_count = 0;
 
     for (auto&& tab : boost::range::join(_sstables_compacted_but_not_deleted,
-                                         *_sstables | boost::adaptors::map_values)) {
+                    // this might seem dangerous, but "move" here just avoids constness,
+                    // making the two ranges compatible when compiling with boost 1.55.
+                    // Noone is actually moving anything...
+                                         std::move(*_sstables) | boost::adaptors::map_values)) {
         update_stats_for_new_sstable(tab->data_size());
     }
 }
@@ -871,7 +874,11 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
            sstables_to_remove.begin(), sstables_to_remove.end());
 
     // First, add the new sstables.
-    for (auto&& tab : boost::range::join(new_sstables, *current_sstables | boost::adaptors::map_values)) {
+
+    // this might seem dangerous, but "move" here just avoids constness,
+    // making the two ranges compatible when compiling with boost 1.55.
+    // Noone is actually moving anything...
+    for (auto&& tab : boost::range::join(new_sstables, std::move(*current_sstables) | boost::adaptors::map_values)) {
         // Checks if oldtab is a sstable not being compacted.
         if (!s.count(tab)) {
             new_sstable_list->emplace(tab->generation(), tab);
