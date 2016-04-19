@@ -81,7 +81,9 @@ private:
         service::client_state client_state;
 
         core_local_state()
-            : client_state(service::client_state::for_external_calls()) {
+            : client_state(service::client_state::for_external_calls())
+        {
+            client_state.set_login(::make_shared<auth::authenticated_user>("cassandra"));
         }
 
         future<> stop() {
