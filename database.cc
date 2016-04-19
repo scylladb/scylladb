@@ -147,8 +147,11 @@ column_family::make_partition_presence_checker(lw_shared_ptr<sstable_list> old_s
 
 mutation_source
 column_family::sstables_as_mutation_source() {
-    return mutation_source([this] (schema_ptr s, const query::partition_range& r, const io_priority_class& pc) {
-        return make_sstable_reader(std::move(s), r, pc);
+    return mutation_source([this] (schema_ptr s,
+                                   const query::partition_range& r,
+                                   query::clustering_key_filtering_context ck_filtering,
+                                   const io_priority_class& pc) {
+        return make_sstable_reader(std::move(s), r, ck_filtering, pc);
     });
 }
 
@@ -180,17 +183,23 @@ class range_sstable_reader final : public mutation_reader::impl {
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
     // the priority changes.
     const io_priority_class& _pc;
+    query::clustering_key_filtering_context _ck_filtering;
 public:
-    range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr, const io_priority_class& pc)
+    range_sstable_reader(schema_ptr s,
+                         lw_shared_ptr<sstable_list> sstables,
+                         const query::partition_range& pr,
+                         query::clustering_key_filtering_context ck_filtering,
+                         const io_priority_class& pc)
         : _pr(pr)
         , _sstables(std::move(sstables))
         , _pc(pc)
+        , _ck_filtering(ck_filtering)
     {
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
             mutation_reader reader =
-                make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, query::no_clustering_key_filtering, pc);
+                make_mutation_reader<sstable_range_wrapping_reader>(sst, s, pr, _ck_filtering, _pc);
             if (sst->is_shared()) {
                 reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
             }
@@ -215,23 +224,30 @@ class single_key_sstable_reader final : public mutation_reader::impl {
     // Use a pointer instead of copying, so we don't need to regenerate the reader if
     // the priority changes.
     const io_priority_class& _pc;
+    query::clustering_key_filtering_context _ck_filtering;
 public:
-    single_key_sstable_reader(schema_ptr schema, lw_shared_ptr<sstable_list> sstables, const partition_key& key, const io_priority_class& pc)
+    single_key_sstable_reader(schema_ptr schema,
+                              lw_shared_ptr<sstable_list> sstables,
+                              const partition_key& key,
+                              query::clustering_key_filtering_context ck_filtering,
+                              const io_priority_class& pc)
         : _schema(std::move(schema))
         , _key(sstables::key::from_partition_key(*_schema, key))
         , _sstables(std::move(sstables))
         , _pc(pc)
+        , _ck_filtering(ck_filtering)
     { }
 
     virtual future<mutation_opt> operator()() override {
         if (_done) {
             return make_ready_future<mutation_opt>();
         }
-        return parallel_for_each(*_sstables | boost::adaptors::map_values, [this](const lw_shared_ptr<sstables::sstable>& sstable) {
-            return sstable->read_row(_schema, _key, query::no_clustering_key_filtering, _pc)
-                .then([this](mutation_opt mo) {
-                    apply(_m, std::move(mo));
-            });
+        return parallel_for_each(*_sstables | boost::adaptors::map_values,
+            [this](const lw_shared_ptr<sstables::sstable>& sstable) {
+                return sstable->read_row(_schema, _key, _ck_filtering, _pc)
+                    .then([this](mutation_opt mo) {
+                        apply(_m, std::move(mo));
+                });
         }).then([this] {
             _done = true;
             return std::move(_m);
@@ -240,16 +256,19 @@ public:
 };
 
 mutation_reader
-column_family::make_sstable_reader(schema_ptr s, const query::partition_range& pr, const io_priority_class& pc) const {
+column_family::make_sstable_reader(schema_ptr s,
+                                   const query::partition_range& pr,
+                                   query::clustering_key_filtering_context ck_filtering,
+                                   const io_priority_class& pc) const {
     if (pr.is_singular() && pr.start()->value().has_key()) {
         const dht::ring_position& pos = pr.start()->value();
         if (dht::shard_of(pos.token()) != engine().cpu_id()) {
             return make_empty_reader(); // range doesn't belong to this shard
         }
-        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key(), pc);
+        return make_mutation_reader<single_key_sstable_reader>(std::move(s), _sstables, *pos.key(), ck_filtering, pc);
     } else {
         // range_sstable_reader is not movable so we need to wrap it
-        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, pc);
+        return make_mutation_reader<range_sstable_reader>(std::move(s), _sstables, pr, ck_filtering, pc);
     }
 }
 
@@ -308,7 +327,10 @@ column_family::find_row(schema_ptr s, const dht::decorated_key& partition_key, c
 }
 
 mutation_reader
-column_family::make_reader(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) const {
+column_family::make_reader(schema_ptr s,
+                           const query::partition_range& range,
+                           const query::clustering_key_filtering_context& ck_filtering,
+                           const io_priority_class& pc) const {
     if (query::is_wrap_around(range, *s)) {
         // make_combined_reader() can't handle streams that wrap around yet.
         fail(unimplemented::cause::WRAP_AROUND);
@@ -338,13 +360,13 @@ column_family::make_reader(schema_ptr s, const query::partition_range& range, co
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range, query::no_clustering_key_filtering, pc));
+        readers.emplace_back(mt->make_reader(s, range, ck_filtering, pc));
     }
 
     if (_config.enable_cache) {
-        readers.emplace_back(_cache.make_reader(s, range, pc));
+        readers.emplace_back(_cache.make_reader(s, range, ck_filtering, pc));
     } else {
-        readers.emplace_back(make_sstable_reader(s, range, pc));
+        readers.emplace_back(make_sstable_reader(s, range, ck_filtering, pc));
     }
 
     return make_combined_reader(std::move(readers));
@@ -1826,8 +1848,11 @@ column_family::query(schema_ptr s, const query::read_command& cmd, query::result
 
 mutation_source
 column_family::as_mutation_source() const {
-    return mutation_source([this] (schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
-        return this->make_reader(std::move(s), range, pc);
+    return mutation_source([this] (schema_ptr s,
+                                   const query::partition_range& range,
+                                   query::clustering_key_filtering_context ck_filtering,
+                                   const io_priority_class& pc) {
+        return this->make_reader(std::move(s), range, ck_filtering, pc);
     });
 }
 

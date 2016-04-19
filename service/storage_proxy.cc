@@ -3159,7 +3159,8 @@ private:
         return _db.invoke_on(_shard, [this] (database& db) {
             schema_ptr s = _schema;
             column_family& cf = db.find_column_family(s->id());
-            return make_foreign(std::make_unique<remote_state>(remote_state{cf.make_reader(std::move(s), _range, *_pc)}));
+            return make_foreign(std::make_unique<remote_state>(
+                remote_state{cf.make_reader(std::move(s), _range, query::no_clustering_key_filtering, *_pc)}));
         }).then([this] (auto&& ptr) {
             _remote = std::move(ptr);
         });

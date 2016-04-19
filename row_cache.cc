@@ -279,7 +279,10 @@ class scanning_and_populating_reader final : public mutation_reader::impl {
     dht::decorated_key_opt _last_secondary_key;
     const io_priority_class _pc;
 public:
-    scanning_and_populating_reader(schema_ptr s, row_cache& cache, const query::partition_range& range, const io_priority_class& pc)
+    scanning_and_populating_reader(schema_ptr s,
+                                   row_cache& cache,
+                                   const query::partition_range& range,
+                                   const io_priority_class& pc)
         : _cache(cache), _schema(s),
           _primary(make_mutation_reader<just_cache_scanning_reader>(s, cache, range)),
           _underlying(cache._underlying), _original_range(range), _underlying_keys(cache._underlying_keys),
@@ -319,7 +322,7 @@ public:
                 _range = query::partition_range(query::partition_range::bound { std::move(*dk), true }, std::move(end));
                 _last_secondary_key = {};
                 _secondary_phase = _cache._populate_phaser.phase();
-                _secondary = _underlying(_cache._schema, _range, _pc);
+                _secondary = _underlying(_cache._schema, _range, query::no_clustering_key_filtering, _pc);
                 _secondary_only = true;
                 return next_secondary();
             });
@@ -332,7 +335,7 @@ private:
             auto cmp = dht::ring_position_comparator(*_schema);
             _range = _range.split_after(*_last_secondary_key, cmp);
             _secondary_phase = _cache._populate_phaser.phase();
-            _secondary = _underlying(_cache._schema, _range, _pc);
+            _secondary = _underlying(_cache._schema, _range, query::no_clustering_key_filtering, _pc);
         }
         return _secondary().then([this, op = _cache._populate_phaser.start()] (mutation_opt&& mo) {
             if (!mo && _next_primary) {
@@ -361,7 +364,9 @@ private:
 };
 
 mutation_reader
-row_cache::make_scanning_reader(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
+row_cache::make_scanning_reader(schema_ptr s,
+                                const query::partition_range& range,
+                                const io_priority_class& pc) {
     if (range.is_wrap_around(dht::ring_position_comparator(*s))) {
         warn(unimplemented::cause::WRAP_AROUND);
         throw std::runtime_error("row_cache doesn't support wrap-around ranges");
@@ -369,13 +374,49 @@ row_cache::make_scanning_reader(schema_ptr s, const query::partition_range& rang
     return make_mutation_reader<scanning_and_populating_reader>(std::move(s), *this, range, pc);
 }
 
+class slicing_reader : public mutation_reader::impl {
+private:
+    mutation_reader _underlying;
+    query::clustering_key_filtering_context _ck_filtering;
+
+    future<mutation_opt> filter(mutation_opt&& mut) {
+        while (mut && !mut->partition().empty()) {
+            const query::clustering_row_ranges& ck_ranges = _ck_filtering.get_ranges(mut->key());
+            mutation_partition filtered_partition = mutation_partition(mut->partition(), *(mut->schema()), ck_ranges);
+
+            if (!filtered_partition.empty()) {
+                mut->partition() = std::move(filtered_partition);
+                return make_ready_future<mutation_opt>(std::move(mut));
+            }
+
+            future<mutation_opt> next = _underlying();
+            if (!next.available()) {
+                return next.then([this] (mutation_opt&& mut) { return filter(std::move(mut)); });
+            }
+            mut = std::move(next.get0());
+        }
+        return make_ready_future<mutation_opt>(std::move(mut));
+    }
+
+public:
+    slicing_reader(mutation_reader&& reader, query::clustering_key_filtering_context ck_filtering)
+        : _underlying(std::move(reader)), _ck_filtering(std::move(ck_filtering)) {}
+
+    virtual future<mutation_opt> operator()() override {
+        return _underlying().then([this] (mutation_opt&& mut) { return filter(std::move(mut)); });
+    }
+};
+
 mutation_reader
-row_cache::make_reader(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
+row_cache::make_reader(schema_ptr s,
+                       const query::partition_range& range,
+                       query::clustering_key_filtering_context ck_filtering,
+                       const io_priority_class& pc) {
     if (range.is_singular()) {
         const query::ring_position& pos = range.start()->value();
 
         if (!pos.has_key()) {
-            return make_scanning_reader(std::move(s), range, pc);
+            return make_mutation_reader<slicing_reader>(make_scanning_reader(std::move(s), range, pc), ck_filtering);
         }
 
         return _read_section(_tracker.region(), [&] {
@@ -387,16 +428,18 @@ row_cache::make_reader(schema_ptr s, const query::partition_range& range, const 
                 _tracker.touch(e);
                 on_hit();
                 upgrade_entry(e);
-                return make_reader_returning(e.read(s));
+                return make_reader_returning(e.read(s, ck_filtering));
             } else {
                 on_miss();
-                return make_mutation_reader<populating_reader>(s, *this, _underlying(_schema, range, pc));
+                return make_mutation_reader<slicing_reader>(
+                    make_mutation_reader<populating_reader>(s, *this, _underlying(_schema, range, query::no_clustering_key_filtering, pc)),
+                    ck_filtering);
             }
           });
         });
     }
 
-    return make_scanning_reader(std::move(s), range, pc);
+    return make_mutation_reader<slicing_reader>(make_scanning_reader(std::move(s), range, pc), ck_filtering);
 }
 
 row_cache::~row_cache() {
@@ -616,6 +659,16 @@ void row_cache::set_schema(schema_ptr new_schema) noexcept {
 
 mutation cache_entry::read(const schema_ptr& s) {
     auto m = mutation(_schema, _key, _p);
+    if (_schema != s) {
+        m.upgrade(s);
+    }
+    return m;
+}
+
+mutation cache_entry::read(const schema_ptr& s, query::clustering_key_filtering_context ck_filtering) {
+    const query::clustering_row_ranges& ck_ranges = ck_filtering.get_ranges(_key.key());
+    mutation_partition filtered_partition = mutation_partition(_p, *_schema, ck_ranges);
+    auto m = mutation(_schema, _key, std::move(filtered_partition));
     if (_schema != s) {
         m.upgrade(s);
     }

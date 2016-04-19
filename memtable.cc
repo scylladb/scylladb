@@ -115,7 +115,7 @@ class scanning_reader final : public mutation_reader::impl {
     stdx::optional<query::partition_range> _delegate_range;
     mutation_reader _delegate;
     const io_priority_class& _pc;
-    const query::clustering_key_filtering_context& _ck_filtering;
+    query::clustering_key_filtering_context _ck_filtering;
 private:
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = partition_entry::compare(_memtable->_schema);

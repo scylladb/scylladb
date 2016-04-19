@@ -153,19 +153,30 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
 // The reader returns mutations having all the same schema, the one passed
 // when invoking the source.
 class mutation_source {
-    std::function<mutation_reader(schema_ptr, const query::partition_range& range, const io_priority_class& pc)> _fn;
+    using partition_range = const query::partition_range&;
+    using clustering_filter = query::clustering_key_filtering_context;
+    using io_priority = const io_priority_class&;
+    std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority)> _fn;
 public:
-    mutation_source(std::function<mutation_reader(schema_ptr, const query::partition_range& range, const io_priority_class& pc)> fn) : _fn(std::move(fn)) {}
-    mutation_source(std::function<mutation_reader(schema_ptr, const query::partition_range& range)> fn)
-        : _fn([fn = std::move(fn)] (schema_ptr s, const query::partition_range& range, const io_priority_class& pc) {
+    mutation_source(std::function<mutation_reader(schema_ptr, partition_range, clustering_filter, io_priority)> fn)
+        : _fn(std::move(fn)) {}
+    mutation_source(std::function<mutation_reader(schema_ptr, partition_range, clustering_filter)> fn)
+        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority) {
+            return fn(s, range, ck_filtering);
+        }) {}
+    mutation_source(std::function<mutation_reader(schema_ptr, partition_range range)> fn)
+        : _fn([fn = std::move(fn)] (schema_ptr s, partition_range range, clustering_filter, io_priority) {
             return fn(s, range);
         }) {}
 
-    mutation_reader operator()(schema_ptr s, const query::partition_range& range, const io_priority_class& pc) const {
-        return _fn(std::move(s), range, pc);
+    mutation_reader operator()(schema_ptr s, partition_range range, clustering_filter ck_filtering, io_priority pc) const {
+        return _fn(std::move(s), range, ck_filtering, pc);
     }
-    mutation_reader operator()(schema_ptr s, const query::partition_range& range) const {
-        return _fn(std::move(s), range, default_priority_class());
+    mutation_reader operator()(schema_ptr s, partition_range range, clustering_filter ck_filtering) const {
+        return _fn(std::move(s), range, ck_filtering, default_priority_class());
+    }
+    mutation_reader operator()(schema_ptr s, partition_range range) const {
+        return _fn(std::move(s), range, query::no_clustering_key_filtering, default_priority_class());
     }
 };
 
