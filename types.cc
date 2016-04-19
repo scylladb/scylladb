@@ -22,6 +22,9 @@
 #include <boost/lexical_cast.hpp>
 #include <algorithm>
 #include "cql3/cql3_type.hh"
+#include "cql3/lists.hh"
+#include "cql3/maps.hh"
+#include "cql3/sets.hh"
 #include "types.hh"
 #include "core/print.hh"
 #include "net/ip.hh"
@@ -1367,21 +1370,15 @@ thread_local std::unordered_map<data_type, shared_ptr<cql3::cql3_type>> collecti
 
 const collection_type_impl::kind collection_type_impl::kind::map(
         [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
-            // FIXME: implement
-            // return isKey ? Maps.keySpecOf(collection) : Maps.valueSpecOf(collection);
-            abort();
+            return is_key ? cql3::maps::key_spec_of(*collection) : cql3::maps::value_spec_of(*collection);
         });
 const collection_type_impl::kind collection_type_impl::kind::set(
         [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
-            // FIXME: implement
-            // return Sets.valueSpecOf(collection);
-            abort();
+            return cql3::sets::value_spec_of(collection);
         });
 const collection_type_impl::kind collection_type_impl::kind::list(
         [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
-            // FIXME: implement
-            // return Lists.valueSpecOf(collection);
-            abort();
+            return cql3::lists::value_spec_of(collection);
         });
 
 shared_ptr<cql3::column_specification>
