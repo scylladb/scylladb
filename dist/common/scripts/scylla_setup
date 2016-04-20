@@ -244,15 +244,24 @@ if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup sysconfig?" &&:
     SYSCONFIG_SETUP=$?
     if [ $SYSCONFIG_SETUP -eq 1 ]; then
-        echo "Please select NIC from following list: "
-        while true; do
-            ls /sys/class/net
-            echo -n "> "
-            read NIC
-            if [ -e /sys/class/net/$NIC ]; then
-                break
-            fi
-        done
+        NICS=$(for i in /sys/class/net/*;do nic=`basename $i`; if [ "$nic" != "lo" ]; then echo $nic; fi; done)
+        NR_NICS=`echo $NICS|wc -w`
+        if [ $NR_NICS -eq 0 ]; then
+            echo "NIC not found."
+            exit 1
+        elif [ $NR_NICS -eq 1 ]; then
+            NIC=$NICS
+        else
+            echo "Please select NIC from following list: "
+            while true; do
+                echo $NICS
+                echo -n "> "
+                read NIC
+                if [ -e /sys/class/net/$NIC ]; then
+                    break
+                fi
+            done
+        fi
     fi
 fi
 
