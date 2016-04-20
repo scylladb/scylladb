@@ -99,34 +99,6 @@ void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
-class throttle_state {
-    size_t _max_space;
-    logalloc::region_group& _region_group;
-    throttle_state* _parent;
-
-    circular_buffer<promise<>> _throttled_requests;
-    timer<> _throttling_timer{[this] { unthrottle(); }};
-    void unthrottle();
-    bool should_throttle() const {
-        if (_region_group.memory_used() > _max_space) {
-            return true;
-        }
-        if (_parent) {
-            return _parent->should_throttle();
-        }
-        return false;
-    }
-public:
-    throttle_state(size_t max_space, logalloc::region_group& region, throttle_state* parent = nullptr)
-        : _max_space(max_space)
-        , _region_group(region)
-        , _parent(parent)
-    {}
-
-    future<> throttle();
-};
-
-
 class replay_position_reordered_exception : public std::exception {};
 
 // We could just add all memtables, regardless of types, to a single list, and
@@ -888,6 +860,9 @@ class database {
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
     size_t _streaming_memtable_total_space = 500 << 20;
+    logalloc::region_group_reclaimer _dirty_memory_region_group_reclaimer;
+    logalloc::region_group_reclaimer _streaming_dirty_memory_region_group_reclaimer;
+
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
     semaphore _read_concurrency_sem{max_concurrent_reads()};
@@ -906,7 +881,7 @@ class database {
     bool _enable_incremental_backups = false;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation& m, const schema_ptr& m_schema, const db::replay_position&);
+    future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::replay_position);
     future<> populate(sstring datadir);
     future<> populate_keyspace(sstring datadir, sstring ks_name);
 
@@ -917,9 +892,6 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-
-    throttle_state _memtables_throttler;
-    throttle_state _streaming_throttler;
 
     future<> do_apply(schema_ptr, const frozen_mutation&);
 public:
