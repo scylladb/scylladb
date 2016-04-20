@@ -264,6 +264,9 @@ if [ $INTERACTIVE -eq 1 ]; then
         fi
     fi
 fi
+if [ $SYSCONFIG_SETUP -eq 1 ]; then
+    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
+fi
 
 if [ $INTERACTIVE -eq 1 ]; then
     interactive_ask_service "Do you want to setup IO configuration?" &&:
@@ -273,9 +276,6 @@ if [ $IO_SETUP -eq 1 ]; then
     /usr/lib/scylla/scylla_io_setup
 fi
 
-if [ $SYSCONFIG_SETUP -eq 1 ]; then
-    /usr/lib/scylla/scylla_sysconfig_setup --nic $NIC
-fi
 if [ $DEV_MODE -eq 1 ]; then
     /usr/lib/scylla/scylla_dev_mode_setup --developer-mode 1
 fi
