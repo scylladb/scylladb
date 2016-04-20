@@ -100,7 +100,6 @@ class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
     key_view _key;
     const io_priority_class* _pc = nullptr;
-    std::function<future<> (mutation&& m)> _mutation_to_subscription;
 
     struct column {
         bool is_static;
@@ -364,13 +363,6 @@ public:
     mp_row_consumer(const schema_ptr _schema, const io_priority_class& pc)
             : _schema(_schema)
             , _pc(&pc)
-    { }
-
-    mp_row_consumer(const schema_ptr _schema, std::function<future<> (mutation&& m)> sub_fn,
-                    const io_priority_class& pc)
-            : _schema(_schema)
-            , _pc(&pc)
-            , _mutation_to_subscription(sub_fn)
     { }
 
     mp_row_consumer() {}
