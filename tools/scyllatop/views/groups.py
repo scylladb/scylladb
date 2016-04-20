@@ -3,7 +3,7 @@ import mergeable
 
 
 class Group(object):
-    _HEAD_PATTERN = re.compile('^([^/]+)-\d+/')
+    _HEAD_PATTERN = re.compile('^([^-]+)-\d+/')
 
     def __init__(self, label):
         self._label = label
@@ -29,7 +29,7 @@ class Group(object):
 
     @classmethod
     def extractLabel(cls, metric):
-        return cls._HEAD_PATTERN.sub(r'\1-*/', metric.name)
+        return cls._HEAD_PATTERN.sub(r'\1-*/', metric.symbol)
 
     @property
     def size(self):
