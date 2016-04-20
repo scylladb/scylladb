@@ -357,6 +357,7 @@ public:
 };
 
 class serialized_compare;
+class user_type_impl;
 
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
@@ -425,6 +426,8 @@ public:
     bool equals(const shared_ptr<const abstract_type>& other) const {
         return equals(*other);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const = 0;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const = 0;
 protected:
     virtual bool equals(const abstract_type& other) const {
         return this == &other;
@@ -475,6 +478,7 @@ public:
     virtual bool is_atomic() const { return !is_multi_cell(); }
     virtual bool is_reversed() const { return false; }
     virtual bool is_tuple() const { return false; }
+    virtual bool is_user_type() const { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const = 0;
     virtual shared_ptr<const abstract_type> freeze() const { return shared_from_this(); }
     friend class list_type_impl;
@@ -499,7 +503,13 @@ protected:
     friend class reversed_type_impl;
     template <typename T> friend const T& value_cast(const data_value& value);
     template <typename T> friend T&& value_cast(data_value&& value);
+    friend bool operator==(const abstract_type& x, const abstract_type& y);
 };
+
+inline bool operator==(const abstract_type& x, const abstract_type& y)
+{
+     return x.equals(y);
+}
 
 inline
 size_t
@@ -589,6 +599,12 @@ protected:
     }
     virtual const std::type_info& native_typeid() const override {
         return typeid(native_type);
+    }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return false;
+    }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
+        return std::experimental::nullopt;
     }
 protected:
     data_value make_value(std::unique_ptr<native_type> value) const {
@@ -873,6 +889,14 @@ public:
         return _underlying_type->as_cql3_type();
     }
 
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return _underlying_type->references_user_type(keyspace, name);
+    }
+
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override {
+        return _underlying_type->update_user_type(updated);
+    }
+
     static shared_ptr<const reversed_type_impl> get_instance(data_type type) {
         return intern::get_instance(std::move(type));
     }
@@ -927,6 +951,8 @@ public:
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             cql_serialization_format sf);
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 using map_type = shared_ptr<const map_type_impl>;
@@ -964,6 +990,8 @@ public:
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, cql_serialization_format sf) const;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 using set_type = shared_ptr<const set_type_impl>;
@@ -999,6 +1027,8 @@ public:
     virtual bytes from_string(sstring_view text) const override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) const override;
     virtual bytes to_value(mutation_view mut, cql_serialization_format sf) const override;
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 };
 
 using list_type = shared_ptr<const list_type_impl>;
@@ -1400,6 +1430,8 @@ public:
     virtual bool is_value_compatible_with_internal(const abstract_type& previous) const override;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
     virtual bool is_tuple() const override { return true; }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 private:
     bool check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const;
     static sstring make_name(const std::vector<data_type>& types);
@@ -1430,6 +1462,10 @@ public:
     const std::vector<bytes>& field_names() const { return _field_names; }
     sstring get_name_as_string() const;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override;
+    virtual bool equals(const abstract_type& other) const override;
+    virtual bool is_user_type() const override { return true; }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override;
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const override;
 private:
     static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
 };

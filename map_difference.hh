@@ -46,19 +46,22 @@ struct map_difference {
     { }
 };
 
+/**
+ * Produces a map_difference between the two specified maps, with Key keys and
+ * Tp values, using the provided equality function. In order to work with any
+ * map type, such as std::map and std::unordered_map, Args holds the remaining
+ * type parameters of the particular map type.
+ */
 template<template<typename...> class Map,
          typename Key,
          typename Tp,
-         typename Compare = std::less<Key>,
          typename Eq = std::equal_to<Tp>,
-         typename Alloc>
+         typename... Args>
 inline
 map_difference<Key>
-difference(const Map<Key, Tp, Compare, Alloc>& left,
-           const Map<Key, Tp, Compare, Alloc>& right,
-           Compare key_comp = Compare(),
-           Eq equals = Eq(),
-           Alloc alloc = Alloc())
+difference(const Map<Key, Tp, Args...>& left,
+           const Map<Key, Tp, Args...>& right,
+           Eq equals = Eq())
 {
     map_difference<Key> diff{};
     for (auto&& kv : right) {
@@ -81,11 +84,4 @@ difference(const Map<Key, Tp, Compare, Alloc>& left,
         }
     }
     return diff;
-}
-
-template<typename Key, typename Tp, typename Compare, typename Eq, typename Alloc>
-inline
-map_difference<Key>
-difference(const std::map<Key, Tp, Compare, Alloc>& left, const std::map<Key, Tp, Compare, Alloc>& right, Eq equals) {
-    return difference(left, right, left.key_comp(), equals);
 }

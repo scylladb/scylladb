@@ -17,9 +17,7 @@
  */
 
 /*
- * Copyright (C) 2015 ScyllaDB
- *
- * Modified by ScyllaDB
+ * Copyright 2016 ScyllaDB
  */
 
 /*
@@ -49,57 +47,23 @@ namespace cql3 {
 
 namespace statements {
 
-class alter_type_statement : public schema_altering_statement {
-protected:
+class drop_type_statement : public schema_altering_statement {
     ut_name _name;
+    bool _if_exists;
 public:
-    alter_type_statement(const ut_name& name);
+    drop_type_statement(const ut_name& name, bool if_exists);
 
     virtual void prepare_keyspace(const service::client_state& state) override;
 
     virtual future<> check_access(const service::client_state& state) override;
 
-    virtual void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override;
+    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
     virtual shared_ptr<transport::event::schema_change> change_event() override;
 
     virtual const sstring& keyspace() const override;
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
-
-    class add_or_alter;
-    class renames;
-protected:
-    virtual user_type make_updated_type(database& db, user_type to_update) const = 0;
-private:
-    void do_announce_migration(database& db, ::keyspace& ks, bool is_local_only);
-};
-
-class alter_type_statement::add_or_alter : public alter_type_statement {
-    bool _is_add;
-    shared_ptr<column_identifier> _field_name;
-    shared_ptr<cql3_type::raw> _field_type;
-public:
-    add_or_alter(const ut_name& name, bool is_add,
-                 const shared_ptr<column_identifier> field_name,
-                 const shared_ptr<cql3_type::raw> field_type);
-    virtual user_type make_updated_type(database& db, user_type to_update) const override;
-private:
-    user_type do_add(database& db, user_type to_update) const;
-    user_type do_alter(database& db, user_type to_update) const;
-};
-
-
-class alter_type_statement::renames : public alter_type_statement {
-    using renames_type = std::vector<std::pair<shared_ptr<column_identifier>,
-                                               shared_ptr<column_identifier>>>;
-    renames_type _renames;
-public:
-    renames(const ut_name& name);
-
-    void add_rename(shared_ptr<column_identifier> previous_name, shared_ptr<column_identifier> new_name);
-
-    virtual user_type make_updated_type(database& db, user_type to_update) const override;
 };
 
 }

@@ -113,6 +113,12 @@ struct simple_type_impl : concrete_type<T> {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const {
+        return false;
+    }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::experimental::nullopt;
+    }
 };
 
 template<typename T>
@@ -1297,6 +1303,12 @@ public:
     virtual const std::type_info& native_typeid() const {
         fail(unimplemented::cause::COUNTERS);
     }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        return false;
+    }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
+        return std::experimental::nullopt;
+    }
 };
 
 struct empty_type_impl : abstract_type {
@@ -1357,6 +1369,14 @@ struct empty_type_impl : abstract_type {
         abort();
     }
     virtual const std::type_info& native_typeid() const {
+        // Can't happen
+        abort();
+    }
+    virtual bool references_user_type(const sstring& keyspace, const bytes& name) const override {
+        // Can't happen
+        abort();
+    }
+    virtual std::experimental::optional<data_type> update_user_type(const shared_ptr<const user_type_impl> updated) const {
         // Can't happen
         abort();
     }
@@ -1768,6 +1788,22 @@ map_type_impl::serialize_partially_deserialized_form(
 sstring
 map_type_impl::cql3_type_name() const {
     return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
+}
+
+bool
+map_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _keys->references_user_type(keyspace, name) || _values->references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+map_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto k = _keys->update_user_type(updated);
+    auto v = _values->update_user_type(updated);
+    if (!k && !v) {
+        return std::experimental::nullopt;
+    }
+    return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+        get_instance(k ? *k : _keys, v ? *v : _values, _is_multi_cell)));
 }
 
 auto collection_type_impl::deserialize_mutation_form(collection_mutation_view cm) -> mutation_view {
@@ -2201,6 +2237,21 @@ set_type_impl::cql3_type_name() const {
     return sprint("set<%s>", _elements->as_cql3_type());
 }
 
+bool
+set_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _elements->references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+set_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto e = _elements->update_user_type(updated);
+    if (e) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*e), _is_multi_cell)));
+    }
+    return std::experimental::nullopt;
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -2367,6 +2418,21 @@ list_type_impl::to_value(mutation_view mut, cql_serialization_format sf) const {
 sstring
 list_type_impl::cql3_type_name() const {
     return sprint("list<%s>", _elements->as_cql3_type());
+}
+
+bool
+list_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return _elements->references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+list_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto e = _elements->update_user_type(updated);
+    if (e) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*e), _is_multi_cell)));
+    }
+    return std::experimental::nullopt;
 }
 
 tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
@@ -2578,7 +2644,7 @@ tuple_type_impl::check_compatibility(const abstract_type& previous, bool (abstra
                 _types.begin(), _types.end(),
                 x->_types.begin(), x->_types.end(),
                 [predicate] (data_type a, data_type b) { return ((*a).*predicate)(*b); });
-    return c.first == _types.end();  // previous allowed to be longer
+    return c.second == x->_types.end();  // this allowed to be longer
 }
 
 size_t
@@ -2605,6 +2671,36 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
     return sprint("org.apache.cassandra.db.marshal.TupleType(%s)", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
+bool
+tuple_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return std::any_of(_types.begin(), _types.end(), [&](auto&& dt) { return dt->references_user_type(keyspace, name); });
+}
+
+static std::experimental::optional<std::vector<data_type>>
+update_types(const std::vector<data_type> types, const user_type updated) {
+    std::experimental::optional<std::vector<data_type>> new_types = std::experimental::nullopt;
+    for (uint32_t i = 0; i < types.size(); ++i) {
+        auto&& ut = types[i]->update_user_type(updated);
+        if (ut) {
+            if (!new_types) {
+                new_types = types;
+            }
+            new_types->emplace(new_types->begin() + i, std::move(*ut));
+        }
+    }
+    return new_types;
+}
+
+std::experimental::optional<data_type>
+tuple_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    auto new_types = update_types(_types, updated);
+    if (new_types) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(std::move(*new_types))));
+    }
+    return std::experimental::nullopt;
+}
+
 sstring
 user_type_impl::get_name_as_string() const {
     auto real_utf8_type = static_cast<const utf8_type_impl*>(utf8_type.get());
@@ -2613,13 +2709,13 @@ user_type_impl::get_name_as_string() const {
 
 shared_ptr<cql3::cql3_type>
 user_type_impl::as_cql3_type() const {
-    throw "not yet";
+    return make_shared<cql3::cql3_type>(get_name_as_string(), shared_from_this(), false);
 }
 
 sstring
 user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
     std::ostringstream os;
-    os << "(" << keyspace << "," << to_hex(name);
+    os << "org.apache.cassandra.db.marshal.UserType(" << keyspace << "," << to_hex(name);
     for (size_t i = 0; i < field_names.size(); ++i) {
         os << ",";
         os << to_hex(field_names[i]) << ":";
@@ -2627,6 +2723,35 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
     }
     os << ")";
     return os.str();
+}
+
+bool
+user_type_impl::equals(const abstract_type& other) const {
+    auto x = dynamic_cast<const user_type_impl*>(&other);
+    return x
+        && _keyspace == x->_keyspace
+        && _name == x->_name
+        && std::equal(_field_names.begin(), _field_names.end(), x->_field_names.begin(), x->_field_names.end())
+        && tuple_type_impl::equals(other);
+}
+
+bool
+user_type_impl::references_user_type(const sstring& keyspace, const bytes& name) const {
+    return (_keyspace == keyspace && _name == name)
+        || tuple_type_impl::references_user_type(keyspace, name);
+}
+
+std::experimental::optional<data_type>
+user_type_impl::update_user_type(const shared_ptr<const user_type_impl> updated) const {
+    if (_keyspace == updated->_keyspace && _name == updated->_name) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(updated));
+    }
+    auto new_types = update_types(_types, updated);
+    if (new_types) {
+        return std::experimental::make_optional(static_pointer_cast<const abstract_type>(
+            get_instance(_keyspace, _name, _field_names, *new_types)));
+    }
+    return std::experimental::nullopt;
 }
 
 size_t

@@ -21,6 +21,7 @@
 
 #define BOOST_TEST_DYN_LINK
 
+#include <iostream>
 #include <seastar/core/thread.hh>
 #include <seastar/tests/test-utils.hh>
 #include <seastar/util/defer.hh>
@@ -186,6 +187,35 @@ SEASTAR_TEST_CASE(test_notifications) {
             e.execute_cql("drop table tests.table1;").get();
 
             BOOST_REQUIRE_EQUAL(listener.drop_column_family_count, 1);
+
+            e.execute_cql("create type tests.type1 (field1 text, field2 text);").get();
+
+            BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 1);
+
+            e.execute_cql("drop type tests.type1;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.drop_user_type_count, 1);
+
+            e.execute_cql("create type tests.type1 (field1 text, field2 text);").get();
+            e.execute_cql("create type tests.type2 (field1 text, field2 text);").get();
+
+            BOOST_REQUIRE_EQUAL(listener.create_user_type_count, 3);
+
+            e.execute_cql("drop type tests.type1;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.drop_user_type_count, 2);
+
+            e.execute_cql("alter type tests.type2 add field3 text;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 1);
+
+            e.execute_cql("alter type tests.type2 alter field3 type blob;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 2);
+
+            e.execute_cql("alter type tests.type2 rename field2 to field4 and field3 to field5;").get();
+
+            BOOST_REQUIRE_EQUAL(listener.update_user_type_count, 3);
         });
     });
 }

@@ -630,7 +630,7 @@ public:
 class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
 public:
-    user_type get_type(bytes name) const {
+    user_type get_type(const bytes& name) const {
         return _user_types.at(name);
     }
     const std::unordered_map<bytes, user_type>& get_all_types() const {
@@ -705,6 +705,12 @@ public:
     void remove_column_family(const schema_ptr& s) {
         _cf_meta_data.erase(s->cf_name());
     }
+    void add_user_type(const user_type ut) {
+        _user_types->add_type(ut);
+    }
+    void remove_user_type(const user_type ut) {
+        _user_types->remove_type(ut);
+    }
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
@@ -732,7 +738,6 @@ public:
         : _metadata(std::move(metadata))
         , _config(std::move(cfg))
     {}
-    user_types_metadata _user_types;
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
@@ -743,6 +748,12 @@ public:
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_column_family(const schema_ptr& s) {
         _metadata->add_column_family(s);
+    }
+    void add_user_type(const user_type ut) {
+        _metadata->add_user_type(ut);
+    }
+    void remove_user_type(const user_type ut) {
+        _metadata->remove_user_type(ut);
     }
 
     // FIXME to allow simple registration at boostrap

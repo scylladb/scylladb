@@ -148,7 +148,7 @@ public:
         try {
             auto&& ks = db.find_keyspace(_name.get_keyspace());
             try {
-                auto&& type = ks._user_types.get_type(_name.get_user_type_name());
+                auto&& type = ks.metadata()->user_types()->get_type(_name.get_user_type_name());
                 if (!_frozen) {
                     throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
                 }
