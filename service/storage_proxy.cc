@@ -98,10 +98,15 @@ const dht::token& end_token(const query::partition_range& r) {
 }
 
 static inline
+sstring get_dc(gms::inet_address ep) {
+    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    return snitch_ptr->get_datacenter(ep);
+}
+
+static inline
 sstring get_local_dc() {
     auto local_addr = utils::fb_utilities::get_broadcast_address();
-    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    return snitch_ptr->get_datacenter(local_addr);
+    return get_dc(local_addr);
 }
 
 class abstract_write_response_handler {
@@ -340,6 +345,41 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(sch
         h = std::make_unique<write_response_handler>(shared_from_this(), ks, cl, type, std::move(s), std::move(m), std::move(targets), std::move(pending_endpoints), std::move(dead_endpoints));
     }
     return register_response_handler(std::move(h));
+}
+
+storage_proxy::split_stats::split_stats(const sstring& description_prefix)
+        : _description_prefix(description_prefix) {
+    // register a local Node counter to begin with...
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", _description_prefix + sstring(" (local Node)"))
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _local.val)));
+}
+
+storage_proxy::stats::stats()
+        : writes_attempts("total write attempts")
+        , writes_errors("write errors")
+        , read_repair_write_attempts("read repair write attempts") {}
+
+inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
+    if (is_me(ep)) {
+        return _local.val;
+    }
+
+    sstring dc = get_dc(ep);
+
+    // if this is the first time we see an endpoint from this DC - add a
+    // corresponding collectd metric
+    if (_dc_stats.find(dc) == _dc_stats.end()) {
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", _description_prefix + sstring(" (external Nodes in DC: ") + dc + sstring(")"))
+            , scollectd::make_typed(scollectd::data_type::DERIVE, [this, dc] { return _dc_stats[dc].val; })
+        ));
+    }
+    return _dc_stats[dc].val;
 }
 
 storage_proxy::~storage_proxy() {}
@@ -1147,10 +1187,11 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
-    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     for(auto dest: get_write_response_handler(response_id).get_targets()) {
-        sstring dc = snitch_ptr->get_datacenter(dest);
+        ++_stats.writes_attempts.get_ep_stat(dest);
+
+        sstring dc = get_dc(dest);
         if (dc == get_local_dc()) {
             local.emplace_back("", std::vector<gms::inet_address>({dest}));
         } else {
@@ -1200,7 +1241,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             f = futurize<void>::apply(rmutate, coordinator, std::move(forward));
         }
 
-        f.handle_exception([coordinator] (std::exception_ptr eptr) {
+        f.handle_exception([coordinator, p = shared_from_this()] (std::exception_ptr eptr) {
+            ++p->_stats.writes_errors.get_ep_stat(coordinator);
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -1423,7 +1465,8 @@ future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, st
         return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
             auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
             return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
-        }).then([this] (std::vector<unique_response_handler> ids) {
+        }).then([this, ep = i.first] (std::vector<unique_response_handler> ids) {
+            _stats.read_repair_write_attempts.get_ep_stat(ep) += ids.size();
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
         }).then_wrapped([this, lc] (future<> f) {
             return mutate_end(std::move(f), lc);

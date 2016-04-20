@@ -77,6 +77,39 @@ class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*imp
     };
 
 public:
+    // split statistics counters
+    struct split_stats {
+    private:
+        struct stats_counter {
+            uint64_t val = 0;
+        };
+
+        // counter of operations performed on a local Node
+        stats_counter _local;
+        // counters of operations performed on external Nodes aggregated per Nodes' DCs
+        std::unordered_map<sstring, stats_counter> _dc_stats;
+        // collectd registrations container
+        std::vector<scollectd::registration> _collectd_regs;
+        // a prefix string that will be used for a collecd counters' description
+        sstring _description_prefix;
+
+    public:
+        /**
+         * @param description_prefix a collectd description prefix
+         */
+        split_stats(const sstring& description_prefix);
+
+        /**
+         * Get a reference to the statistics counter corresponding to the given
+         * destination.
+         *
+         * @param ep address of a destination
+         *
+         * @return a reference to the requested counter
+         */
+        uint64_t& get_ep_stat(gms::inet_address ep);
+    };
+
     struct stats {
         uint64_t read_timeouts = 0;
         uint64_t read_unavailables = 0;
@@ -84,6 +117,14 @@ public:
         uint64_t range_slice_unavailables = 0;
         uint64_t write_timeouts = 0;
         uint64_t write_unavailables = 0;
+
+        // total write attempts
+        split_stats writes_attempts;
+        split_stats writes_errors;
+
+        // write attempts due to Read Repair logic
+        split_stats read_repair_write_attempts;
+
         uint64_t read_repair_attempts = 0;
         uint64_t read_repair_repaired_blocking = 0;
         uint64_t read_repair_repaired_background = 0;
@@ -107,6 +148,9 @@ public:
         uint64_t reads = 0;
         uint64_t background_reads = 0; // client no longer waits for the read
         uint64_t read_retries = 0; // read is retried with new limit
+
+    public:
+        stats();
     };
 private:
     distributed<database>& _db;
