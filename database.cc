@@ -1201,6 +1201,8 @@ database::database(const db::config& cfg)
     : _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
     , _cfg(std::make_unique<db::config>(cfg))
     , _memtable_total_space([this] {
+        _stats = make_lw_shared<db_stats>();
+
         auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
         if (!memtable_total_space) {
             return memory::stats().total_memory() / 2;
@@ -1245,6 +1247,20 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "pending_flushes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_bytes)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_writes)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_reads")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
     ));
 }
 
@@ -1823,13 +1839,19 @@ column_family::as_mutation_source() const {
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges);
+    return cf.query(std::move(s), cmd, request, ranges).then([this, s = _stats] (auto&& res) {
+        ++s->total_reads;
+        return std::move(res);
+    });
 }
 
 future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp).then([this, s = _stats] (auto&& res) {
+        ++s->total_reads;
+        return std::move(res);
+    });
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -2006,6 +2028,8 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     }
     return _memtables_throttler.throttle().then([this, &m, s = std::move(s)] {
         return do_apply(std::move(s), m);
+    }).then([this, s = _stats] {
+        ++s->total_writes;
     });
 }
 
