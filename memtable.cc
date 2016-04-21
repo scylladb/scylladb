@@ -165,7 +165,7 @@ public:
             // FIXME: Use cache. See column_family::make_reader().
             _delegate_range = _last ? _range.split_after(*_last, dht::ring_position_comparator(*_memtable->_schema)) : _range;
             _delegate = make_mutation_reader<sstable_range_wrapping_reader>(
-                _memtable->_sstable, _schema, *_delegate_range, _pc);
+                _memtable->_sstable, _schema, *_delegate_range, query::no_clustering_key_filtering, _pc);
             _memtable = {};
             _last = {};
             return _delegate();
