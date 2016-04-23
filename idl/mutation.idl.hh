@@ -82,9 +82,19 @@ class deletable_row stub [[writable]] {
     row cells;
 };
 
+enum class bound_kind : uint8_t {
+    excl_end,
+    incl_start,
+    incl_end,
+    excl_start,
+};
+
 class range_tombstone stub [[writable]] {
     clustering_key_prefix start;
     tombstone tomb;
+    bound_kind start_kind [[version 1.3]] = bound_kind::incl_start;
+    clustering_key_prefix end [[version 1.3]] = start;
+    bound_kind end_kind [[version 1.3]] = bound_kind::incl_end;
 };
 
 class mutation_partition stub [[writable]] {

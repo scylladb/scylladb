@@ -23,6 +23,7 @@
 
 #include "atomic_cell.hh"
 #include "tombstone.hh"
+#include "range_tombstone.hh"
 #include "keys.hh"
 
 class row_marker;
