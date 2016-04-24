@@ -69,6 +69,12 @@ private:
     distributed<service::storage_proxy>& _proxy;
     distributed<database>& _db;
 
+    struct stats {
+        uint64_t prepare_invocations = 0;
+    } _stats;
+
+    std::vector<scollectd::registration> _collectd_regs;
+
     class internal_state;
     std::unique_ptr<internal_state> _internal_state;
 

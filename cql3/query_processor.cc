@@ -94,6 +94,11 @@ query_processor::query_processor(distributed<service::storage_proxy>& proxy,
     , _db(db)
     , _internal_state(new internal_state())
 {
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("query_processor"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "statements_prepared")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.prepare_invocations)));
     service::get_local_migration_manager().register_listener(_migration_subscriber.get());
 }
 
@@ -267,6 +272,7 @@ query_processor::get_statement(const sstring_view& query, const service::client_
 #if 0
         Tracing.trace("Preparing statement");
 #endif
+    ++_stats.prepare_invocations;
     return statement->prepare(_db.local());
 }
 
