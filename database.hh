@@ -98,6 +98,34 @@ void make(database& db, bool durable, bool volatile_testing_only);
 }
 }
 
+class throttle_state {
+    size_t _max_space;
+    logalloc::region_group& _region_group;
+    throttle_state* _parent;
+
+    circular_buffer<promise<>> _throttled_requests;
+    timer<> _throttling_timer{[this] { unthrottle(); }};
+    void unthrottle();
+    bool should_throttle() const {
+        if (_region_group.memory_used() > _max_space) {
+            return true;
+        }
+        if (_parent) {
+            return _parent->should_throttle();
+        }
+        return false;
+    }
+public:
+    throttle_state(size_t max_space, logalloc::region_group& region, throttle_state* parent = nullptr)
+        : _max_space(max_space)
+        , _region_group(region)
+        , _parent(parent)
+    {}
+
+    future<> throttle();
+};
+
+
 class replay_position_reordered_exception : public std::exception {};
 
 // We could just add all memtables, regardless of types, to a single list, and
@@ -122,14 +150,16 @@ class memtable_list {
     using shared_memtable = lw_shared_ptr<memtable>;
     std::vector<shared_memtable> _memtables;
     std::function<future<> ()> _seal_fn;
-    std::function<shared_memtable ()> _new_memtable;
+    std::function<schema_ptr()> _current_schema;
     size_t _max_memtable_size;
+    logalloc::region_group* _dirty_memory_region_group;
 public:
-    memtable_list(std::function<future<> ()> seal_fn, std::function<shared_memtable()> new_mt, size_t max_memtable_size)
+    memtable_list(std::function<future<> ()> seal_fn, std::function<schema_ptr()> cs, size_t max_memtable_size, logalloc::region_group* region_group)
         : _memtables({})
         , _seal_fn(seal_fn)
-        , _new_memtable(new_mt)
-        , _max_memtable_size(max_memtable_size) {
+        , _current_schema(cs)
+        , _max_memtable_size(max_memtable_size)
+        , _dirty_memory_region_group(region_group) {
         add_memtable();
     }
 
@@ -174,7 +204,7 @@ public:
     }
 
     void add_memtable() {
-        _memtables.emplace_back(_new_memtable());
+        _memtables.emplace_back(new_memtable());
     }
 
     bool should_flush() {
@@ -187,6 +217,10 @@ public:
             // FIXME: maybe merge with other in-memory memtables
             _seal_fn();
         }
+    }
+private:
+    lw_shared_ptr<memtable> new_memtable() {
+        return make_lw_shared<memtable>(_current_schema(), _dirty_memory_region_group);
     }
 };
 
@@ -212,6 +246,7 @@ public:
         bool enable_commitlog = true;
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
+        size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
@@ -265,8 +300,17 @@ private:
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
 
+    lw_shared_ptr<memtable_list> make_memtable_list();
+    lw_shared_ptr<memtable_list> make_streaming_memtable_list();
+
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    // sstables that have been compacted (so don't look up in query) but
+    // have not been deleted yet, so must not GC any tombstones in other sstables
+    // that may delete data in these sstables:
+    std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
+    // Control background fibers waiting for sstables to be deleted
+    seastar::gate _sstable_deletion_gate;
     // There are situations in which we need to stop writing sstables. Flushers will take
     // the read lock, and the ones that wish to stop that process will take the write lock.
     rwlock _sstables_lock;
@@ -319,6 +363,7 @@ private:
     // Rebuild existing _sstables with new_sstables added to it and sstables_to_remove removed from it.
     void rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                               const std::vector<sstables::shared_sstable>& sstables_to_remove);
+    void rebuild_statistics();
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -485,6 +530,7 @@ public:
     }
 
     lw_shared_ptr<sstable_list> get_sstables();
+    lw_shared_ptr<sstable_list> get_sstables_including_compacted_undeleted();
     size_t sstables_count();
     int64_t get_unleveled_sstables() const;
 
@@ -584,7 +630,7 @@ public:
 class user_types_metadata {
     std::unordered_map<bytes, user_type> _user_types;
 public:
-    user_type get_type(bytes name) const {
+    user_type get_type(const bytes& name) const {
         return _user_types.at(name);
     }
     const std::unordered_map<bytes, user_type>& get_all_types() const {
@@ -659,6 +705,12 @@ public:
     void remove_column_family(const schema_ptr& s) {
         _cf_meta_data.erase(s->cf_name());
     }
+    void add_user_type(const user_type ut) {
+        _user_types->add_type(ut);
+    }
+    void remove_user_type(const user_type ut) {
+        _user_types->remove_type(ut);
+    }
     friend std::ostream& operator<<(std::ostream& os, const keyspace_metadata& m);
 };
 
@@ -672,6 +724,7 @@ public:
         bool enable_cache = true;
         bool enable_incremental_backups = false;
         size_t max_memtable_size = 5'000'000;
+        size_t max_streaming_memtable_size = 5'000'000;
         logalloc::region_group* dirty_memory_region_group = nullptr;
         logalloc::region_group* streaming_dirty_memory_region_group = nullptr;
         ::cf_stats* cf_stats = nullptr;
@@ -685,7 +738,6 @@ public:
         : _metadata(std::move(metadata))
         , _config(std::move(cfg))
     {}
-    user_types_metadata _user_types;
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
@@ -696,6 +748,12 @@ public:
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_column_family(const schema_ptr& s) {
         _metadata->add_column_family(s);
+    }
+    void add_user_type(const user_type ut) {
+        _metadata->add_user_type(ut);
+    }
+    void remove_user_type(const user_type ut) {
+        _metadata->remove_user_type(ut);
     }
 
     // FIXME to allow simple registration at boostrap
@@ -734,6 +792,13 @@ public:
 
 class database {
     ::cf_stats _cf_stats;
+    struct db_stats {
+        uint64_t total_writes = 0;
+        uint64_t total_reads = 0;
+    };
+
+    lw_shared_ptr<db_stats> _stats;
+
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
     std::unordered_map<sstring, keyspace> _keyspaces;
@@ -742,6 +807,7 @@ class database {
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
+    size_t _streaming_memtable_total_space = 500 << 20;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
@@ -760,29 +826,6 @@ private:
     void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
     friend void db::system_keyspace::make(database& db, bool durable, bool volatile_testing_only);
     void setup_collectd();
-
-    class throttle_state {
-        size_t _max_space;
-        logalloc::region_group& _region_group;
-        throttle_state* _parent;
-
-        circular_buffer<promise<>> _throttled_requests;
-        timer<> _throttling_timer{[this] { unthrottle(); }};
-        void unthrottle();
-        bool should_throttle() const {
-            if (_region_group.memory_used() > _max_space) {
-                return true;
-            }
-            if (_parent) {
-                return _parent->should_throttle();
-            }
-            return false;
-        }
-    public:
-        throttle_state(size_t max_space, logalloc::region_group& region);
-        throttle_state(size_t max_space, logalloc::region_group& region, throttle_state& parent);
-        future<> throttle();
-    };
 
     throttle_state _memtables_throttler;
     throttle_state _streaming_throttler;

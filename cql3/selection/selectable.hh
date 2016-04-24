@@ -55,6 +55,7 @@ class selectable {
 public:
     virtual ~selectable() {}
     virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
+    virtual sstring to_string() const = 0;
 protected:
     static size_t add_and_get_index(const column_definition& def, std::vector<const column_definition*>& defs) {
         auto i = std::find(defs.begin(), defs.end(), &def);
@@ -84,6 +85,8 @@ public:
     class with_field_selection;
 };
 
+std::ostream & operator<<(std::ostream &os, const selectable& s);
+
 class selectable::with_function : public selectable {
     functions::function_name _function_name;
     std::vector<shared_ptr<selectable>> _args;
@@ -92,17 +95,7 @@ public:
         : _function_name(std::move(fname)), _args(std::move(args)) {
     }
 
-#if 0
-    @Override
-    public String toString()
-    {
-        return new StrBuilder().append(functionName)
-                               .append("(")
-                               .appendWithSeparators(args, ", ")
-                               .append(")")
-                               .toString();
-    }
-#endif
+    virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
     class raw : public selectable::raw {

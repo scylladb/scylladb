@@ -1,0 +1,20 @@
+echo
+echo '   _____            _ _       _____  ____  '
+echo '  / ____|          | | |     |  __ \|  _ \ '
+echo ' | (___   ___ _   _| | | __ _| |  | | |_) |'
+echo '  \___ \ / __| | | | | |/ _` | |  | |  _ < '
+echo '  ____) | (__| |_| | | | (_| | |__| | |_) |'
+echo ' |_____/ \___|\__, |_|_|\__,_|_____/|____/ '
+echo '               __/ |                       '
+echo '              |___/                        '
+echo ''
+echo ''
+echo 'Nodetool:'
+echo '	nodetool help'
+echo 'CQL Shell:'
+echo '	cqlsh'
+echo 'More documentation available at: '
+echo '	http://www.scylladb.com/doc/'
+echo
+
+export CQLSH_HOST=$(hostname -i)

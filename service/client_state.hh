@@ -48,6 +48,7 @@
 #include "database.hh"
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"
+#include "auth/permission.hh"
 
 namespace service {
 
@@ -191,73 +192,16 @@ public:
      */
     future<> check_user_exists();
 
-#if 0
-    public void hasAllKeyspacesAccess(Permission perm) throws UnauthorizedException
-    {
-        if (isInternal)
-            return;
-        validateLogin();
-        ensureHasPermission(perm, DataResource.root());
-    }
+    future<> has_all_keyspaces_access(auth::permission) const;
+    future<> has_keyspace_access(const sstring&, auth::permission) const;
+    future<> has_column_family_access(const sstring&, const sstring&, auth::permission) const;
 
-    public void hasKeyspaceAccess(String keyspace, Permission perm) throws UnauthorizedException, InvalidRequestException
-    {
-        hasAccess(keyspace, perm, DataResource.keyspace(keyspace));
-    }
-
-    public void hasColumnFamilyAccess(String keyspace, String columnFamily, Permission perm)
-    throws UnauthorizedException, InvalidRequestException
-    {
-        ThriftValidation.validateColumnFamily(keyspace, columnFamily);
-        hasAccess(keyspace, perm, DataResource.columnFamily(keyspace, columnFamily));
-    }
-
-    private void hasAccess(String keyspace, Permission perm, DataResource resource)
-    throws UnauthorizedException, InvalidRequestException
-    {
-        validateKeyspace(keyspace);
-        if (isInternal)
-            return;
-        validateLogin();
-        preventSystemKSSchemaModification(keyspace, resource, perm);
-        if ((perm == Permission.SELECT) && READABLE_SYSTEM_RESOURCES.contains(resource))
-            return;
-        if (PROTECTED_AUTH_RESOURCES.contains(resource))
-            if ((perm == Permission.CREATE) || (perm == Permission.ALTER) || (perm == Permission.DROP))
-                throw new UnauthorizedException(String.format("%s schema is protected", resource));
-        ensureHasPermission(perm, resource);
-    }
-
-    public void ensureHasPermission(Permission perm, IResource resource) throws UnauthorizedException
-    {
-        for (IResource r : Resources.chain(resource))
-            if (authorize(r).contains(perm))
-                return;
-
-        throw new UnauthorizedException(String.format("User %s has no %s permission on %s or any of its parents",
-                                                      user.getName(),
-                                                      perm,
-                                                      resource));
-    }
-
-    private void preventSystemKSSchemaModification(String keyspace, DataResource resource, Permission perm) throws UnauthorizedException
-    {
-        // we only care about schema modification.
-        if (!((perm == Permission.ALTER) || (perm == Permission.DROP) || (perm == Permission.CREATE)))
-            return;
-
-        // prevent system keyspace modification
-        if (SystemKeyspace.NAME.equalsIgnoreCase(keyspace))
-            throw new UnauthorizedException(keyspace + " keyspace is not user-modifiable.");
-
-        // we want to allow altering AUTH_KS and TRACING_KS.
-        Set<String> allowAlter = Sets.newHashSet(Auth.AUTH_KS, TraceKeyspace.NAME);
-        if (allowAlter.contains(keyspace.toLowerCase()) && !(resource.isKeyspaceLevel() && (perm == Permission.ALTER)))
-            throw new UnauthorizedException(String.format("Cannot %s %s", perm, resource));
-    }
-#endif
-
+private:
+    future<> has_access(const sstring&, auth::permission, auth::data_resource) const;
+    future<bool> check_has_permission(auth::permission, auth::data_resource) const;
 public:
+    future<> ensure_has_permission(auth::permission, auth::data_resource) const;
+
     void validate_login() const;
     void ensure_not_anonymous() const throw(exceptions::unauthorized_exception);
 

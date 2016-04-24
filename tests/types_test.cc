@@ -582,6 +582,12 @@ BOOST_AUTO_TEST_CASE(test_reversed_type_value_compatibility) {
     BOOST_REQUIRE(rb->is_value_compatible_with(*utf8_type));
 }
 
+BOOST_AUTO_TEST_CASE(test_parsing_of_user_type) {
+    sstring text = "org.apache.cassandra.db.marshal.UserType(keyspace1,61646472657373,737472656574:org.apache.cassandra.db.marshal.UTF8Type,63697479:org.apache.cassandra.db.marshal.UTF8Type,7a6970:org.apache.cassandra.db.marshal.Int32Type)";
+    auto type = db::marshal::type_parser::parse(text);
+    BOOST_REQUIRE(type->name() == text);
+}
+
 static auto msg = [] (const char* m, data_type x, data_type y) -> std::string {
     return sprint("%s(%s, %s)", m, x->name(), y->name());
 };

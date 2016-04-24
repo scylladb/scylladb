@@ -53,6 +53,9 @@ auth::authenticated_user::authenticated_user(sstring name)
                 : _name(name), _anon(false)
 {}
 
+auth::authenticated_user::authenticated_user(authenticated_user&&) = default;
+auth::authenticated_user::authenticated_user(const authenticated_user&) = default;
+
 const sstring& auth::authenticated_user::name() const {
     return _anon ? ANONYMOUS_USERNAME : _name;
 }

@@ -259,13 +259,21 @@ future<> migration_manager::notify_create_column_family(const schema_ptr& cfm) {
     });
 }
 
-#if 0
-public void notifyCreateUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onCreateUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_create_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_create_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Create user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyCreateFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)
@@ -306,13 +314,21 @@ future<> migration_manager::notify_update_column_family(const schema_ptr& cfm, b
     });
 }
 
-#if 0
-public void notifyUpdateUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onUpdateUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_update_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_update_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Update user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyUpdateFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)
@@ -352,13 +368,21 @@ future<> migration_manager::notify_drop_column_family(const schema_ptr& cfm) {
     });
 }
 
-#if 0
-public void notifyDropUserType(UserType ut)
-{
-    for (IMigrationListener listener : listeners)
-        listener.onDropUserType(ut.keyspace, ut.getNameAsString());
+future<> migration_manager::notify_drop_user_type(const user_type& type) {
+    return seastar::async([this, type] {
+        auto&& ks_name = type->_keyspace;
+        auto&& type_name = type->get_name_as_string();
+        for (auto&& listener : _listeners) {
+            try {
+                listener->on_drop_user_type(ks_name, type_name);
+            } catch (...) {
+                logger.warn("Drop user type notification failed {}.{}: {}", ks_name, type_name, std::current_exception());
+            }
+        }
+    });
 }
 
+#if 0
 public void notifyDropFunction(UDFunction udf)
 {
     for (IMigrationListener listener : listeners)
@@ -428,13 +452,24 @@ future<> migration_manager::announce_column_family_update(schema_ptr cfm, bool f
     }
 }
 
-#if 0
-public static void announceNewType(UserType newType, boolean announceLocally)
-{
-    KSMetaData ksm = Schema.instance.getKSMetaData(newType.keyspace);
-    announce(LegacySchemaTables.makeCreateTypeMutation(ksm, newType, FBUtilities.timestampMicros()), announceLocally);
+static future<> do_announce_new_type(user_type new_type, bool announce_locally) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(new_type->_keyspace);
+    auto mutations = db::schema_tables::make_create_type_mutations(keyspace.metadata(), new_type, api::new_timestamp());
+    return migration_manager::announce(std::move(mutations), announce_locally);
 }
 
+future<> migration_manager::announce_new_type(user_type new_type, bool announce_locally) {
+    logger.info("Create new User Type: {}", new_type->get_name_as_string());
+    return do_announce_new_type(new_type, announce_locally);
+}
+
+future<> migration_manager::announce_type_update(user_type updated_type, bool announce_locally) {
+    logger.info("Update User Type: {}", updated_type->get_name_as_string());
+    return do_announce_new_type(updated_type, announce_locally);
+}
+
+#if 0
 public static void announceNewFunction(UDFunction udf, boolean announceLocally)
 {
     logger.info(String.format("Create scalar function '%s'", udf.name()));
@@ -485,26 +520,20 @@ public static void announceColumnFamilyUpdate(CFMetaData cfm, boolean fromThrift
     logger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
     announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
 }
-
-public static void announceTypeUpdate(UserType updatedType, boolean announceLocally)
-{
-    announceNewType(updatedType, announceLocally);
-}
 #endif
 
 future<> migration_manager::announce_keyspace_drop(const sstring& ks_name, bool announce_locally)
 {
-    try {
-        auto& db = get_local_storage_proxy().get_db().local();
-        auto& keyspace = db.find_keyspace(ks_name);
-#if 0
-        logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
-#endif
-        auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
-        return announce(std::move(mutations), announce_locally);
-    } catch (const no_such_keyspace& e) {
+    auto& db = get_local_storage_proxy().get_db().local();
+    if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(sprint("Cannot drop non existing keyspace '%s'.", ks_name));
     }
+    auto& keyspace = db.find_keyspace(ks_name);
+#if 0
+    logger.info(String.format("Drop Keyspace '%s'", oldKsm.name));
+#endif
+    auto&& mutations = db::schema_tables::make_drop_keyspace_mutations(keyspace.metadata(), api::new_timestamp());
+    return announce(std::move(mutations), announce_locally);
 }
 
 future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
@@ -523,18 +552,16 @@ future<> migration_manager::announce_column_family_drop(const sstring& ks_name,
     }
 }
 
+future<> migration_manager::announce_type_drop(user_type dropped_type, bool announce_locally)
+{
+    auto& db = get_local_storage_proxy().get_db().local();
+    auto&& keyspace = db.find_keyspace(dropped_type->_keyspace);
+    logger.info("Drop User Type: {}", dropped_type->get_name_as_string());
+    auto mutations = db::schema_tables::make_drop_type_mutations(keyspace.metadata(), dropped_type, api::new_timestamp());
+    return announce(std::move(mutations), announce_locally);
+}
+
 #if 0
-public static void announceTypeDrop(UserType droppedType)
-{
-    announceTypeDrop(droppedType, false);
-}
-
-public static void announceTypeDrop(UserType droppedType, boolean announceLocally)
-{
-    KSMetaData ksm = Schema.instance.getKSMetaData(droppedType.keyspace);
-    announce(LegacySchemaTables.dropTypeFromSchemaMutation(ksm, droppedType, FBUtilities.timestampMicros()), announceLocally);
-}
-
 public static void announceFunctionDrop(UDFunction udf, boolean announceLocally)
 {
     logger.info(String.format("Drop scalar function overload '%s' args '%s'", udf.name(), udf.argTypes()));

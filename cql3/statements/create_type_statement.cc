@@ -39,6 +39,8 @@
 
 #include "cql3/statements/create_type_statement.hh"
 
+#include "service/migration_manager.hh"
+
 namespace cql3 {
 
 namespace statements {
@@ -62,46 +64,47 @@ void create_type_statement::add_definition(::shared_ptr<column_identifier> name,
     _column_types.emplace_back(type);
 }
 
-void create_type_statement::check_access(const service::client_state& state)
+future<> create_type_statement::check_access(const service::client_state& state)
 {
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-    state.hasKeyspaceAccess(keyspace(), Permission.CREATE);
-#endif
+    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
 }
 
-void create_type_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
+inline bool create_type_statement::type_exists_in(::keyspace& ks)
 {
-#if 0
-    KSMetaData ksm = Schema.instance.getKSMetaData(name.getKeyspace());
-    if (ksm == null)
-        throw new InvalidRequestException(String.format("Cannot add type in unknown keyspace %s", name.getKeyspace()));
-
-    if (ksm.userTypes.getType(name.getUserTypeName()) != null && !ifNotExists)
-        throw new InvalidRequestException(String.format("A user type of name %s already exists", name));
-
-    for (CQL3Type.Raw type : columnTypes)
-        if (type.isCounter())
-            throw new InvalidRequestException("A user type cannot contain counters");
-#endif
+    auto&& keyspace_types = ks.metadata()->user_types()->get_all_types();
+    return keyspace_types.find(_name.get_user_type_name()) != keyspace_types.end();
 }
 
-#if 0
-public static void checkForDuplicateNames(UserType type) throws InvalidRequestException
+void create_type_statement::validate(distributed<service::storage_proxy>& proxy, const service::client_state& state)
 {
-    for (int i = 0; i < type.size() - 1; i++)
-    {
-        ByteBuffer fieldName = type.fieldName(i);
-        for (int j = i+1; j < type.size(); j++)
-        {
-            if (fieldName.equals(type.fieldName(j)))
-                throw new InvalidRequestException(String.format("Duplicate field name %s in type %s",
-                                                                UTF8Type.instance.getString(fieldName),
-                                                                UTF8Type.instance.getString(type.name)));
+    try {
+        auto&& ks = proxy.local().get_db().local().find_keyspace(keyspace());
+        if (type_exists_in(ks) && !_if_not_exists) {
+            throw exceptions::invalid_request_exception(sprint("A user type of name %s already exists", _name.to_string()));
+        }
+    } catch (no_such_keyspace& e) {
+        throw exceptions::invalid_request_exception(sprint("Cannot add type in unknown keyspace %s", keyspace()));
+    }
+
+    for (auto&& type : _column_types) {
+        if (type->is_counter()) {
+            throw exceptions::invalid_request_exception(sprint("A user type cannot contain counters"));
         }
     }
 }
-#endif
+
+void create_type_statement::check_for_duplicate_names(user_type type)
+{
+    auto names = type->field_names();
+    for (auto i = names.cbegin(); i < names.cend() - 1; ++i) {
+        for (auto j = i +  1; j < names.cend(); ++j) {
+            if (*i == *j) {
+                throw exceptions::invalid_request_exception(
+                        sprint("Duplicate field name %s in type %s", to_hex(*i), type->get_name_as_string()));
+            }
+        }
+    }
+}
 
 shared_ptr<transport::event::schema_change> create_type_statement::change_event()
 {
@@ -118,37 +121,38 @@ const sstring& create_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-#if 0
-private UserType createType() throws InvalidRequestException
+inline user_type create_type_statement::create_type(database& db)
 {
-    List<ByteBuffer> names = new ArrayList<>(columnNames.size());
-    for (ColumnIdentifier name : columnNames)
-        names.add(name.bytes);
+    std::vector<bytes> field_names;
+    std::vector<data_type> field_types;
 
-    List<AbstractType<?>> types = new ArrayList<>(columnTypes.size());
-    for (CQL3Type.Raw type : columnTypes)
-        types.add(type.prepare(keyspace()).getType());
+    for (auto&& column_name : _column_names) {
+        field_names.push_back(column_name->name());
+    }
 
-    return new UserType(name.getKeyspace(), name.getUserTypeName(), names, types);
+    for (auto&& column_type : _column_types) {
+        field_types.push_back(column_type->prepare(db, keyspace())->get_type());
+    }
+
+    return user_type_impl::get_instance(keyspace(), _name.get_user_type_name(),
+        std::move(field_names), std::move(field_types));
 }
-#endif
 
 future<bool> create_type_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only)
 {
-    throw std::runtime_error("User-defined types are not supported yet");
-#if 0
-   KSMetaData ksm = Schema.instance.getKSMetaData(name.getKeyspace());
-   assert ksm != null; // should haven't validate otherwise
+    auto&& db = proxy.local().get_db().local();
 
-   // Can happen with ifNotExists
-   if (ksm.userTypes.getType(name.getUserTypeName()) != null)
-       return false;
+    // Keyspace exists or we wouldn't have validated otherwise
+    auto&& ks = db.find_keyspace(keyspace());
 
-   UserType type = createType();
-   checkForDuplicateNames(type);
-   MigrationManager.announceNewType(type, isLocalOnly);
-   return true;
-#endif
+    // Can happen with if_not_exists
+    if (type_exists_in(ks)) {
+        return make_ready_future<bool>(false);
+    }
+
+    auto type = create_type(db);
+    check_for_duplicate_names(type);
+    return service::get_local_migration_manager().announce_new_type(type, is_local_only).then([] { return true; });
 }
 
 }

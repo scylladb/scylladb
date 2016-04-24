@@ -1900,10 +1900,10 @@ future<> storage_service::decommission() {
     });
 }
 
-future<> storage_service::remove_node(sstring host_id_string) {
-    return run_with_api_lock(sstring("remove_node"), [host_id_string] (storage_service& ss) mutable {
+future<> storage_service::removenode(sstring host_id_string) {
+    return run_with_api_lock(sstring("removenode"), [host_id_string] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id_string] {
-            logger.debug("remove_node: host_id = {}", host_id_string);
+            logger.debug("removenode: host_id = {}", host_id_string);
             auto my_address = ss.get_broadcast_address();
             auto& tm = ss._token_metadata;
             auto local_host_id = tm.get_host_id(my_address);
@@ -1917,7 +1917,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
 
             auto tokens = tm.get_tokens(endpoint);
 
-            logger.debug("remove_node: endpoint = {}", endpoint);
+            logger.debug("removenode: endpoint = {}", endpoint);
 
             if (endpoint == my_address) {
                 throw std::runtime_error("Cannot remove self");
@@ -1960,6 +1960,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
                     }
                 }
             }
+            logger.info("removenode: endpoint = {}, replicating_nodes = {}", endpoint, ss._replicating_nodes);
             ss._removing_node = endpoint;
             tm.add_leaving_endpoint(endpoint);
             ss.update_pending_ranges().get();
@@ -1969,11 +1970,21 @@ future<> storage_service::remove_node(sstring host_id_string) {
             gossiper.advertise_removing(endpoint, host_id, local_host_id).get();
 
             // kick off streaming commands
-            ss.restore_replica_count(endpoint, my_address).get();
+            // No need to wait for restore_replica_count to complete, since
+            // when it completes, the node will be removed from _replicating_nodes,
+            // and we wait for _replicating_nodes to become empty below
+            ss.restore_replica_count(endpoint, my_address).handle_exception([endpoint, my_address] (auto ep) {
+                logger.info("Failed to restore_replica_count for node {} on node {}", endpoint, my_address);
+            });
 
             // wait for ReplicationFinishedVerbHandler to signal we're done
-            while (!ss._replicating_nodes.empty()) {
+            while (!(ss._replicating_nodes.empty() || ss._force_remove_completion)) {
                 sleep(std::chrono::milliseconds(100)).get();
+            }
+
+            if (ss._force_remove_completion) {
+                ss._force_remove_completion = false;
+                throw std::runtime_error("nodetool removenode force is called by user");
             }
 
             std::unordered_set<token> tmp(tokens.begin(), tokens.end());
@@ -1983,7 +1994,7 @@ future<> storage_service::remove_node(sstring host_id_string) {
             gossiper.advertise_token_removed(endpoint, host_id).get();
 
             ss._replicating_nodes.clear();
-            ss._removing_node = {};
+            ss._removing_node = std::experimental::nullopt;
         });
     });
 }
@@ -2358,6 +2369,8 @@ future<> storage_service::send_replication_notification(inet_address remote) {
 
 future<> storage_service::confirm_replication(inet_address node) {
     return run_with_no_api_lock([node] (storage_service& ss) {
+        auto removing_node = bool(ss._removing_node) ? sprint("%s", *ss._removing_node) : "NONE";
+        logger.info("Got confirm_replication from {}, removing_node {}", node, removing_node);
         // replicatingNodes can be empty in the case where this node used to be a removal coordinator,
         // but restarted before all 'replication finished' messages arrived. In that case, we'll
         // still go ahead and acknowledge it.
@@ -2976,6 +2989,70 @@ void storage_service::do_isolate_on_error(disk_error type)
         // isolated protect us against multiple stops
         service::get_storage_service().invoke_on_all([] (service::storage_service& s) { s.stop_native_transport(); });
     }
+}
+
+future<sstring> storage_service::get_removal_status() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        if (!ss._removing_node) {
+            return make_ready_future<sstring>(sstring("No token removals in process."));
+        }
+        auto tokens = ss._token_metadata.get_tokens(*ss._removing_node);
+        if (tokens.empty()) {
+            return make_ready_future<sstring>(sstring("Node has no token"));
+        }
+        auto status = sprint("Removing token (%s). Waiting for replication confirmation from [%s].",
+                tokens.front(), join(",", ss._replicating_nodes));
+        return make_ready_future<sstring>(status);
+    });
+}
+
+future<> storage_service::force_remove_completion() {
+    return run_with_no_api_lock([] (storage_service& ss) {
+        return seastar::async([&ss] {
+            if (!ss._operation_in_progress.empty()) {
+                if (ss._operation_in_progress != sstring("removenode")) {
+                    throw std::runtime_error(sprint("Operation %s is in progress, try again", ss._operation_in_progress));
+                } else {
+                    // This flag will make removenode stop waiting for the confirmation
+                    ss._force_remove_completion = true;
+                    while (!ss._operation_in_progress.empty()) {
+                        // Wait removenode operation to complete
+                        logger.info("Operation {} is in progress, wait for it to complete", ss._operation_in_progress);
+                        sleep(std::chrono::seconds(1)).get();
+                    }
+                    ss._force_remove_completion = false;
+                }
+            }
+            ss._operation_in_progress = sstring("removenode_force");
+            try {
+                if (!ss._replicating_nodes.empty() || !ss._token_metadata.get_leaving_endpoints().empty()) {
+                    auto leaving = ss._token_metadata.get_leaving_endpoints();
+                    logger.warn("Removal not confirmed for {}, Leaving={}", join(",", ss._replicating_nodes), leaving);
+                    for (auto endpoint : leaving) {
+                        utils::UUID host_id;
+                        auto tokens = ss._token_metadata.get_tokens(endpoint);
+                        try {
+                            host_id = ss._token_metadata.get_host_id(endpoint);
+                        } catch (...) {
+                            logger.warn("No host_id is found for endpoint {}", endpoint);
+                            continue;
+                        }
+                        gms::get_local_gossiper().advertise_token_removed(endpoint, host_id).get();
+                        std::unordered_set<token> tokens_set(tokens.begin(), tokens.end());
+                        ss.excise(tokens_set, endpoint);
+                    }
+                    ss._replicating_nodes.clear();
+                    ss._removing_node = std::experimental::nullopt;
+                } else {
+                    logger.warn("No tokens to force removal on, call 'removenode' first");
+                }
+                ss._operation_in_progress = {};
+            } catch (...) {
+                ss._operation_in_progress = {};
+                throw;
+            }
+        });
+    });
 }
 
 } // namespace service

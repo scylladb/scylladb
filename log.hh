@@ -188,6 +188,8 @@ logger::do_log(log_level level, const char* fmt, Args&&... args) {
 // Pretty-printer for exceptions to be logged, e.g., std::current_exception().
 namespace std {
 std::ostream& operator<<(std::ostream&, const std::exception_ptr&);
+std::ostream& operator<<(std::ostream&, const std::exception&);
+std::ostream& operator<<(std::ostream&, const std::system_error&);
 }
 
 #endif /* LOG_HH_ */

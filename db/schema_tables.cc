@@ -106,6 +106,10 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     std::map<qualified_name, schema_mutations>&& before,
     std::map<qualified_name, schema_mutations>&& after);
 
+static void merge_types(distributed<service::storage_proxy>& proxy,
+    schema_result&& before,
+    schema_result&& after);
+
 std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, /* not present in 2.1.8: FUNCTIONS, AGGREGATES */ };
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
@@ -599,7 +603,7 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
        // current state of the schema
        auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
        auto&& old_column_families = read_tables_for_keyspaces(proxy, keyspaces);
-       /*auto& old_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& old_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
 #if 0 // not in 2.1.8
        /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -616,10 +620,10 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
            }).get();
        }
 
-      // with new data applied
+       // with new data applied
        auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
        auto&& new_column_families = read_tables_for_keyspaces(proxy, keyspaces);
-       /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+       auto&& new_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
 #if 0 // not in 2.1.8
        /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
        /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
@@ -627,8 +631,8 @@ future<> do_merge_schema(distributed<service::storage_proxy>& proxy, std::vector
 
        std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
        merge_tables(proxy, std::move(old_column_families), std::move(new_column_families));
+       merge_types(proxy, std::move(old_types), std::move(new_types));
 #if 0
-       mergeTypes(oldTypes, newTypes);
        mergeFunctions(oldFunctions, newFunctions);
        mergeAggregates(oldAggregates, newAggregates);
 #endif
@@ -658,9 +662,7 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
      *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
      *   to this node
      */
-    auto diff = difference(before, after, [](const auto& x, const auto& y) -> bool {
-        return *x == *y;
-    });
+    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
     for (auto&& key : diff.entries_only_on_left) {
         dropped.emplace(key);
@@ -756,62 +758,107 @@ static void merge_tables(distributed<service::storage_proxy>& proxy,
     }).get();
 }
 
-#if 0
-    // see the comments for mergeKeyspaces()
-    private static void mergeTypes(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
-    {
-        List<UserType> created = new ArrayList<>();
-        List<UserType> altered = new ArrayList<>();
-        List<UserType> dropped = new ArrayList<>();
+static inline void collect_types(std::set<sstring>& keys, schema_result& result, std::vector<user_type>& to)
+{
+    for (auto&& key : keys) {
+        auto&& value = result[key];
+        auto types = create_types_from_schema_partition(schema_result_value_type{key, std::move(value)});
+        std::move(types.begin(), types.end(), std::back_inserter(to));
+    }
+}
 
-        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(before, after);
+static inline void ensure_type_is_unused(distributed<service::storage_proxy>& proxy, user_type type)
+{
+	// We don't want to drop a type unless it's not used anymore (mainly because
+    // if someone drops a type and recreates one with the same name but different
+    // definition with the previous name still in use, things can get messy).
+    // We have two places to check: 1) other user type that can nest the one
+    // we drop and 2) existing tables referencing the type (maybe in a nested
+    // way).
 
-        // New keyspace with types
-        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
-            if (entry.getValue().hasColumns())
-                created.addAll(createTypesFromPartition(new Row(entry.getKey(), entry.getValue())).values());
+    auto&& keyspace = type->_keyspace;
+    auto&& name = type->_name;
+    auto&& db = proxy.local().get_db().local();
+    auto&& ks = db.find_keyspace(type->_keyspace);
 
-        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : diff.entriesDiffering().entrySet())
-        {
-            String keyspaceName = AsciiType.instance.compose(entry.getKey().getKey());
-
-            ColumnFamily pre  = entry.getValue().leftValue();
-            ColumnFamily post = entry.getValue().rightValue();
-
-            if (pre.hasColumns() && post.hasColumns())
-            {
-                MapDifference<ByteBuffer, UserType> delta =
-                    Maps.difference(Schema.instance.getKSMetaData(keyspaceName).userTypes.getAllTypes(),
-                                    createTypesFromPartition(new Row(entry.getKey(), post)));
-
-                dropped.addAll(delta.entriesOnlyOnLeft().values());
-                created.addAll(delta.entriesOnlyOnRight().values());
-                Iterables.addAll(altered, Iterables.transform(delta.entriesDiffering().values(), new Function<MapDifference.ValueDifference<UserType>, UserType>()
-                {
-                    public UserType apply(MapDifference.ValueDifference<UserType> pair)
-                    {
-                        return pair.rightValue();
-                    }
-                }));
-            }
-            else if (pre.hasColumns())
-            {
-                dropped.addAll(Schema.instance.getKSMetaData(keyspaceName).userTypes.getAllTypes().values());
-            }
-            else if (post.hasColumns())
-            {
-                created.addAll(createTypesFromPartition(new Row(entry.getKey(), post)).values());
-            }
+    for (auto&& ut : ks.metadata()->user_types()->get_all_types() | boost::adaptors::map_values) {
+        if (ut->_keyspace == keyspace && ut->_name == name) {
+            continue;
         }
 
-        for (UserType type : created)
-            Schema.instance.addType(type);
-        for (UserType type : altered)
-            Schema.instance.updateType(type);
-        for (UserType type : dropped)
-            Schema.instance.dropType(type);
+        if (ut->references_user_type(keyspace, name)) {
+            throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by user type %s", keyspace, type->get_name_as_string(), ut->get_name_as_string()));
+        }
     }
 
+    for (auto&& cfm : ks.metadata()->cf_meta_data() | boost::adaptors::map_values) {
+        for (auto&& col : cfm->all_columns() | boost::adaptors::map_values) {
+            if (col->type->references_user_type(keyspace, name)) {
+                throw exceptions::invalid_request_exception(sprint("Cannot drop user type %s.%s as it is still used by table %s.%s", keyspace, type->get_name_as_string(), cfm->ks_name(), cfm->cf_name()));
+            }
+        }
+    }
+}
+
+ // see the comments for merge_keyspaces()
+static void merge_types(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
+{
+    std::vector<user_type> created, altered, dropped;
+
+    auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
+
+    collect_types(diff.entries_only_on_left, before, dropped); // Keyspaces with no more types
+    collect_types(diff.entries_only_on_right, after, created); // New keyspaces with types
+
+    for (auto&& key : diff.entries_differing) {
+        // The user types of this keyspace differ, so diff the current types with the updated ones
+        auto current_types = proxy.local().get_db().local().find_keyspace(key).metadata()->user_types()->get_all_types();
+        decltype(current_types) updated_types;
+        auto ts = create_types_from_schema_partition(schema_result_value_type{key, std::move(after[key])});
+        updated_types.reserve(ts.size());
+        for (auto&& type : ts) {
+            updated_types[type->_name] = std::move(type);
+        }
+
+        auto delta = difference(current_types, updated_types, indirect_equal_to<user_type>());
+
+        for (auto&& key : delta.entries_only_on_left) {
+            dropped.emplace_back(current_types[key]);
+        }
+        for (auto&& key : delta.entries_only_on_right) {
+            created.emplace_back(std::move(updated_types[key]));
+        }
+        for (auto&& key : delta.entries_differing) {
+            altered.emplace_back(std::move(updated_types[key]));
+        }
+    }
+
+    for (auto&& ut : dropped) {
+        ensure_type_is_unused(proxy, ut);
+    }
+
+    proxy.local().get_db().invoke_on_all([&created, &dropped, &altered] (database& db) {
+        return seastar::async([&] {
+            for (auto&& type : created) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+                service::get_local_migration_manager().notify_create_user_type(user_type).get();
+            }
+            for (auto&& type : dropped) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+                service::get_local_migration_manager().notify_drop_user_type(user_type).get();
+            }
+            for (auto&& type : altered) {
+                auto user_type = dynamic_pointer_cast<const user_type_impl>(parse_type(type->name()));
+                db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+                service::get_local_migration_manager().notify_update_user_type(user_type).get();
+            }
+        });
+    }).get();
+}
+
+#if 0
     // see the comments for mergeKeyspaces()
     private static void mergeFunctions(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
     {
@@ -937,10 +984,9 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
     mutations.emplace_back(std::move(m));
 
     if (with_tables_and_types_and_functions) {
-#if 0
-        for (UserType type : keyspace.userTypes.getAllTypes().values())
-            addTypeToSchemaMutation(type, timestamp, mutation);
-#endif
+        for (auto&& kv : keyspace->user_types()->get_all_types()) {
+            add_type_to_schema_mutation(kv.second, timestamp, mutations);
+        }
         for (auto&& kv : keyspace->cf_meta_data()) {
             add_table_to_schema_mutation(kv.second, timestamp, true, mutations);
         }
@@ -985,80 +1031,101 @@ lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const sch
     return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes);
 }
 
-#if 0
-    /*
-     * User type metadata serialization/deserialization.
-     */
-
-    public static Mutation makeCreateTypeMutation(KSMetaData keyspace, UserType type, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-        addTypeToSchemaMutation(type, timestamp, mutation);
-        return mutation;
-    }
-
-    private static void addTypeToSchemaMutation(UserType type, long timestamp, Mutation mutation)
-    {
-        ColumnFamily cells = mutation.addOrGet(Usertypes);
-
-        Composite prefix = Usertypes.comparator.make(type.name);
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-
-        adder.resetCollection("field_names");
-        adder.resetCollection("field_types");
-
-        for (int i = 0; i < type.size(); i++)
-        {
-            adder.addListEntry("field_names", type.fieldName(i));
-            adder.addListEntry("field_types", type.fieldType(i).toString());
+std::vector<user_type> create_types_from_schema_partition(const schema_result_value_type& result)
+{
+    std::vector<user_type> user_types;
+    user_types.reserve(result.second->rows().size());
+    for (auto&& row : result.second->rows()) {
+        auto name = to_bytes(row.get_nonnull<sstring>("type_name"));
+        auto columns = row.get_nonnull<list_type_impl::native_type>("field_names");
+        std::vector<bytes> field_names;
+        for (auto&& value : columns) {
+            field_names.emplace_back(to_bytes(value_cast<sstring>(value)));
         }
-    }
-
-    public static Mutation dropTypeFromSchemaMutation(KSMetaData keyspace, UserType type, long timestamp)
-    {
-        // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-
-        ColumnFamily cells = mutation.addOrGet(Usertypes);
-        int ldt = (int) (System.currentTimeMillis() / 1000);
-
-        Composite prefix = Usertypes.comparator.make(type.name);
-        cells.addAtom(new RangeTombstone(prefix, prefix.end(), timestamp, ldt));
-
-        return mutation;
-    }
-
-    private static Map<ByteBuffer, UserType> createTypesFromPartition(Row partition)
-    {
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, USERTYPES);
-        Map<ByteBuffer, UserType> types = new HashMap<>();
-        for (UntypedResultSet.Row row : QueryProcessor.resultify(query, partition))
-        {
-            UserType type = createTypeFromRow(row);
-            types.put(type.name, type);
+        auto types = row.get_nonnull<list_type_impl::native_type>("field_types");
+        std::vector<data_type> field_types;
+        for (auto&& value : types) {
+            field_types.emplace_back(parse_type(value_cast<sstring>(value)));
         }
-        return types;
+
+        user_types.emplace_back(user_type_impl::get_instance(result.first, name, field_names, field_types));
+    }
+    return user_types;
+}
+
+/*
+ * User type metadata serialization/deserialization
+ */
+
+template <typename T>
+static atomic_cell_or_collection
+make_list_mutation(const std::vector<T>& values,
+    const column_definition* column,
+    api::timestamp_type timestamp,
+    std::function<data_value(typename std::vector<T>::value_type)> to_data_value)
+{
+    assert(column);
+    list_type_impl::mutation m;
+    m.cells.reserve(values.size());
+    m.tomb.timestamp = timestamp - 1;
+    m.tomb.deletion_time = gc_clock::now();
+
+    auto values_type = static_pointer_cast<const list_type_impl>(column->type);
+    for (auto&& value : values) {
+        auto dv = to_data_value(value);
+        auto uuid = utils::UUID_gen::get_time_UUID_bytes();
+        m.cells.emplace_back(
+            bytes(reinterpret_cast<const int8_t*>(uuid.data()), uuid.size()),
+            atomic_cell::make_live(timestamp, values_type->get_elements_type()->decompose(std::move(dv))));
     }
 
-    private static UserType createTypeFromRow(UntypedResultSet.Row row)
-    {
-        String keyspace = row.getString("keyspace_name");
-        ByteBuffer name = ByteBufferUtil.bytes(row.getString("type_name"));
-        List<String> rawColumns = row.getList("field_names", UTF8Type.instance);
-        List<String> rawTypes = row.getList("field_types", UTF8Type.instance);
+    return atomic_cell_or_collection::from_collection_mutation(values_type->serialize_mutation_form(std::move(m)));
+}
 
-        List<ByteBuffer> columns = new ArrayList<>(rawColumns.size());
-        for (String rawColumn : rawColumns)
-            columns.add(ByteBufferUtil.bytes(rawColumn));
+void add_type_to_schema_mutation(user_type type, api::timestamp_type timestamp, std::vector<mutation>& mutations)
+{
+    schema_ptr s = usertypes();
+    auto pkey = partition_key::from_singular(*s, type->_keyspace);
+    auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
+    mutation m{pkey, s};
 
-        List<AbstractType<?>> types = new ArrayList<>(rawTypes.size());
-        for (String rawType : rawTypes)
-            types.add(parseType(rawType));
+    auto field_names_column = s->get_column_definition("field_names");
+    auto field_names = make_list_mutation(type->field_names(), field_names_column, timestamp, [](auto&& name) {
+        return utf8_type->deserialize(name);
+    });
+    m.set_clustered_cell(ckey, *field_names_column, std::move(field_names));
 
-        return new UserType(keyspace, name, columns, types);
-    }
-#endif
+    auto field_types_column = s->get_column_definition("field_types");
+    auto field_types = make_list_mutation(type->field_types(), field_types_column, timestamp, [](auto&& type) {
+        return data_value(type->name());
+    });
+    m.set_clustered_cell(ckey, *field_types_column, std::move(field_types));
+
+    mutations.emplace_back(std::move(m));
+}
+
+std::vector<mutation> make_create_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+    add_type_to_schema_mutation(type, timestamp, mutations);
+    return mutations;
+}
+
+std::vector<mutation> make_drop_type_mutations(lw_shared_ptr<keyspace_metadata> keyspace, user_type type, api::timestamp_type timestamp)
+{
+    // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
+    auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+
+    schema_ptr s = usertypes();
+    auto pkey = partition_key::from_singular(*s, type->_keyspace);
+    auto ckey = clustering_key::from_singular(*s, type->get_name_as_string());
+    mutation m{pkey, s};
+    m.partition().apply_delete(*s, ckey, tombstone(timestamp, gc_clock::now()));
+    mutations.emplace_back(std::move(m));
+
+    return mutations;
+}
 
 /*
  * Table metadata serialization/deserialization.

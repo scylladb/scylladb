@@ -58,13 +58,7 @@ public:
             : _id(std::move(id)), _is_writetime(is_writetime) {
     }
 
-#if 0
-    @Override
-    public String toString()
-    {
-        return (isWritetime ? "writetime" : "ttl") + "(" + id + ")";
-    }
-#endif
+    virtual sstring to_string() const override;
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 

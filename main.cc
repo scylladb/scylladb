@@ -233,6 +233,21 @@ static bool cpu_sanity() {
     return true;
 }
 
+static void tcp_syncookies_sanity() {
+    try {
+        auto f = file_desc::open("/proc/sys/net/ipv4/tcp_syncookies", O_RDONLY | O_CLOEXEC);
+        char buf[128] = {};
+        f.read(buf, 128);
+        if (sstring(buf) == "0\n") {
+            startlog.warn("sysctl entry net.ipv4.tcp_syncookies is set to 0.\n"
+                          "For better performance, set following parameter on sysctl is strongly recommended:\n"
+                          "net.ipv4.tcp_syncookies=1");
+        }
+    } catch (const std::system_error& e) {
+            startlog.warn("Unable to check if net.ipv4.tcp_syncookies is set {}", e);
+    }
+}
+
 static future<>
 verify_seastar_io_scheduler(bool has_max_io_requests, bool developer_mode) {
     auto note_bad_conf = [developer_mode] (sstring cause) {
@@ -307,6 +322,8 @@ int main(int ac, char** av) {
         if (opts.count("developer-mode")) {
             engine().set_strict_dma(false);
         }
+
+        tcp_syncookies_sanity();
 
         return seastar::async([cfg, &db, &qp, &proxy, &mm, &ctx, &opts, &dirs] {
             read_config(opts, *cfg).get();
@@ -396,6 +413,10 @@ int main(int ac, char** av) {
             // Note: changed from using a move here, because we want the config object intact.
             db.start(std::ref(*cfg)).get();
             engine().at_exit([&db] {
+                // A shared sstable must be compacted by all shards before it can be deleted.
+                // Since we're stoping, that's not going to happen.  Cancel those pending
+                // deletions to let anyone waiting on them to continue.
+                sstables::cancel_atomic_deletions();
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
                 // call stop on each db instance, but leave the shareded<database> pointers alive.

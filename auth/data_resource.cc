@@ -158,7 +158,15 @@ bool auth::data_resource::exists() const {
 }
 
 sstring auth::data_resource::to_string() const {
-    return name();
+    switch (get_level()) {
+        case level::ROOT:
+            return "<all keyspaces>";
+        case level::KEYSPACE:
+            return sprint("<keyspace %s>", _ks);
+        case level::COLUMN_FAMILY:
+        default:
+            return sprint("<table %s.%s>", _ks, _cf);
+    }
 }
 
 bool auth::data_resource::operator==(const data_resource& v) const {
@@ -170,6 +178,6 @@ bool auth::data_resource::operator<(const data_resource& v) const {
 }
 
 std::ostream& auth::operator<<(std::ostream& os, const data_resource& r) {
-    return os << r.name();
+    return os << r.to_string();
 }
 

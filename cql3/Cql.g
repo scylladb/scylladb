@@ -38,6 +38,8 @@ options {
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/create_type_statement.hh"
+#include "cql3/statements/drop_type_statement.hh"
+#include "cql3/statements/alter_type_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/drop_table_statement.hh"
 #include "cql3/statements/truncate_statement.hh"
@@ -51,6 +53,9 @@ options {
 #include "cql3/statements/alter_user_statement.hh"
 #include "cql3/statements/drop_user_statement.hh"
 #include "cql3/statements/list_users_statement.hh"
+#include "cql3/statements/grant_statement.hh"
+#include "cql3/statements/revoke_statement.hh"
+#include "cql3/statements/list_permissions_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -313,10 +318,10 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st14=alterTableStatement         { $stmt = st14; }
 #if 0
     | st15=alterKeyspaceStatement      { $stmt = st15; }
+#endif
     | st16=grantStatement              { $stmt = st16; }
     | st17=revokeStatement             { $stmt = st17; }
     | st18=listPermissionsStatement    { $stmt = st18; }
-#endif
     | st19=createUserStatement         { $stmt = st19; }
     | st20=alterUserStatement          { $stmt = st20; }
     | st21=dropUserStatement           { $stmt = st21; }
@@ -326,9 +331,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st24=dropTriggerStatement        { $stmt = st24; }
 #endif
     | st25=createTypeStatement         { $stmt = st25; }
-#if 0
     | st26=alterTypeStatement          { $stmt = st26; }
     | st27=dropTypeStatement           { $stmt = st27; }
+#if 0
     | st28=createFunctionStatement     { $stmt = st28; }
     | st29=dropFunctionStatement       { $stmt = st29; }
     | st30=createAggregateStatement    { $stmt = st30; }
@@ -843,25 +848,26 @@ alterTableStatement returns [shared_ptr<alter_table_statement> expr]
     }
     ;
 
-#if 0
 /**
  * ALTER TYPE <name> ALTER <field> TYPE <newtype>;
  * ALTER TYPE <name> ADD <field> <newtype>;
  * ALTER TYPE <name> RENAME <field> TO <newtype> AND ...;
  */
-alterTypeStatement returns [AlterTypeStatement expr]
+alterTypeStatement returns [::shared_ptr<alter_type_statement> expr]
     : K_ALTER K_TYPE name=userTypeName
-          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = AlterTypeStatement.alter(name, f, v); }
-          | K_ADD   f=ident v=comparatorType        { $expr = AlterTypeStatement.addition(name, f, v); }
+          ( K_ALTER f=ident K_TYPE v=comparatorType { $expr = ::make_shared<alter_type_statement::add_or_alter>(name, false, f, v); }
+          | K_ADD   f=ident v=comparatorType        { $expr = ::make_shared<alter_type_statement::add_or_alter>(name, true, f, v); }
           | K_RENAME
-               { Map<ColumnIdentifier, ColumnIdentifier> renames = new HashMap<ColumnIdentifier, ColumnIdentifier>(); }
-                 id1=ident K_TO toId1=ident { renames.put(id1, toId1); }
-                 ( K_AND idn=ident K_TO toIdn=ident { renames.put(idn, toIdn); } )*
-               { $expr = AlterTypeStatement.renames(name, renames); }
+               { $expr = ::make_shared<alter_type_statement::renames>(name); }
+               renames[{ static_pointer_cast<alter_type_statement::renames>($expr) }]
           )
     ;
-#endif
 
+
+renames[::shared_ptr<alter_type_statement::renames> expr]
+    : fromId=ident K_TO toId=ident { $expr->add_rename(fromId, toId); }
+      ( K_AND renames[$expr] )?
+    ;
 
 /**
  * DROP KEYSPACE [IF EXISTS] <KSP>;
@@ -879,15 +885,15 @@ dropTableStatement returns [::shared_ptr<drop_table_statement> stmt]
     : K_DROP K_COLUMNFAMILY (K_IF K_EXISTS { if_exists = true; } )? cf=columnFamilyName { $stmt = ::make_shared<drop_table_statement>(cf, if_exists); }
     ;
 
-#if 0
 /**
  * DROP TYPE <name>;
  */
-dropTypeStatement returns [DropTypeStatement stmt]
-    @init { boolean ifExists = false; }
-    : K_DROP K_TYPE (K_IF K_EXISTS { ifExists = true; } )? name=userTypeName { $stmt = new DropTypeStatement(name, ifExists); }
+dropTypeStatement returns [::shared_ptr<drop_type_statement> stmt]
+    @init { bool if_exists = false; }
+    : K_DROP K_TYPE (K_IF K_EXISTS { if_exists = true; } )? name=userTypeName { $stmt = ::make_shared<drop_type_statement>(name, if_exists); }
     ;
 
+#if 0
 /**
  * DROP INDEX [IF EXISTS] <INDEX_NAME>
  */
@@ -905,69 +911,66 @@ truncateStatement returns [::shared_ptr<truncate_statement> stmt]
     : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName { $stmt = ::make_shared<truncate_statement>(cf); }
     ;
 
-#if 0
 /**
  * GRANT <permission> ON <resource> TO <username>
  */
-grantStatement returns [GrantStatement stmt]
+grantStatement returns [::shared_ptr<grant_statement> stmt]
     : K_GRANT
           permissionOrAll
       K_ON
           resource
       K_TO
           username
-      { $stmt = new GrantStatement($permissionOrAll.perms, $resource.res, $username.text); }
+      { $stmt = ::make_shared<grant_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
     ;
 
 /**
  * REVOKE <permission> ON <resource> FROM <username>
  */
-revokeStatement returns [RevokeStatement stmt]
+revokeStatement returns [::shared_ptr<revoke_statement> stmt]
     : K_REVOKE
           permissionOrAll
       K_ON
           resource
       K_FROM
           username
-      { $stmt = new RevokeStatement($permissionOrAll.perms, $resource.res, $username.text); }
+      { $stmt = ::make_shared<revoke_statement>($permissionOrAll.perms, $resource.res, $username.text); } 
     ;
 
-listPermissionsStatement returns [ListPermissionsStatement stmt]
+listPermissionsStatement returns [::shared_ptr<list_permissions_statement> stmt]
     @init {
-        IResource resource = null;
-        String username = null;
-        boolean recursive = true;
+		std::experimental::optional<auth::data_resource> r;
+		std::experimental::optional<sstring> u;
+		bool recursive = true;
     }
     : K_LIST
           permissionOrAll
-      ( K_ON resource { resource = $resource.res; } )?
-      ( K_OF username { username = $username.text; } )?
+      ( K_ON resource { r = $resource.res; } )?
+      ( K_OF username { u = sstring($username.text); } )?
       ( K_NORECURSIVE { recursive = false; } )?
-      { $stmt = new ListPermissionsStatement($permissionOrAll.perms, resource, username, recursive); }
+      { $stmt = ::make_shared<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(u), recursive); } 
     ;
 
-permission returns [Permission perm]
+permission returns [auth::permission perm]
     : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE)
-    { $perm = Permission.valueOf($p.text.toUpperCase()); }
+    { $perm = auth::permissions::from_string($p.text); }
     ;
 
-permissionOrAll returns [Set<Permission> perms]
-    : K_ALL ( K_PERMISSIONS )?       { $perms = Permission.ALL_DATA; }
-    | p=permission ( K_PERMISSION )? { $perms = EnumSet.of($p.perm); }
+permissionOrAll returns [auth::permission_set perms]
+    : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL_DATA; }
+    | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
     ;
 
-resource returns [IResource res]
+resource returns [auth::data_resource res]
     : r=dataResource { $res = $r.res; }
     ;
 
-dataResource returns [DataResource res]
-    : K_ALL K_KEYSPACES { $res = DataResource.root(); }
-    | K_KEYSPACE ks = keyspaceName { $res = DataResource.keyspace($ks.id); }
+dataResource returns [auth::data_resource res]
+    : K_ALL K_KEYSPACES { $res = auth::data_resource(); }
+    | K_KEYSPACE ks = keyspaceName { $res = auth::data_resource($ks.id); }
     | ( K_COLUMNFAMILY )? cf = columnFamilyName
-      { $res = DataResource.columnFamily($cf.name.getKeyspace(), $cf.name.getColumnFamily()); }
+      { $res = auth::data_resource($cf.name->get_keyspace(), $cf.name->get_column_family()); }
     ;
-
-#endif
 
 /**
  * CREATE USER [IF NOT EXISTS] <username> [WITH PASSWORD <password>] [SUPERUSER|NOSUPERUSER]

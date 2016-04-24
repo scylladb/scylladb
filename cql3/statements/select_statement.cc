@@ -126,11 +126,8 @@ uint32_t select_statement::get_bound_terms() {
     return _bound_terms;
 }
 
-void select_statement::check_access(const service::client_state& state) {
-    warn(unimplemented::cause::PERMISSIONS);
-#if 0
-        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
-#endif
+future<> select_statement::check_access(const service::client_state& state) {
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::SELECT);
 }
 
 void select_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {

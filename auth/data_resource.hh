@@ -42,6 +42,7 @@
 #pragma once
 
 #include <iosfwd>
+#include <set>
 #include <seastar/core/sstring.hh>
 
 namespace auth {
@@ -137,6 +138,11 @@ public:
     bool operator==(const data_resource&) const;
     bool operator<(const data_resource&) const;
 };
+
+/**
+ * Resource id mappings, i.e. keyspace and/or column families.
+ */
+using resource_ids = std::set<data_resource>;
 
 std::ostream& operator<<(std::ostream&, const data_resource&);
 

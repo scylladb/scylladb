@@ -59,7 +59,7 @@ public:
 
     void add_definition(::shared_ptr<column_identifier> name, ::shared_ptr<cql3_type::raw> type);
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
@@ -68,6 +68,11 @@ public:
     virtual const sstring& keyspace() const override;
 
     virtual future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+
+    static void check_for_duplicate_names(user_type type);
+private:
+    bool type_exists_in(::keyspace& ks);
+    user_type create_type(database& db);
 };
 
 }

@@ -53,7 +53,7 @@ class drop_keyspace_statement : public schema_altering_statement {
 public:
     drop_keyspace_statement(const sstring& keyspace, bool if_exists);
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 

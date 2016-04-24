@@ -45,7 +45,9 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/function_output_iterator.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm/find.hpp>
+#include <boost/range/adaptor/map.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
@@ -85,13 +87,25 @@ public:
     }
 };
 
+lw_shared_ptr<memtable_list>
+column_family::make_memtable_list() {
+    auto seal = [this] { return seal_active_memtable(); };
+    auto get_schema = [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group);
+}
+
+lw_shared_ptr<memtable_list>
+column_family::make_streaming_memtable_list() {
+    auto seal = [this] { return seal_active_streaming_memtable_delayed(); };
+    auto get_schema =  [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_streaming_memtable_size, _config.streaming_dirty_memory_region_group);
+}
+
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
-    , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
-        make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
+    , _memtables(make_memtable_list())
+    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memtable_list())
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
@@ -106,10 +120,8 @@ column_family::column_family(schema_ptr schema, config config, db::commitlog& cl
 column_family::column_family(schema_ptr schema, config config, no_commitlog cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
-    , _streaming_memtables(_config.enable_disk_writes ?
-        make_lw_shared<memtable_list>([this] { return seal_active_streaming_memtable_delayed(); }, [this] { return new_streaming_memtable(); }, _config.max_memtable_size) :
-        make_lw_shared<memtable_list>([this] { return seal_active_memtable(); }, [this] { return new_memtable(); }, _config.max_memtable_size))
+    , _memtables(make_memtable_list())
+    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memtable_list())
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(nullptr)
@@ -543,15 +555,6 @@ void column_family::add_sstable(lw_shared_ptr<sstables::sstable> sstable) {
     _sstables->emplace(generation, std::move(sstable));
 }
 
-lw_shared_ptr<memtable> column_family::new_memtable() {
-    return make_lw_shared<memtable>(_schema, _config.dirty_memory_region_group);
-}
-
-lw_shared_ptr<memtable> column_family::new_streaming_memtable() {
-    return make_lw_shared<memtable>(_schema, _config.streaming_dirty_memory_region_group);
-}
-
-
 future<>
 column_family::update_cache(memtable& m, lw_shared_ptr<sstable_list> old_sstables) {
     if (_config.enable_cache) {
@@ -770,6 +773,8 @@ column_family::stop() {
         return _flush_queue->close().then([this] {
             return _streaming_flush_gate.close();
         });
+    }).then([this] {
+        return _sstable_deletion_gate.close();
     });
 }
 
@@ -832,6 +837,18 @@ column_family::reshuffle_sstables(std::set<int64_t> all_generations, int64_t sta
     });
 }
 
+void column_family::rebuild_statistics() {
+    // zeroing live_disk_space_used and live_sstable_count because the
+    // sstable list was re-created
+    _stats.live_disk_space_used = 0;
+    _stats.live_sstable_count = 0;
+
+    for (auto&& tab : boost::range::join(_sstables_compacted_but_not_deleted,
+                                         *_sstables | boost::adaptors::map_values)) {
+        update_stats_for_new_sstable(tab->data_size());
+    }
+}
+
 void
 column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>& new_sstables,
                                     const std::vector<sstables::shared_sstable>& sstables_to_remove) {
@@ -840,37 +857,49 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
     // later), and we add the new tables generated by the compaction.
     // We create a new list rather than modifying it in-place, so that
     // on-going reads can continue to use the old list.
+    //
+    // We only remove old sstables after they are successfully deleted,
+    // to avoid a new compaction from ignoring data in the old sstables
+    // if the deletion fails (note deletion of shared sstables can take
+    // unbounded time, because all shards must agree on the deletion).
     auto current_sstables = _sstables;
     auto new_sstable_list = make_lw_shared<sstable_list>();
+    auto new_compacted_but_not_deleted = _sstables_compacted_but_not_deleted;
 
-    // zeroing live_disk_space_used and live_sstable_count because the
-    // sstable list is re-created below.
-    _stats.live_disk_space_used = 0;
-    _stats.live_sstable_count = 0;
 
     std::unordered_set<sstables::shared_sstable> s(
            sstables_to_remove.begin(), sstables_to_remove.end());
 
-    for (const auto& oldtab : *current_sstables) {
+    // First, add the new sstables.
+    for (auto&& tab : boost::range::join(new_sstables, *current_sstables | boost::adaptors::map_values)) {
         // Checks if oldtab is a sstable not being compacted.
-        if (!s.count(oldtab.second)) {
-            update_stats_for_new_sstable(oldtab.second->data_size());
-            new_sstable_list->emplace(oldtab.first, oldtab.second);
+        if (!s.count(tab)) {
+            new_sstable_list->emplace(tab->generation(), tab);
+        } else {
+            new_compacted_but_not_deleted.push_back(tab);
         }
     }
-
-    for (const auto& newtab : new_sstables) {
-        // FIXME: rename the new sstable(s). Verify a rename doesn't cause
-        // problems for the sstable object.
-        update_stats_for_new_sstable(newtab->data_size());
-        new_sstable_list->emplace(newtab->generation(), newtab);
-    }
-
-    for (const auto& oldtab : sstables_to_remove) {
-        oldtab->mark_for_deletion();
-    }
-
     _sstables = std::move(new_sstable_list);
+    _sstables_compacted_but_not_deleted = std::move(new_compacted_but_not_deleted);
+
+    rebuild_statistics();
+
+    // Second, delete the old sstables.  This is done in the background, so we can
+    // consider this compaction completed.
+    seastar::with_gate(_sstable_deletion_gate, [this, sstables_to_remove] {
+        return sstables::delete_atomically(sstables_to_remove).then([this, sstables_to_remove] {
+            auto current_sstables = _sstables;
+            auto new_sstable_list = make_lw_shared<sstable_list>();
+
+            std::unordered_set<sstables::shared_sstable> s(
+                   sstables_to_remove.begin(), sstables_to_remove.end());
+            auto e = boost::range::remove_if(_sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) -> bool {
+                return s.count(sst);
+            });
+            _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
+            rebuild_statistics();
+        });
+    });
 }
 
 future<>
@@ -894,7 +923,7 @@ column_family::compact_sstables(sstables::compaction_descriptor descriptor, bool
         };
         return sstables::compact_sstables(*sstables_to_compact, *this, create_sstable, descriptor.max_sstable_bytes, descriptor.level,
                 cleanup).then([this, sstables_to_compact] (auto new_sstables) {
-            this->rebuild_sstable_list(new_sstables, *sstables_to_compact);
+            return this->rebuild_sstable_list(new_sstables, *sstables_to_compact);
         });
     });
 }
@@ -1023,6 +1052,24 @@ int64_t column_family::get_unleveled_sstables() const {
 
 lw_shared_ptr<sstable_list> column_family::get_sstables() {
     return _sstables;
+}
+
+// Gets the list of all sstables in the column family, including ones that are
+// not used for active queries because they have already been compacted, but are
+// waiting for delete_atomically() to return.
+//
+// As long as we haven't deleted them, compaction needs to ensure it doesn't
+// garbage-collect a tombstone that covers data in an sstable that may not be
+// successfully deleted.
+lw_shared_ptr<sstable_list> column_family::get_sstables_including_compacted_undeleted() {
+    if (_sstables_compacted_but_not_deleted.empty()) {
+        return _sstables;
+    }
+    auto ret = make_lw_shared(*_sstables);
+    for (auto&& s : _sstables_compacted_but_not_deleted) {
+        ret->insert(std::make_pair(s->generation(), s));
+    }
+    return ret;
 }
 
 inline bool column_family::manifest_json_filter(const sstring& fname) {
@@ -1154,20 +1201,22 @@ database::database(const db::config& cfg)
     : _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
     , _cfg(std::make_unique<db::config>(cfg))
     , _memtable_total_space([this] {
+        _stats = make_lw_shared<db_stats>();
+
         auto memtable_total_space = size_t(_cfg->memtable_total_space_in_mb()) << 20;
         if (!memtable_total_space) {
             return memory::stats().total_memory() / 2;
         }
         return memtable_total_space;
     }())
+    , _streaming_memtable_total_space(_memtable_total_space / 4)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _memtables_throttler(_memtable_total_space, _dirty_memory_region_group)
-    // We have to be careful here not to set the streaming limit for less than
-    // a memtable maximum size. Allow up to 25 % to be used up by streaming memtables
-    // in the common case
-    , _streaming_throttler(_memtable_total_space * std::min(0.25, cfg.memtable_cleanup_threshold()),
-                           _streaming_dirty_memory_region_group, _memtables_throttler)
+    , _streaming_throttler(_streaming_memtable_total_space,
+                           _streaming_dirty_memory_region_group,
+                           &_memtables_throttler
+    )
 {
     // Start compaction manager with two tasks for handling compaction jobs.
     _compaction_manager.start(2);
@@ -1198,6 +1247,20 @@ database::setup_collectd() {
                 , scollectd::per_cpu_plugin_instance
                 , "bytes", "pending_flushes")
                 , scollectd::make_typed(scollectd::data_type::GAUGE, _cf_stats.pending_memtables_flushes_bytes)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_writes")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_writes)
+    ));
+
+    _collectd.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("database"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "total_reads")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats->total_reads)
     ));
 }
 
@@ -1313,6 +1376,15 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     return do_parse_system_tables(proxy, db::schema_tables::KEYSPACES, [this] (schema_result_value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
+    }).then([&proxy, this] {
+        return do_parse_system_tables(proxy, db::schema_tables::USERTYPES, [this, &proxy] (schema_result_value_type &v) {
+            auto&& user_types = create_types_from_schema_partition(v);
+            auto& ks = this->find_keyspace(v.first);
+            for (auto&& type : user_types) {
+                ks.add_user_type(type);
+            }
+            return make_ready_future<>();
+        });
     }).then([&proxy, this] {
         return do_parse_system_tables(proxy, db::schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result_value_type &v) {
             return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
@@ -1561,6 +1633,7 @@ keyspace::make_column_family_config(const schema& s) const {
     cfg.enable_commitlog = _config.enable_commitlog;
     cfg.enable_cache = _config.enable_cache;
     cfg.max_memtable_size = _config.max_memtable_size;
+    cfg.max_streaming_memtable_size = _config.max_streaming_memtable_size;
     cfg.dirty_memory_region_group = _config.dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = _config.streaming_dirty_memory_region_group;
     cfg.cf_stats = _config.cf_stats;
@@ -1766,13 +1839,19 @@ column_family::as_mutation_source() const {
 future<lw_shared_ptr<query::result>>
 database::query(schema_ptr s, const query::read_command& cmd, query::result_request request, const std::vector<query::partition_range>& ranges) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return cf.query(std::move(s), cmd, request, ranges);
+    return cf.query(std::move(s), cmd, request, ranges).then([this, s = _stats] (auto&& res) {
+        ++s->total_reads;
+        return std::move(res);
+    });
 }
 
 future<reconcilable_result>
 database::query_mutations(schema_ptr s, const query::read_command& cmd, const query::partition_range& range) {
     column_family& cf = find_column_family(cmd.cf_id);
-    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp);
+    return mutation_query(std::move(s), cf.as_mutation_source(), range, cmd.slice, cmd.row_limit, cmd.timestamp).then([this, s = _stats] (auto&& res) {
+        ++s->total_reads;
+        return std::move(res);
+    });
 }
 
 std::unordered_set<sstring> database::get_initial_tokens() {
@@ -1913,19 +1992,7 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m) {
     return apply_in_memory(m, s, db::replay_position());
 }
 
-database::throttle_state::throttle_state(size_t max_space, logalloc::region_group& rg)
-    : _max_space(max_space)
-    , _region_group(rg)
-    , _parent(nullptr)
-{}
-
-database::throttle_state::throttle_state(size_t max_space, logalloc::region_group& rg, throttle_state& parent)
-    : _max_space(max_space)
-    , _region_group(rg)
-    , _parent(&parent)
-{}
-
-future<> database::throttle_state::throttle() {
+future<> throttle_state::throttle() {
     if (!should_throttle() && _throttled_requests.empty()) {
         // All is well, go ahead
         return make_ready_future<>();
@@ -1938,13 +2005,13 @@ future<> database::throttle_state::throttle() {
     return _throttled_requests.back().get_future();
 }
 
-void database::throttle_state::unthrottle() {
+void throttle_state::unthrottle() {
     // Release one request per free 1MB we have
     // FIXME: improve this
     if (should_throttle()) {
         return;
     }
-    size_t avail = (_max_space - _region_group.memory_used()) >> 20;
+    size_t avail = std::max((_max_space - _region_group.memory_used()) >> 20, size_t(1));
     avail = std::min(_throttled_requests.size(), avail);
     for (size_t i = 0; i < avail; ++i) {
         _throttled_requests.front().set_value();
@@ -1961,6 +2028,8 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m) {
     }
     return _memtables_throttler.throttle().then([this, &m, s = std::move(s)] {
         return do_apply(std::move(s), m);
+    }).then([this, s = _stats] {
+        ++s->total_writes;
     });
 }
 
@@ -2003,6 +2072,10 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_commitlog = ksm.durable_writes() && _cfg->enable_commitlog() && !_cfg->enable_in_memory_data_store();
         cfg.enable_cache = _cfg->enable_cache();
         cfg.max_memtable_size = _memtable_total_space * _cfg->memtable_cleanup_threshold();
+        // We should guarantee that at least two memtable are available, otherwise after flush, adding another memtable would
+        // easily take us into throttling until the first one is flushed.
+        cfg.max_streaming_memtable_size = std::min(cfg.max_memtable_size, _streaming_memtable_total_space / 2);
+
     } else {
         cfg.datadir = "";
         cfg.enable_disk_writes = false;
@@ -2010,6 +2083,8 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
         cfg.enable_commitlog = false;
         cfg.enable_cache = false;
         cfg.max_memtable_size = std::numeric_limits<size_t>::max();
+        // All writes should go to the main memtable list if we're not durable
+        cfg.max_streaming_memtable_size = 0;
     }
     cfg.dirty_memory_region_group = &_dirty_memory_region_group;
     cfg.streaming_dirty_memory_region_group = &_streaming_dirty_memory_region_group;
@@ -2524,7 +2599,7 @@ future<db::replay_position> column_family::discard_sstables(db_clock::time_point
         _cache.clear();
 
         return parallel_for_each(remove, [](sstables::shared_sstable s) {
-            return s->mark_for_deletion_on_disk();
+            return sstables::delete_atomically({s});
         }).then([rp] {
             return make_ready_future<db::replay_position>(rp);
         }).finally([remove] {}); // keep the objects alive until here.

@@ -16,5 +16,5 @@ class Simple(base.Base):
     def _prepareTable(self, measurements):
         result = table.Table('lr')
         for metric in measurements:
-            result.add(metric.name, helpers.formatValues(metric.status))
+            result.add(metric.symbol, helpers.formatValues(metric.status))
         return result

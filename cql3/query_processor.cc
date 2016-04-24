@@ -132,23 +132,26 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
 #if 0
         logger.trace("Process {} @CL.{}", statement, options.getConsistency());
 #endif
-    auto& client_state = query_state.get_client_state();
-    statement->check_access(client_state);
-    statement->validate(_proxy, client_state);
 
-    future<::shared_ptr<transport::messages::result_message>> fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
-    if (query_state.get_client_state()._is_internal) {
-        fut = statement->execute_internal(_proxy, query_state, options);
-    } else  {
-        fut = statement->execute(_proxy, query_state, options);
-    }
+    return statement->check_access(query_state.get_client_state()).then([this, statement, &query_state, &options]() {
+        auto& client_state = query_state.get_client_state();
 
-    return fut.then([statement] (auto msg) {
-        if (msg) {
-            return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
+        statement->validate(_proxy, client_state);
+
+        future<::shared_ptr<transport::messages::result_message>> fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
+        if (client_state._is_internal) {
+            fut = statement->execute_internal(_proxy, query_state, options);
+        } else  {
+            fut = statement->execute(_proxy, query_state, options);
         }
-        return make_ready_future<::shared_ptr<result_message>>(
-            ::make_shared<result_message::void_message>());
+
+        return fut.then([statement] (auto msg) {
+            if (msg) {
+                return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
+            }
+            return make_ready_future<::shared_ptr<result_message>>(
+                ::make_shared<result_message::void_message>());
+        });
     });
 }
 
@@ -383,11 +386,11 @@ future<::shared_ptr<untyped_result_set>> query_processor::process(
 
 future<::shared_ptr<transport::messages::result_message>>
 query_processor::process_batch(::shared_ptr<statements::batch_statement> batch, service::query_state& query_state, query_options& options) {
-    auto& client_state = query_state.get_client_state();
-    batch->check_access(client_state);
-    batch->validate();
-    batch->validate(_proxy, client_state);
-    return batch->execute(_proxy, query_state, options);
+    return batch->check_access(query_state.get_client_state()).then([this, &query_state, &options, batch] {
+        batch->validate();
+        batch->validate(_proxy, query_state.get_client_state());
+        return batch->execute(_proxy, query_state, options);
+    });
 }
 
 query_processor::migration_subscriber::migration_subscriber(query_processor* qp)

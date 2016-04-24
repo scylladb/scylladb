@@ -42,6 +42,7 @@
 #include "validation.hh"
 #include "database.hh"
 #include "exceptions/exceptions.hh"
+#include "service/storage_proxy.hh"
 
 namespace validation {
 
@@ -74,15 +75,7 @@ validate_cql_key(schema_ptr schema, const partition_key& key) {
  */
 schema_ptr
 validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name) {
-    if (keyspace_name.empty()) {
-        throw exceptions::invalid_request_exception("Keyspace not set");
-    }
-
-    try {
-        db.find_keyspace(keyspace_name);
-    } catch (...) {
-        throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace_name));
-    }
+    validate_keyspace(db, keyspace_name);
 
     if (cf_name.empty()) {
         throw exceptions::invalid_request_exception("non-empty table is required");
@@ -94,5 +87,30 @@ validate_column_family(database& db, const sstring& keyspace_name, const sstring
         throw exceptions::invalid_request_exception(sprint("unconfigured table %s", cf_name));
     }
 }
+
+schema_ptr validate_column_family(const sstring& keyspace_name,
+                const sstring& cf_name) {
+    return validate_column_family(
+                    service::get_local_storage_proxy().get_db().local(),
+                    keyspace_name, cf_name);
+}
+
+void validate_keyspace(database& db, const sstring& keyspace_name) {
+    if (keyspace_name.empty()) {
+        throw exceptions::invalid_request_exception("Keyspace not set");
+    }
+
+    try {
+        db.find_keyspace(keyspace_name);
+    } catch (...) {
+        throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace_name));
+    }
+}
+
+void validate_keyspace(const sstring& keyspace_name) {
+    validate_keyspace(service::get_local_storage_proxy().get_db().local(),
+                    keyspace_name);
+}
+
 
 }

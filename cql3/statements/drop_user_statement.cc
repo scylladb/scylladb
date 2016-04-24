@@ -44,6 +44,7 @@
 #include "drop_user_statement.hh"
 #include "auth/auth.hh"
 #include "auth/authenticator.hh"
+#include "auth/authorizer.hh"
 
 cql3::statements::drop_user_statement::drop_user_statement(sstring username, bool if_exists)
     : _username(std::move(username))
@@ -78,11 +79,13 @@ cql3::statements::drop_user_statement::execute(distributed<service::storage_prox
             }
 
             // clean up permissions after the dropped user.
-            // TODO: authorizer
-            //DatabaseDescriptor.getAuthorizer().revokeAll(username);
-            auth::auth::delete_user(_username);
-            auth::authenticator::get().drop(_username);
-            return make_ready_future<::shared_ptr<transport::messages::result_message>>();
+            return auth::authorizer::get().revoke_all(_username).then([this] {
+                return auth::auth::delete_user(_username).then([this] {
+                    return auth::authenticator::get().drop(_username);
+                });
+            }).then([] {
+                return make_ready_future<::shared_ptr<transport::messages::result_message>>();
+            });
         });
     });
 }

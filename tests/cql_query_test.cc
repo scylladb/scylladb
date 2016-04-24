@@ -1055,35 +1055,9 @@ SEASTAR_TEST_CASE(test_tuples) {
 }
 
 SEASTAR_TEST_CASE(test_user_type) {
-    //
-    // This test will stop working when schema_registry will be plugged
-    // in the column family creation path due to type_parser bug:
-    //
-    // See https://github.com/scylladb/scylla/issues/631
-    //
-    if (0) {
-    auto make_user_type = [] {
-        return user_type_impl::get_instance("ks", to_bytes("ut1"),
-                {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
-                {int32_type, long_type, utf8_type});
-    };
-    return do_with_cql_env([make_user_type] (cql_test_env& e) {
-        auto ksm = make_lw_shared<keyspace_metadata>("ks",
-                "org.apache.cassandra.locator.SimpleStrategy",
-                std::map<sstring, sstring>{},
-                false
-                );
-        // We don't have "CREATE TYPE" yet, so we must insert the type manually
-        return e.local_db().create_keyspace(ksm).then(
-                [&e, make_user_type, ksm] {
-            keyspace& ks = e.local_db().find_keyspace(ksm->name());
-            ks._user_types.add_type(make_user_type());
-
-            return e.create_table([make_user_type] (auto ks_name) {
-            // CQL: "create table cf (id int primary key, t ut1)";
-                return schema({}, ks_name, "cf",
-                    {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
-            });
+    return do_with_cql_env([] (cql_test_env& e) {
+        return e.execute_cql("create type ut1 (my_int int, my_bigint bigint, my_text text);").discard_result().then([&e] {
+            return e.execute_cql("create table cf (id int primary key, t frozen <ut1>);").discard_result();
         }).then([&e] {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
         }).then([&e] {
@@ -1106,8 +1080,10 @@ SEASTAR_TEST_CASE(test_user_type) {
             return e.execute_cql("insert into cf (id, t) values (2, (frozen<ut1>)(2001, 3001, 'abc4'));").discard_result();
         }).then([&e] {
             return e.execute_cql("select t from cf where id = 2;");
-        }).then([&e, make_user_type] (shared_ptr<transport::messages::result_message> msg) {
-            auto ut = make_user_type();
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            auto ut = user_type_impl::get_instance("ks", to_bytes("ut1"),
+                        {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
+                        {int32_type, long_type, utf8_type});
             auto ut_val = make_user_value(ut,
                           user_type_impl::native_type({int32_t(2001),
                                                        int64_t(3001),
@@ -1118,8 +1094,6 @@ SEASTAR_TEST_CASE(test_user_type) {
                 });
         });
     });
-    }
-    return make_ready_future();
 }
 
 SEASTAR_TEST_CASE(test_select_multiple_ranges) {
@@ -2103,6 +2077,24 @@ SEASTAR_TEST_CASE(test_alter_table) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_map_query) {
+    return do_with_cql_env([] (auto& e) {
+        return seastar::async([&e] {
+            e.execute_cql("CREATE TABLE xx (k int PRIMARY KEY, m map<text, int>);").get();
+            e.execute_cql("insert into xx (k, m) values (0, {'v2': 1});").get();
+            auto m_type = map_type_impl::get_instance(utf8_type, int32_type, true);
+            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                    .is_rows().with_rows({
+                        { make_map_value(m_type, map_type_impl::native_type({{sstring("v2"), 1}})).serialize() }
+                    });
+            e.execute_cql("delete m['v2'] from xx where k = 0;").get();
+            assert_that(e.execute_cql("select m from xx where k = 0;").get0())
+                    .is_rows().with_rows({{{}}});
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_drop_table) {
     return do_with_cql_env([] (auto& e) {
         return seastar::async([&e] {

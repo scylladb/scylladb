@@ -78,12 +78,9 @@ bool truncate_statement::depends_on_column_family(const sstring& cf_name) const
     return false;
 }
 
-void truncate_statement::check_access(const service::client_state& state)
+future<> truncate_statement::check_access(const service::client_state& state)
 {
-    warn(unimplemented::cause::AUTH);
-#if 0
-    state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
-#endif
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::MODIFY);
 }
 
 void truncate_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)

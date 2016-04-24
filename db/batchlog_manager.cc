@@ -74,8 +74,13 @@ const uint32_t db::batchlog_manager::page_size;
 
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp)
         : _qp(qp)
-        , _e1(_rd())
-{}
+        , _e1(_rd()) {
+    _collectd_registrations.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("batchlog_manager"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", "total write replay attempts")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_attempts)));
+}
 
 future<> db::batchlog_manager::do_batch_log_replay() {
     // Use with_semaphore is much simpler, but nested invoke_on can
@@ -251,6 +256,7 @@ future<> db::batchlog_manager::replay_all_failed_batches() {
             // in both cases.
             // FIXME: verify that the above is reasonably true.
             return limiter->reserve(size).then([this, mutations = std::move(mutations), id] {
+                _stats.write_attempts += mutations.size();
                 return _qp.proxy().local().mutate(mutations, db::consistency_level::ANY);
             });
         }).then([this, id] {

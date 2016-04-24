@@ -75,6 +75,7 @@
 namespace service {
 
 static logging::logger logger("storage_proxy");
+static logging::logger qlogger("query_result");
 
 distributed<service::storage_proxy> _the_storage_proxy;
 
@@ -97,10 +98,15 @@ const dht::token& end_token(const query::partition_range& r) {
 }
 
 static inline
+sstring get_dc(gms::inet_address ep) {
+    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    return snitch_ptr->get_datacenter(ep);
+}
+
+static inline
 sstring get_local_dc() {
     auto local_addr = utils::fb_utilities::get_broadcast_address();
-    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
-    return snitch_ptr->get_datacenter(local_addr);
+    return get_dc(local_addr);
 }
 
 class abstract_write_response_handler {
@@ -341,6 +347,50 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(sch
     return register_response_handler(std::move(h));
 }
 
+storage_proxy::split_stats::split_stats(const sstring& description_prefix)
+        : _description_prefix(description_prefix) {
+    // register a local Node counter to begin with...
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", _description_prefix + sstring(" (local Node)"))
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _local.val)));
+}
+
+storage_proxy::stats::stats()
+        : writes_attempts("total write attempts")
+        , writes_errors("write errors")
+        , read_repair_write_attempts("read repair write attempts")
+        , data_read_attempts("data reads")
+        , data_read_completed("completed data reads")
+        , data_read_errors("data read errors")
+        , digest_read_attempts("digest reads")
+        , digest_read_completed("completed digest reads")
+        , digest_read_errors("digest read errors")
+        , mutation_data_read_attempts("mutation data reads")
+        , mutation_data_read_completed("completed mutation data reads")
+        , mutation_data_read_errors("mutation data read errors") {}
+
+inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
+    if (is_me(ep)) {
+        return _local.val;
+    }
+
+    sstring dc = get_dc(ep);
+
+    // if this is the first time we see an endpoint from this DC - add a
+    // corresponding collectd metric
+    if (_dc_stats.find(dc) == _dc_stats.end()) {
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+            , scollectd::per_cpu_plugin_instance
+            , "total_operations", _description_prefix + sstring(" (external Nodes in DC: ") + dc + sstring(")"))
+            , scollectd::make_typed(scollectd::data_type::DERIVE, [this, dc] { return _dc_stats[dc].val; })
+        ));
+    }
+    return _dc_stats[dc].val;
+}
+
 storage_proxy::~storage_proxy() {}
 storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     _collectd_registrations = std::make_unique<scollectd::registrations>(scollectd::registrations({
@@ -408,6 +458,21 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "range slice unavailable")
                 , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "received mutations")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.received_mutations)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "forwarded mutations")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarded_mutations)
+        ),
+        scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
+                , scollectd::per_cpu_plugin_instance
+                , "total_operations", "forwarding errors")
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.forwarding_errors)
         ),
     }));
 }
@@ -860,6 +925,8 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::vector<gms::inet_address> pending_endpoints =
         get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), keyspace_name);
 
+    logger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
+
     // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
     auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
         return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
@@ -885,6 +952,7 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
             std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
 
+    logger.trace("creating write handler with live: {} dead: {}", live_endpoints, dead_endpoints);
     db::assure_sufficient_live_nodes(cl, ks, live_endpoints, pending_endpoints);
 
     return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::move(live_endpoints), pending_endpoints, std::move(dead_endpoints));
@@ -1128,10 +1196,11 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
-    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     for(auto dest: get_write_response_handler(response_id).get_targets()) {
-        sstring dc = snitch_ptr->get_datacenter(dest);
+        ++_stats.writes_attempts.get_ep_stat(dest);
+
+        sstring dc = get_dc(dest);
         if (dc == get_local_dc()) {
             local.emplace_back("", std::vector<gms::inet_address>({dest}));
         } else {
@@ -1181,7 +1250,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             f = futurize<void>::apply(rmutate, coordinator, std::move(forward));
         }
 
-        f.handle_exception([coordinator] (std::exception_ptr eptr) {
+        f.handle_exception([coordinator, p = shared_from_this()] (std::exception_ptr eptr) {
+            ++p->_stats.writes_errors.get_ep_stat(coordinator);
             try {
                 std::rethrow_exception(eptr);
             } catch(rpc::closed_error&) {
@@ -1404,7 +1474,8 @@ future<> storage_proxy::schedule_repair(std::unordered_map<gms::inet_address, st
         return mutate_prepare<>(std::move(i.second), db::consistency_level::ONE, type, [ep = i.first, this] (const mutation& m, db::consistency_level cl, db::write_type type) {
             auto& ks = _db.local().find_keyspace(m.schema()->ks_name());
             return create_write_response_handler(m.schema(), ks, cl, type, freeze(m), std::unordered_set<gms::inet_address>({ep}, 1), {}, {});
-        }).then([this] (std::vector<unique_response_handler> ids) {
+        }).then([this, ep = i.first] (std::vector<unique_response_handler> ids) {
+            _stats.read_repair_write_attempts.get_ep_stat(ep) += ids.size();
             return mutate_begin(std::move(ids), db::consistency_level::ONE);
         }).then_wrapped([this, lc] (future<> f) {
             return mutate_end(std::move(f), lc);
@@ -1814,6 +1885,7 @@ public:
 
 protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range);
         } else {
@@ -1824,6 +1896,7 @@ protected:
         }
     }
     future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_singular_local(_schema, _cmd, _partition_range);
         } else {
@@ -1834,6 +1907,7 @@ protected:
         }
     }
     future<query::result_digest> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
+        ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
         if (is_me(ep)) {
             return _proxy->query_singular_local_digest(_schema, _cmd, _partition_range);
         } else {
@@ -1843,10 +1917,12 @@ protected:
     }
     future<> make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, &cmd, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
+            return make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> f) {
                 try {
                     resolver->add_mutate_data(ep, f.get0());
+                    ++_proxy->_stats.mutation_data_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.mutation_data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -1854,10 +1930,12 @@ protected:
     }
     future<> make_data_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_data_request(ep, timeout).then_wrapped([resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
+            return make_data_request(ep, timeout).then_wrapped([this, resolver, ep] (future<foreign_ptr<lw_shared_ptr<query::result>>> f) {
                 try {
                     resolver->add_data(ep, f.get0());
+                    ++_proxy->_stats.data_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.data_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -1865,10 +1943,12 @@ protected:
     }
     future<> make_digest_requests(digest_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         return parallel_for_each(begin, end, [this, resolver = std::move(resolver), timeout] (gms::inet_address ep) {
-            return make_digest_request(ep, timeout).then_wrapped([resolver, ep] (future<query::result_digest> f) {
+            return make_digest_request(ep, timeout).then_wrapped([this, resolver, ep] (future<query::result_digest> f) {
                 try {
                     resolver->add_digest(ep, f.get0());
+                    ++_proxy->_stats.digest_read_completed.get_ep_stat(ep);
                 } catch(...) {
+                    ++_proxy->_stats.digest_read_errors.get_ep_stat(ep);
                     resolver->error(ep, std::current_exception());
                 }
             });
@@ -2073,6 +2153,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
     db::read_repair_decision repair_decision = new_read_repair_decision(*schema);
     std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
 
+    logger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
+
     // Throw UAE early if we don't have enough replicas.
     db::assure_sufficient_live_nodes(cl, ks, target_replicas);
 
@@ -2110,6 +2192,8 @@ db::read_repair_decision storage_proxy::new_read_repair_decision(const schema& s
         extra_replica = *it;
     }
     target_replicas.push_back(extra_replica);
+
+    logger.trace("creating read executor with extra target {}", extra_replica);
 
     if (retry_type == speculative_retry::type::ALWAYS) {
         return ::make_shared<always_speculating_read_executor>(schema, p, cmd, std::move(pr), cl, block_for, std::move(target_replicas));
@@ -2229,6 +2313,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
             filtered_endpoints = std::move(filtered_merged);
             ++i;
         }
+        logger.trace("creating range read executor with targets {}", filtered_endpoints);
         db::assure_sufficient_live_nodes(cl, ks, filtered_endpoints);
         exec.push_back(::make_shared<range_slice_read_executor>(schema, p, cmd, std::move(range), cl, std::move(filtered_endpoints)));
     }
@@ -2298,21 +2383,18 @@ storage_proxy::query(schema_ptr s,
     std::vector<query::partition_range>&& partition_ranges,
     db::consistency_level cl)
 {
-    if (logger.is_enabled(logging::log_level::trace)) {
+    if (logger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
-        try {
-            logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, ::join(", ", partition_ranges), query_id);
-        } catch (...) {
-            logger.trace("{}", std::current_exception());
-        }
+        logger.trace("query {}.{} cmd={}, ranges={}, id={}", s->ks_name(), s->cf_name(), *cmd, partition_ranges, query_id);
         return do_query(s, cmd, std::move(partition_ranges), cl).then([query_id, cmd, s] (foreign_ptr<lw_shared_ptr<query::result>>&& res) {
-            try {
-                logger.trace("query_result id={}, {}", query_id, res->pretty_print(s, cmd->slice));
-            } catch (...) {
-                logger.trace("{}", std::current_exception());
+            if (res->buf().is_linearized()) {
+                logger.trace("query_result id={}, size={}, rows={}", query_id, res->buf().size(), res->calculate_row_count(cmd->slice));
+            } else {
+                logger.trace("query_result id={}, size={}", query_id, res->buf().size());
             }
+            qlogger.trace("id={}, {}", query_id, res->pretty_printer(s, cmd->slice));
             return std::move(res);
         });
     }
@@ -2434,6 +2516,11 @@ std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace
     auto itend = boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector())));
     eps.erase(itend, eps.end());
     locator::i_endpoint_snitch::get_local_snitch_ptr()->sort_by_proximity(utils::fb_utilities::get_broadcast_address(), eps);
+    // FIXME: before dynamic snitch is implement put local address (if present) at the beginning
+    auto it = boost::range::find(eps, utils::fb_utilities::get_broadcast_address());
+    if (it != eps.end() && it != eps.begin()) {
+        std::iter_swap(it, eps.begin());
+    }
     return eps;
 }
 
@@ -2837,6 +2924,8 @@ void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
     ms.register_mutation([] (const rpc::client_info& cinfo, frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         return do_with(std::move(in), get_local_shared_storage_proxy(), [&cinfo, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m, shared_ptr<storage_proxy>& p) {
+            ++p->_stats.received_mutations;
+            p->_stats.forwarded_mutations += forward.size();
             return when_all(
                 // mutate_locally() may throw, putting it into apply() converts exception to a future.
                 futurize<void>::apply([&p, &m, reply_to, &cinfo] {
@@ -2859,7 +2948,10 @@ void storage_proxy::init_messaging_service() {
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
                     auto timeout = clock_type::now() + std::chrono::milliseconds(p->_db.local().get_config().write_request_timeout_in_ms());
-                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([] (future<> f) {
+                    return ms.send_mutation(net::messaging_service::msg_addr{forward, 0}, timeout, m, {}, reply_to, shard, response_id).then_wrapped([&p] (future<> f) {
+                        if (f.failed()) {
+                            ++p->_stats.forwarding_errors;
+                        };
                         f.ignore_ready_future();
                     });
                 })

@@ -61,7 +61,7 @@ public:
 
     bool depends_on_column_family(const sstring& cf_name) const override;
 
-    void check_access(const service::client_state& state) override;
+    future<> check_access(const service::client_state& state) override;
 
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 

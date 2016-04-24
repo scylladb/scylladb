@@ -87,11 +87,6 @@ public:
     using credentials_map = std::unordered_map<sstring, sstring>;
 
     /**
-     * Resource id mappings, i.e. keyspace and/or column families.
-     */
-    using resource_ids = std::set<data_resource>;
-
-    /**
      * Setup is called once upon system startup to initialize the IAuthenticator.
      *
      * For example, use this method to create any required keyspaces/column families.
@@ -177,7 +172,7 @@ public:
      * @return Keyspaces, column families that will be unmodifiable by users; other resources.
      * @see resource_ids
      */
-    virtual resource_ids protected_resources() const = 0;
+    virtual const resource_ids& protected_resources() const = 0;
 
     class sasl_challenge {
     public:

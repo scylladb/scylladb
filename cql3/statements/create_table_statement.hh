@@ -95,7 +95,7 @@ public:
                            bool if_not_exists,
                            column_set_type static_columns);
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 

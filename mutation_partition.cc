@@ -596,7 +596,7 @@ static void get_compacted_row_slice(const schema& s,
             } else {
                 auto&& mut = cell->as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                if (ctype->is_empty(mut)) {
+                if (!ctype->is_any_live(mut)) {
                     writer.add().skip();
                 } else {
                     write_cell(writer, slice, def.type, mut);

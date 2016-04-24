@@ -153,6 +153,50 @@ result::pretty_print(schema_ptr s, const query::partition_slice& slice) const {
     return out.str();
 }
 
+query::result::printer
+result::pretty_printer(schema_ptr s, const query::partition_slice& slice) const {
+    return query::result::printer{s, slice, *this};
+}
+
+std::ostream& operator<<(std::ostream& os, const query::result::printer& p) {
+    os << p.res.pretty_print(p.s, p.slice);
+    return os;
+}
+
+uint32_t result::calculate_row_count(const query::partition_slice& slice) {
+    struct {
+        uint32_t total_count = 0;
+        uint32_t current_partition_count = 0;
+        void accept_new_partition(const partition_key& key, uint32_t row_count) {
+            accept_new_partition(row_count);
+        }
+        void accept_new_partition(uint32_t row_count) {
+            total_count += row_count;
+            current_partition_count = row_count;
+        }
+        void accept_new_row(...) {}
+        void accept_partition_end(const query::result_row_view& static_row) {
+            if (current_partition_count == 0) {
+                total_count++;
+            }
+        }
+    } counter;
+
+    bytes_view v;
+
+    if (buf().is_linearized()) {
+        v = buf().view();
+    } else {
+        // FIXME: make result_view::consume() work on fragments to avoid linearization.
+        bytes_ostream w(buf());
+        v = w.linearize();
+    }
+
+    query::result_view view(v);
+    view.consume(slice, counter);
+    return counter.total_count;
+}
+
 result::result()
     : result([] {
         bytes_ostream out;

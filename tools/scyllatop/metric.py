@@ -14,11 +14,6 @@ class Metric(object):
         self._status = {}
 
     @property
-    def name(self):
-        hostStripped = self._METRIC_SYMBOL_HOST_PATTERN.sub('', self._symbol)
-        return hostStripped
-
-    @property
     def symbol(self):
         return self._symbol
 
@@ -51,4 +46,4 @@ class Metric(object):
         return results
 
     def __repr__(self):
-        return '{0}:{1}'.format(self.name, self.status)
+        return '{0}:{1}'.format(self.symbol, self.status)

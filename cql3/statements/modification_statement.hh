@@ -129,7 +129,7 @@ public:
 
     gc_clock::duration get_time_to_live(const query_options& options) const;
 
-    virtual void check_access(const service::client_state& state) override;
+    virtual future<> check_access(const service::client_state& state) override;
 
     void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 

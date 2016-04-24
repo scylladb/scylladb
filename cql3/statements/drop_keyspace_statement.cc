@@ -54,12 +54,9 @@ drop_keyspace_statement::drop_keyspace_statement(const sstring& keyspace, bool i
 {
 }
 
-void drop_keyspace_statement::check_access(const service::client_state& state)
+future<> drop_keyspace_statement::check_access(const service::client_state& state)
 {
-    warn(unimplemented::cause::AUTH);
-#if 0
-    state.hasKeyspaceAccess(keyspace, Permission.DROP);
-#endif
+    return state.has_keyspace_access(keyspace(), auth::permission::DROP);
 }
 
 void drop_keyspace_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state)
