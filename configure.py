@@ -477,6 +477,7 @@ scylla_core = (['database.cc',
                  'tracing/trace_keyspace_helper.cc',
                  'tracing/trace_state.cc',
                  'range_tombstone.cc',
+                 'range_tombstone_list.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
