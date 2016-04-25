@@ -40,7 +40,7 @@ const utils::UUID& get_uuid(const sstring& name, const database& db) {
     if (pos == sstring::npos) {
         pos  = name.find(":");
         if (pos == sstring::npos) {
-            throw bad_param_exception("Column family name should be in keyspace::column_family format");
+            throw bad_param_exception("Column family name should be in keyspace:column_family format");
         }
         end = pos + 1;
     } else {
