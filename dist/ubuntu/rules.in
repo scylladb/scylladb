@@ -13,7 +13,7 @@ LIBS = $(CURDIR)/debian/scylla-server/usr/lib
 CONF = $(CURDIR)/debian/scylla-server/etc/scylla
 
 override_dh_auto_build:
-	./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --compiler=@@COMPILER@@
+	./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@
 	ninja
 
 override_dh_auto_clean:
