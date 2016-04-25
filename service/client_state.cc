@@ -104,7 +104,6 @@ future<> service::client_state::has_all_keyspaces_access(
 
 future<> service::client_state::has_keyspace_access(const sstring& ks,
                 auth::permission p) const {
-    validation::validate_keyspace(ks);
     return has_access(ks, p, auth::data_resource(ks));
 }
 
@@ -115,6 +114,9 @@ future<> service::client_state::has_column_family_access(const sstring& ks,
 }
 
 future<> service::client_state::has_access(const sstring& ks, auth::permission p, auth::data_resource resource) const {
+    if (ks.empty()) {
+        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
+    }
     if (_is_internal) {
         return make_ready_future();
     }
