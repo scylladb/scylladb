@@ -2081,12 +2081,50 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
     return ret;
 }
 
+struct pending_shard_deletes {
+    std::unordered_map<int, promise<>> pending_deletes;
+    int idgen = 0;
+    future<> delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set);
+    void acknowledge(int id, std::exception_ptr ex);
+};
+
+static thread_local pending_shard_deletes this_shard_deletes;
+
+future<>
+pending_shard_deletes::delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set) {
+    auto i = pending_deletes.emplace(idgen++, promise<>()).first;
+    auto idx = i->first;
+    auto fut = i->second.get_future();
+    auto deleting_shard = engine().cpu_id();
+    smp::submit_to(0, [atomic_deletion_set, deleting_shard, idx] {
+        futurize<void>::apply(do_delete_atomically, atomic_deletion_set, deleting_shard).then_wrapped([deleting_shard, idx] (future<> ret) {
+            std::exception_ptr ex;
+            if (ret.failed()) {
+                ex = ret.get_exception();
+            }
+            return smp::submit_to(deleting_shard, [idx, ex] () mutable {
+                this_shard_deletes.acknowledge(idx, ex);
+            });
+        });
+    });
+    return fut;
+}
+
+void
+pending_shard_deletes::acknowledge(int idx, std::exception_ptr ex) {
+    auto i = pending_deletes.find(idx);
+    auto& pr = i->second;
+    if (ex) {
+        pr.set_exception(ex);
+    } else {
+        pr.set_value();
+    }
+    pending_deletes.erase(i);
+}
+
 future<>
 delete_atomically(std::vector<sstable_to_delete> ssts) {
-    auto shard = engine().cpu_id();
-    return smp::submit_to(0, [=] {
-        return do_delete_atomically(ssts, shard);
-    });
+    return this_shard_deletes.delete_atomically(std::move(ssts));
 }
 
 future<>
