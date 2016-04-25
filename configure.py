@@ -255,6 +255,8 @@ arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', typ
                         help = 'Enable(1)/disable(0)compiler debug information generation')
 arg_parser.add_argument('--static-stdc++', dest = 'staticcxx', action = 'store_true',
 			help = 'Link libgcc and libstdc++ statically')
+arg_parser.add_argument('--static-thrift', dest = 'staticthrift', action = 'store_true',
+			help = 'Link libthrift statically')
 arg_parser.add_argument('--tests-debuginfo', action = 'store', dest = 'tests_debuginfo', type = int, default = 0,
                         help = 'Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--python', action = 'store', dest = 'python', default = 'python3',
@@ -722,6 +724,10 @@ user_cflags = args.user_cflags
 user_ldflags = args.user_ldflags
 if args.staticcxx:
     user_ldflags += " -static-libgcc -static-libstdc++"
+if args.staticthrift:
+    thrift_libs = "-Wl,-Bstatic -lthrift -Wl,-Bdynamic"
+else:
+    thrift_libs = "-lthrift"
 
 outdir = 'build'
 buildfile = 'build.ninja'
@@ -832,14 +838,14 @@ with open(buildfile, 'w') as f:
                     f.write('build $builddir/{}/{}: {}.{} {} {}\n'.format(mode, binary, tests_link_rule, mode, str.join(' ', objs),
                                                                                      'seastar/build/{}/libseastar.a'.format(mode)))
                     if has_thrift:
-                        f.write('   libs =  -lthrift -lboost_system $libs\n')
+                        f.write('   libs =  {} -lboost_system $libs\n'.format(thrift_libs))
                     f.write('build $builddir/{}/{}_g: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                               'seastar/build/{}/libseastar.a'.format(mode)))
                 else:
                     f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
                                                                             'seastar/build/{}/libseastar.a'.format(mode)))
                 if has_thrift:
-                    f.write('   libs =  -lthrift -lboost_system $libs\n')
+                    f.write('   libs =  {} -lboost_system $libs\n'.format(thrift_libs))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
