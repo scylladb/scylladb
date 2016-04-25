@@ -30,6 +30,7 @@
 #include "core/shared_ptr.hh"
 #include "core/do_with.hh"
 #include "core/thread.hh"
+#include <seastar/core/shared_future.hh>
 #include <iterator>
 
 #include "types.hh"
@@ -44,6 +45,9 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/algorithm_ext/insert.hpp>
+#include <boost/range/algorithm_ext/push_back.hpp>
+#include <boost/range/algorithm/set_algorithm.hpp>
 #include <regex>
 #include <core/align.hh>
 #include "utils/phased_barrier.hh"
@@ -65,8 +69,6 @@ future<file> new_sstable_component_file(sstring name, open_flags flags, file_ope
         return make_exception_future<file>(ep);
     });
 }
-
-thread_local std::unordered_map<sstring, std::unordered_set<unsigned>> sstable::_shards_agreeing_to_remove_sstable;
 
 static utils::phased_barrier& background_jobs() {
     static thread_local utils::phased_barrier gate;
@@ -1815,7 +1817,7 @@ sstable::~sstable() {
         // clean up unused sstables, and because we'll never reuse the same
         // generation number anyway.
         try {
-            shared_remove_by_toc_name(filename(component_type::TOC), _shared).handle_exception(
+            delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
                             sstlog.warn("Exception when deleting sstable file: {}", eptr);
                         });
@@ -1829,26 +1831,6 @@ sstable::~sstable() {
 sstring
 dirname(sstring fname) {
     return boost::filesystem::canonical(std::string(fname)).parent_path().string();
-}
-
-future<>
-sstable::shared_remove_by_toc_name(sstring toc_name, bool shared) {
-    if (!shared) {
-        return remove_by_toc_name(toc_name);
-    } else {
-        auto shard = std::hash<sstring>()(toc_name) % smp::count;
-        return smp::submit_to(shard, [toc_name, src_shard = engine().cpu_id()] {
-            auto& remove_set = _shards_agreeing_to_remove_sstable[toc_name];
-            remove_set.insert(src_shard);
-            auto counter = remove_set.size();
-            if (counter == smp::count) {
-                _shards_agreeing_to_remove_sstable.erase(toc_name);
-                return remove_by_toc_name(toc_name);
-            } else {
-                return make_ready_future<>();
-            }
-        });
-    }
 }
 
 future<>
@@ -1998,6 +1980,172 @@ sstable::get_sstable_key_range(const schema& s) {
 void sstable::mark_sstable_for_deletion(sstring ks, sstring cf, sstring dir, int64_t generation, version_types v, format_types f) {
     auto sst = sstable(ks, cf, dir, generation, v, f);
     sst.mark_for_deletion();
+}
+
+std::ostream&
+operator<<(std::ostream& os, const sstable_to_delete& std) {
+    return os << std.name << "(" << (std.shared ? "shared" : "unshared") << ")";
+}
+
+using shards_agreeing_to_delete_sstable_type = std::unordered_set<shard_id>;
+using sstables_to_delete_atomically_type = std::set<sstring>;
+struct pending_deletion {
+    sstables_to_delete_atomically_type names;
+    std::vector<lw_shared_ptr<promise<>>> completions;
+};
+
+static thread_local bool g_atomic_deletions_cancelled = false;
+static thread_local std::list<lw_shared_ptr<pending_deletion>> g_atomic_deletion_sets;
+static thread_local std::unordered_map<sstring, shards_agreeing_to_delete_sstable_type> g_shards_agreeing_to_delete_sstable;
+
+static logging::logger deletion_logger("sstable-deletion");
+
+static
+future<>
+do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigned deleting_shard) {
+    // runs on shard 0 only
+    deletion_logger.debug("shard {} atomically deleting {}", deleting_shard, atomic_deletion_set);
+
+    if (g_atomic_deletions_cancelled) {
+        deletion_logger.debug("atomic deletions disabled, erroring out");
+        throw std::runtime_error(sprint("atomic deletions disabled; not deleting %s", atomic_deletion_set));
+    }
+
+    // Insert atomic_deletion_set into the list of sets pending deletion.  If the new set
+    // overlaps with an existing set, merge them (the merged set will be deleted atomically).
+    std::list<lw_shared_ptr<pending_deletion>> new_atomic_deletion_sets;
+    auto merged_set = make_lw_shared(pending_deletion());
+    for (auto&& sst_to_delete : atomic_deletion_set) {
+        merged_set->names.insert(sst_to_delete.name);
+        if (!sst_to_delete.shared) {
+            for (auto shard : boost::irange<shard_id>(0, smp::count)) {
+                g_shards_agreeing_to_delete_sstable[sst_to_delete.name].insert(shard);
+            }
+        }
+    }
+    merged_set->completions.push_back(make_lw_shared<promise<>>());
+    auto ret = merged_set->completions.back()->get_future();
+    for (auto&& old_set : g_atomic_deletion_sets) {
+         auto intersection = sstables_to_delete_atomically_type();
+         boost::set_intersection(merged_set->names, old_set->names, std::inserter(intersection, intersection.end()));
+         if (intersection.empty()) {
+             // We copy old_set to avoid corrupting g_atomic_deletion_sets if we fail
+             // further on.
+             new_atomic_deletion_sets.push_back(old_set);
+         } else {
+             deletion_logger.debug("merging with {}", old_set->names);
+             boost::insert(merged_set->names, old_set->names);
+             boost::push_back(merged_set->completions, old_set->completions);
+         }
+    }
+    deletion_logger.debug("new atomic set: {}", merged_set->names);
+    new_atomic_deletion_sets.push_back(merged_set);
+    // can now exception-safely commit:
+    g_atomic_deletion_sets = std::move(new_atomic_deletion_sets);
+
+    // Mark each sstable as being deleted from deleting_shard.  We have to do
+    // this in a separate pass, so the consideration whether we can delete or not
+    // sees all the data from this pass.
+    for (auto&& sst : atomic_deletion_set) {
+        g_shards_agreeing_to_delete_sstable[sst.name].insert(deleting_shard);
+    }
+
+    // Figure out if the (possibly merged) set can be deleted
+    for (auto&& sst : merged_set->names) {
+        if (g_shards_agreeing_to_delete_sstable[sst].size() != smp::count) {
+            // Not everyone agrees, leave the set pending
+            deletion_logger.debug("deferring deletion until all shards agree");
+            return ret;
+        }
+    }
+
+    // Cannot recover from a failed deletion
+    g_atomic_deletion_sets.pop_back();
+    for (auto&& name : merged_set->names) {
+        g_shards_agreeing_to_delete_sstable.erase(name);
+    }
+
+    // Everyone agrees, let's delete
+    // FIXME: this needs to be done atomically (using a log file of sstables we intend to delete)
+    parallel_for_each(merged_set->names, [] (sstring name) {
+        deletion_logger.debug("deleting {}", name);
+        return remove_by_toc_name(name);
+    }).then_wrapped([merged_set] (future<> result) {
+        deletion_logger.debug("atomic deletion completed: {}", merged_set->names);
+        shared_future<> sf(std::move(result));
+        for (auto&& comp : merged_set->completions) {
+            sf.get_future().forward_to(std::move(*comp));
+        }
+    });
+
+    return ret;
+}
+
+struct pending_shard_deletes {
+    std::unordered_map<int, promise<>> pending_deletes;
+    int idgen = 0;
+    future<> delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set);
+    void acknowledge(int id, std::exception_ptr ex);
+};
+
+static thread_local pending_shard_deletes this_shard_deletes;
+
+future<>
+pending_shard_deletes::delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set) {
+    auto i = pending_deletes.emplace(idgen++, promise<>()).first;
+    auto idx = i->first;
+    auto fut = i->second.get_future();
+    auto deleting_shard = engine().cpu_id();
+    smp::submit_to(0, [atomic_deletion_set, deleting_shard, idx] {
+        futurize<void>::apply(do_delete_atomically, atomic_deletion_set, deleting_shard).then_wrapped([deleting_shard, idx] (future<> ret) {
+            std::exception_ptr ex;
+            if (ret.failed()) {
+                ex = ret.get_exception();
+            }
+            return smp::submit_to(deleting_shard, [idx, ex] () mutable {
+                this_shard_deletes.acknowledge(idx, ex);
+            });
+        });
+    });
+    return fut;
+}
+
+void
+pending_shard_deletes::acknowledge(int idx, std::exception_ptr ex) {
+    auto i = pending_deletes.find(idx);
+    auto& pr = i->second;
+    if (ex) {
+        pr.set_exception(ex);
+    } else {
+        pr.set_value();
+    }
+    pending_deletes.erase(i);
+}
+
+future<>
+delete_atomically(std::vector<sstable_to_delete> ssts) {
+    return this_shard_deletes.delete_atomically(std::move(ssts));
+}
+
+future<>
+delete_atomically(std::vector<shared_sstable> ssts) {
+    std::vector<sstable_to_delete> sstables_to_delete_atomically;
+    for (auto&& sst : ssts) {
+        sstables_to_delete_atomically.push_back({sst->toc_filename(), sst->is_shared()});
+    }
+    return delete_atomically(std::move(sstables_to_delete_atomically));
+}
+
+void
+cancel_atomic_deletions() {
+    g_atomic_deletions_cancelled = true;
+    for (auto&& pd : g_atomic_deletion_sets) {
+        for (auto&& c : pd->completions) {
+            c->set_exception(std::runtime_error(sprint("Atomic sstable deletions cancelled; not deleting %s", pd->names)));
+        }
+    }
+    g_atomic_deletion_sets.clear();
+    g_shards_agreeing_to_delete_sstable.clear();
 }
 
 }
