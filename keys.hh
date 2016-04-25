@@ -299,6 +299,11 @@ public:
     void feed_hash(Hasher& h, const schema& s) const {
         view().feed_hash(h, s);
     }
+
+    // Returns the number of components of this compound.
+    size_t size(const schema& s) const {
+        return std::distance(begin(s), end(s));
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>

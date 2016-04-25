@@ -146,8 +146,8 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
     auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
     auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row(), s, column_kind::static_column).end_static_row().start_range_tombstones();
     for (auto&& rt : mp.row_tombstones()) {
-        row_tombstones.add().write_start(rt.prefix()).write_tomb(rt.t()).write_start_kind(bound_kind::incl_start_bound)
-            .write_end(rt.prefix()).write_end_kind(bound_kind::incl_end_bound).end_range_tombstone();
+        row_tombstones.add().write_start(rt.prefix()).write_tomb(rt.t()).write_start_kind(bound_kind::incl_start)
+            .write_end(rt.prefix()).write_end_kind(bound_kind::incl_end).end_range_tombstone();
     }
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.clustered_rows()) {
