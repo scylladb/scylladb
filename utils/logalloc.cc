@@ -1927,6 +1927,36 @@ void tracker::impl::register_collectd_metrics() {
     });
 }
 
+void region_group::do_release_requests() noexcept {
+    // The later() statement is here  to avoid executing the function in update() context. But
+    // also guarantees that we won't dominate the CPU if we have many requests to release.
+    with_gate(_asynchronous_gate, [this] {
+        return later().then([this] {
+            // Check again, we may have executed release_requests() in this mean time from another entry
+            // point (for instance, a descendant notification)
+            if (_blocked_requests.empty()) {
+                return;
+            }
+
+            auto blocked_at = do_for_each_parent(this, [] (auto rg) {
+                return rg->execution_permitted() ? stop_iteration::no : stop_iteration::yes;
+            });
+
+            if (!blocked_at) {
+                auto req = std::move(_blocked_requests.front());
+                _blocked_requests.pop_front();
+                req->allocate();
+                release_requests();
+            } else {
+                // If someone blocked us in the mean time then we can't execute. We need to make
+                // sure that we are listening to notifications, though. It could be that we used to
+                // be blocked on ourselves and now we are blocking on an ancestor
+                subscribe_for_ancestor_available_memory_notification(blocked_at);
+            }
+        });
+    });
+}
+
 void
 region_group::add(region_group* child) {
     _subgroups.push_back(child);
