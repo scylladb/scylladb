@@ -216,6 +216,7 @@ scylla_tests = [
     'tests/dynamic_bitset_test',
     'tests/auth_test',
     'tests/idl_test',
+    'tests/range_tombstone_list_test',
 ]
 
 apps = [
@@ -582,6 +583,7 @@ tests_not_using_seastar_test_framework = set([
     'tests/managed_vector_test',
     'tests/dynamic_bitset_test',
     'tests/idl_test',
+    'tests/range_tombstone_list_test'
 ])
 
 for t in tests_not_using_seastar_test_framework:

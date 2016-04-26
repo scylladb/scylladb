@@ -69,6 +69,7 @@ boost_tests = [
     'snitch_reset_test',
     'auth_test',
     'idl_test',
+    'range_tombstone_list_test'
 ]
 
 other_tests = [
