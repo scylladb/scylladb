@@ -30,5 +30,6 @@ else
     else
         echo "Please upgrade to newer kernel."
     fi
+    echo " see http://docs.scylladb.com/kb/kb-fs-not-qualified-aio/ for details"
 fi
 exit $RET
