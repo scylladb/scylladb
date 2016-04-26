@@ -338,7 +338,7 @@ column_family::make_reader(schema_ptr s, const query::partition_range& range, co
     // https://github.com/scylladb/scylla/issues/185
 
     for (auto&& mt : *_memtables) {
-        readers.emplace_back(mt->make_reader(s, range, pc));
+        readers.emplace_back(mt->make_reader(s, range, query::no_clustering_key_filtering, pc));
     }
 
     if (_config.enable_cache) {

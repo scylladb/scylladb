@@ -58,7 +58,7 @@ public:
     mutation_partition& partition() { return _p; }
     const schema_ptr& schema() const { return _schema; }
     schema_ptr& schema() { return _schema; }
-    mutation read(const schema_ptr&);
+    mutation read(const schema_ptr&, const query::clustering_key_filtering_context&);
 
     struct compare {
         dht::decorated_key::less_comparator _c;
@@ -136,7 +136,10 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     //
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_reader(schema_ptr, const query::partition_range& range = query::full_partition_range, const io_priority_class& pc = default_priority_class());
+    mutation_reader make_reader(schema_ptr,
+                                const query::partition_range& range = query::full_partition_range,
+                                const query::clustering_key_filtering_context& ck_filtering = query::no_clustering_key_filtering,
+                                const io_priority_class& pc = default_priority_class());
 
     mutation_source as_data_source();
     key_source as_key_source();
