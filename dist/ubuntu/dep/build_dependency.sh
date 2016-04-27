@@ -41,6 +41,10 @@ if [ ! -f build/libthrift0_1.0.0-dev_amd64.deb ]; then
     tar xpf thrift-0.9.1.tar.gz
     cd thrift-0.9.1
     patch -p0 < ../../dist/ubuntu/dep/thrift.diff
+    if [ "$RELEASE" = "16.04" ]; then
+        sed -i "s/, python-support//" debian/control
+        sed -i "s/dh_pysupport//" debian/rules
+    fi
     echo Y | sudo mk-build-deps -i -r
     debuild -r fakeroot --no-tgz-check -us -uc
     cd ../..
@@ -48,8 +52,8 @@ fi
 
 if [ "$RELEASE" = "14.04" ]; then
     sudo gdebi -n build/antlr3_*.deb
+    sudo gdebi -n build/thrift-compiler_*.deb
 fi
 sudo gdebi -n build/antlr3-c++-dev_*.deb
 sudo gdebi -n build/libthrift0_*.deb
 sudo gdebi -n build/libthrift-dev_*.deb
-sudo gdebi -n build/thrift-compiler_*.deb
