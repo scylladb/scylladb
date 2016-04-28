@@ -8,23 +8,24 @@ if [ "`id -u`" -ne 0 ]; then
 fi
 
 print_usage() {
-    echo "scylla_install_pkg --local-pkg /home/scylla/rpms --unstable"
+    echo "scylla_install_pkg --local-pkg /home/scylla/rpms --repo [URL]"
     echo "  --local-pkg	install locally built .rpm/.deb on specified directory"
-    echo "  --unstable  use unstable repository"
+    echo "  --repo specify repository URL"
     exit 1
 }
 
 LOCAL_PKG=
 UNSTABLE=0
+REPO=
 while [ $# -gt 0 ]; do
     case "$1" in
         "--local-pkg")
             LOCAL_PKG=$2
             shift 2
             ;;
-        "--unstable")
-            UNSTABLE=1
-            shift 1
+        "--repo")
+            REPO=$2
+            shift 2
             ;;
         *)
             print_usage
@@ -41,10 +42,10 @@ if [ "$ID" = "ubuntu" ]; then
     chmod +x /usr/sbin/policy-rc.d
     cp /etc/hosts /etc/hosts.orig
     echo 127.0.0.1 `hostname` >> /etc/hosts
-    if [ $UNSTABLE -eq 0 ]; then
+    if [ "$REPO" = "" ]; then
         echo "deb http://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
     else
-        echo "deb https://s3.amazonaws.com/downloads.scylladb.com/deb/unstable/ubuntu/master/latest trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
+        echo "deb $REPO trusty/scylladb multiverse" > /etc/apt/sources.list.d/scylla.list
     fi
     apt-get update
     if [ "$LOCAL_PKG" = "" ]; then
@@ -61,16 +62,16 @@ if [ "$ID" = "ubuntu" ]; then
     rm /usr/sbin/policy-rc.d
 else
     if [ "$ID" = "fedora" ]; then
-        if [ $UNSTABLE -eq 0 ]; then
+        if [ "$REPO" = "" ]; then
             curl http://downloads.scylladb.com/rpm/fedora/scylla.repo > /etc/yum.repos.d/scylla.repo
         else
-            curl http://downloads.scylladb.com.s3.amazonaws.com/rpm/unstable/fedora/master/latest/scylla.repo > /etc/yum.repos.d/scylla.repo
+            curl $REPO > /etc/yum.repos.d/scylla.repo
         fi
     elif [ "$ID" = "centos" ] || [ "$ID" = "rhel" ]; then
-        if [ $UNSTABLE -eq 0 ]; then
+        if [ "$REPO" = "" ]; then
             curl http://downloads.scylladb.com/rpm/centos/scylla.repo > /etc/yum.repos.d/scylla.repo
         else
-            curl http://downloads.scylladb.com.s3.amazonaws.com/rpm/unstable/centos/master/latest/scylla.repo > /etc/yum.repos.d/scylla.repo
+            curl $REPO > /etc/yum.repos.d/scylla.repo
         fi
         yum install -y epel-release
     else

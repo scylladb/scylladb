@@ -6,9 +6,9 @@ if [ ! -e dist/ami/build_ami.sh ]; then
 fi
 
 print_usage() {
-    echo "build_ami.sh --localrpm --unstable"
+    echo "build_ami.sh --localrpm --repo [URL]"
     echo "  --localrpm  deploy locally built rpms"
-    echo "  --unstable  use unstable branch"
+    echo "  --repo  specify repository URL"
     exit 1
 }
 LOCALRPM=0
@@ -19,9 +19,9 @@ while [ $# -gt 0 ]; do
             INSTALL_ARGS="$INSTALL_ARGS --localrpm"
             shift 1
             ;;
-        "--unstable")
-            INSTALL_ARGS="$INSTALL_ARGS --unstable"
-            shift 1
+        "--repo")
+            INSTALL_ARGS="$INSTALL_ARGS --repo $2"
+            shift 2
             ;;
         *)
             print_usage
