@@ -1,17 +1,5 @@
 #!/usr/bin/make -f
 
-DOC = $(CURDIR)/debian/scylla-server/usr/share/doc/scylla-server
-SCRIPTS = $(CURDIR)/debian/scylla-server/usr/lib/scylla
-SWAGGER = $(SCRIPTS)/swagger-ui
-API = $(SCRIPTS)/api
-SYSCTL = $(CURDIR)/debian/scylla-server/etc/sysctl.d
-SUDOERS =  $(CURDIR)/debian/scylla-server/etc/sudoers.d
-LIMITS= $(CURDIR)/debian/scylla-server/etc/security/limits.d
-COLLECTD= $(CURDIR)/debian/scylla-server/etc/collectd/collectd.conf.d
-SCYLLAD= $(CURDIR)/debian/scylla-server/etc/scylla.d
-LIBS = $(CURDIR)/debian/scylla-server/usr/lib
-CONF = $(CURDIR)/debian/scylla-server/etc/scylla
-
 override_dh_auto_build:
 	./configure.py --disable-xen --enable-dpdk --mode=release --static-stdc++ --static-thrift --compiler=@@COMPILER@@
 	ninja
@@ -20,65 +8,6 @@ override_dh_auto_clean:
 	rm -rf build/release seastar/build
 	rm -rf Cql.tokens
 	rm -rf build.ninja seastar/build.ninja
-
-override_dh_auto_install:
-	mkdir -p $(LIMITS) && \
-	cp $(CURDIR)/dist/common/limits.d/scylla.conf  $(LIMITS)
-
-	mkdir -p $(SYSCTL) && \
-	cp $(CURDIR)/dist/ubuntu/sysctl.d/99-scylla.conf $(SYSCTL)
-
-	mkdir -p $(SUDOERS) && \
-	cp $(CURDIR)/dist/common/sudoers.d/scylla $(SUDOERS)
-
-	mkdir -p $(COLLECTD) && \
-	cp $(CURDIR)/dist/common/collectd.d/scylla.conf $(COLLECTD)
-
-	mkdir -p $(SCYLLAD) && \
-	cp $(CURDIR)/dist/common/scylla.d/*.conf $(SCYLLAD)
-
-	mkdir -p $(CONF) && \
-	cp $(CURDIR)/conf/scylla.yaml $(CONF)
-	cp $(CURDIR)/conf/cassandra-rackdc.properties $(CONF)
-
-	mkdir -p $(DOC) && \
-	cp $(CURDIR)/*.md $(DOC)
-	cp $(CURDIR)/NOTICE.txt $(DOC)
-	cp $(CURDIR)/ORIGIN $(DOC)
-	cp -r $(CURDIR)/licenses $(DOC)
-
-	mkdir -p $(SCRIPTS) && \
-	cp $(CURDIR)/seastar/scripts/dpdk_nic_bind.py $(SCRIPTS)
-	cp $(CURDIR)/seastar/scripts/posix_net_conf.sh $(SCRIPTS)
-	cp $(CURDIR)/dist/common/scripts/* $(SCRIPTS)
-	cp $(CURDIR)/dist/ubuntu/scripts/* $(SCRIPTS)
-	cp -r $(CURDIR)/tools/scyllatop $(SCRIPTS)
-
-	mkdir -p $(SWAGGER) && \
-	cp -r $(CURDIR)/swagger-ui/dist $(SWAGGER)
-
-	mkdir -p $(API) && \
-	cp -r $(CURDIR)/api/api-doc $(API)
-
-	mkdir -p $(CURDIR)/debian/scylla-server/usr/bin/ && \
-	cp $(CURDIR)/build/release/scylla \
-		$(CURDIR)/debian/scylla-server/usr/bin/
-	cp $(CURDIR)/build/release/iotune \
-		$(CURDIR)/debian/scylla-server/usr/bin/
-	cp $(CURDIR)/dist/common/bin/scyllatop \
-		$(CURDIR)/debian/scylla-server/usr/bin/
-
-	mkdir -p $(CURDIR)/debian/scylla-server/usr/sbin/ && \
-	cp -P $(CURDIR)/dist/common/sbin/* \
-		$(CURDIR)/debian/scylla-server/usr/sbin/
-
-
-	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/data
-	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/commitlog
-	mkdir -p $(CURDIR)/debian/scylla-server/var/lib/scylla/coredump
-
-	mkdir -p $(CURDIR)/debian/scylla-server-dbg/usr/lib/scylla
-	cp $(CURDIR)/scylla-gdb.py $(CURDIR)/debian/scylla-server-dbg/usr/lib/scylla
 
 override_dh_installinit:
 	dh_installinit --no-start @@DH_INSTALLINIT@@

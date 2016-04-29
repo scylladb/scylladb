@@ -1,0 +1,7 @@
+etc/scylla
+etc/scylla.d
+usr/lib/scylla
+var/lib/scylla
+var/lib/scylla/data
+var/lib/scylla/commitlog
+var/lib/scylla/coredump
