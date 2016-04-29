@@ -107,10 +107,12 @@ public:
 
         // ensure all SSTables are in the manifest
         for (auto& sstable : sstables) {
+            // unconditionally add a sstable to a list of its level.
             manifest.add(sstable);
         }
 
         for (auto i = 1U; i < manifest._generations.size(); i++) {
+            // send overlapping sstables (with level > 0) to level 0, if any.
             manifest.repair_overlapping_sstables(i);
         }
 
@@ -123,36 +125,8 @@ public:
         if (level >= _generations.size()) {
             throw std::runtime_error(sprint("Invalid level %u out of %ld", level, (_generations.size() - 1)));
         }
-#if 0
-        logDistribution();
-#endif
-        if (can_add_sstable(sstable)) {
-            // adding the sstable does not cause overlap in the level
-
-            logger.debug("Adding {} to L{}", sstable->get_filename(), level);
-
-            _generations[level].push_back(sstable);
-        } else {
-            // this can happen if:
-            // * a compaction has promoted an overlapping sstable to the given level, or
-            //   was also supposed to add an sstable at the given level.
-            // * we are moving sstables from unrepaired to repaired and the sstable
-            //   would cause overlap
-            //
-            // The add(..):ed sstable will be sent to level 0
-#if 0
-            try
-            {
-                reader.descriptor.getMetadataSerializer().mutateLevel(reader.descriptor, 0);
-                reader.reloadSSTableMetadata();
-            }
-            catch (IOException e)
-            {
-                logger.error("Could not change sstable level - adding it at level 0 anyway, we will find it at restart.", e);
-            }
-#endif
-            _generations[0].push_back(sstable);
-        }
+        logger.debug("Adding {} to L{}", sstable->get_filename(), level);
+        _generations[level].push_back(sstable);
     }
 
 #if 0
