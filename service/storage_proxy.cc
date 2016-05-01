@@ -2267,7 +2267,7 @@ storage_proxy::query_partition_key_range_concurrent(std::chrono::steady_clock::t
     auto concurrent_fetch_starting_index = i;
     auto p = shared_from_this();
 
-    while (i != ranges.end() && std::distance(i, concurrent_fetch_starting_index) < concurrency_factor) {
+    while (i != ranges.end() && std::distance(concurrent_fetch_starting_index, i) < concurrency_factor) {
         query::partition_range& range = *i;
         std::vector<gms::inet_address> live_endpoints = get_live_sorted_endpoints(ks, end_token(range));
         std::vector<gms::inet_address> filtered_endpoints = filter_for_query(cl, ks, live_endpoints);
