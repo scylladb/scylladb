@@ -2363,6 +2363,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
 
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     results.reserve(ranges.size()/concurrency_factor + 1);
+    logger.debug("Estimated result rows per range: {}; requested rows: {}, ranges.size(): {}; concurrent range requests: {}",
+            result_rows_per_range, cmd->row_limit, ranges.size(), concurrency_factor);
 
     return query_partition_key_range_concurrent(timeout, std::move(results), cmd, cl, ranges.begin(), std::move(ranges), concurrency_factor)
             .then([](std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results) {
