@@ -96,14 +96,16 @@ public:
 class result {
     bytes_ostream _w;
     stdx::optional<result_digest> _digest;
+    stdx::optional<uint32_t> _row_count;
+
 public:
     class builder;
     class partition_writer;
     friend class result_merger;
 
     result();
-    result(bytes_ostream&& w) : _w(std::move(w)) {}
-    result(bytes_ostream&& w, stdx::optional<result_digest> d) : _w(std::move(w)), _digest(d) {}
+    result(bytes_ostream&& w, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _row_count(c) {}
+    result(bytes_ostream&& w, stdx::optional<result_digest> d, stdx::optional<uint32_t> c = {}) : _w(std::move(w)), _digest(d), _row_count(c) {}
     result(result&&) = default;
     result(const result&) = default;
     result& operator=(result&&) = default;
@@ -115,6 +117,10 @@ public:
 
     const stdx::optional<result_digest>& digest() const {
         return _digest;
+    }
+
+    const stdx::optional<uint32_t>& row_count() const {
+        return _row_count;
     }
 
     uint32_t calculate_row_count(const query::partition_slice&);

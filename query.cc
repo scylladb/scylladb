@@ -213,8 +213,16 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     bytes_ostream w;
     auto partitions = ser::writer_of_query_result(w).start_partitions();
+    std::experimental::optional<uint32_t> row_count = 0;
 
     for (auto&& r : _partial) {
+        if (row_count) {
+            if (r->row_count()) {
+                row_count = row_count.value() + r->row_count().value();
+            } else {
+                row_count = std::experimental::nullopt;
+            }
+        }
         result_view::do_with(*r, [&] (result_view rv) {
             for (auto&& pv : rv._v.partitions()) {
                 partitions.add(pv);
@@ -224,7 +232,7 @@ foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
 
     std::move(partitions).end_partitions().end_query_result();
 
-    return make_foreign(make_lw_shared<query::result>(std::move(w)));
+    return make_foreign(make_lw_shared<query::result>(std::move(w), row_count));
 }
 
 }

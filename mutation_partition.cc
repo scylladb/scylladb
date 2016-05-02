@@ -706,6 +706,7 @@ mutation_partition::query_compacted(query::result::partition_writer& pw, const s
 					|| !has_any_live_data(s, column_kind::static_column, static_row()))) {
 		pw.retract();
 	} else {
+	    pw.row_count() = row_count ? : 1;
         std::move(rows_wr).end_rows().end_qr_partition();
 	}
 }
