@@ -354,9 +354,12 @@ future<> auth::auth::setup_table(const sstring& name, const sstring& cql) {
     ::shared_ptr<cql3::statements::create_table_statement> statement =
                     static_pointer_cast<cql3::statements::create_table_statement>(
                                     parsed->prepare(db)->statement);
-    // Origin sets "Legacy Cf Id" for the new table. We have no need to be
-    // pre-2.1 compatible (afaik), so lets skip a whole lotta hoolaballo
-    return statement->announce_migration(qp.proxy(), false).then([statement](bool) {});
+    auto schema = statement->get_cf_meta_data();
+    auto uuid = generate_legacy_id(schema->ks_name(), schema->cf_name());
+
+    schema_builder b(schema);
+    b.set_uuid(uuid);
+    return service::get_local_migration_manager().announce_new_column_family(b.build(), false);
 }
 
 future<bool> auth::auth::has_existing_users(const sstring& cfname, const sstring& def_user_name, const sstring& name_column) {
