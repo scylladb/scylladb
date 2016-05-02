@@ -125,6 +125,7 @@ public:
         apply_reversibly(s, std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
     }
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
+    range_tombstone_list difference(const schema& s, const range_tombstone_list& rt_list) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
     void erase_where(Pred filter) {

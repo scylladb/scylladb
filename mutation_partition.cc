@@ -1485,19 +1485,7 @@ mutation_partition mutation_partition::difference(schema_ptr s, const mutation_p
     }
     mp._static_row = _static_row.difference(*s, column_kind::static_column, other._static_row);
 
-    auto it_rt = other._row_tombstones.begin();
-    bound_view::compare cmp_rt(*s);
-    for (auto&& rt : _row_tombstones) {
-        while (it_rt != other._row_tombstones.end() && cmp_rt(it_rt->start_bound(), rt.start_bound())) {
-            ++it_rt;
-        }
-        if (it_rt == other._row_tombstones.end()
-                || !it_rt->start_bound().equal(*s, rt.start_bound())
-                || !it_rt->end_bound().equal(*s, rt.end_bound())
-                || rt.tomb > it_rt->tomb) {
-            mp.apply_row_tombstone(*s, rt);
-        }
-    }
+    mp._row_tombstones = _row_tombstones.difference(*s, other._row_tombstones);
 
     auto it_r = other._rows.begin();
     rows_entry::compare cmp_r(*s);
