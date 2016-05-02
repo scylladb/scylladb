@@ -64,18 +64,39 @@ void init_ms_fd_gossiper(sstring listen_address
     }
 
     future<> f = make_ready_future<>();
-    ::shared_ptr<server_credentials> creds;
+
+    // While tls::server_credentials themselves are "shard-safe" once they are
+    // fully initialized and "immutable", the ::shared_ptr holding them is not.
+    // We need to pre-create credentials for each shard, so we can hand them out.
+    // Because constructor is crap place to run future-calls...
+    std::vector<server_credentials> per_cpu_creds;
 
     if (ew != encrypt_what::none) {
-        // note: credentials are immutable after this, and ok to share across shards
-        creds = ::make_shared<server_credentials>(::make_shared<dh_params>(dh_params::level::MEDIUM));
-        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
-        ms_trust_store.empty() ? creds->set_system_trust().get() :
-                                 creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
+        dh_params dh(dh_params::level::MEDIUM);
+        for (size_t i = 0; i < smp::count; ++i) {
+            per_cpu_creds.emplace_back(dh);
+            per_cpu_creds.back().set_x509_key_file(ms_cert, ms_key,
+                            x509_crt_format::PEM).get();
+            if (ms_trust_store.empty()) {
+                per_cpu_creds.back().set_system_trust().get();
+            } else {
+                per_cpu_creds.back().set_x509_trust_file(ms_trust_store,
+                                x509_crt_format::PEM).get();
+            }
+        }
     }
 
+    struct creds_helper {
+        std::vector<server_credentials> & creds;
+
+        operator ::shared_ptr<server_credentials>() const {
+            return creds.empty() ? nullptr : ::make_shared<server_credentials>(std::move(creds[engine().cpu_id()]));
+        }
+    };
+
     // Init messaging_service
-    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds).get();
+    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds_helper{per_cpu_creds}).get();
+
     // #293 - do not stop anything
     //engine().at_exit([] { return net::get_messaging_service().stop(); });
     // Init failure_detector
