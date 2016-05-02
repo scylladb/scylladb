@@ -50,6 +50,7 @@ class result::partition_writer {
     bool _static_row_added = false;
     md5_hasher& _digest;
     md5_hasher _digest_pos;
+    uint32_t& _row_count;
 public:
     partition_writer(
         result_request request,
@@ -58,7 +59,8 @@ public:
         ser::query_result__partitions& pw,
         ser::vector_position pos,
         ser::after_qr_partition__key w,
-        md5_hasher& digest)
+        md5_hasher& digest,
+        uint32_t& row_count)
         : _request(request)
         , _w(std::move(w))
         , _slice(slice)
@@ -67,6 +69,7 @@ public:
         , _pos(std::move(pos))
         , _digest(digest)
         , _digest_pos(digest)
+        , _row_count(row_count)
     { }
 
     bool requested_digest() const {
@@ -98,6 +101,9 @@ public:
     md5_hasher& digest() {
         return _digest;
     }
+    uint32_t& row_count() {
+        return _row_count;
+    }
 };
 
 class result::builder {
@@ -106,6 +112,7 @@ class result::builder {
     const partition_slice& _slice;
     ser::query_result__partitions _w;
     result_request _request;
+    uint32_t _row_count = 0;
 public:
     builder(const partition_slice& slice, result_request request)
         : _slice(slice)
@@ -130,21 +137,21 @@ public:
         if (_request != result_request::only_result) {
             key.feed_hash(_digest, s);
         }
-        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest);
+        return partition_writer(_request, _slice, ranges, _w, std::move(pos), std::move(after_key), _digest, _row_count);
     }
 
     result build() {
         std::move(_w).end_partitions().end_query_result();
         switch (_request) {
         case result_request::only_result:
-            return result(std::move(_out));
+            return result(std::move(_out), _row_count);
         case result_request::only_digest: {
             bytes_ostream buf;
             ser::writer_of_query_result(buf).start_partitions().end_partitions().end_query_result();
             return result(std::move(buf), result_digest(_digest.finalize_array()));
         }
         case result_request::result_and_digest:
-            return result(std::move(_out), result_digest(_digest.finalize_array()));
+            return result(std::move(_out), result_digest(_digest.finalize_array()), _row_count);
         }
         abort();
     }
