@@ -851,7 +851,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
-                            BOOST_REQUIRE(rt.t() == tomb);
+                            BOOST_REQUIRE(rt.tomb == tomb);
                         }
                     });
                 });
@@ -886,7 +886,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
                         auto& mp = mutation->partition();
                         BOOST_REQUIRE(mp.row_tombstones().size() == 1);
                         for (auto& rt: mp.row_tombstones()) {
-                            BOOST_REQUIRE(rt.t() == tomb);
+                            BOOST_REQUIRE(rt.tomb == tomb);
                         }
                     });
                 });

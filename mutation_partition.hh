@@ -39,6 +39,7 @@
 #include "mutation_partition_visitor.hh"
 #include "utils/managed_vector.hh"
 #include "hashing_partition_visitor.hh"
+#include "range_tombstone_list.hh"
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -430,85 +431,6 @@ public:
     deletable_row difference(const schema&, column_kind, const deletable_row& other) const;
 };
 
-class row_tombstones_entry {
-    boost::intrusive::set_member_hook<> _link;
-    clustering_key_prefix _prefix;
-    tombstone _t;
-    friend class mutation_partition;
-public:
-    row_tombstones_entry(clustering_key_prefix&& prefix, tombstone t)
-        : _prefix(std::move(prefix))
-        , _t(std::move(t))
-    { }
-    row_tombstones_entry(const clustering_key_prefix& prefix)
-        : _prefix(prefix)
-    { }
-    row_tombstones_entry(row_tombstones_entry&& o) noexcept;
-    row_tombstones_entry(const row_tombstones_entry&) = default;
-    clustering_key_prefix& prefix() {
-        return _prefix;
-    }
-    const clustering_key_prefix& prefix() const {
-        return _prefix;
-    }
-    const clustering_key_prefix& key() const {
-        return _prefix;
-    }
-    tombstone& t() {
-        return _t;
-    }
-    const tombstone& t() const {
-        return _t;
-    }
-    void apply(tombstone t) {
-        _t.apply(t);
-    }
-    // See reversibly_mergeable.hh
-    void apply_reversibly(row_tombstones_entry& e) {
-        _t.apply_reversibly(e._t);
-    }
-    // See reversibly_mergeable.hh
-    void revert(row_tombstones_entry& e) noexcept {
-        _t.revert(e._t);
-    }
-    struct compare {
-        clustering_key_prefix::less_compare _c;
-        compare(const schema& s) : _c(s) {}
-        bool operator()(const row_tombstones_entry& e1, const row_tombstones_entry& e2) const {
-            return _c(e1._prefix, e2._prefix);
-        }
-        bool operator()(const clustering_key_prefix& prefix, const row_tombstones_entry& e) const {
-            return _c(prefix, e._prefix);
-        }
-        bool operator()(const row_tombstones_entry& e, const clustering_key_prefix& prefix) const {
-            return _c(e._prefix, prefix);
-        }
-    };
-    template <typename Comparator>
-    struct delegating_compare {
-        Comparator _c;
-        delegating_compare(Comparator&& c) : _c(std::move(c)) {}
-        template <typename Comparable>
-        bool operator()(const Comparable& prefix, const row_tombstones_entry& e) const {
-            return _c(prefix, e._prefix);
-        }
-        template <typename Comparable>
-        bool operator()(const row_tombstones_entry& e, const Comparable& prefix) const {
-            return _c(e._prefix, prefix);
-        }
-    };
-    template <typename Comparator>
-    static auto key_comparator(Comparator&& c) {
-        return delegating_compare<Comparator>(std::move(c));
-    }
-
-    friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
-    bool equal(const schema& s, const row_tombstones_entry& other) const;
-    bool empty() const {
-        return !_t;
-    }
-};
-
 class rows_entry {
     boost::intrusive::set_member_hook<> _link;
     clustering_key _key;
@@ -610,11 +532,7 @@ class mutation_partition final {
     using rows_type = boost::intrusive::set<rows_entry,
         boost::intrusive::member_hook<rows_entry, boost::intrusive::set_member_hook<>, &rows_entry::_link>,
         boost::intrusive::compare<rows_entry::compare>>;
-    using row_tombstones_type = boost::intrusive::set<row_tombstones_entry,
-        boost::intrusive::member_hook<row_tombstones_entry, boost::intrusive::set_member_hook<>, &row_tombstones_entry::_link>,
-        boost::intrusive::compare<row_tombstones_entry::compare>>;
     friend class rows_entry;
-    friend class row_tombstones_entry;
     friend class size_calculator;
 private:
     tombstone _tombstone;
@@ -622,8 +540,7 @@ private:
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
-    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
-    row_tombstones_type _row_tombstones;
+    range_tombstone_list _row_tombstones;
 
     template<typename T>
     friend class db::serializer;
@@ -633,11 +550,11 @@ public:
     struct copy_comparators_only {};
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
-        , _row_tombstones(row_tombstones_entry::compare(*s))
+        , _row_tombstones(*s)
     { }
     mutation_partition(mutation_partition& other, copy_comparators_only)
         : _rows(other._rows.key_comp())
-        , _row_tombstones(other._row_tombstones.key_comp())
+        , _row_tombstones(other._row_tombstones, range_tombstone_list::copy_comparator_only())
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
@@ -663,7 +580,7 @@ public:
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
-    void apply_row_tombstone(const schema&, row_tombstones_entry*) noexcept;
+    void apply_row_tombstone(const schema& schema, const range_tombstone& rt);
     //
     // Applies p to current object.
     //
@@ -757,7 +674,7 @@ public:
     const row& static_row() const { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
-    const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
+    const range_tombstone_list& row_tombstones() const { return _row_tombstones; }
     const row* find_row(const clustering_key& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;

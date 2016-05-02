@@ -1660,7 +1660,7 @@ private:
             virtual void accept_partition_tombstone(tombstone) override { }
             virtual void accept_static_cell(column_id, atomic_cell_view) override { }
             virtual void accept_static_cell(column_id, collection_mutation_view) override { }
-            virtual void accept_row_tombstone(clustering_key_prefix_view, tombstone) override { }
+            virtual void accept_row_tombstone(const range_tombstone&) override { }
             virtual void accept_row(clustering_key_view key, tombstone, const row_marker&) override {
                 if (!_is_reversed || !_last_ck) {
                     _last_ck = clustering_key(key);
@@ -3144,7 +3144,7 @@ public:
             }
             if (_runs.empty() || row_count >= _cmd->row_limit) {
                 ret = reconcilable_result(row_count, std::move(partitions));
-            } 
+            }
             return make_ready_future<std::experimental::optional<reconcilable_result>>(std::move(ret));
         });
     }

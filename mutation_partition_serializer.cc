@@ -33,6 +33,8 @@
 #include "idl/uuid.dist.impl.hh"
 #include "idl/keys.dist.impl.hh"
 #include "idl/mutation.dist.impl.hh"
+#include "range_tombstone_to_prefix_tombstone_converter.hh"
+#include "service/storage_service.hh"
 
 using namespace db;
 
@@ -140,15 +142,32 @@ auto write_row_marker(Writer&& writer, const row_marker& marker)
 
 }
 
+static void write_tombstones(const schema& s, auto& row_tombstones, const range_tombstone_list& rt_list)
+{
+    if (service::get_local_storage_service().cluster_supports_range_tombstones()) {
+        for (auto&& rt : rt_list) {
+            row_tombstones.add().write_start(rt.start).write_tomb(rt.tomb).write_start_kind(rt.start_kind)
+                .write_end(rt.end).write_end_kind(rt.end_kind).end_range_tombstone();
+        }
+    } else {
+        range_tombstone_to_prefix_tombstone_converter m;
+        for (auto&& rt : rt_list) {
+            auto prefix = m.convert(s, rt);
+            if (prefix) {
+                row_tombstones.add().write_start(*prefix).write_tomb(rt.tomb).write_start_kind(bound_kind::incl_start)
+                    .write_end(*prefix).write_end_kind(bound_kind::incl_end).end_range_tombstone();
+            }
+        }
+        m.verify_no_open_tombstones();
+    }
+}
+
 template<typename Writer>
 void mutation_partition_serializer::write_serialized(Writer&& writer, const schema& s, const mutation_partition& mp)
 {
     auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
     auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row(), s, column_kind::static_column).end_static_row().start_range_tombstones();
-    for (auto&& rt : mp.row_tombstones()) {
-        row_tombstones.add().write_start(rt.prefix()).write_tomb(rt.t()).write_start_kind(bound_kind::incl_start)
-            .write_end(rt.prefix()).write_end_kind(bound_kind::incl_end).end_range_tombstone();
-    }
+    write_tombstones(s, row_tombstones, mp.row_tombstones());
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.clustered_rows()) {
         auto marker_writer = clustering_rows.add().write_key(cr.key());

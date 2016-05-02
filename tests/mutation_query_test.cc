@@ -28,6 +28,7 @@
 #include <boost/test/unit_test.hpp>
 #include <query-result-set.hh>
 
+#include "tests/test_services.hh"
 #include "tests/test-utils.hh"
 #include "tests/mutation_assertions.hh"
 #include "tests/result_set_assertions.hh"
@@ -62,7 +63,6 @@ struct mutation_less_cmp {
         return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
     }
 };
-
 mutation_source make_source(std::vector<mutation> mutations) {
     return mutation_source([mutations = std::move(mutations)] (schema_ptr s, const query::partition_range& range) {
         assert(range.is_full()); // slicing not implemented yet
@@ -83,6 +83,7 @@ query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, cons
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -135,6 +136,7 @@ SEASTAR_TEST_CASE(test_reading_from_single_partition) {
 
 SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -182,6 +184,7 @@ SEASTAR_TEST_CASE(test_cells_are_expired_according_to_query_timestamp) {
 
 SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -377,6 +380,7 @@ SEASTAR_TEST_CASE(test_reverse_ordering_is_respected) {
 
 SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = make_schema();
         auto now = gc_clock::now();
 
@@ -398,6 +402,7 @@ SEASTAR_TEST_CASE(test_query_when_partition_tombstone_covers_live_cells) {
 
 SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
     return seastar::async([] {
+        storage_service_for_tests ssft;
         auto s = schema_builder("ks", "cf")
             .with_column("pk", bytes_type, column_kind::partition_key)
             .with_column("v", bytes_type, column_kind::regular_column)
@@ -447,6 +452,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
 
 SEASTAR_TEST_CASE(test_result_row_count) {
     return seastar::async([] {
+            storage_service_for_tests ssft;
             auto s = make_schema();
             auto now = gc_clock::now();
             auto slice = partition_slice_builder(*s).build();

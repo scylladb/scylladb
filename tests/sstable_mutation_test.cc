@@ -580,8 +580,8 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone) {
                     auto& rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 1);
                     for (auto e : rts) {
-                        BOOST_REQUIRE(e.prefix().equal(*s, make_ckey("aaa")));
-                        BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
+                        BOOST_REQUIRE(e.start.equal(*s, make_ckey("aaa")));
+                        BOOST_REQUIRE(e.tomb.timestamp == 1459334681228103LL);
                     }
                     auto& rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.size() == 1);
@@ -637,8 +637,8 @@ SEASTAR_TEST_CASE(tombstone_merging) {
                     auto& rts = mut->partition().row_tombstones();
                     BOOST_REQUIRE(rts.size() == 1);
                     for (auto e : rts) {
-                        BOOST_REQUIRE(e.prefix().equal(*s, make_ckey("aaa")));
-                        BOOST_REQUIRE(e.t().timestamp == 1459334681228103LL);
+                        BOOST_REQUIRE(e.start.equal(*s, make_ckey("aaa")));
+                        BOOST_REQUIRE(e.tomb.timestamp == 1459334681228103LL);
                     }
                     auto& rows = mut->partition().clustered_rows();
                     BOOST_REQUIRE(rows.size() == 0);
@@ -719,20 +719,20 @@ SEASTAR_TEST_CASE(tombstone_in_tombstone2) {
                     auto& rows = mut->partition().clustered_rows();
                     auto& rts = mut->partition().row_tombstones();
 
-                    BOOST_REQUIRE(rts.size() == 2);
-                    bool found1 = false, found2 = false;
-                    for (auto e : rts) {
-                        if (e.t().timestamp == 1459438519943668LL) {
-                            BOOST_REQUIRE(e.prefix().equal(*s, make_ckey("aaa")));
-                            found1 = true;
-                        } else if (e.t().timestamp == 1459438519950348LL) {
-                            BOOST_REQUIRE(e.key().equal(*s, make_ckey("aaa", "bbb")));
-                            found2 = true;
-                        } else {
-                            BOOST_FAIL("unexpected timestamp");
-                        }
-                    }
-                    BOOST_REQUIRE(found1 && found2);
+                    auto it = rts.begin();
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519950348L);
+                    ++it;
+                    BOOST_REQUIRE(it->start_bound().equal(*s, bound_view(make_ckey("aaa", "bbb"), bound_kind::excl_start)));
+                    BOOST_REQUIRE(it->end_bound().equal(*s, bound_view(make_ckey("aaa"), bound_kind::incl_end)));
+                    BOOST_REQUIRE(it->tomb.timestamp == 1459438519943668L);
+                    ++it;
+                    BOOST_REQUIRE(it == rts.end());
 
                     BOOST_REQUIRE(rows.size() == 1);
                     for (auto e : rows) {

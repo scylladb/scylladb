@@ -52,8 +52,8 @@ public:
         r.append_cell(id, atomic_cell_or_collection(collection));
     }
 
-    virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) override {
-        _partition.apply_row_tombstone(_schema, prefix, t);
+    virtual void accept_row_tombstone(const range_tombstone& rt) override {
+        _partition.apply_row_tombstone(_schema, rt);
     }
 
     virtual void accept_row(clustering_key_view key, tombstone deleted_at, const row_marker& rm) override {
