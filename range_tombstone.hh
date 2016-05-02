@@ -131,6 +131,10 @@ public:
             : range_tombstone(std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb)) {
         update_node(rt._link);
     }
+    struct without_link { };
+    range_tombstone(range_tombstone&& rt, without_link) noexcept
+            : range_tombstone(std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb)) {
+    }
     range_tombstone(const range_tombstone& rt)
             : range_tombstone(rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb)
     { }
@@ -180,6 +184,11 @@ public:
             ::feed_hash(h, end_kind);
         }
         ::feed_hash(h, tomb);
+    }
+    friend void swap(range_tombstone& rt1, range_tombstone& rt2) {
+        range_tombstone tmp(std::move(rt2), without_link());
+        rt2.move_assign(std::move(rt1));
+        rt1.move_assign(std::move(tmp));
     }
     friend std::ostream& operator<<(std::ostream& out, const range_tombstone& rt);
     using container_type = bi::set<range_tombstone,

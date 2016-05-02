@@ -25,6 +25,64 @@
 
 class range_tombstone_list final {
     using range_tombstones_type = range_tombstone::container_type;
+    class insert_undo_op {
+        const range_tombstone& _new_rt;
+    public:
+        insert_undo_op(const range_tombstone& new_rt)
+                : _new_rt(new_rt) { }
+        void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
+    };
+    class update_undo_op {
+        range_tombstone _old_rt;
+        const range_tombstone& _new_rt;
+    public:
+        update_undo_op(range_tombstone&& old_rt, const range_tombstone& new_rt)
+                : _old_rt(std::move(old_rt)), _new_rt(new_rt) { }
+        void undo(const schema& s, range_tombstone_list& rt_list) noexcept;
+    };
+    class reverter {
+    private:
+        std::vector<insert_undo_op> _insert_undo_ops;
+        std::vector<update_undo_op> _update_undo_ops;
+        const schema& _s;
+    protected:
+        range_tombstone_list& _dst;
+    public:
+        reverter(const schema& s, range_tombstone_list& dst)
+                : _s(s)
+                , _dst(dst) { }
+        virtual ~reverter() {
+            revert();
+        }
+        reverter(reverter&&) = default;
+        reverter& operator=(reverter&&) = default;
+        reverter(const reverter&) = delete;
+        reverter& operator=(reverter&) = delete;
+        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt);
+        virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt);
+        void revert() noexcept {
+            for (auto&& op : _insert_undo_ops) {
+                op.undo(_s, _dst);
+            }
+            auto rit = _update_undo_ops.rbegin();
+            while (rit != _update_undo_ops.rend()) {
+                rit->undo(_s, _dst);
+                ++rit;
+            }
+            cancel();
+        }
+        void cancel() noexcept {
+            _insert_undo_ops.clear();
+            _update_undo_ops.clear();
+        }
+    };
+    class nop_reverter : public reverter {
+    public:
+        nop_reverter(const schema& s, range_tombstone_list& rt_list)
+                : reverter(s, rt_list) { }
+        virtual range_tombstones_type::iterator insert(range_tombstones_type::iterator it, range_tombstone& new_rt) override;
+        virtual void update(range_tombstones_type::iterator it, range_tombstone&& new_rt) override;
+    };
 private:
     range_tombstones_type _tombstones;
 public:
@@ -62,7 +120,10 @@ public:
         apply(s, std::move(rt.start), rt.start_kind, std::move(rt.end), rt.end_kind, std::move(rt.tomb));
     }
     void apply(const schema& s, clustering_key_prefix start, bound_kind start_kind,
-               clustering_key_prefix end, bound_kind end_kind, tombstone tomb);
+               clustering_key_prefix end, bound_kind end_kind, tombstone tomb) {
+        nop_reverter rev(s, *this);
+        apply_reversibly(s, std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
+    }
     tombstone search_tombstone_covering(const schema& s, const clustering_key_prefix& key) const;
     // Erases the range tombstones for which filter returns true.
     template <typename Pred>
@@ -78,7 +139,13 @@ public:
             }
         }
     }
+    void apply(const schema& s, range_tombstone_list& rt_list);
+    // See reversibly_mergeable.hh
+    reverter apply_reversibly(const schema& s, range_tombstone_list& rt_list);
 private:
+    void apply_reversibly(const schema& s, clustering_key_prefix start, bound_kind start_kind,
+                          clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
     void insert_from(const schema& s, range_tombstones_type::iterator it, clustering_key_prefix start,
-                     bound_kind start_kind, clustering_key_prefix end, bound_kind end_kind, tombstone tomb);
+                     bound_kind start_kind, clustering_key_prefix end, bound_kind end_kind, tombstone tomb, reverter& rev);
+    range_tombstones_type::iterator find(const schema& s, const range_tombstone& rt);
 };

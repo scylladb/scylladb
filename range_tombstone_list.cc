@@ -34,11 +34,13 @@ range_tombstone_list::~range_tombstone_list() {
     _tombstones.clear_and_dispose(current_deleter<range_tombstone>());
 }
 
-void range_tombstone_list::apply(const schema& s,
+void range_tombstone_list::apply_reversibly(const schema& s,
         clustering_key_prefix start, bound_kind start_kind,
         clustering_key_prefix end,
         bound_kind end_kind,
-        tombstone tomb) {
+        tombstone tomb,
+        reverter& rev)
+{
     if (!_tombstones.empty()) {
         bound_view::compare less(s);
         bound_view start_bound(start, start_kind);
@@ -47,13 +49,13 @@ void range_tombstone_list::apply(const schema& s,
             auto it = _tombstones.upper_bound(start_bound, [less](auto&& sb, auto&& rt) {
                 return less(sb, rt.end_bound());
             });
-            insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
+            insert_from(s, std::move(it), std::move(start), start_kind, std::move(end), end_kind, std::move(tomb), rev);
             return;
         }
     }
     auto rt = current_allocator().construct<range_tombstone>(
             std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-    _tombstones.push_back(*rt);
+    rev.insert(_tombstones.end(), *rt);
 }
 
 /*
@@ -73,13 +75,13 @@ void range_tombstone_list::insert_from(const schema& s,
     bound_kind start_kind,
     clustering_key_prefix end,
     bound_kind end_kind,
-    tombstone tomb)
+    tombstone tomb,
+    reverter& rev)
 {
     bound_view::compare less(s);
     bound_view end_bound(end, end_kind);
     while (it != _tombstones.end()) {
         bound_view start_bound(start, start_kind);
-
         if (less(end_bound, start_bound)) {
             return;
         }
@@ -90,10 +92,11 @@ void range_tombstone_list::insert_from(const schema& s,
             if (less(it->start_bound(), start_bound)) {
                 auto new_end = bound_view(start, invert_kind(start_kind));
                 if (!less(new_end, it->start_bound())) {
+                    // Here it->start < start
                     auto rt = current_allocator().construct<range_tombstone>(it->start_bound(), new_end, it->tomb);
-                    it = _tombstones.insert_before(it, *rt);
+                    it = rev.insert(it, *rt);
                     ++it;
-                    *it = {start_bound, it->end_bound(), it->tomb};
+                    rev.update(it, {start_bound, it->end_bound(), it->tomb});
                 }
             }
 
@@ -103,7 +106,7 @@ void range_tombstone_list::insert_from(const schema& s,
                 // Here end < it->start, so the new tombstone is before the current one.
                 auto rt = current_allocator().construct<range_tombstone>(
                         std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-                _tombstones.insert_before(it, *rt);
+                rev.insert(it, *rt);
                 return;
             }
 
@@ -111,10 +114,10 @@ void range_tombstone_list::insert_from(const schema& s,
                 // Here start <= it->start and end < it->end.
                 auto rt = current_allocator().construct<range_tombstone>(
                         std::move(start), start_kind, end, end_kind, std::move(tomb));
-                it = _tombstones.insert_before(it, *rt);
+                it = rev.insert(it, *rt);
                 ++it;
                 auto new_start_kind = invert_kind(end_kind);
-                *it = {std::move(end), new_start_kind, it->end, it->end_kind, it->tomb};
+                rev.update(it, {std::move(end), new_start_kind, it->end, it->end_kind, it->tomb});
                 return;
             }
 
@@ -124,13 +127,13 @@ void range_tombstone_list::insert_from(const schema& s,
             // new tombstone and are done.
             auto next = std::next(it);
             if (next == _tombstones.end() || !less(next->start_bound(), end_bound)) {
-                *it = {std::move(start), start_kind, std::move(end), end_kind, std::move(tomb)};
+                rev.update(it, {std::move(start), start_kind, std::move(end), end_kind, std::move(tomb)});
                 return;
             }
 
             // We overlap with the next tombstone.
 
-            *it = {std::move(start), start_kind, next->start, invert_kind(next->start_kind), tomb};
+            rev.update(it, {std::move(start), start_kind, next->start, invert_kind(next->start_kind), tomb});
             start = next->start;
             start_kind = next->start_kind;
             ++it;
@@ -145,15 +148,15 @@ void range_tombstone_list::insert_from(const schema& s,
                     if (!less(bound_view(it->start, new_end_kind), start_bound)) {
                         auto rt = current_allocator().construct<range_tombstone>(
                                 std::move(start), start_kind, it->start, new_end_kind, tomb);
-                        it = _tombstones.insert_before(it, *rt);
+                        it = rev.insert(it, *rt);
                         ++it;
                     }
                 } else {
                     // Here start < it->start and end <= it->start, so just insert the new tombstone.
                     auto rt = current_allocator().construct<range_tombstone>(
                             std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-                    _tombstones.insert_before(it, *rt);
-                   return;
+                    rev.insert(it, *rt);
+                    return;
                 }
             }
 
@@ -172,7 +175,19 @@ void range_tombstone_list::insert_from(const schema& s,
     // If we got here, then just insert the remainder at the end.
     auto rt = current_allocator().construct<range_tombstone>(
             std::move(start), start_kind, std::move(end), end_kind, std::move(tomb));
-    _tombstones.push_back(*rt);
+    rev.insert(it, *rt);
+}
+
+range_tombstone_list::range_tombstones_type::iterator range_tombstone_list::find(const schema& s, const range_tombstone& rt) {
+    bound_view::compare less(s);
+    auto it = _tombstones.find(rt, [less](auto&& rt1, auto&& rt2) {
+        return less(rt1.end_bound(), rt2.end_bound());
+    });
+
+    if (it != _tombstones.end() && it->equal(s, rt)) {
+        return it;
+    }
+    return _tombstones.end();
 }
 
 /*
@@ -189,4 +204,52 @@ tombstone range_tombstone_list::search_tombstone_covering(const schema& s, const
     }
 
     return it->tomb;
+}
+
+void range_tombstone_list::apply(const schema& s, range_tombstone_list& rt_list) {
+    for (auto&& rt : rt_list) {
+        apply(s, rt);
+    }
+}
+
+// See reversibly_mergeable.hh
+range_tombstone_list::reverter range_tombstone_list::apply_reversibly(const schema& s, range_tombstone_list& rt_list) {
+    reverter rev(s, *this);
+    for (auto&& rt : rt_list) {
+        apply_reversibly(s, rt.start, rt.start_kind, rt.end, rt.end_kind, rt.tomb, rev);
+    }
+    return rev;
+}
+
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
+    _insert_undo_ops.emplace_back(new_rt);
+    return _dst._tombstones.insert_before(it, new_rt);
+}
+
+void range_tombstone_list::reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
+    _update_undo_ops.reserve(_update_undo_ops.size() + 1);
+    swap(*it, new_rt);
+    _update_undo_ops.emplace_back(std::move(new_rt), *it);
+}
+
+range_tombstone_list::range_tombstones_type::iterator
+range_tombstone_list::nop_reverter::insert(range_tombstones_type::iterator it, range_tombstone& new_rt) {
+    return _dst._tombstones.insert_before(it, new_rt);
+}
+
+void range_tombstone_list::nop_reverter::update(range_tombstones_type::iterator it, range_tombstone&& new_rt) {
+    *it = std::move(new_rt);
+}
+
+void range_tombstone_list::insert_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
+    auto it = rt_list.find(s, _new_rt);
+    assert (it != rt_list.end());
+    rt_list._tombstones.erase_and_dispose(it, current_deleter<range_tombstone>());
+}
+
+void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone_list& rt_list) noexcept {
+    auto it = rt_list.find(s, _new_rt);
+    assert (it != rt_list.end());
+    *it = std::move(_old_rt);
 }
