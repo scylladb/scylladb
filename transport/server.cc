@@ -275,7 +275,7 @@ future<> cql_server::stop() {
 }
 
 future<>
-cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials> creds, bool keepalive) {
+cql_server::listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> creds, bool keepalive) {
     _notifier = std::make_unique<event_notifier>(addr.port);
     service::get_local_migration_manager().register_listener(_notifier.get());
     service::get_local_storage_service().register_subscriber(_notifier.get());
@@ -285,7 +285,7 @@ cql_server::listen(ipv4_addr addr, ::shared_ptr<seastar::tls::server_credentials
     server_socket ss;
     try {
         ss = creds
-          ? seastar::tls::listen(creds, make_ipv4_address(addr), lo)
+          ? seastar::tls::listen(creds->build_server_credentials(), make_ipv4_address(addr), lo)
           : engine().listen(make_ipv4_address(addr), lo);
     } catch (...) {
         throw std::runtime_error(sprint("CQLServer error while listening on %s -> %s", make_ipv4_address(addr), std::current_exception()));

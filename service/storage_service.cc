@@ -1797,17 +1797,18 @@ future<> storage_service::start_native_transport() {
                 //    return cserver->stop();
                 //});
 
-                ::shared_ptr<seastar::tls::server_credentials> cred;
+                std::shared_ptr<seastar::tls::credentials_builder> cred;
                 auto addr = ipv4_addr{ip, port};
                 auto f = make_ready_future();
 
                 // main should have made sure values are clean and neatish
                 if (ceo.at("enabled") == "true") {
-                    cred = ::make_shared<seastar::tls::server_credentials>(::make_shared<seastar::tls::dh_params>(seastar::tls::dh_params::level::MEDIUM));
+                    cred = std::make_shared<seastar::tls::credentials_builder>();
+                    cred->set_dh_level(seastar::tls::dh_params::level::MEDIUM);
                     f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
                     logger.info("Enabling encrypted CQL connections between client and server");
                 }
-                return f.then([cserver, addr, cred, keepalive] {
+                return f.then([cserver, addr, cred = std::move(cred), keepalive] {
                     return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred, keepalive);
                 });
             });
