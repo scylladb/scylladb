@@ -186,7 +186,7 @@ public:
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"), uint16_t port = 7000);
     messaging_service(gms::inet_address ip, uint16_t port, encrypt_what,
-            uint16_t ssl_port, ::shared_ptr<seastar::tls::server_credentials>);
+            uint16_t ssl_port, std::shared_ptr<seastar::tls::credentials_builder>);
     ~messaging_service();
 public:
     uint16_t port();
