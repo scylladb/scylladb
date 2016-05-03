@@ -1,5 +1,3 @@
-conf/scylla.yaml etc/scylla
-conf/cassandra-rackdc.properties etc/scylla
 dist/common/limits.d/scylla.conf etc/security/limits.d
 dist/ubuntu/sysctl.d/99-scylla.conf etc/sysctl.d
 dist/common/sudoers.d/scylla etc/sudoers.d

@@ -57,24 +57,24 @@ VERSION=$(./SCYLLA-VERSION-GEN)
 SCYLLA_VERSION=$(cat build/SCYLLA-VERSION-FILE)
 SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 echo $VERSION >version
-./scripts/git-archive-all --extra version --force-submodules --prefix scylla-server-$SCYLLA_VERSION $RPMBUILD/SOURCES/scylla-server-$VERSION.tar
+./scripts/git-archive-all --extra version --force-submodules --prefix scylla-$SCYLLA_VERSION $RPMBUILD/SOURCES/scylla-$VERSION.tar
 rm -f version
-cp dist/redhat/scylla-server.spec.in $RPMBUILD/SPECS/scylla-server.spec
-sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" $RPMBUILD/SPECS/scylla-server.spec
-sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" $RPMBUILD/SPECS/scylla-server.spec
+cp dist/redhat/scylla.spec.in $RPMBUILD/SPECS/scylla.spec
+sed -i -e "s/@@VERSION@@/$SCYLLA_VERSION/g" $RPMBUILD/SPECS/scylla.spec
+sed -i -e "s/@@RELEASE@@/$SCYLLA_RELEASE/g" $RPMBUILD/SPECS/scylla.spec
 if [ "$ID" = "fedora" ]; then
     if [ $JOBS -gt 0 ]; then
-        rpmbuild -bs --define "_topdir $RPMBUILD" --define "_smp_mflags -j$JOBS" $RPMBUILD/SPECS/scylla-server.spec
+        rpmbuild -bs --define "_topdir $RPMBUILD" --define "_smp_mflags -j$JOBS" $RPMBUILD/SPECS/scylla.spec
     else
-        rpmbuild -bs --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
+        rpmbuild -bs --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
     fi
-    mock rebuild --resultdir=`pwd`/build/rpms $RPMBUILD/SRPMS/scylla-server-$VERSION*.src.rpm
+    mock rebuild --resultdir=`pwd`/build/rpms $RPMBUILD/SRPMS/scylla-$VERSION*.src.rpm
 else
-    sudo yum-builddep -y  $RPMBUILD/SPECS/scylla-server.spec
+    sudo yum-builddep -y  $RPMBUILD/SPECS/scylla.spec
     . /etc/profile.d/scylla.sh
     if [ $JOBS -gt 0 ]; then
-        rpmbuild -ba --define "_topdir $RPMBUILD" --define "_smp_mflags -j$JOBS" $RPMBUILD/SPECS/scylla-server.spec
+        rpmbuild -ba --define "_topdir $RPMBUILD" --define "_smp_mflags -j$JOBS" $RPMBUILD/SPECS/scylla.spec
     else
-        rpmbuild -ba --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla-server.spec
+        rpmbuild -ba --define "_topdir $RPMBUILD" $RPMBUILD/SPECS/scylla.spec
     fi
 fi

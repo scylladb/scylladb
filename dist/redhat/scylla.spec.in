@@ -1,4 +1,4 @@
-Name:           scylla-server
+Name:           scylla
 Version:        @@VERSION@@
 Release:        @@RELEASE@@%{?dist}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
@@ -7,22 +7,39 @@ Group:          Applications/Databases
 License:        AGPLv3
 URL:            http://www.scylladb.com/
 Source0:        %{name}-@@VERSION@@-@@RELEASE@@.tar
+Requires:       scylla-server scylla-jmx scylla-tools
+Obsoletes:	scylla-server < 1.1
 
+%description
+Scylla is a highly scalable, eventually consistent, distributed,
+partitioned row DB.
+This package installs all required packages for ScyllaDB,  including
+scylla-server, scylla-jmx, scylla-tools.
+
+%files
+%defattr(-,root,root)
+
+%prep
+%setup -q
+
+%package        server
+Group:          Applications/Databases
+Summary:        The Scylla database server
+License:        AGPLv3
+URL:            http://www.scylladb.com/
 BuildRequires:  libaio-devel libstdc++-devel cryptopp-devel hwloc-devel numactl-devel libpciaccess-devel libxml2-devel zlib-devel thrift-devel yaml-cpp-devel lz4-devel snappy-devel jsoncpp-devel systemd-devel xz-devel openssl-devel libcap-devel libselinux-devel libgcrypt-devel libgpg-error-devel elfutils-devel krb5-devel libcom_err-devel libattr-devel pcre-devel elfutils-libelf-devel bzip2-devel keyutils-libs-devel xfsprogs-devel make gnutls-devel systemd-devel
 %{?fedora:BuildRequires: boost-devel ninja-build ragel antlr3-tool antlr3-C++-devel python3 gcc-c++ libasan libubsan python3-pyparsing dnf-yum}
 %{?rhel:BuildRequires: scylla-libstdc++-static scylla-boost-devel scylla-ninja-build scylla-ragel scylla-antlr3-tool scylla-antlr3-C++-devel python34 scylla-gcc-c++ >= 5.1.1, python34-pyparsing}
-Requires:       systemd-libs hwloc collectd
+Requires:       scylla-conf systemd-libs hwloc collectd
 Conflicts:      abrt
 
-%description
+%description server
+This package contains ScyllaDB server.
 
 %define __debug_install_post   \
     %{_rpmconfigdir}/find-debuginfo.sh %{?_missing_build_ids_terminate_build:--strict-build-id} %{?_find_debuginfo_opts} "%{_builddir}/%{?buildsubdir}";\
     cp scylla-gdb.py ${RPM_BUILD_ROOT}/usr/src/debug/%{name}-%{version}/;\
     %{nil}
-
-%prep
-%setup -q
 
 %build
 %if 0%{?fedora}
@@ -82,7 +99,7 @@ cp -r api/api-doc $RPM_BUILD_ROOT%{_prefix}/lib/scylla/api
 cp -r tools/scyllatop $RPM_BUILD_ROOT%{_prefix}/lib/scylla/scyllatop
 cp -P dist/common/sbin/*  $RPM_BUILD_ROOT%{_sbindir}/
 
-%pre
+%pre server
 /usr/sbin/groupadd scylla 2> /dev/null || :
 /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sharedstatedir}/scylla scylla 2> /dev/null || :
 %if 0%{?rhel}
@@ -91,24 +108,20 @@ cp /tmp/sudoers /etc/sudoers
 rm /tmp/sudoers
 %endif
 
-%post
-grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
-echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
-echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
-mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+%post server
 # Upgrade coredump settings
 if [ -f /etc/systemd/coredump.conf ];then
     /usr/lib/scylla/scylla_coredump_setup
 fi
 %systemd_post scylla-server.service
 
-%preun
+%preun server
 %systemd_preun scylla-server.service
 
-%postun
+%postun server
 %systemd_postun
 
-%posttrans
+%posttrans server
 if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
     cp -a /tmp/%{name}-%{version}-%{release}/* /etc/scylla/
     rm -rf /tmp/%{name}-%{version}-%{release}/
@@ -119,16 +132,13 @@ systemctl restart collectd
 %clean
 rm -rf $RPM_BUILD_ROOT
 
-%files
+%files server
 %defattr(-,root,root)
 
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %{_sysconfdir}/security/limits.d/scylla.conf
 %{_sysconfdir}/sudoers.d/scylla
 %config(noreplace) %{_sysconfdir}/collectd.d/scylla.conf
-%attr(0755,root,root) %dir %{_sysconfdir}/scylla
-%config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
-%config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
 %config(noreplace) %{_sysconfdir}/scylla.d/*.conf
 %{_docdir}/scylla/README.md
@@ -164,6 +174,28 @@ rm -rf $RPM_BUILD_ROOT
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/data
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/commitlog
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
+
+%package conf
+Group:          Applications/Databases
+Summary:        Scylla configuration package
+License:        AGPLv3
+URL:            http://www.scylladb.com/
+Obsoletes:	scylla-server < 1.1
+
+%description conf
+This package contains the main scylla configuration file.
+
+%post conf
+grep -v api_ui_dir /etc/scylla/scylla.yaml | grep -v api_doc_dir > /tmp/scylla.yaml
+echo "api_ui_dir: /usr/lib/scylla/swagger-ui/dist/" >> /tmp/scylla.yaml
+echo "api_doc_dir: /usr/lib/scylla/api/api-doc/" >> /tmp/scylla.yaml
+mv /tmp/scylla.yaml /etc/scylla/scylla.yaml
+
+%files conf
+%defattr(-,root,root)
+%attr(0755,root,root) %dir %{_sysconfdir}/scylla
+%config(noreplace) %{_sysconfdir}/scylla/scylla.yaml
+%config(noreplace) %{_sysconfdir}/scylla/cassandra-rackdc.properties
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

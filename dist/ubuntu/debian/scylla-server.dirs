@@ -1,4 +1,3 @@
-etc/scylla
 etc/scylla.d
 usr/lib/scylla
 var/lib/scylla
