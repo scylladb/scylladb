@@ -225,7 +225,7 @@ messaging_service::messaging_service(gms::inet_address ip
         , uint16_t port
         , encrypt_what ew
         , uint16_t ssl_port
-        , ::shared_ptr<seastar::tls::server_credentials> credentials
+        , std::shared_ptr<seastar::tls::credentials_builder> credentials
         )
     : _listen_address(ip)
     , _port(port)
@@ -233,7 +233,7 @@ messaging_service::messaging_service(gms::inet_address ip
     , _encrypt_what(ew)
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _server(new rpc_protocol_server_wrapper(*_rpc, ipv4_addr { _listen_address.raw_addr(), _port }, rpc_resource_limits()))
-    , _credentials(std::move(credentials))
+    , _credentials(credentials ? credentials->build_server_credentials() : nullptr)
     , _server_tls([this]() -> std::unique_ptr<rpc_protocol_server_wrapper>{
         if (_encrypt_what == encrypt_what::none) {
             return nullptr;

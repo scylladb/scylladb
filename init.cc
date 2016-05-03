@@ -64,38 +64,22 @@ void init_ms_fd_gossiper(sstring listen_address
     }
 
     future<> f = make_ready_future<>();
-
-    // While tls::server_credentials themselves are "shard-safe" once they are
-    // fully initialized and "immutable", the ::shared_ptr holding them is not.
-    // We need to pre-create credentials for each shard, so we can hand them out.
-    // Because constructor is crap place to run future-calls...
-    std::vector<server_credentials> per_cpu_creds;
+    std::shared_ptr<credentials_builder> creds;
 
     if (ew != encrypt_what::none) {
-        dh_params dh(dh_params::level::MEDIUM);
-        for (size_t i = 0; i < smp::count; ++i) {
-            per_cpu_creds.emplace_back(dh);
-            per_cpu_creds.back().set_x509_key_file(ms_cert, ms_key,
-                            x509_crt_format::PEM).get();
-            if (ms_trust_store.empty()) {
-                per_cpu_creds.back().set_system_trust().get();
-            } else {
-                per_cpu_creds.back().set_x509_trust_file(ms_trust_store,
-                                x509_crt_format::PEM).get();
-            }
+        creds = std::make_shared<credentials_builder>();
+        creds->set_dh_level(dh_params::level::MEDIUM);
+
+        creds->set_x509_key_file(ms_cert, ms_key, x509_crt_format::PEM).get();
+        if (ms_trust_store.empty()) {
+            creds->set_system_trust().get();
+        } else {
+            creds->set_x509_trust_file(ms_trust_store, x509_crt_format::PEM).get();
         }
     }
 
-    struct creds_helper {
-        std::vector<server_credentials> & creds;
-
-        operator ::shared_ptr<server_credentials>() const {
-            return creds.empty() ? nullptr : ::make_shared<server_credentials>(std::move(creds[engine().cpu_id()]));
-        }
-    };
-
     // Init messaging_service
-    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds_helper{per_cpu_creds}).get();
+    net::get_messaging_service().start(listen, storage_port, ew, ssl_storage_port, creds).get();
 
     // #293 - do not stop anything
     //engine().at_exit([] { return net::get_messaging_service().stop(); });
