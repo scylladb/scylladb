@@ -1034,14 +1034,6 @@ void column_family::set_compaction_strategy(sstables::compaction_strategy_type s
     _compaction_strategy = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 }
 
-bool column_family::compaction_manager_queued() const {
-    return _compaction_manager_queued;
-}
-
-void column_family::set_compaction_manager_queued(bool compaction_manager_queued) {
-    _compaction_manager_queued = compaction_manager_queued;
-}
-
 bool column_family::pending_compactions() const {
     return _stats.pending_compactions > 0;
 }
@@ -1225,8 +1217,7 @@ database::database(const db::config& cfg)
                            &_memtables_throttler
     )
 {
-    // Start compaction manager with two tasks for handling compaction jobs.
-    _compaction_manager.start(2);
+    _compaction_manager.start();
     setup_collectd();
 
     dblog.info("Row: max_vector_size: {}, internal_count: {}", size_t(row::max_vector_size), size_t(row::internal_count));
@@ -2583,7 +2574,6 @@ void column_family::clear() {
 // if we implement notifications, whatnot.
 future<db::replay_position> column_family::discard_sstables(db_clock::time_point truncated_at) {
     assert(_compaction_disabled > 0);
-    assert(!compaction_manager_queued());
 
     return with_lock(_sstables_lock.for_read(), [this, truncated_at] {
         db::replay_position rp;

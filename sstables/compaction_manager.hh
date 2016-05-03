@@ -27,8 +27,8 @@
 #include "core/gate.hh"
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
-#include <deque>
 #include <vector>
+#include <list>
 #include <functional>
 #include "sstables/compaction.hh"
 
@@ -36,35 +36,26 @@ class column_family;
 
 // Compaction manager is a feature used to manage compaction jobs from multiple
 // column families pertaining to the same database.
-// For each compaction job handler, there will be one fiber that will check for
-// jobs, and if any, run it. FIFO ordering is implemented here.
 class compaction_manager {
 public:
     struct stats {
         int64_t pending_tasks = 0;
         int64_t completed_tasks = 0;
         uint64_t active_tasks = 0; // Number of compaction going on.
+        int64_t errors = 0;
     };
 private:
     struct task {
+        column_family* compacting_cf = nullptr;
         future<> compaction_done = make_ready_future<>();
-        semaphore compaction_sem = semaphore(0);
         seastar::gate compaction_gate;
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
-        // CF being currently compacted.
-        column_family* compacting_cf = nullptr;
         bool stopping = false;
         bool cleanup = false;
     };
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
-    std::vector<lw_shared_ptr<task>> _tasks;
-
-    // Queue shared among all tasks containing all column families to be compacted.
-    std::deque<column_family*> _cfs_to_compact;
-
-    // Queue shared among all tasks containing all column families to be cleaned up.
-    std::deque<column_family*> _cfs_to_cleanup;
+    std::list<lw_shared_ptr<task>> _tasks;
 
     // Used to wake up a caller of perform_cleanup() which is waiting for termination
     // of cleanup operation.
@@ -81,28 +72,36 @@ private:
     // Store sstables that are being compacted at the moment. That's needed to prevent
     // a sstable from being compacted twice.
     std::unordered_set<sstables::shared_sstable> _compacting_sstables;
-private:
-    void task_start(lw_shared_ptr<task>& task);
-    future<> task_stop(lw_shared_ptr<task>& task);
 
-    void add_column_family(column_family* cf);
-    // Signal the compaction task with the lowest amount of pending jobs.
-    // This function is called when a cf is submitted for compaction and we need
-    // to wake up a handler.
-    void signal_less_busy_task();
+    // Keep track of weight of ongoing compaction for each column family.
+    // That's used to allow parallel compaction on the same column family.
+    std::unordered_map<column_family*, std::unordered_set<int>> _weight_tracker;
+private:
+    void task_start(column_family* cf, bool cleanup);
+    future<> task_stop(lw_shared_ptr<task> task);
+
     // Returns if this compaction manager is accepting new requests.
-    // It will not accept new requests in case the manager was stopped and/or there
-    // is no task to handle them.
+    // It will not accept new requests in case the manager was stopped.
     bool can_submit();
+
+    // If weight is not taken for the column family, weight is registered and
+    // true is returned. Return false otherwise.
+    bool try_to_register_weight(column_family* cf, int weight);
+    // Deregister weight for a column family.
+    void deregister_weight(column_family* cf, int weight);
+
+    // If weight of compaction job is taken, it will be trimmed until its new
+    // weight is not taken or its size is equal to minimum threshold.
+    // Return weight of compaction job.
+    int trim_to_compact(column_family* cf, sstables::compaction_descriptor& descriptor);
 public:
     compaction_manager();
     ~compaction_manager();
 
     void register_collectd_metrics();
 
-    // Creates N fibers that will allow N compaction jobs to run in parallel.
-    // Defaults to only one fiber.
-    void start(int task_nr = 1);
+    // Start compaction manager.
+    void start();
 
     // Stop all fibers. Ongoing compactions will be waited.
     future<> stop();

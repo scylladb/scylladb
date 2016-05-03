@@ -977,7 +977,7 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     auto cm = make_lw_shared<compaction_manager>();
-    cm->start(2); // starting two task handlers.
+    cm->start();
 
     auto tmp = make_lw_shared<tmpdir>();
 
@@ -1021,14 +1021,17 @@ SEASTAR_TEST_CASE(compaction_manager_test) {
 
         BOOST_REQUIRE(cf->sstables_count() == generations->size());
         cf->trigger_compaction();
-        BOOST_REQUIRE(cm->get_stats().pending_tasks == 1);
+        BOOST_REQUIRE(cm->get_stats().active_tasks == 1);
 
         // wait for submitted job to finish.
-        auto end = [cm] { return cm->get_stats().pending_tasks == 0; };
+        auto end = [cm] { return cm->get_stats().active_tasks == 0; };
         return do_until(end, [] {
             // sleep until compaction manager selects cf for compaction.
             return sleep(std::chrono::milliseconds(100));
         }).then([cf, cm] {
+            BOOST_REQUIRE(cm->get_stats().completed_tasks == 1);
+            BOOST_REQUIRE(cm->get_stats().errors == 0);
+
             // remove cf from compaction manager; this will wait for the
             // ongoing compaction to finish.
             return cf->stop().then([cf, cm] {

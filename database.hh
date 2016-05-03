@@ -322,8 +322,6 @@ private:
     db::commitlog* _commitlog;
     sstables::compaction_strategy _compaction_strategy;
     compaction_manager& _compaction_manager;
-    // Whether or not a cf is queued by its compaction manager.
-    bool _compaction_manager_queued = false;
     int _compaction_disabled = 0;
     class memtable_flush_queue;
     std::unique_ptr<memtable_flush_queue> _flush_queue;
@@ -546,8 +544,6 @@ public:
         return _compaction_strategy;
     }
 
-    bool compaction_manager_queued() const;
-    void set_compaction_manager_queued(bool compaction_manager_queued);
     bool pending_compactions() const;
 
     const stats& get_stats() const {

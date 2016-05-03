@@ -887,7 +887,7 @@ SEASTAR_TEST_CASE(reshuffle) {
             }).then([sstp] {});
         }).then([] {
             auto cm = make_lw_shared<compaction_manager>();
-            cm->start(2); // starting two task handlers.
+            cm->start();
 
             column_family::config cfg;
             cfg.datadir = "tests/sstables/generation";
