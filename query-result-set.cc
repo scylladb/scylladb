@@ -141,6 +141,9 @@ result_set_builder::deserialize(const clustering_key& key)
     std::unordered_map<sstring, data_value> cells;
     auto i = key.begin(*_schema);
     for (auto&& col : _schema->clustering_key_columns()) {
+        if (i == key.end(*_schema)) {
+            break;
+        }
         cells.emplace(col.name_as_text(), col.type->deserialize_value(*i));
         ++i;
     }
