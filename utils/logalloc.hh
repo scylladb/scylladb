@@ -31,6 +31,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/circular_buffer.hh>
 #include "allocation_strategy.hh"
+#include <boost/heap/binomial_heap.hpp>
 
 namespace logalloc {
 
@@ -53,11 +54,21 @@ using eviction_fn = std::function<memory::reclaiming_result()>;
 
 // Groups regions for the purpose of statistics.  Can be nested.
 class region_group {
+    struct region_evictable_occupancy_ascending_less_comparator {
+        bool operator()(region_impl* r1, region_impl* r2) const;
+    };
+
+    using region_heap = boost::heap::binomial_heap<region_impl*,
+          boost::heap::compare<region_evictable_occupancy_ascending_less_comparator>,
+          boost::heap::allocator<std::allocator<region_impl*>>,
+          //constant_time_size<true> causes corruption with boost < 1.60
+          boost::heap::constant_time_size<false>>;
+
     region_group* _parent = nullptr;
     size_t _total_memory = 0;
     size_t _throttle_threshold = std::numeric_limits<size_t>::max();
     std::vector<region_group*> _subgroups;
-    std::vector<region_impl*> _regions;
+    region_heap _regions;
 
     struct allocating_function {
         virtual ~allocating_function() = default;
@@ -145,6 +156,26 @@ public:
             }
             return stop_iteration::no;
         });
+    }
+
+    // It would be easier to call update, but it is unfortunately broken in boost versions up to at
+    // least 1.59.
+    //
+    // One possibility would be to just test for delta sigdness, but we adopt an explicit call for
+    // two reasons:
+    //
+    // 1) it save us a branch
+    // 2) some callers would like to pass delta = 0. For instance, when we are making a region
+    //    evictable / non-evictable. Because the evictable occupancy changes, we would like to call
+    //    the full update cycle even then.
+    void increase_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+        _regions.increase(r_handle);
+        update(delta);
+    }
+
+    void decrease_usage(region_heap::handle_type& r_handle, ssize_t delta) {
+        _regions.decrease(r_handle);
+        update(delta);
     }
 
     //
