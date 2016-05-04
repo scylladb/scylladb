@@ -1805,6 +1805,7 @@ future<> storage_service::start_native_transport() {
                 if (ceo.at("enabled") == "true") {
                     cred = ::make_shared<seastar::tls::server_credentials>(::make_shared<seastar::tls::dh_params>(seastar::tls::dh_params::level::MEDIUM));
                     f = cred->set_x509_key_file(ceo.at("certificate"), ceo.at("keyfile"), seastar::tls::x509_crt_format::PEM);
+                    logger.info("Enabling encrypted CQL connections between client and server");
                 }
                 return f.then([cserver, addr, cred, keepalive] {
                     return cserver->invoke_on_all(&transport::cql_server::listen, addr, cred, keepalive);
