@@ -255,6 +255,13 @@ messaging_service::messaging_service(gms::inet_address ip
         ci.attach_auxiliary("src_cpu_id", src_cpu_id);
         return rpc::no_wait;
     });
+    // Do this on just cpu 0, to avoid duplicate logs.
+    if (engine().cpu_id() == 0) {
+        if (_server_tls) {
+            logger.info("Starting Encrypted Messaging Service on SSL port {}", _ssl_port);
+        }
+        logger.info("Starting Messaging Service on port {}", _port);
+    }
 }
 
 msg_addr messaging_service::get_source(const rpc::client_info& cinfo) {
