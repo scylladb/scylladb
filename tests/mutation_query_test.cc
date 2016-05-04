@@ -444,3 +444,36 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
         BOOST_REQUIRE_EQUAL(result.row_count(), 2);
     });
 }
+
+SEASTAR_TEST_CASE(test_result_row_count) {
+    return seastar::async([] {
+            auto s = make_schema();
+            auto now = gc_clock::now();
+            auto slice = partition_slice_builder(*s).build();
+
+            mutation m1(partition_key::from_single_value(*s, "key1"), s);
+
+            auto src = make_source({m1});
+
+
+            auto r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, now).get0(), s, slice);
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 0);
+
+            m1.set_static_cell("s1", data_value(bytes("S_v1")), 1);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, now).get0(), s, slice);
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
+
+            m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("A")), "v1", data_value(bytes("A_v1")), 1);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, now).get0(), s, slice);
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 1);
+
+            m1.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B_v1")), 1);
+            r = to_data_query_result(mutation_query(s, make_source({m1}), query::full_partition_range, slice, 10000, now).get0(), s, slice);
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 2);
+
+            mutation m2(partition_key::from_single_value(*s, "key2"), s);
+            m2.set_static_cell("s1", data_value(bytes("S_v1")), 1);
+            r = to_data_query_result(mutation_query(s, make_source({m1, m2}), query::full_partition_range, slice, 10000, now).get0(), s, slice);
+            BOOST_REQUIRE_EQUAL(r.row_count().value(), 3);
+    });
+}
