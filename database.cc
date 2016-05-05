@@ -905,6 +905,12 @@ column_family::rebuild_sstable_list(const std::vector<sstables::shared_sstable>&
             });
             _sstables_compacted_but_not_deleted.erase(e, _sstables_compacted_but_not_deleted.end());
             rebuild_statistics();
+        }).handle_exception([] (std::exception_ptr e) {
+            try {
+                std::rethrow_exception(e);
+            } catch (sstables::atomic_deletion_cancelled& adc) {
+                dblog.debug("Failed to delete sstables after compaction: {}", adc);
+            }
         });
     });
 }
