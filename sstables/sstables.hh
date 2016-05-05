@@ -605,12 +605,26 @@ struct sstable_to_delete {
 // shared among shard, so actual on-disk deletion of an sstable is deferred
 // until all shards agree it can be deleted.
 //
+// When shutting down, we will not be able to complete some deletions.
+// In that case, an atomic_deletion_cancelled exception is returned instead.
+//
 // This function only solves the second problem for now.
 future<> delete_atomically(std::vector<shared_sstable> ssts);
 future<> delete_atomically(std::vector<sstable_to_delete> ssts);
 
+class atomic_deletion_cancelled : public std::exception {
+    std::string _msg;
+public:
+    explicit atomic_deletion_cancelled(std::vector<sstring> names);
+    template <typename StringRange>
+    explicit atomic_deletion_cancelled(StringRange range)
+            : atomic_deletion_cancelled(std::vector<sstring>{range.begin(), range.end()}) {
+    }
+    const char* what() const noexcept override;
+};
+
 // Cancel any deletions scheduled by delete_atomically() and make their
-// futures complete
+// futures complete (with an atomic_deletion_cancelled exception).
 void cancel_atomic_deletions();
 
 }
