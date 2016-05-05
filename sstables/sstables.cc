@@ -1858,7 +1858,13 @@ sstable::~sstable() {
         try {
             delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
-                            sstlog.warn("Exception when deleting sstable file: {}", eptr);
+                            try {
+                                std::rethrow_exception(eptr);
+                            } catch (atomic_deletion_cancelled&) {
+                                sstlog.debug("Exception when deleting sstable file: {}", eptr);
+                            } catch (...) {
+                                sstlog.warn("Exception when deleting sstable file: {}", eptr);
+                            }
                         });
         } catch (...) {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
