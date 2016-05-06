@@ -592,6 +592,11 @@ int main(int ac, char** av) {
             engine().at_exit([] {
                 return repair_shutdown(service::get_local_storage_service().db());
             });
+            engine().at_exit([&db] {
+                return db.invoke_on_all([](auto& db) {
+                    return db.get_compaction_manager().stop();
+                });
+            });
         }).or_terminate();
     });
 }
