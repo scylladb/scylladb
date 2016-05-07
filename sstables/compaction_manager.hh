@@ -25,6 +25,7 @@
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "core/gate.hh"
+#include "core/shared_future.hh"
 #include "log.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include <vector>
@@ -47,7 +48,7 @@ public:
 private:
     struct task {
         column_family* compacting_cf = nullptr;
-        future<> compaction_done = make_ready_future<>();
+        shared_future<> compaction_done = make_ready_future<>();
         seastar::gate compaction_gate;
         exponential_backoff_retry compaction_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(300));
         bool stopping = false;
@@ -56,10 +57,6 @@ private:
 
     // compaction manager may have N fibers to allow parallel compaction per shard.
     std::list<lw_shared_ptr<task>> _tasks;
-
-    // Used to wake up a caller of perform_cleanup() which is waiting for termination
-    // of cleanup operation.
-    std::unordered_map<column_family*, promise<>> _cleanup_waiters;
 
     // Used to assert that compaction_manager was explicitly stopped, if started.
     bool _stopped = true;
@@ -77,7 +74,7 @@ private:
     // That's used to allow parallel compaction on the same column family.
     std::unordered_map<column_family*, std::unordered_set<int>> _weight_tracker;
 private:
-    void task_start(column_family* cf, bool cleanup);
+    lw_shared_ptr<task> task_start(column_family* cf, bool cleanup);
     future<> task_stop(lw_shared_ptr<task> task);
 
     // Returns if this compaction manager is accepting new requests.

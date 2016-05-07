@@ -108,7 +108,7 @@ void compaction_manager::deregister_weight(column_family* cf, int weight) {
     it->second.erase(weight);
 }
 
-void compaction_manager::task_start(column_family* cf, bool cleanup) {
+lw_shared_ptr<compaction_manager::task> compaction_manager::task_start(column_family* cf, bool cleanup) {
     // NOTE: Compaction code runs in parallel to the rest of the system.
     // When it's time to shutdown, we need to prevent any new compaction
     // from starting and wait for a possible ongoing compaction.
@@ -183,15 +183,6 @@ void compaction_manager::task_start(column_family* cf, bool cleanup) {
             return operation.then([this, task] {
                 _stats.completed_tasks++;
                 task->compaction_retry.reset();
-
-                if (task->cleanup) {
-                    auto it = _cleanup_waiters.find(task->compacting_cf);
-                    if (it != _cleanup_waiters.end()) {
-                        // Notificate waiter of cleanup termination.
-                        it->second.set_value();
-                        _cleanup_waiters.erase(it);
-                    }
-                }
                 return make_ready_future<>();
             }).finally([this, task, weight, sstables_to_compact = std::move(sstables_to_compact)] {
                 // Remove compacted sstables from the set of compacting sstables.
@@ -254,13 +245,14 @@ void compaction_manager::task_start(column_family* cf, bool cleanup) {
     }).finally([this, task] {
         _tasks.remove(task);
     });
+    return task;
 }
 
 future<> compaction_manager::task_stop(lw_shared_ptr<compaction_manager::task> task) {
     task->stopping = true;
     return task->compaction_gate.close().then([task] {
-        return task->compaction_done.then([task] {
-            task->compaction_done = make_ready_future<>();
+        auto f = task->compaction_done.get_future();
+        return f.then([task] {
             task->compaction_gate = seastar::gate();
             task->stopping = false;
             return make_ready_future<>();
@@ -312,10 +304,6 @@ future<> compaction_manager::stop() {
             return this->task_stop(task);
         });
     }).then([this] {
-        for (auto& it : _cleanup_waiters) {
-            it.second.set_exception(std::runtime_error("cleanup interrupted due to shutdown"));
-        }
-        _cleanup_waiters.clear();
         _weight_tracker.clear();
         cmlog.info("Stopped");
         return make_ready_future<>();
@@ -342,13 +330,9 @@ future<> compaction_manager::perform_cleanup(column_family* cf) {
             throw std::runtime_error(sprint("cleanup request failed: there is an ongoing cleanup on %s.%s", cf->schema()->ks_name(), cf->schema()->cf_name()));
         }
     }
-    task_start(cf, true);
-
-    promise<> p;
-    future<> f = p.get_future();
-    _cleanup_waiters.insert(std::make_pair(cf, std::move(p)));
-    // Wait for termination of cleanup operation.
-    return std::move(f);
+    auto task = task_start(cf, true);
+    auto f = task->compaction_done.get_future();
+    return f.then([task] {});
 }
 
 future<> compaction_manager::remove(column_family* cf) {
