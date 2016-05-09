@@ -118,7 +118,7 @@ public:
             : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, local)) {
     }
     rpc_protocol_client_wrapper(rpc_protocol& proto, rpc::client_options opts, ipv4_addr addr, ipv4_addr local, ::shared_ptr<seastar::tls::server_credentials> c)
-            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, seastar::tls::connect(c, addr, local)))
+            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), seastar::tls::socket(c), addr, local))
     {}
     auto get_stats() const { return _p->get_stats(); }
     future<> stop() { return _p->stop(); }
