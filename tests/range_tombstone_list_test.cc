@@ -28,6 +28,7 @@
 #include "keys.hh"
 #include "schema_builder.hh"
 #include "range_tombstone_list.hh"
+#include "range_tombstone_to_prefix_tombstone_converter.hh"
 
 #include "disk-error-handler.hh"
 
@@ -569,4 +570,24 @@ BOOST_AUTO_TEST_CASE(test_search_with_empty_end) {
 
     BOOST_REQUIRE(6 == l.search_tombstone_covering(*s, key({15})).timestamp);
     BOOST_REQUIRE(6 == l.search_tombstone_covering(*s, key({1000})).timestamp);
+}
+
+BOOST_AUTO_TEST_CASE(test_range_tombstone_to_prefix_tombstone_converter) {
+    range_tombstone_list l(*s);
+
+    auto rt1 = range_tombstone(key({1}), key({1}), {7, gc_now});
+    auto rt2 = range_tombstone(key({1, 2}), key({1, 2}), {8, gc_now});
+    l.apply(*s, rt1);
+    l.apply(*s, rt2);
+
+    range_tombstone_to_prefix_tombstone_converter converter;
+    std::vector<clustering_key_prefix> keys = { key({1, 2}), key({1}) };
+    auto it = keys.begin();
+    for (auto&& rt : l) {
+        auto prefix = converter.convert(*s, rt);
+        if (prefix) {
+            BOOST_REQUIRE(prefix->equal(*s, *it));
+            ++it;
+        }
+    }
 }
