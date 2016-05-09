@@ -1,0 +1,5 @@
+scylla-env (1.0-ubuntu1) trusty; urgency=medium
+
+  * Initial release.
+
+ -- Takuya ASADA <syuu@scylladb.com>  Mon, 09 May 2016 18:32:52 +0000

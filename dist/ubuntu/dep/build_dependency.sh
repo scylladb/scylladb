@@ -15,6 +15,13 @@ if [ "$RELEASE" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
         debuild -r fakeroot --no-tgz-check -us -uc
         cd -
     fi
+    if [ ! -f build/scylla-env_1.0-0ubuntu1_all.deb ]; then
+        rm -rf build/scylla-env-1.0
+        cp -a dist/common/dep/scylla-env-1.0 build/
+        cd build/scylla-env-1.0
+        debuild -r fakeroot --no-tgz-check -us -uc
+        cd -
+    fi
 fi
 
 if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then
