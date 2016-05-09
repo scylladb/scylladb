@@ -22,6 +22,27 @@ if [ "$RELEASE" = "14.04" ] || [ "$DISTRIBUTION" = "Debian" ]; then
         debuild -r fakeroot --no-tgz-check -us -uc
         cd -
     fi
+    if [ ! -f build/scylla-gdb_7.11-0ubuntu1_amd64.deb ]; then
+        rm -rf build/gdb-7.11
+        if [ ! -f build/gdb_7.11-0ubuntu1.dsc ]; then
+            wget -O build/gdb_7.11-0ubuntu1.dsc http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.dsc
+        fi
+        if [ ! -f build/gdb_7.11.orig.tar.xz ]; then
+            wget -O build/gdb_7.11.orig.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11.orig.tar.xz
+        fi
+        if [ ! -f build/gdb_7.11-0ubuntu1.debian.tar.xz ]; then
+            wget -O build/gdb_7.11-0ubuntu1.debian.tar.xz http://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_7.11-0ubuntu1.debian.tar.xz
+        fi
+        cd build
+        dpkg-source -x gdb_7.11-0ubuntu1.dsc
+        mv gdb_7.11.orig.tar.xz scylla-gdb_7.11.orig.tar.xz
+        cd -
+        cd build/gdb-7.11
+        patch -p0 < ../../dist/ubuntu/dep/gdb.diff
+        echo Y | sudo mk-build-deps -i -r
+        debuild -r fakeroot --no-tgz-check -us -uc
+        cd -
+    fi
 fi
 
 if [ ! -f build/antlr3-c++-dev_3.5.2-1_all.deb ]; then
