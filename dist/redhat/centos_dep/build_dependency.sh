@@ -58,10 +58,10 @@ sudo yum install -y rpm-devel python34-devel guile-devel readline-devel ncurses-
 sudo yum install -y dos2unix
 
 if [ ! -f $RPMBUILD/RPMS/noarch/scylla-env-1.0-1.el7.centos.noarch.rpm ]; then
-    cd dist/redhat/centos_dep
+    cd dist/common/centos_dep
     tar cpf $RPMBUILD/SOURCES/scylla-env-1.0.tar scylla-env-1.0
     cd -
-    rpmbuild --define "_topdir $RPMBUILD" --ba dist/redhat/centos_dep/scylla-env.spec
+    rpmbuild --define "_topdir $RPMBUILD" --ba dist/common/centos_dep/scylla-env.spec
 fi
 do_install scylla-env-1.0-1.el7.centos.noarch.rpm
 
