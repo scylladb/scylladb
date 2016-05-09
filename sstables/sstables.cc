@@ -45,6 +45,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/insert.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/algorithm/set_algorithm.hpp>
@@ -1857,7 +1858,13 @@ sstable::~sstable() {
         try {
             delete_atomically({sstable_to_delete(filename(component_type::TOC), _shared)}).handle_exception(
                         [op = background_jobs().start()] (std::exception_ptr eptr) {
-                            sstlog.warn("Exception when deleting sstable file: {}", eptr);
+                            try {
+                                std::rethrow_exception(eptr);
+                            } catch (atomic_deletion_cancelled&) {
+                                sstlog.debug("Exception when deleting sstable file: {}", eptr);
+                            } catch (...) {
+                                sstlog.warn("Exception when deleting sstable file: {}", eptr);
+                            }
                         });
         } catch (...) {
             sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
@@ -2048,7 +2055,9 @@ do_delete_atomically(std::vector<sstable_to_delete> atomic_deletion_set, unsigne
 
     if (g_atomic_deletions_cancelled) {
         deletion_logger.debug("atomic deletions disabled, erroring out");
-        throw std::runtime_error(sprint("atomic deletions disabled; not deleting %s", atomic_deletion_set));
+        using boost::adaptors::transformed;
+        throw atomic_deletion_cancelled(atomic_deletion_set
+                                        | transformed(std::mem_fn(&sstable_to_delete::name)));
     }
 
     // Insert atomic_deletion_set into the list of sets pending deletion.  If the new set
@@ -2143,11 +2152,20 @@ cancel_atomic_deletions() {
     g_atomic_deletions_cancelled = true;
     for (auto&& pd : g_atomic_deletion_sets) {
         for (auto&& c : pd->completions) {
-            c->set_exception(std::runtime_error(sprint("Atomic sstable deletions cancelled; not deleting %s", pd->names)));
+            c->set_exception(atomic_deletion_cancelled(pd->names));
         }
     }
     g_atomic_deletion_sets.clear();
     g_shards_agreeing_to_delete_sstable.clear();
+}
+
+atomic_deletion_cancelled::atomic_deletion_cancelled(std::vector<sstring> names)
+        : _msg(sprint("atomic deletions cancelled; not deleting %s", names)) {
+}
+
+const char*
+atomic_deletion_cancelled::what() const noexcept {
+    return _msg.c_str();
 }
 
 }
