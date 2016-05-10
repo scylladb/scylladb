@@ -1794,6 +1794,20 @@ double sstable::get_compression_ratio() const {
     }
 }
 
+void sstable::set_sstable_level(uint32_t new_level) {
+    auto entry = _statistics.contents.find(metadata_type::Stats);
+    if (entry == _statistics.contents.end()) {
+        return;
+    }
+    auto& p = entry->second;
+    if (!p) {
+        throw std::runtime_error("Statistics is malformed");
+    }
+    stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+    sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
+    s.sstable_level = new_level;
+}
+
 future<> sstable::mutate_sstable_level(uint32_t new_level) {
     if (!has_component(component_type::Statistics)) {
         return make_ready_future<>();

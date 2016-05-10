@@ -973,7 +973,13 @@ column_family::load_new_sstables(std::vector<sstables::entry_descriptor> new_tab
     return parallel_for_each(new_tables, [this] (auto comps) {
         auto sst = make_lw_shared<sstables::sstable>(_schema->ks_name(), _schema->cf_name(), _config.datadir, comps.generation, comps.version, comps.format);
         return sst->load().then([this, sst] {
-            return sst->mutate_sstable_level(0);
+            // This sets in-memory level of sstable to 0.
+            // When loading a migrated sstable, it's important to set it to level 0 because
+            // leveled compaction relies on a level > 0 having no overlapping sstables.
+            // If Scylla reboots before migrated sstable gets compacted, leveled strategy
+            // is smart enough to detect a sstable that overlaps and set its in-memory
+            // level to 0.
+            return sst->set_sstable_level(0);
         }).then([this, sst] {
             auto first = sst->get_first_partition_key(*_schema);
             auto last = sst->get_last_partition_key(*_schema);
