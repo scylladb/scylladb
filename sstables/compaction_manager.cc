@@ -300,7 +300,7 @@ future<> compaction_manager::stop() {
     // from the list when done.
     auto tasks = _tasks;
     return do_with(std::move(tasks), [this] (std::list<lw_shared_ptr<task>>& tasks) {
-        return do_for_each(tasks, [this] (auto& task) {
+        return parallel_for_each(tasks, [this] (auto& task) {
             return this->task_stop(task);
         });
     }).then([this] {
