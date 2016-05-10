@@ -766,7 +766,7 @@ public:
     const sstring& datadir() const {
         return _config.datadir;
     }
-private:
+
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
 

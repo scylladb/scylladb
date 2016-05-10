@@ -458,12 +458,6 @@ future<> lister::scan_dir(sstring name, lister::dir_entry_types type, walker_typ
     });
 }
 
-static std::vector<sstring> parse_fname(sstring filename) {
-    std::vector<sstring> comps;
-    boost::split(comps , filename ,boost::is_any_of(".-"));
-    return comps;
-}
-
 static bool belongs_to_current_shard(const schema& s, const partition_key& first, const partition_key& last) {
     auto key_shard = [&s] (const partition_key& pk) {
         auto token = dht::global_partitioner().get_token(s, pk);
@@ -1284,48 +1278,29 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
     auto i = _keyspaces.find(ks_name);
     if (i == _keyspaces.end()) {
         dblog.warn("Skipping undefined keyspace: {}", ks_name);
+        return make_ready_future<>();
     } else {
         dblog.info("Populating Keyspace {}", ks_name);
-        return lister::scan_dir(ksdir, { directory_entry_type::directory }, [this, ksdir, ks_name] (directory_entry de) {
-            auto comps = parse_fname(de.name);
-            if (comps.size() < 2) {
-                dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
-                return make_ready_future<>();
-            }
-
-            sstring cfname = comps[0];
-            sstring uuidst = comps[1];
-
-            try {
-                auto&& uuid = [&] {
-                    try {
-                        return find_uuid(ks_name, cfname);
-                    } catch (const std::out_of_range& e) {
-                        std::throw_with_nested(no_such_column_family(ks_name, cfname));
-                    }
-                }();
-                auto& cf = find_column_family(uuid);
-
-                // #870: Check that the directory name matches
-                // the current, expected UUID of the CF.
-                if (utils::UUID(uuidst) == uuid) {
-                    // FIXME: Increase parallelism.
-                    auto sstdir = ksdir + "/" + de.name;
-                    dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
-                    return cf.populate(sstdir);
-                }
-                // Nope. Warn and ignore.
-                dblog.info("Keyspace {}: Skipping obsolete version of CF {} ({})", ksdir, cfname, uuidst);
-            } catch (marshal_exception&) {
-                // Bogus UUID part of directory name
-                dblog.warn("{}, CF {}: malformed UUID: {}. Ignoring", ksdir, comps[0], uuidst);
-            } catch (no_such_column_family&) {
-                dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
-            }
-            return make_ready_future<>();
-        });
+        auto& ks = i->second;
+        return parallel_for_each(std::cbegin(_column_families), std::cend(_column_families),
+            [ks_name, &ks] (const std::pair<utils::UUID, lw_shared_ptr<column_family>>& e) {
+                utils::UUID uuid = e.first;
+                lw_shared_ptr<column_family> cf = e.second;
+                sstring cfname = cf->schema()->cf_name();
+                auto sstdir = ks.column_family_directory(cfname, uuid);
+                dblog.info("Keyspace {}: Reading CF {} ", ks_name, cfname);
+                return ks.make_directory_for_column_family(cfname, uuid).then([cf, sstdir] {
+                    return cf->populate(sstdir);
+                }).handle_exception([ks_name, cfname, sstdir](std::exception_ptr eptr) {
+                    std::string msg =
+                        sprint("Exception while populating keyspace '%s' with column family '%s' from file '%s': %s",
+                               ks_name, cfname, sstdir, eptr);
+                    dblog.error("Exception while populating keyspace '{}' with column family '{}' from file '{}': {}",
+                                ks_name, cfname, sstdir, eptr);
+                    throw std::runtime_error(msg.c_str());
+                });
+            });
     }
-    return make_ready_future<>();
 }
 
 future<> database::populate(sstring datadir) {
