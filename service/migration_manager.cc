@@ -396,6 +396,21 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
+future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally) {
+    return announce_keyspace_update(ksm, api::new_timestamp(), announce_locally);
+}
+
+future<> migration_manager::announce_keyspace_update(lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally) {
+    ksm->validate();
+    auto& proxy = get_local_storage_proxy();
+    if (!proxy.get_db().local().has_keyspace(ksm->name())) {
+        throw exceptions::configuration_exception(sprint("Cannot update non existing keyspace '%s'.", ksm->name()));
+    }
+    logger.info("Update Keyspace: {}", ksm);
+    auto mutations = db::schema_tables::make_create_keyspace_mutations(ksm, timestamp);
+    return announce(std::move(mutations), announce_locally);
+}
+
 future<>migration_manager::announce_new_keyspace(lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
 {
     return announce_new_keyspace(ksm, api::new_timestamp(), announce_locally);

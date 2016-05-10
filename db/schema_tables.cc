@@ -674,17 +674,19 @@ future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& p
     for (auto&& key : diff.entries_differing) {
         altered.emplace_back(key);
     }
-    return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-        return proxy.local().get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
-            return do_for_each(created, [&db](auto&& val) {
-                auto ksm = create_keyspace_from_schema_partition(val);
-                return db.create_keyspace(ksm).then([ksm] {
-                    return service::get_local_migration_manager().notify_create_keyspace(ksm);
+    return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) mutable {
+        return do_with(std::move(altered), [&proxy, &created](auto& altered) {
+            return proxy.local().get_db().invoke_on_all([&created, &altered] (database& db) {
+                return do_for_each(created, [&db](auto&& val) {
+                    auto ksm = create_keyspace_from_schema_partition(val);
+                    return db.create_keyspace(ksm).then([ksm] {
+                        return service::get_local_migration_manager().notify_create_keyspace(ksm);
+                    });
+                }).then([&altered, &db]() {
+                    return do_for_each(altered, [&db](auto& name) {
+                        return db.update_keyspace(name);
+                    });
                 });
-            }).then([&altered, &db] () mutable {
-                for (auto&& name : altered) {
-                    db.update_keyspace(name);
-                }
             });
         });
     }).then([dropped = std::move(dropped)] () {

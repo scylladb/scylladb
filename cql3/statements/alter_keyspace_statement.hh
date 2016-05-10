@@ -41,10 +41,10 @@
 
 #pragma once
 
+#include <memory>
+
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
-
-#include <memory>
 
 namespace cql3 {
 
@@ -52,69 +52,18 @@ namespace statements {
 
 class alter_keyspace_statement : public schema_altering_statement {
     sstring _name;
-    std::unique_ptr<ks_prop_defs> _attrs;
+    ::shared_ptr<ks_prop_defs> _attrs;
 
 public:
-    alter_keyspace_statement(sstring name, std::unique_ptr<ks_prop_defs>&& attrs)
-        : _name{name}
-        , _attrs{std::move(attrs)}
-    { }
+    alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs);
 
-    virtual const sstring& keyspace() const override {
-        return _name;
-    }
+    const sstring& keyspace() const override;
 
-#if 0
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
-        state.hasKeyspaceAccess(name, Permission.ALTER);
-    }
-
-    public void validate(ClientState state) throws RequestValidationException
-    {
-        KSMetaData ksm = Schema.instance.getKSMetaData(name);
-        if (ksm == null)
-            throw new InvalidRequestException("Unknown keyspace " + name);
-        if (ksm.name.equalsIgnoreCase(SystemKeyspace.NAME))
-            throw new InvalidRequestException("Cannot alter system keyspace");
-
-        attrs.validate();
-
-        if (attrs.getReplicationStrategyClass() == null && !attrs.getReplicationOptions().isEmpty())
-        {
-            throw new ConfigurationException("Missing replication strategy class");
-        }
-        else if (attrs.getReplicationStrategyClass() != null)
-        {
-            // The strategy is validated through KSMetaData.validate() in announceKeyspaceUpdate below.
-            // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
-            // so doing proper validation here.
-            AbstractReplicationStrategy.validateReplicationStrategy(name,
-                                                                    AbstractReplicationStrategy.getClass(attrs.getReplicationStrategyClass()),
-                                                                    StorageService.instance.getTokenMetadata(),
-                                                                    DatabaseDescriptor.getEndpointSnitch(),
-                                                                    attrs.getReplicationOptions());
-        }
-    }
-
-    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
-    {
-        KSMetaData ksm = Schema.instance.getKSMetaData(name);
-        // In the (very) unlikely case the keyspace was dropped since validate()
-        if (ksm == null)
-            throw new InvalidRequestException("Unknown keyspace " + name);
-
-        MigrationManager.announceKeyspaceUpdate(attrs.asKSMetadataUpdate(ksm), isLocalOnly);
-        return true;
-    }
-
-    public Event.SchemaChange changeEvent()
-    {
-        return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, keyspace());
-    }
-#endif
+    future<> check_access(const service::client_state& state) override;
+    void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override;
+    future<bool> announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) override;
+    shared_ptr<transport::event::schema_change> change_event() override;
 };
 
 }
-
 }

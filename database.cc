@@ -1448,8 +1448,17 @@ void database::add_keyspace(sstring name, keyspace k) {
     _keyspaces.emplace(std::move(name), std::move(k));
 }
 
-void database::update_keyspace(const sstring& name) {
-    throw std::runtime_error("update keyspace not implemented");
+future<> database::update_keyspace(const sstring& name) {
+    auto& proxy = service::get_storage_proxy();
+    return db::schema_tables::read_schema_partition_for_keyspace(proxy, db::schema_tables::KEYSPACES, name).then([this, name](db::schema_tables::schema_result_value_type&& v) {
+        auto& ks = find_keyspace(name);
+
+        auto tmp_ksm = db::schema_tables::create_keyspace_from_schema_partition(v);
+        auto new_ksm = ::make_lw_shared<keyspace_metadata>(tmp_ksm->name(), tmp_ksm->strategy_name(), tmp_ksm->strategy_options(), tmp_ksm->durable_writes(),
+                        boost::copy_range<std::vector<schema_ptr>>(ks.metadata()->cf_meta_data() | boost::adaptors::map_values), ks.metadata()->user_types());
+        ks.update_from(std::move(new_ksm));
+        return service::get_local_migration_manager().notify_update_keyspace(ks.metadata());
+    });
 }
 
 void database::drop_keyspace(const sstring& name) {
@@ -1601,6 +1610,11 @@ keyspace::get_replication_strategy() const {
 void
 keyspace::set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy) {
     _replication_strategy = std::move(replication_strategy);
+}
+
+void keyspace::update_from(::lw_shared_ptr<keyspace_metadata> ksm) {
+    _metadata = std::move(ksm);
+   create_replication_strategy(_metadata->strategy_options());
 }
 
 column_family::config
