@@ -734,10 +734,24 @@ public:
         : _metadata(std::move(metadata))
         , _config(std::move(cfg))
     {}
-    const lw_shared_ptr<keyspace_metadata>& metadata() const {
+
+    void update_from(lw_shared_ptr<keyspace_metadata>);
+
+    /** Note: return by shared pointer value, since the meta data is
+     * semi-volatile. I.e. we could do alter keyspace at any time, and
+     * boom, it is replaced.
+     */
+    lw_shared_ptr<keyspace_metadata> metadata() const {
         return _metadata;
     }
     void create_replication_strategy(const std::map<sstring, sstring>& options);
+    /**
+     * This should not really be return by reference, since replication
+     * strategy is also volatile in that it could be replaced at "any" time.
+     * However, all current uses at least are "instantateous", i.e. does not
+     * carry it across a continuation. So it is sort of same for now, but
+     * should eventually be refactored.
+     */
     locator::abstract_replication_strategy& get_replication_strategy();
     const locator::abstract_replication_strategy& get_replication_strategy() const;
     column_family::config make_column_family_config(const schema& s) const;
@@ -872,7 +886,7 @@ public:
     keyspace& find_keyspace(const sstring& name);
     const keyspace& find_keyspace(const sstring& name) const;
     bool has_keyspace(const sstring& name) const;
-    void update_keyspace(const sstring& name);
+    future<> update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
     const auto& keyspaces() const { return _keyspaces; }
     std::vector<sstring> get_non_system_keyspaces() const;
