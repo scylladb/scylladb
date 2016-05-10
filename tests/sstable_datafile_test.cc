@@ -1951,6 +1951,45 @@ SEASTAR_TEST_CASE(leveled_06) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(leveled_07) {
+    // Check that sstable, with level > 0, that overlaps with another in the same level is sent back to L0.
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {}, {}, {}, utf8_type));
+
+    column_family::config cfg;
+    compaction_manager cm;
+    cfg.enable_disk_writes = false;
+    cfg.enable_commitlog = false;
+    auto cf = make_lw_shared<column_family>(s, cfg, column_family::no_commitlog(), cm);
+    cf->mark_ready_for_writes();
+
+    auto key_and_token_pair = token_generation_for_current_shard(5);
+    auto min_key = key_and_token_pair[0].first;
+    auto max_key = key_and_token_pair[key_and_token_pair.size()-1].first;
+
+    // Creating two sstables which key range overlap.
+    add_sstable_for_leveled_test(cf, /*gen*/1, /*data_size*/0, /*level*/1, min_key, max_key);
+    BOOST_REQUIRE(cf->get_sstables()->size() == 1);
+
+    add_sstable_for_leveled_test(cf, /*gen*/2, /*data_size*/0, /*level*/1, key_and_token_pair[1].first, max_key);
+    BOOST_REQUIRE(cf->get_sstables()->size() == 2);
+
+    BOOST_REQUIRE(sstable_overlaps(cf, 1, 2) == true);
+
+    auto max_sstable_size_in_mb = 1;
+    auto candidates = get_candidates_for_leveled_strategy(*cf);
+    leveled_manifest manifest = leveled_manifest::create(*cf, candidates, max_sstable_size_in_mb);
+    BOOST_REQUIRE(manifest.get_level_size(0) == 1);
+    BOOST_REQUIRE(manifest.get_level_size(1) == 1);
+
+    auto& l0 = manifest.get_level(0);
+    auto& sst = l0.front();
+    BOOST_REQUIRE(sst->generation() == 2);
+    BOOST_REQUIRE(sst->get_sstable_level() == 0);
+
+    return make_ready_future<>();
+}
+
 static lw_shared_ptr<key_reader> prepare_key_reader(schema_ptr s,
     const std::vector<shared_sstable>& ssts, const query::partition_range& range)
 {
