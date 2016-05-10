@@ -232,20 +232,8 @@ public:
 
     void send_back_to_L0(sstables::shared_sstable& sstable) {
         remove(sstable);
-#if 0
-        try
-        {
-            sstable.descriptor.getMetadataSerializer().mutateLevel(sstable.descriptor, 0);
-            sstable.reloadSSTableMetadata();
-            add(sstable);
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException("Could not reload sstable meta data", e);
-        }
-#else
         _generations[0].push_back(sstable);
-#endif
+        sstable->set_sstable_level(0);
     }
 
 #if 0
