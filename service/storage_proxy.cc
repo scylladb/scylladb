@@ -2946,8 +2946,8 @@ void storage_proxy::init_messaging_service() {
                     return ms.send_mutation_done(net::messaging_service::msg_addr{reply_to, shard}, shard, response_id).then_wrapped([] (future<> f) {
                         f.ignore_ready_future();
                     });
-                }).handle_exception([] (std::exception_ptr eptr) {
-                    logger.warn("MUTATION verb handler: {}", eptr);
+                }).handle_exception([reply_to, shard] (std::exception_ptr eptr) {
+                    logger.warn("Failed to apply mutation from {}#{}: {}", reply_to, shard, eptr);
                 }),
                 parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m, &p] (gms::inet_address forward) {
                     auto& ms = net::get_local_messaging_service();
