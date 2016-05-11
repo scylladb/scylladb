@@ -423,10 +423,9 @@ void query_processor::migration_subscriber::on_update_keyspace(const sstring& ks
 
 void query_processor::migration_subscriber::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
 {
-    if (columns_changed) {
-        log.info("Column definitions for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
-        remove_invalid_prepared_statements(ks_name, cf_name);
-    }
+    // #1255: Ignoring columns_changed deliberately.
+    log.info("Column definitions for {}.{} changed, invalidating related prepared statements", ks_name, cf_name);
+    remove_invalid_prepared_statements(ks_name, cf_name);
 }
 
 void query_processor::migration_subscriber::on_update_user_type(const sstring& ks_name, const sstring& type_name)
