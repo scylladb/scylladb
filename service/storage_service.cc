@@ -780,7 +780,7 @@ void storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state s
                     logger.warn("Up notification failed {}: {}", endpoint, std::current_exception());
                 }
             }
-        });
+        }).get();
     }
 }
 
