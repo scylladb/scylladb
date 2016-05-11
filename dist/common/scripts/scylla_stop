@@ -1,5 +1,18 @@
 #!/bin/bash -e
 
+. /etc/os-release
+if [ "$ID" = "ubuntu" ]; then
+    . /etc/default/scylla-server
+else
+    . /etc/sysconfig/scylla-server
+fi
+for i in /etc/scylla.d/*.conf; do
+    if [ "$i" = "/etc/scylla.d/*.conf" ]; then
+        break
+    fi
+    . "$i"
+done
+
 if [ "$NETWORK_MODE" = "virtio" ]; then
     ip tuntap del mode tap dev $TAP
 elif [ "$NETWORK_MODE" = "dpdk" ]; then

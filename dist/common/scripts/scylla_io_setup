@@ -1,5 +1,18 @@
 #!/bin/bash
 
+. /etc/os-release
+if [ "$ID" = "ubuntu" ]; then
+    . /etc/default/scylla-server
+else
+    . /etc/sysconfig/scylla-server
+fi
+for i in /etc/scylla.d/*.conf; do
+    if [ "$i" = "/etc/scylla.d/*.conf" ]; then
+        break
+    fi
+    . "$i"
+done
+
 print_usage() {
     echo "scylla_io_setup --ami"
     echo "  --ami				setup AMI instance"
@@ -29,13 +42,6 @@ output_to_user()
     echo "$1"
     logger -p user.err "$1"
 }
-
-. /etc/os-release
-if [ "$NAME" = "Ubuntu" ]; then
-   . /etc/default/scylla-server
-else
-   . /etc/sysconfig/scylla-server
-fi
 
 if [ `is_developer_mode` -eq 0 ]; then
     SMP=`echo $SCYLLA_ARGS|grep smp|sed -e "s/^.*smp\(\s\+\|=\)\([0-9]*\).*$/\2/"`
