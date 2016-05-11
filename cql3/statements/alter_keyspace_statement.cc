@@ -68,7 +68,7 @@ void cql3::statements::alter_keyspace_statement::validate(distributed<service::s
 
         _attrs->validate();
 
-        if (!bool(_attrs->get_replication_strategy_class())) {
+        if (!bool(_attrs->get_replication_strategy_class()) && !_attrs->get_replication_options().empty()) {
             throw exceptions::configuration_exception("Missing replication strategy class");
         }
 #if 0
@@ -89,7 +89,8 @@ void cql3::statements::alter_keyspace_statement::validate(distributed<service::s
 }
 
 future<bool> cql3::statements::alter_keyspace_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
-    return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata(_name), is_local_only).then([] {
+    auto old_ksm = service::get_local_storage_proxy().get_db().local().find_keyspace(_name).metadata();
+    return service::get_local_migration_manager().announce_keyspace_update(_attrs->as_ks_metadata_update(old_ksm), is_local_only).then([] {
        return true;
     });
 }

@@ -66,6 +66,7 @@ public:
     std::map<sstring, sstring> get_replication_options() const;
     std::experimental::optional<sstring> get_replication_strategy_class() const;
     lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name);
+    lw_shared_ptr<keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<keyspace_metadata> old);
 
 #if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException
