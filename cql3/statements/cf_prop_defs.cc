@@ -162,7 +162,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     }
 
     std::experimental::optional<sstring> tmp_value = {};
-    if (has_property(KW_MINCOMPACTIONTHRESHOLD)) {
+    if (has_property(KW_COMPACTION)) {
         if (get_compaction_options().count(KW_MINCOMPACTIONTHRESHOLD)) {
             tmp_value = get_compaction_options().at(KW_MINCOMPACTIONTHRESHOLD);
         }
@@ -170,7 +170,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder) {
     int min_compaction_threshold = to_int(KW_MINCOMPACTIONTHRESHOLD, tmp_value, builder.get_min_compaction_threshold());
 
     tmp_value = {};
-    if (has_property(KW_MAXCOMPACTIONTHRESHOLD)) {
+    if (has_property(KW_COMPACTION)) {
         if (get_compaction_options().count(KW_MAXCOMPACTIONTHRESHOLD)) {
             tmp_value = get_compaction_options().at(KW_MAXCOMPACTIONTHRESHOLD);
         }
