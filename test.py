@@ -32,6 +32,7 @@ boost_tests = [
     'types_test',
     'keys_test',
     'mutation_test',
+    'schema_registry_test',
     'range_test',
     'mutation_reader_test',
     'cql_query_test',
