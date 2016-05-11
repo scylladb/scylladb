@@ -76,6 +76,7 @@ namespace service {
 
 static logging::logger logger("storage_proxy");
 static logging::logger qlogger("query_result");
+static logging::logger mlogger("mutation_data");
 
 distributed<service::storage_proxy> _the_storage_proxy;
 
@@ -1047,6 +1048,8 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
  */
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
+    logger.trace("mutate cl={}", cl, mutations);
+    mlogger.trace("mutations={}", mutations);
     auto type = mutations.size() == 1 ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH;
     utils::latency_counter lc;
     lc.start();
