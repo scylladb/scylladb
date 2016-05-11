@@ -872,12 +872,16 @@ $name$temp_param serializer<$name$temp_param>::read(Input& buf) {""").substitute
     else:
         fprintln(cout, """  Input& in = buf;""")
     params = []
+    local_names = {}
     for index, param in enumerate(cls["members"]):
         if is_class(param) or is_enum(param):
             continue
         local_param = "__local_" + str(index)
+        local_names[param["name"]] = local_param
         if "attribute" in param:
             deflt = param["default"][0] if "default" in param else param_type(param["type"]) + "()"
+            if deflt in local_names:
+                deflt = local_names[deflt]
             fprintln(cout, Template("""  $typ $local = (in.size()>0) ?
     $func(in, boost::type<$typ>()) : $default;""").substitute({'func' : DESERIALIZER, 'typ': param_type(param["type"]), 'local' : local_param, 'default': deflt}))
         else:
