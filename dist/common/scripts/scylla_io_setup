@@ -69,7 +69,8 @@ if [ `is_developer_mode` -eq 0 ]; then
 
         echo "SEASTAR_IO=\"--num-io-queues $NR_IO_QUEUES --max-io-requests $NR_REQS\"" > /etc/scylla.d/io.conf
     else
-        iotune --evaluation-directory /var/lib/scylla --format envfile --options-file /etc/scylla.d/io.conf $CPUSET
+        DATA_DIR=`/usr/lib/scylla/scylla_config_get.py --config $SCYLLA_CONF/scylla.yaml --get data_file_directories|head -n1`
+        iotune --evaluation-directory $DATA_DIR --format envfile --options-file /etc/scylla.d/io.conf $CPUSET
         if [ $? -ne 0 ]; then
             output_to_user "/var/lib/scylla did not pass validation tests, it may not be on XFS and/or has limited disk space."
             output_to_user "This is a non-supported setup, and performance is expected to be very bad."
