@@ -16,7 +16,7 @@ Conflicts: scylla-server (<< 1.1)
 
 Package: scylla-server
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, collectd, scylla-conf, @@DEPENDS@@
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, hwloc-nox, collectd, scylla-conf, PyYAML, @@DEPENDS@@
 Description: Scylla database server binaries 
  Scylla is a highly scalable, eventually consistent, distributed,
  partitioned row DB.
