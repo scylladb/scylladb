@@ -203,12 +203,15 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
             return make_ready_future<>();
         case schema_registry_entry::sync_state::SYNCING:
             return _synced_future;
-        case schema_registry_entry::sync_state::NOT_SYNCED:
+        case schema_registry_entry::sync_state::NOT_SYNCED: {
             logger.debug("Syncing {}", _version);
             _synced_promise = {};
-            do_with(std::move(syncer), [] (auto& syncer) {
+            auto f = do_with(std::move(syncer), [] (auto& syncer) {
                 return syncer();
-            }).then_wrapped([this, self = shared_from_this()] (auto&& f) {
+            });
+            _synced_future = _synced_promise.get_future();
+            _sync_state = schema_registry_entry::sync_state::SYNCING;
+            f.then_wrapped([this, self = shared_from_this()] (auto&& f) {
                 if (_sync_state != sync_state::SYNCING) {
                     return;
                 }
@@ -222,9 +225,8 @@ future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
                     _synced_promise.set_value();
                 }
             });
-            _synced_future = _synced_promise.get_future();
-            _sync_state = schema_registry_entry::sync_state::SYNCING;
             return _synced_future;
+        }
         default:
             assert(0);
     }
