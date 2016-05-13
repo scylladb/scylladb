@@ -301,7 +301,7 @@ static mutation_sets generate_mutation_sets() {
     {
         random_mutation_generator gen;
         for (int i = 0; i < 10; ++i) {
-            auto m = gen();
+            auto m = gen(false);
             result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
             result.equal.emplace_back(mutations{m, m});
         }
@@ -409,7 +409,7 @@ public:
         _gen = std::mt19937(seed);
     }
 
-    mutation operator()() {
+    mutation operator()(bool range_deletes) {
         std::uniform_int_distribution<column_id> column_count_dist(1, column_count);
         std::uniform_int_distribution<column_id> column_id_dist(0, column_count - 1);
         std::uniform_int_distribution<size_t> value_blob_index_dist(0, 2);
@@ -472,8 +472,18 @@ public:
 
         size_t range_tombstone_count = row_count_dist(_gen);
         for (size_t i = 0; i < range_tombstone_count; ++i) {
-            auto key = clustering_key::from_exploded(*_schema, {random_blob()});
-            m.partition().apply_row_tombstone(*_schema, key, random_tombstone());
+            auto&& start = clustering_key::from_exploded(*_schema, {random_blob()});
+            if (range_deletes) {
+                clustering_key_prefix::less_compare less(*_schema);
+                auto end = clustering_key::from_exploded(*_schema, {random_blob()});
+                if (less(end, start)) {
+                    std::swap(start, end);
+                }
+                m.partition().apply_row_tombstone(*_schema,
+                        range_tombstone(std::move(start), std::move(end), random_tombstone()));
+            } else {
+                m.partition().apply_row_tombstone(*_schema, start, random_tombstone());
+            }
         }
         return m;
     }
@@ -485,8 +495,8 @@ random_mutation_generator::random_mutation_generator()
     : _impl(std::make_unique<random_mutation_generator::impl>())
 { }
 
-mutation random_mutation_generator::operator()() {
-    return (*_impl)();
+mutation random_mutation_generator::operator()(bool range_deletes) {
+    return (*_impl)(range_deletes);
 }
 
 schema_ptr random_mutation_generator::schema() const {
