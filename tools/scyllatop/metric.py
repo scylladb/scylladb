@@ -30,6 +30,7 @@ class Metric(object):
             key = match.groupdict()['key']
             value = match.groupdict()['value']
             self._status[key] = value
+            logging.debug( '{}: {}'.format( self.symbol, line.strip() ) )
 
     @classmethod
     def discover(cls, collectd):
