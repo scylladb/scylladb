@@ -432,32 +432,32 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write timeouts")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_timeouts._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "write unavailable")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_unavailables)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.write_unavailables._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "read timeouts")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_timeouts)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_timeouts._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "read unavailable")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_unavailables)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.read_unavailables._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "range slice timeouts")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_timeouts)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_timeouts._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
                 , "total_operations", "range slice unavailable")
-                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables)
+                , scollectd::make_typed(scollectd::data_type::DERIVE, _stats.range_slice_unavailables._count)
         ),
         scollectd::add_polled_metric(scollectd::type_instance_id("storage_proxy"
                 , scollectd::per_cpu_plugin_instance
@@ -1012,7 +1012,7 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     assert(mutate_result.available());
     _stats.write.mark(lc.stop().latency_in_nano());
     if (lc.is_start()) {
-        _stats.estimated_write.add(lc.latency(), _stats.write.count);
+        _stats.estimated_write.add(lc.latency(), _stats.write.hist.count);
     }
     try {
         mutate_result.get();
@@ -1023,14 +1023,14 @@ future<> storage_proxy::mutate_end(future<> mutate_result, utils::latency_counte
     } catch(mutation_write_timeout_exception& ex) {
         // timeout
         logger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-        _stats.write_timeouts++;
+        _stats.write_timeouts.mark();
         return make_exception_future<>(std::current_exception());
     } catch (exceptions::unavailable_exception& ex) {
-        _stats.write_unavailables++;
+        _stats.write_unavailables.mark();
         logger.trace("Unavailable");
         return make_exception_future<>(std::current_exception());
     }  catch(overloaded_exception& ex) {
-        _stats.write_unavailables++;
+        _stats.write_unavailables.mark();
         logger.trace("Overloaded");
         return make_exception_future<>(std::current_exception());
     }
@@ -2224,7 +2224,7 @@ void storage_proxy::handle_read_error(std::exception_ptr eptr) {
         std::rethrow_exception(eptr);
     } catch (read_timeout_exception& ex) {
         logger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
-        _stats.read_timeouts++;
+        _stats.read_timeouts.mark();
     } catch (...) {
         logger.debug("Error during read query {}", eptr);
     }
@@ -2428,7 +2428,7 @@ storage_proxy::do_query(schema_ptr s,
             return query_singular(cmd, std::move(partition_ranges), cl).finally([lc, p] () mutable {
                     p->_stats.read.mark(lc.stop().latency_in_nano());
                     if (lc.is_start()) {
-                        p->_stats.estimated_read.add(lc.latency(), p->_stats.read.count);
+                        p->_stats.estimated_read.add(lc.latency(), p->_stats.read.hist.count);
                     }
             });
         } catch (const no_such_column_family&) {
