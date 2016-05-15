@@ -23,8 +23,52 @@
 
 #include <boost/circular_buffer.hpp>
 #include "latency.hh"
-
+#include <cmath>
+#include "core/timer.hh"
+#include <iostream>
 namespace utils {
+/**
+ * An exponentially-weighted moving average.
+ */
+class moving_average {
+    double _alpha = 0;
+    bool _initialized = false;
+    latency_counter::duration _tick_interval;
+    uint64_t _count = 0;
+    double _rate = 0;
+public:
+    moving_average(latency_counter::duration interval, latency_counter::duration tick_interval) :
+        _tick_interval(tick_interval) {
+        _alpha = 1 - std::exp(-std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count()/
+                static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(tick_interval).count()));
+    }
+
+    void add(uint64_t val = 1) {
+        _count += val;
+    }
+
+    void update() {
+        double instant_rate = _count / static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(_tick_interval).count());
+        if (_initialized) {
+            _rate += (_alpha * (instant_rate - _rate));
+        } else {
+            _rate = instant_rate;
+            _initialized = true;
+        }
+        _count = 0;
+    }
+
+    bool is_initilized() const {
+        return _initialized;
+    }
+
+    double rate() const {
+        if (is_initilized()) {
+            return _rate;
+        }
+        return 0;
+    }
+};
 
 class ihistogram {
 public:
@@ -107,6 +151,169 @@ public:
 
     int64_t pending() const {
         return started - count;
+    }
+
+    inline double pow2(double a) {
+        return a * a;
+    }
+
+    ihistogram& operator +=(const ihistogram& o) {
+        if (count == 0) {
+            *this = o;
+        } else if (o.count > 0) {
+            if (min > o.min) {
+                min = o.min;
+            }
+            if (max < o.max) {
+                max = o.max;
+            }
+            double ncount = count + o.count;
+            sum += o.sum;
+            double a = count / ncount;
+            double b = o.count / ncount;
+
+            double m = a * mean + b * o.mean;
+
+            variance = (variance + pow2(m - mean)) * a
+                    + (o.variance + pow2(o.mean - mean)) * b;
+            mean = m;
+            count += o.count;
+            for (auto i : o.sample) {
+                sample.push_back(i);
+            }
+        }
+        return *this;
+    }
+
+    friend ihistogram operator +(ihistogram a, const ihistogram& b);
+};
+
+inline ihistogram operator +(ihistogram a, const ihistogram& b) {
+    a += b;
+    return a;
+}
+
+struct rate_moving_average {
+    uint64_t count = 0;
+    double rates[3] = {0};
+    double mean_rate;
+    rate_moving_average& operator +=(const rate_moving_average& o) {
+        count += o.count;
+        mean_rate += o.mean_rate;
+        for (int i=0; i<3; i++) {
+            rates[i] += o.rates[i];
+        }
+        return *this;
+    }
+    friend rate_moving_average operator+ (rate_moving_average a, const rate_moving_average& b);
+};
+
+inline rate_moving_average operator+ (rate_moving_average a, const rate_moving_average& b) {
+    a += b;
+    return a;
+}
+
+class timed_rate_moving_average {
+    static constexpr latency_counter::duration tick_interval() {
+        return std::chrono::seconds(10);
+    }
+    moving_average rates[3] = {{tick_interval(), std::chrono::minutes(1)}, {tick_interval(), std::chrono::minutes(5)}, {tick_interval(), std::chrono::minutes(15)}};
+    latency_counter::time_point start_time;
+    timer<> _timer;
+
+public:
+    // _count is public so the collectd will be able to use it.
+    // for all other cases use the count() method
+    uint64_t _count = 0;
+    timed_rate_moving_average() : start_time(latency_counter::now()), _timer([this] {
+        update();
+    }) {
+        _timer.arm_periodic(tick_interval());
+    }
+
+    void mark(uint64_t n = 1) {
+        _count += n;
+        for (int i = 0; i < 3; i++) {
+            rates[i].add(n);
+        }
+    }
+
+    rate_moving_average rate() const {
+        rate_moving_average res;
+        if (_count > 0) {
+            double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(latency_counter::now() - start_time).count();
+            res.mean_rate = (_count / elapsed);
+        }
+        res.count = _count;
+        for (int i = 0; i < 3; i++) {
+            res.rates[i] = rates[i].rate();
+        }
+        return res;
+    }
+
+    void update() {
+        for (int i = 0; i < 3; i++) {
+            rates[i].update();
+        }
+    }
+
+    uint64_t count() const {
+        return _count;
+    }
+};
+
+
+struct rate_moving_average_and_histogram {
+    ihistogram hist;
+    rate_moving_average rate;
+
+    rate_moving_average_and_histogram& operator +=(const rate_moving_average_and_histogram& o) {
+        hist += o.hist;
+        rate += o.rate;
+        return *this;
+    }
+    friend rate_moving_average_and_histogram operator +(rate_moving_average_and_histogram a, const rate_moving_average_and_histogram& b);
+};
+
+inline rate_moving_average_and_histogram operator +(rate_moving_average_and_histogram a, const rate_moving_average_and_histogram& b) {
+    a += b;
+    return a;
+}
+
+/**
+ * A timer metric which aggregates timing durations and provides duration statistics, plus
+ * throughput statistics via meter
+ */
+class timed_rate_moving_average_and_histogram {
+public:
+    ihistogram hist;
+    timed_rate_moving_average met;
+    timed_rate_moving_average_and_histogram() = default;
+    timed_rate_moving_average_and_histogram(timed_rate_moving_average_and_histogram&&) = default;
+    timed_rate_moving_average_and_histogram(const timed_rate_moving_average_and_histogram&) = default;
+    timed_rate_moving_average_and_histogram(size_t size, int64_t _sample_mask = 0x80) : hist(size, _sample_mask) {}
+    timed_rate_moving_average_and_histogram& operator=(const timed_rate_moving_average_and_histogram&) = default;
+    void mark(int duration) {
+        if (duration >= 0) {
+            hist.mark(duration);
+            met.mark();
+        }
+    }
+
+    void mark(latency_counter& lc) {
+        hist.mark(lc);
+        met.mark();
+    }
+
+    void set_latency(latency_counter& lc) {
+        hist.set_latency(lc);
+    }
+
+    rate_moving_average_and_histogram rate() const {
+        rate_moving_average_and_histogram res;
+        res.hist = hist;
+        res.rate = met.rate();
+        return res;
     }
 };
 
