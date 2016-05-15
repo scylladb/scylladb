@@ -110,44 +110,7 @@ future<json::json_return_type>  sum_stats(distributed<T>& d, V F::*f) {
     });
 }
 
-inline double pow2(double a) {
-    return a * a;
-}
 
-// FIXME: Move to utils::ihistogram::operator+=()
-inline utils::ihistogram add_histogram(utils::ihistogram res,
-        const utils::ihistogram& val) {
-    if (res.count == 0) {
-        return val;
-    }
-    if (val.count == 0) {
-        return std::move(res);
-    }
-    if (res.min > val.min) {
-        res.min = val.min;
-    }
-    if (res.max < val.max) {
-        res.max = val.max;
-    }
-    double ncount = res.count + val.count;
-    // To get an estimated sum we take the estimated mean
-    // and multiply it by the true count
-    res.sum = res.sum + val.mean * val.count;
-    double a = res.count/ncount;
-    double b = val.count/ncount;
-
-    double mean =  a * res.mean + b * val.mean;
-
-    res.variance = (res.variance + pow2(res.mean - mean) )* a +
-            (val.variance + pow2(val.mean -mean))* b;
-
-    res.mean = mean;
-    res.count = res.count + val.count;
-    for (auto i : val.sample) {
-        res.sample.push_back(i);
-    }
-    return res;
-}
 
 inline
 httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
@@ -156,12 +119,36 @@ httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
     return h;
 }
 
-template<class T, class F>
-future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::ihistogram F::*f) {
+inline
+httpd::utils_json::rate_moving_average meter_to_json(const utils::rate_moving_average& val) {
+    httpd::utils_json::rate_moving_average m;
+    m = val;
+    return m;
+}
 
-    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, utils::ihistogram(),
-            add_histogram).then([](const utils::ihistogram& val) {
+inline
+httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::rate_moving_average_and_histogram& val) {
+    httpd::utils_json::rate_moving_average_and_histogram h;
+    h.hist = val.hist;
+    h.meter = meter_to_json(val.rate);
+    return h;
+}
+
+template<class T, class F>
+future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).hist;}, utils::ihistogram(),
+            std::plus<utils::ihistogram>()).then([](const utils::ihistogram& val) {
         return make_ready_future<json::json_return_type>(to_json(val));
+    });
+}
+
+template<class T, class F>
+future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
+            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return make_ready_future<json::json_return_type>(timer_to_json(val));
     });
 }
 
