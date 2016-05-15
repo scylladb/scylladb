@@ -262,13 +262,13 @@ public:
         int64_t live_sstable_count = 0;
         /** Estimated number of compactions pending for this column family */
         int64_t pending_compactions = 0;
-        utils::ihistogram reads{256};
-        utils::ihistogram writes{256};
+        utils::timed_rate_moving_average_and_histogram reads{256};
+        utils::timed_rate_moving_average_and_histogram writes{256};
         sstables::estimated_histogram estimated_read;
         sstables::estimated_histogram estimated_write;
         sstables::estimated_histogram estimated_sstable_per_read;
-        utils::ihistogram tombstone_scanned;
-        utils::ihistogram live_scanned;
+        utils::timed_rate_moving_average_and_histogram tombstone_scanned;
+        utils::timed_rate_moving_average_and_histogram live_scanned;
     };
 
     struct snapshot_details {
