@@ -88,6 +88,7 @@ public:
     prepared(const bytes& id, ::shared_ptr<cql3::statements::parsed_statement::prepared> prepared)
         : _id{id}
         , _prepared{prepared}
+        // FIXME: Populate partition key bind indices for prepared_metadata.
         , _metadata{::make_shared<cql3::prepared_metadata>(prepared->bound_names, std::vector<uint16_t>())}
         , _result_metadata{extract_result_metadata(prepared->statement)}
     { }

@@ -132,8 +132,8 @@ public:
                       const std::vector<uint16_t>& partition_key_bind_indices);
 
     flag_enum_set flags() const;
-    const std::vector<::shared_ptr<column_specification>> names() const;
-    const std::vector<uint16_t> partition_key_bind_indices() const;
+    const std::vector<::shared_ptr<column_specification>>& names() const;
+    const std::vector<uint16_t>& partition_key_bind_indices() const;
 };
 
 class result_set {

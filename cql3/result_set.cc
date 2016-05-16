@@ -117,11 +117,11 @@ prepared_metadata::flag_enum_set prepared_metadata::flags() const {
     return _flags;
 }
 
-const std::vector<::shared_ptr<column_specification>> prepared_metadata::names() const {
+const std::vector<::shared_ptr<column_specification>>& prepared_metadata::names() const {
     return _names;
 }
 
-const std::vector<uint16_t> prepared_metadata::partition_key_bind_indices() const {
+const std::vector<uint16_t>& prepared_metadata::partition_key_bind_indices() const {
     return _partition_key_bind_indices;
 }
 
