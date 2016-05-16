@@ -71,12 +71,7 @@ bool metadata::all_in_same_cf() const {
         return false;
     }
 
-    assert(!names.empty());
-
-    auto first = names.front();
-    return std::all_of(std::next(names.begin()), names.end(), [first] (auto&& spec) {
-        return spec->ks_name == first->ks_name && spec->cf_name == first->cf_name;
-    });
+    return column_specification::all_in_same_table(names);
 }
 
 void metadata::set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
