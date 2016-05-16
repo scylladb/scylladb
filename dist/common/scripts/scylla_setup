@@ -227,6 +227,9 @@ if [ $INTERACTIVE -eq 1 ]; then
             echo -n "> "
             read dsk
             if [ "$dsk" = "done" ]; then
+                if [ "$DISKS" = "" ]; then
+                    continue
+                fi
                 break
             fi
             if [ "$dsk" = "" ]; then
