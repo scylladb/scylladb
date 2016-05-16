@@ -79,72 +79,31 @@ private:
     ::shared_ptr<const service::pager::paging_state> _paging_state;
 
 public:
-    metadata(std::vector<::shared_ptr<column_specification>> names_)
-        : metadata(flag_enum_set(), std::move(names_), names_.size(), {})
-    { }
+    metadata(std::vector<::shared_ptr<column_specification>> names_);
 
     metadata(flag_enum_set flags, std::vector<::shared_ptr<column_specification>> names_, uint32_t column_count,
-            ::shared_ptr<const service::pager::paging_state> paging_state)
-        : _flags(flags)
-        , names(std::move(names_))
-        , _column_count(column_count)
-        , _paging_state(std::move(paging_state))
-    { }
+            ::shared_ptr<const service::pager::paging_state> paging_state);
 
     // The maximum number of values that the ResultSet can hold. This can be bigger than columnCount due to CASSANDRA-4911
-    uint32_t value_count() {
-        return _flags.contains<flag::NO_METADATA>() ? _column_count : names.size();
-    }
+    uint32_t value_count();
 
-    void add_non_serialized_column(::shared_ptr<column_specification> name) {
-        // See comment above. Because columnCount doesn't account the newly added name, it
-        // won't be serialized.
-        names.emplace_back(std::move(name));
-    }
+    void add_non_serialized_column(::shared_ptr<column_specification> name);
 
 private:
-    bool all_in_same_cf() const {
-        if (_flags.contains<flag::NO_METADATA>()) {
-            return false;
-        }
-
-        assert(!names.empty());
-
-        auto first = names.front();
-        return std::all_of(std::next(names.begin()), names.end(), [first] (auto&& spec) {
-            return spec->ks_name == first->ks_name && spec->cf_name == first->cf_name;
-        });
-    }
+    bool all_in_same_cf() const;
 
 public:
-    void set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state) {
-        if (!paging_state) {
-            return;
-        }
+    void set_has_more_pages(::shared_ptr<const service::pager::paging_state> paging_state);
 
-        _flags.set<flag::HAS_MORE_PAGES>();
-        _paging_state = std::move(paging_state);
-    }
+    void set_skip_metadata();
 
-    void set_skip_metadata() {
-        _flags.set<flag::NO_METADATA>();
-    }
+    flag_enum_set flags() const;
 
-    flag_enum_set flags() const {
-        return _flags;
-    }
+    uint32_t column_count() const;
 
-    uint32_t column_count() const {
-        return _column_count;
-    }
+    ::shared_ptr<const service::pager::paging_state> paging_state() const;
 
-    auto paging_state() const {
-        return _paging_state;
-    }
-
-    auto const& get_names() const {
-        return names;
-    }
+    const std::vector<::shared_ptr<column_specification>>& get_names() const;
 };
 
 inline ::shared_ptr<cql3::metadata> make_empty_metadata()
@@ -159,64 +118,33 @@ public:
     ::shared_ptr<metadata> _metadata;
     std::deque<std::vector<bytes_opt>> _rows;
 public:
-    result_set(std::vector<::shared_ptr<column_specification>> metadata_)
-        : _metadata(::make_shared<metadata>(std::move(metadata_)))
-    { }
+    result_set(std::vector<::shared_ptr<column_specification>> metadata_);
 
-    result_set(::shared_ptr<metadata> metadata)
-        : _metadata(std::move(metadata))
-    { }
+    result_set(::shared_ptr<metadata> metadata);
 
-    size_t size() const {
-        return _rows.size();
-    }
+    size_t size() const;
 
-    bool empty() const {
-        return _rows.empty();
-    }
+    bool empty() const;
 
-    void add_row(std::vector<bytes_opt> row) {
-        assert(row.size() == _metadata->value_count());
-        _rows.emplace_back(std::move(row));
-    }
+    void add_row(std::vector<bytes_opt> row);
 
-    void add_column_value(bytes_opt value) {
-        if (_rows.empty() || _rows.back().size() == _metadata->value_count()) {
-            std::vector<bytes_opt> row;
-            row.reserve(_metadata->value_count());
-            _rows.emplace_back(std::move(row));
-        }
+    void add_column_value(bytes_opt value);
 
-        _rows.back().emplace_back(std::move(value));
-    }
+    void reverse();
 
-    void reverse() {
-        std::reverse(_rows.begin(), _rows.end());
-    }
-
-    void trim(size_t limit) {
-        if (_rows.size() > limit) {
-            _rows.resize(limit);
-        }
-    }
+    void trim(size_t limit);
 
     template<typename RowComparator>
     void sort(RowComparator&& cmp) {
         std::sort(_rows.begin(), _rows.end(), std::forward<RowComparator>(cmp));
     }
 
-    metadata& get_metadata() {
-        return *_metadata;
-    }
+    metadata& get_metadata();
 
-    const metadata& get_metadata() const {
-        return *_metadata;
-    }
+    const metadata& get_metadata() const;
 
     // Returns a range of rows. A row is a range of bytes_opt.
-    auto const& rows() const {
-        return _rows;
-    }
+    const std::deque<std::vector<bytes_opt>>& rows() const;
 };
 
 }
