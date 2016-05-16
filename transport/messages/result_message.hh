@@ -82,13 +82,13 @@ class result_message::prepared : public result_message {
 private:
     bytes _id;
     ::shared_ptr<cql3::statements::parsed_statement::prepared> _prepared;
-    ::shared_ptr<cql3::metadata> _metadata;
+    ::shared_ptr<cql3::prepared_metadata> _metadata;
     ::shared_ptr<cql3::metadata> _result_metadata;
 public:
     prepared(const bytes& id, ::shared_ptr<cql3::statements::parsed_statement::prepared> prepared)
         : _id{id}
         , _prepared{prepared}
-        , _metadata{::make_shared<cql3::metadata>(prepared->bound_names)}
+        , _metadata{::make_shared<cql3::prepared_metadata>(prepared->bound_names, std::vector<uint16_t>())}
         , _result_metadata{extract_result_metadata(prepared->statement)}
     { }
 
@@ -100,7 +100,7 @@ public:
         return _prepared;
     }
 
-    ::shared_ptr<cql3::metadata> metadata() const {
+    ::shared_ptr<cql3::prepared_metadata> metadata() const {
         return _metadata;
     }
 

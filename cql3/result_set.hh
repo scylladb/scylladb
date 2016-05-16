@@ -113,6 +113,29 @@ inline ::shared_ptr<cql3::metadata> make_empty_metadata()
     return result;
 }
 
+class prepared_metadata {
+public:
+    enum class flag : uint8_t {
+        GLOBAL_TABLES_SPEC,
+    };
+
+    using flag_enum = super_enum<flag,
+        flag::GLOBAL_TABLES_SPEC>;
+
+    using flag_enum_set = enum_set<flag_enum>;
+private:
+    flag_enum_set _flags;
+    std::vector<::shared_ptr<column_specification>> _names;
+    std::vector<uint16_t> _partition_key_bind_indices;
+public:
+    prepared_metadata(const std::vector<::shared_ptr<column_specification>>& names,
+                      const std::vector<uint16_t>& partition_key_bind_indices);
+
+    flag_enum_set flags() const;
+    const std::vector<::shared_ptr<column_specification>> names() const;
+    const std::vector<uint16_t> partition_key_bind_indices() const;
+};
+
 class result_set {
 public:
     ::shared_ptr<metadata> _metadata;

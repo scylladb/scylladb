@@ -103,6 +103,28 @@ const std::vector<::shared_ptr<column_specification>>& metadata::get_names() con
     return names;
 }
 
+prepared_metadata::prepared_metadata(const std::vector<::shared_ptr<column_specification>>& names,
+                                     const std::vector<uint16_t>& partition_key_bind_indices)
+    : _names{names}
+    , _partition_key_bind_indices{partition_key_bind_indices}
+{
+    if (!names.empty() && column_specification::all_in_same_table(_names)) {
+        _flags.set<flag::GLOBAL_TABLES_SPEC>();
+    }
+}
+
+prepared_metadata::flag_enum_set prepared_metadata::flags() const {
+    return _flags;
+}
+
+const std::vector<::shared_ptr<column_specification>> prepared_metadata::names() const {
+    return _names;
+}
+
+const std::vector<uint16_t> prepared_metadata::partition_key_bind_indices() const {
+    return _partition_key_bind_indices;
+}
+
 result_set::result_set(std::vector<::shared_ptr<column_specification>> metadata_)
     : _metadata(::make_shared<metadata>(std::move(metadata_)))
 { }
