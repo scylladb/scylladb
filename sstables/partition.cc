@@ -100,6 +100,11 @@ class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
     key_view _key;
     const io_priority_class* _pc = nullptr;
+    query::clustering_key_filtering_context _ck_filtering;
+    query::clustering_key_filter _filter;
+    std::experimental::optional<clustering_key_prefix> _last_clustering_key;
+    bool _last_clustering_key_filter_result = false;
+    std::function<bool(const clustering_key&, const clustering_key&)> _clustering_key_equality;
 
     struct column {
         bool is_static;
@@ -350,26 +355,47 @@ class mp_row_consumer : public row_consumer {
         }
         return ret;
     }
+
 public:
     mutation_opt mut;
 
-    mp_row_consumer(const key& key, const schema_ptr _schema, const io_priority_class& pc)
-            : _schema(_schema)
+    mp_row_consumer(const key& key,
+                    const schema_ptr schema,
+                    query::clustering_key_filtering_context ck_filtering,
+                    const io_priority_class& pc)
+            : _schema(schema)
             , _key(key_view(key))
             , _pc(&pc)
+            , _ck_filtering(ck_filtering)
+            , _filter(_ck_filtering.get_filter_for_sorted(partition_key::from_exploded(*_schema, key.explode(*_schema))))
+            , _clustering_key_equality(clustering_key::equality(*schema))
             , mut(mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
     { }
 
-    mp_row_consumer(const schema_ptr _schema, const io_priority_class& pc)
-            : _schema(_schema)
+    mp_row_consumer(const key& key,
+                    const schema_ptr schema,
+                    const io_priority_class& pc)
+            : mp_row_consumer(key, schema, query::no_clustering_key_filtering, pc) { }
+
+    mp_row_consumer(const schema_ptr schema,
+                    query::clustering_key_filtering_context ck_filtering,
+                    const io_priority_class& pc)
+            : _schema(schema)
             , _pc(&pc)
+            , _ck_filtering(ck_filtering)
+            , _clustering_key_equality(clustering_key::equality(*schema))
     { }
 
-    mp_row_consumer() {}
+    mp_row_consumer(const schema_ptr schema,
+                    const io_priority_class& pc)
+            : mp_row_consumer(schema, query::no_clustering_key_filtering, pc) { }
+
+    mp_row_consumer() : _ck_filtering(query::no_clustering_key_filtering) {}
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         if (_key.empty()) {
             mut = mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema);
+            _filter = _ck_filtering.get_filter_for_sorted(mut->key());
         } else if (key != _key) {
             throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
         }
@@ -420,8 +446,14 @@ public:
             mut->set_static_cell(*(col.cdef), std::move(ac));
             return;
         }
-
-        mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
+        if (!_last_clustering_key || !_clustering_key_equality(clustering_key, *_last_clustering_key)) {
+            _last_clustering_key = clustering_key;
+            _last_clustering_key_filter_result = _filter(clustering_key);
+        }
+        if (_last_clustering_key_filter_result) {
+            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        }
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
@@ -456,7 +488,14 @@ public:
         } else if (col.is_static) {
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
-            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
+            if (!_last_clustering_key || !_clustering_key_equality(clustering_key, *_last_clustering_key)) {
+                _last_clustering_key = clustering_key;
+                _last_clustering_key_filter_result = _filter(clustering_key);
+            }
+            if (_last_clustering_key_filter_result) {
+                mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            }
         }
     }
     virtual proceed consume_row_end() override {
@@ -598,7 +637,10 @@ future<uint64_t> sstables::sstable::data_end_position(uint64_t summary_idx, cons
 }
 
 future<mutation_opt>
-sstables::sstable::read_row(schema_ptr schema, const sstables::key& key, const io_priority_class& pc) {
+sstables::sstable::read_row(schema_ptr schema,
+                            const sstables::key& key,
+                            query::clustering_key_filtering_context ck_filtering,
+                            const io_priority_class& pc) {
 
     assert(schema);
 
@@ -623,7 +665,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key, const i
         return make_ready_future<mutation_opt>();
     }
 
-    return read_indexes(summary_idx, pc).then([this, schema, &key, token, summary_idx, &pc] (auto index_list) {
+    return read_indexes(summary_idx, pc).then([this, schema, ck_filtering, &key, token, summary_idx, &pc] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             _filter_tracker.add_false_positive();
@@ -632,8 +674,8 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key, const i
         _filter_tracker.add_true_positive();
 
         auto position = index_list[index_idx].position();
-        return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, this, position, &pc] (uint64_t end) {
-            return do_with(mp_row_consumer(key, schema, pc), [this, position, end] (auto& c) {
+        return this->data_end_position(summary_idx, index_idx, index_list, pc).then([&key, schema, ck_filtering, this, position, &pc] (uint64_t end) {
+            return do_with(mp_row_consumer(key, schema, ck_filtering, pc), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
                     return make_ready_future<mutation_opt>(std::move(c.mut));
                 });
@@ -650,18 +692,23 @@ private:
 public:
     impl(sstable& sst, schema_ptr schema, uint64_t start, uint64_t end,
          const io_priority_class &pc)
-        : _consumer(schema, pc)
+        : _consumer(schema, query::no_clustering_key_filtering, pc)
         , _get_context([&sst, this, start, end] {
             return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer, start, end));
         }) { }
     impl(sstable& sst, schema_ptr schema,
          const io_priority_class &pc)
-        : _consumer(schema, pc)
+        : _consumer(schema, query::no_clustering_key_filtering, pc)
         , _get_context([this, &sst] {
             return make_ready_future<data_consume_context>(sst.data_consume_rows(_consumer));
         }) { }
-    impl(sstable& sst, schema_ptr schema, std::function<future<uint64_t>()> start, std::function<future<uint64_t>()> end, const io_priority_class& pc)
-        : _consumer(schema, pc)
+    impl(sstable& sst,
+         schema_ptr schema,
+         std::function<future<uint64_t>()> start,
+         std::function<future<uint64_t>()> end,
+         query::clustering_key_filtering_context ck_filtering,
+         const io_priority_class& pc)
+        : _consumer(schema, ck_filtering, pc)
         , _get_context([this, &sst, start = std::move(start), end = std::move(end)] () {
             return start().then([this, &sst, end = std::move(end)] (uint64_t start) {
                 return end().then([this, &sst, start] (uint64_t end) {
@@ -798,11 +845,14 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
     return read_range_rows(std::move(schema),
         query::range<dht::ring_position>::make(
             dht::ring_position::starting_at(min_token),
-            dht::ring_position::ending_at(max_token)), pc);
+            dht::ring_position::ending_at(max_token)), query::no_clustering_key_filtering, pc);
 }
 
 mutation_reader
-sstable::read_range_rows(schema_ptr schema, const query::partition_range& range, const io_priority_class& pc) {
+sstable::read_range_rows(schema_ptr schema,
+                         const query::partition_range& range,
+                         query::clustering_key_filtering_context ck_filtering,
+                         const io_priority_class& pc) {
     if (query::is_wrap_around(range, *schema)) {
         fail(unimplemented::cause::WRAP_AROUND);
     }
@@ -822,7 +872,7 @@ sstable::read_range_rows(schema_ptr schema, const query::partition_range& range,
     };
 
     return std::make_unique<mutation_reader::impl>(
-        *this, std::move(schema), std::move(start), std::move(end), pc);
+        *this, std::move(schema), std::move(start), std::move(end), ck_filtering, pc);
 }
 
 

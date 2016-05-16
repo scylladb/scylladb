@@ -28,6 +28,7 @@
 #include "dht/i_partitioner.hh"
 #include "enum_set.hh"
 #include "range.hh"
+#include "clustering_key_filter.hh"
 
 namespace query {
 

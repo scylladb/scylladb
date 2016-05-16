@@ -641,6 +641,7 @@ public:
     { }
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
+    mutation_partition(const mutation_partition&, const schema&, const query::clustering_row_ranges&);
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) noexcept;

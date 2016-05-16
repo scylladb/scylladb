@@ -223,6 +223,30 @@ mutation_partition::mutation_partition(const mutation_partition& x)
     }
 }
 
+mutation_partition::mutation_partition(const mutation_partition& x, const schema& schema,
+        const query::clustering_row_ranges& ck_ranges)
+        : _tombstone(x._tombstone)
+        , _static_row(x._static_row)
+        , _rows(x._rows.value_comp())
+        , _row_tombstones(x._row_tombstones.value_comp()) {
+    auto cloner = [] (const auto& x) {
+        return current_allocator().construct<std::remove_const_t<std::remove_reference_t<decltype(x)>>>(x);
+    };
+    try {
+        for(auto&& r : ck_ranges) {
+            for (const rows_entry& e : x.range(schema, r)) {
+                std::unique_ptr<rows_entry> copy(current_allocator().construct<rows_entry>(e));
+                _rows.insert(_rows.end(), *copy);
+                copy.release();
+            }
+        }
+        _row_tombstones.clone_from(x._row_tombstones, cloner, current_deleter<row_tombstones_entry>());
+    } catch (...) {
+        _rows.clear_and_dispose(current_deleter<rows_entry>());
+        throw;
+    }
+}
+
 mutation_partition::~mutation_partition() {
     _rows.clear_and_dispose(current_deleter<rows_entry>());
     _row_tombstones.clear_and_dispose(current_deleter<row_tombstones_entry>());

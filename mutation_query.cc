@@ -81,7 +81,8 @@ querying_reader::querying_reader(schema_ptr s,
 { }
 
 future<> querying_reader::read() {
-    _reader = _source(_schema, _range, service::get_local_sstable_query_read_priority());
+    _reader = _source(_schema, _range, query::clustering_key_filtering_context::create(_schema, _slice),
+            service::get_local_sstable_query_read_priority());
     return consume(*_reader, [this](mutation&& m) {
         // FIXME: Make data sources respect row_ranges so that we don't have to filter them out here.
         auto is_distinct = _slice.options.contains(query::partition_slice::option::distinct);

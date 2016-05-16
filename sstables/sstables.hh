@@ -193,8 +193,11 @@ public:
         return _generation;
     }
 
-    future<mutation_opt> read_row(schema_ptr schema, const key& k,
-                                  const io_priority_class& pc = default_priority_class());
+    future<mutation_opt> read_row(
+        schema_ptr schema,
+        const key& k,
+        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const io_priority_class& pc = default_priority_class());
     /**
      * @param schema a schema_ptr object describing this table
      * @param min the minimum token we want to search for (inclusive)
@@ -207,8 +210,11 @@ public:
             const io_priority_class& pc = default_priority_class());
 
     // Returns a mutation_reader for given range of partitions
-    mutation_reader read_range_rows(schema_ptr schema, const query::partition_range& range,
-                                    const io_priority_class& pc = default_priority_class());
+    mutation_reader read_range_rows(
+        schema_ptr schema,
+        const query::partition_range& range,
+        query::clustering_key_filtering_context ck_filtering = query::no_clustering_key_filtering,
+        const io_priority_class& pc = default_priority_class());
 
     // read_rows() returns each of the rows in the sstable, in sequence,
     // converted to a "mutation" data structure.

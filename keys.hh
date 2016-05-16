@@ -526,6 +526,22 @@ public:
                 tri_compare) < 0;
         }
     };
+
+    // See prefix_equality_less_compare.
+    struct prefix_equal_tri_compare {
+        typename TopLevel::compound prefix_type;
+
+        prefix_equal_tri_compare(const schema& s)
+            : prefix_type(TopLevel::get_compound_type(s))
+        { }
+
+        int operator()(const TopLevel& k1, const TopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare);
+        }
+    };
 };
 
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
