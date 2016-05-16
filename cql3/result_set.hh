@@ -52,9 +52,9 @@ namespace cql3 {
 class metadata {
 public:
     enum class flag : uint8_t {
-        GLOBAL_TABLES_SPEC,
-        HAS_MORE_PAGES,
-        NO_METADATA
+        GLOBAL_TABLES_SPEC = 0,
+        HAS_MORE_PAGES = 1,
+        NO_METADATA = 2,
     };
 
     using flag_enum = super_enum<flag,
@@ -116,7 +116,7 @@ inline ::shared_ptr<cql3::metadata> make_empty_metadata()
 class prepared_metadata {
 public:
     enum class flag : uint8_t {
-        GLOBAL_TABLES_SPEC,
+        GLOBAL_TABLES_SPEC = 0,
     };
 
     using flag_enum = super_enum<flag,
