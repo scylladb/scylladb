@@ -26,6 +26,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/future-util.hh>
 #include "allocation_strategy.hh"
 
 namespace logalloc {
@@ -74,13 +75,27 @@ public:
         return _total_memory;
     }
     void update(ssize_t delta) {
-        auto rg = this;
-        while (rg) {
-            rg->_total_memory += delta;
-            rg = rg->_parent;
-        }
+        do_for_each_parent(this, [delta] (auto rg) { rg->_total_memory += delta; return stop_iteration::no; });
     }
 private:
+    // Executes the function func for each region_group upwards in the hierarchy, starting with the
+    // parameter node. The function func may return stop_iteration::no, in which case it proceeds to
+    // the next ancestor in the hierarchy, or stop_iteration::yes, in which case it stops at this
+    // level.
+    //
+    // This method returns a pointer to the region_group that was processed last, or nullptr if the
+    // root was reached.
+    template <typename Func>
+    static region_group* do_for_each_parent(region_group *node, Func&& func) {
+        auto rg = node;
+        while (rg) {
+            if (func(rg) == stop_iteration::yes) {
+                return rg;
+            }
+            rg = rg->_parent;
+        }
+        return nullptr;
+    }
     void add(region_group* child);
     void del(region_group* child);
     void add(region_impl* child);
