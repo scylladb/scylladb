@@ -818,15 +818,16 @@ class database {
 
     lw_shared_ptr<db_stats> _stats;
 
-    std::unordered_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
-    std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
-    std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
     size_t _memtable_total_space = 500 << 20;
     size_t _streaming_memtable_total_space = 500 << 20;
     logalloc::region_group _dirty_memory_region_group;
     logalloc::region_group _streaming_dirty_memory_region_group;
+
+    std::unordered_map<sstring, keyspace> _keyspaces;
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
+    std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
+    std::unique_ptr<db::commitlog> _commitlog;
     utils::UUID _version;
     // compaction_manager object is referenced by all column families of a database.
     compaction_manager _compaction_manager;
