@@ -1,0 +1,42 @@
+#!/bin/bash -e
+#
+#  Copyright (C) 2016 ScyllaDB
+
+print_usage() {
+    echo "scylla_cpuset_setup --cpuset 1-7 --smp 7"
+    echo "  --cpuset   CPUs to use (in cpuset(7) format; default: all))"
+    echo "  --smp      number of threads (default: one per CPU)"
+    exit 1
+}
+
+CPUSET=
+SMP=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--cpuset")
+            CPUSET=$2
+            shift 2
+            ;;
+        "--smp")
+            SMP=$2
+            shift 2
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+
+if [ "$CPUSET" = "" ] && [ "$SMP" = "" ]; then
+    print_usage
+fi
+
+OUT="CPUSET=\""
+if [ "$CPUSET" != "" ]; then
+    OUT="$OUT--cpuset $CPUSET "
+fi
+if [ "$SMP" != "" ]; then
+    OUT="$OUT--smp $SMP "
+fi
+OUT="$OUT\""
+echo $OUT > /etc/scylla.d/cpuset.conf
