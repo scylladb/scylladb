@@ -300,6 +300,7 @@ private:
     // server.
     lw_shared_ptr<memtable_list> _streaming_memtables;
 
+    lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list();
     lw_shared_ptr<memtable_list> make_streaming_memtable_list();
 

@@ -88,6 +88,13 @@ public:
 };
 
 lw_shared_ptr<memtable_list>
+column_family::make_memory_only_memtable_list() {
+    auto seal = [this] { return make_ready_future<>(); };
+    auto get_schema = [this] { return schema(); };
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.max_memtable_size, _config.dirty_memory_region_group);
+}
+
+lw_shared_ptr<memtable_list>
 column_family::make_memtable_list() {
     auto seal = [this] { return seal_active_memtable(); };
     auto get_schema = [this] { return schema(); };
@@ -104,8 +111,8 @@ column_family::make_streaming_memtable_list() {
 column_family::column_family(schema_ptr schema, config config, db::commitlog& cl, compaction_manager& compaction_manager)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables(make_memtable_list())
-    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memtable_list())
+    , _memtables(_config.enable_disk_writes ? make_memtable_list() : make_memory_only_memtable_list())
+    , _streaming_memtables(_config.enable_disk_writes ? make_streaming_memtable_list() : make_memory_only_memtable_list())
     , _sstables(make_lw_shared<sstable_list>())
     , _cache(_schema, sstables_as_mutation_source(), sstables_as_key_source(), global_cache_tracker())
     , _commitlog(&cl)
@@ -679,10 +686,6 @@ future<>
 column_family::seal_active_memtable() {
     auto old = _memtables->back();
     dblog.debug("Sealing active memtable, partitions: {}, occupancy: {}", old->partition_count(), old->occupancy());
-
-    if (!_config.enable_disk_writes) {
-       return make_ready_future<>();
-    }
 
     if (old->empty()) {
         dblog.debug("Memtable is empty");
