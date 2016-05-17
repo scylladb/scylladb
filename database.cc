@@ -1208,8 +1208,7 @@ database::database() : database(db::config())
 {}
 
 database::database(const db::config& cfg)
-    : _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
-    , _cfg(std::make_unique<db::config>(cfg))
+    : _cfg(std::make_unique<db::config>(cfg))
     , _memtable_total_space([this] {
         _stats = make_lw_shared<db_stats>();
 
@@ -1220,6 +1219,7 @@ database::database(const db::config& cfg)
         return memtable_total_space;
     }())
     , _streaming_memtable_total_space(_memtable_total_space / 4)
+    , _streaming_dirty_memory_region_group(&_dirty_memory_region_group)
     , _version(empty_version)
     , _enable_incremental_backups(cfg.incremental_backups())
     , _memtables_throttler(_memtable_total_space, _dirty_memory_region_group)
