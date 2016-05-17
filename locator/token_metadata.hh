@@ -46,6 +46,8 @@
 #include "utils/UUID.hh"
 #include <experimental/optional>
 #include <boost/range/iterator_range.hpp>
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
 #include "query-request.hh"
 #include "range.hh"
 
@@ -144,6 +146,8 @@ private:
     std::unordered_map<token, inet_address> _moving_endpoints;
 
     std::unordered_map<sstring, std::unordered_multimap<range<token>, inet_address>> _pending_ranges;
+    std::unordered_map<sstring, std::unordered_map<range<token>, std::unordered_set<inet_address>>> _pending_ranges_map;
+    std::unordered_map<sstring, boost::icl::interval_map<token, std::unordered_set<inet_address>>> _pending_ranges_interval_map;
 
     std::vector<token> _sorted_tokens;
 
@@ -608,13 +612,15 @@ public:
     std::vector<range<token>> get_primary_ranges_for(std::unordered_set<token> tokens);
 
     range<token> get_primary_range_for(token right);
+    static boost::icl::interval<token>::interval_type range_to_interval(range<dht::token> r);
 
 private:
     std::unordered_multimap<range<token>, inet_address>& get_pending_ranges_mm(sstring keyspace_name);
+    void set_pending_ranges(const sstring& keyspace_name, std::unordered_multimap<range<token>, inet_address> new_pending_ranges);
 
 public:
     /** a mutable map may be returned but caller should not modify it */
-    std::unordered_map<range<token>, std::unordered_set<inet_address>> get_pending_ranges(sstring keyspace_name);
+    const std::unordered_map<range<token>, std::unordered_set<inet_address>>& get_pending_ranges(sstring keyspace_name);
 
     std::vector<range<token>> get_pending_ranges(sstring keyspace_name, inet_address endpoint);
      /**

@@ -87,6 +87,10 @@ public:
     //     [0x00, 0x80] == 1/512
     //     [0xff, 0x80] == 1 - 1/512
     managed_bytes _data;
+
+    token() : _kind(kind::before_all_keys) {
+    }
+
     token(kind k, managed_bytes d) : _kind(std::move(k)), _data(std::move(d)) {
     }
 
