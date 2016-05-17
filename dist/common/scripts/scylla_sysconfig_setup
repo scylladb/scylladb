@@ -75,9 +75,6 @@ echo Setting parameters on $SYSCONFIG/scylla-server
 
 ETHDRV=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | sed -e "s/^.*drv=//" -e "s/ .*$//"`
 ETHPCIID=`/usr/lib/scylla/dpdk_nic_bind.py --status | grep if=$NIC | awk '{print $1}'`
-if [ "$AMI" = "yes" ] && [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
-    SET_NIC="yes"
-fi
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
     -e s#^IFNAME=.*#IFNAME=$NIC# \
     -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
