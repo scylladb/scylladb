@@ -82,6 +82,7 @@ if [ "$AMI" = "yes" ] && [ $NR_CPU -ge 8 ] && [ "$SET_NIC" = "no" ]; then
     SCYLLA_ARGS="$SCYLLA_ARGS --cpuset 1-$NR  --smp $NR"
 fi
 sed -e s#^NETWORK_MODE=.*#NETWORK_MODE=$NETWORK_MODE# \
+    -e s#^IFNAME=.*#IFNAME=$NIC# \
     -e s#^ETHDRV=.*#ETHDRV=$ETHDRV# \
     -e s#^ETHPCIID=.*#ETHPCIID=$ETHPCIID# \
     -e s#^NR_HUGEPAGES=.*#NR_HUGEPAGES=$NR_HUGEPAGES# \
