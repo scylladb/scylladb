@@ -1109,19 +1109,18 @@ void gossiper::mark_alive(inet_address addr, endpoint_state& local_state) {
     local_state.mark_dead();
     msg_addr id = get_msg_addr(addr);
     logger.trace("Sending a EchoMessage to {}", id);
-    auto ok = make_shared<bool>(false);
-    ms().send_gossip_echo(id).then_wrapped([this, id, ok] (auto&& f) mutable {
+    bool ok = ms().send_gossip_echo(id).then_wrapped([this, id] (auto&& f) mutable {
         try {
             f.get();
             logger.trace("Got EchoMessage Reply");
-            *ok = true;
+            return true;
         } catch (...) {
             logger.warn("Fail to send EchoMessage to {}: {}", id, std::current_exception());
         }
-        return make_ready_future<>();
-    }).get();
+        return false;
+    }).get0();
 
-    if (*ok) {
+    if (ok) {
         this->set_last_processed_message_at();
         this->real_mark_alive(id.addr, local_state);
     }
