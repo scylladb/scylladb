@@ -535,6 +535,9 @@ public:
         return get_stats_metadata().sstable_level;
     }
 
+    // This will change sstable level only in memory.
+    void set_sstable_level(uint32_t);
+
     double get_compression_ratio() const;
 
     future<> mutate_sstable_level(uint32_t);
