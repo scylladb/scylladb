@@ -430,9 +430,13 @@ public:
     }
 
     logalloc::occupancy_stats occupancy() const;
+private:
+    column_family(schema_ptr schema, config cfg, db::commitlog* cl, compaction_manager&);
 public:
-    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager&);
-    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager&);
+    column_family(schema_ptr schema, config cfg, db::commitlog& cl, compaction_manager& cm)
+        : column_family(schema, std::move(cfg), &cl, cm) {}
+    column_family(schema_ptr schema, config cfg, no_commitlog, compaction_manager& cm)
+        : column_family(schema, std::move(cfg), nullptr, cm) {}
     column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     const schema_ptr& schema() const { return _schema; }
