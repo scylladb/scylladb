@@ -27,6 +27,8 @@
 #include "log.hh"
 #include <unordered_map>
 #include <algorithm>
+#include <boost/icl/interval.hpp>
+#include <boost/icl/interval_map.hpp>
 
 namespace locator {
 
@@ -339,25 +341,65 @@ range<token> token_metadata::get_primary_range_for(token right) {
     return get_primary_ranges_for({right}).front();
 }
 
+boost::icl::interval<token>::interval_type
+token_metadata::range_to_interval(range<dht::token> r) {
+    bool start_inclusive = false;
+    bool end_inclusive = false;
+    token start = dht::minimum_token();
+    token end = dht::maximum_token();
+
+    if (r.start()) {
+        start = r.start()->value();
+        start_inclusive = r.start()->is_inclusive();
+    }
+
+    if (r.end()) {
+        end = r.end()->value();
+        end_inclusive = r.end()->is_inclusive();
+    }
+
+    if (start_inclusive == false && end_inclusive == false) {
+        return boost::icl::interval<token>::open(std::move(start), std::move(end));
+    } else if (start_inclusive == false && end_inclusive == true) {
+        return boost::icl::interval<token>::left_open(std::move(start), std::move(end));
+    } else if (start_inclusive == true && end_inclusive == false) {
+        return boost::icl::interval<token>::right_open(std::move(start), std::move(end));
+    } else {
+        return boost::icl::interval<token>::closed(std::move(start), std::move(end));
+    }
+}
+
+void token_metadata::set_pending_ranges(const sstring& keyspace_name,
+        std::unordered_multimap<range<token>, inet_address> new_pending_ranges) {
+    if (new_pending_ranges.empty()) {
+        _pending_ranges.erase(keyspace_name);
+        _pending_ranges_map.erase(keyspace_name);
+        _pending_ranges_interval_map.erase(keyspace_name);
+        return;
+    }
+    std::unordered_map<range<token>, std::unordered_set<inet_address>> map;
+    for (const auto& x : new_pending_ranges) {
+        map[x.first].emplace(x.second);
+    }
+
+    // construct a interval map to speed up the search
+    _pending_ranges_interval_map[keyspace_name] = {};
+    for (const auto& m : map) {
+        _pending_ranges_interval_map[keyspace_name] +=
+                std::make_pair(range_to_interval(m.first), m.second);
+    }
+    _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
+    _pending_ranges_map[keyspace_name] = std::move(map);
+}
+
 std::unordered_multimap<range<token>, inet_address>&
 token_metadata::get_pending_ranges_mm(sstring keyspace_name) {
     return _pending_ranges[keyspace_name];
 }
 
-std::unordered_map<range<token>, std::unordered_set<inet_address>>
+const std::unordered_map<range<token>, std::unordered_set<inet_address>>&
 token_metadata::get_pending_ranges(sstring keyspace_name) {
-    std::unordered_map<range<token>, std::unordered_set<inet_address>> ret;
-    for (auto x : get_pending_ranges_mm(keyspace_name)) {
-        auto& range_token = x.first;
-        auto& ep = x.second;
-        auto it = ret.find(range_token);
-        if (it != ret.end()) {
-            it->second.emplace(ep);
-        } else {
-            ret.emplace(range_token, std::unordered_set<inet_address>{ep});
-        }
-    }
-    return ret;
+    return _pending_ranges_map[keyspace_name];
 }
 
 std::vector<range<token>>
@@ -378,7 +420,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
 
     if (_bootstrap_tokens.empty() && _leaving_endpoints.empty() && _moving_endpoints.empty()) {
         logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspace_name);
-        _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
+        set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
         return;
     }
 
@@ -463,7 +505,7 @@ void token_metadata::calculate_pending_ranges(abstract_replication_strategy& str
         all_left_metadata.remove_endpoint(endpoint);
     }
 
-    _pending_ranges[keyspace_name] = std::move(new_pending_ranges);
+    set_pending_ranges(keyspace_name, std::move(new_pending_ranges));
 
     if (logger.is_enabled(logging::log_level::debug)) {
         logger.debug("Pending ranges: {}", (_pending_ranges.empty() ? "<empty>" : print_pending_ranges()));
@@ -508,14 +550,23 @@ void token_metadata::add_moving_endpoint(token t, inet_address endpoint) {
 }
 
 std::vector<gms::inet_address> token_metadata::pending_endpoints_for(const token& token, const sstring& keyspace_name) {
+    // Fast path 0: no pending ranges at all
+    if (_pending_ranges_interval_map.empty()) {
+        return {};
+    }
+
+    // Fast path 1: no pending ranges for this keyspace_name
+    if (_pending_ranges_interval_map[keyspace_name].empty()) {
+        return {};
+    }
+
+    // Slow path: lookup pending ranges
     std::vector<gms::inet_address> endpoints;
-    auto ranges = get_pending_ranges(keyspace_name);
-    for (auto& x : ranges) {
-        if (x.first.contains(token, dht::token_comparator())) {
-            for (auto& addr : x.second) {
-                endpoints.push_back(addr);
-            }
-        }
+    auto interval = range_to_interval(range<dht::token>(token));
+    auto it = _pending_ranges_interval_map[keyspace_name].find(interval);
+    if (it != _pending_ranges_interval_map[keyspace_name].end()) {
+        // interval_map does not work with std::vector, convert to std::vector of ips
+        endpoints = std::vector<gms::inet_address>(it->second.begin(), it->second.end());
     }
     return endpoints;
 }

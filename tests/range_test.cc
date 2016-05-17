@@ -23,10 +23,15 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include "boost/icl/interval.hpp"
+#include "boost/icl/interval_map.hpp"
+#include <unordered_set>
+
 #include "query-request.hh"
 #include "schema_builder.hh"
 
 #include "disk-error-handler.hh"
+#include "locator/token_metadata.hh"
 
 thread_local disk_error_signal_type commit_error;
 thread_local disk_error_signal_type general_disk_error;
@@ -446,4 +451,57 @@ BOOST_AUTO_TEST_CASE(range_overlap_tests) {
     BOOST_REQUIRE(range<unsigned>({3}, {4}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
     // [3,4) and (4,5]
     BOOST_REQUIRE(range<unsigned>({3}, {{4, false}}).overlaps(range<unsigned>({{4, false}}, {5}), unsigned_comparator()) == false);
+}
+
+auto get_item(std::string left, std::string right, std::string val) {
+    using value_type = std::unordered_set<std::string>;
+    auto l = dht::global_partitioner().from_sstring(left);
+    auto r = dht::global_partitioner().from_sstring(right);
+    auto rg = range<dht::token>({{l, false}}, {r});
+    value_type v{val};
+    return std::make_pair(locator::token_metadata::range_to_interval(rg), v);
+}
+
+BOOST_AUTO_TEST_CASE(test_range_interval_map) {
+    using value_type = std::unordered_set<std::string>;
+    using token = dht::token;
+    boost::icl::interval_map<token, value_type> mymap;
+
+    mymap += get_item("1", "5", "A");
+    mymap += get_item("5", "8", "B");
+    mymap += get_item("1", "3", "C");
+    mymap += get_item("3", "8", "D");
+
+    std::cout << "my map: " << "\n";
+    for (auto x : mymap) {
+        std::cout << x.first << " -> ";
+        for (auto s : x.second) {
+            std::cout << s << ", ";
+        }
+        std::cout << "\n";
+    }
+
+    auto search_item = [&mymap] (std::string val) {
+        auto tok = dht::global_partitioner().from_sstring(val);
+        auto search = range<token>(tok);
+        auto it = mymap.find(locator::token_metadata::range_to_interval(search));
+        if (it != mymap.end()) {
+            std::cout << "Found OK:" << " token = " << tok << " in range: " << it->first << "\n";
+            return true;
+        } else {
+            std::cout << "Found NO:" << " token = " << tok << "\n";
+            return false;
+        }
+    };
+
+    BOOST_REQUIRE(search_item("0") == false);
+    BOOST_REQUIRE(search_item("1") == false);
+    BOOST_REQUIRE(search_item("2") == true);
+    BOOST_REQUIRE(search_item("3") == true);
+    BOOST_REQUIRE(search_item("4") == true);
+    BOOST_REQUIRE(search_item("5") == true);
+    BOOST_REQUIRE(search_item("6") == true);
+    BOOST_REQUIRE(search_item("7") == true);
+    BOOST_REQUIRE(search_item("8") == true);
+    BOOST_REQUIRE(search_item("9") == false);
 }
