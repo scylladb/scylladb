@@ -595,10 +595,10 @@ int main(int ac, char** av) {
             supervisor_notify("serving");
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
-                return service::get_local_storage_service().drain_on_shutdown();
+                return repair_shutdown(service::get_local_storage_service().db());
             });
             engine().at_exit([] {
-                return repair_shutdown(service::get_local_storage_service().db());
+                return service::get_local_storage_service().drain_on_shutdown();
             });
             engine().at_exit([&db] {
                 return db.invoke_on_all([](auto& db) {
